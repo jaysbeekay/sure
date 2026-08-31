@@ -38,3 +38,46 @@ en:
         type: Type
         unknown: Unknown
         edit_loan_details: "Edit loan details"
+  components:
+    loans:
+      amortization_schedule:
+        title: Amortization Schedule
+        generate: Generate Schedule
+        regenerate: Regenerate Schedule
+        no_schedule: "No amortization schedule yet. Generate one to see detailed payment breakdown."
+        total_payments: Total Payments
+        total_principal: Total Principal
+        total_interest: Total Interest
+        payment_number: "#"
+        payment_date: Date
+        rate: Rate
+        beginning_balance: Beginning Balance
+        payment: Payment
+        principal: Principal
+        interest: Interest
+        ending_balance: Ending Balance
+        showing_first_payments: "Showing first %{count} of %{total} payments"
+        view_all: View all payments
+  loan_amortization_schedules:
+    index:
+      title: "Amortization Schedule - %{account}"
+      subtitle: "Detailed payment breakdown with principal and interest"
+      summary: Loan Summary
+      loan_amount: Loan Amount
+      interest_rate: Interest Rate
+      term: Term
+      total_interest: Total Interest
+      months: months
+      payment_number: Payment #
+      payment_date: Date
+      rate: Rate
+      beginning_balance: Beginning Balance
+      payment: Payment
+      principal: Principal
+      interest: Interest
+      ending_balance: Ending Balance
+      back_to_account: Back to Account
+      regenerate: Regenerate Schedule
+    create:
+      schedule_generated: Amortization schedule generated successfully
+      missing_loan_details: "Cannot generate schedule: missing loan details (term or interest rate)"

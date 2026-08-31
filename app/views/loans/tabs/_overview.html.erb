@@ -44,6 +44,10 @@
   <% end %>
 </div>
 
+<div class="mt-8 border-t pt-8">
+  <%= render Loans::AmortizationSchedule.new(loan: account.loan) %>
+</div>
+
 <div class="flex justify-center py-8">
   <%= render DS::Link.new(
     text: t(".edit_loan_details"),

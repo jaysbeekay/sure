@@ -1,0 +1,81 @@
+<div class="space-y-4">
+  <div class="flex items-center justify-between">
+    <h3 class="text-lg font-semibold"><%= t(".title") %></h3>
+    <% if can_generate? && !has_schedule? %>
+      <%= button_to loan_amortization_schedule_path(loan), method: :post, class: "btn btn-sm btn-primary" do %>
+        <%= icon("refresh-cw", class: "w-4 h-4") %>
+        <%= t(".generate") %>
+      <% end %>
+    <% elsif has_schedule? %>
+      <%= button_to loan_amortization_schedule_path(loan), method: :post, class: "btn btn-sm btn-ghost" do %>
+        <%= icon("refresh-cw", class: "w-4 h-4") %>
+        <%= t(".regenerate") %>
+      <% end %>
+    <% end %>
+  </div>
+
+  <% if !has_schedule? %>
+    <div class="alert alert-info">
+      <div class="flex gap-2">
+        <%= icon("info", class: "w-5 h-5 flex-shrink-0") %>
+        <span><%= t(".no_schedule") %></span>
+      </div>
+    </div>
+  <% else %>
+    <% if schedule_summary %>
+      <div class="grid grid-cols-3 gap-2">
+        <%= summary_card title: t(".total_payments") do %>
+          <%= schedule_summary[:total_payments] %>
+        <% end %>
+
+        <%= summary_card title: t(".total_principal") do %>
+          <%= format_money(schedule_summary[:total_principal]) %>
+        <% end %>
+
+        <%= summary_card title: t(".total_interest") do %>
+          <%= format_money(schedule_summary[:total_interest]) %>
+        <% end %>
+      </div>
+    <% end %>
+
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th><%= t(".payment_number") %></th>
+            <th><%= t(".payment_date") %></th>
+            <th><%= t(".rate") %></th>
+            <th class="text-right"><%= t(".beginning_balance") %></th>
+            <th class="text-right"><%= t(".payment") %></th>
+            <th class="text-right"><%= t(".principal") %></th>
+            <th class="text-right"><%= t(".interest") %></th>
+            <th class="text-right"><%= t(".ending_balance") %></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% schedule_entries.each do |entry| %>
+            <tr class="hover:bg-base-200">
+              <td><strong><%= entry.payment_number %></strong></td>
+              <td><%= l(entry.payment_date, format: :short) %></td>
+              <td><%= number_to_percentage(entry.interest_rate, precision: 3) %></td>
+              <td class="text-right"><%= format_money(Money.new(entry.beginning_balance.round, loan.account.currency)) %></td>
+              <td class="text-right font-semibold"><%= format_money(Money.new(entry.payment_amount.round, loan.account.currency)) %></td>
+              <td class="text-right text-success"><%= format_money(Money.new(entry.principal_payment.round, loan.account.currency)) %></td>
+              <td class="text-right text-warning"><%= format_money(Money.new(entry.interest_payment.round, loan.account.currency)) %></td>
+              <td class="text-right"><%= format_money(Money.new(entry.ending_balance.round, loan.account.currency)) %></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+
+    <% if !showing_all? %>
+      <div class="text-center py-4">
+        <p class="text-sm text-base-content/60 mb-2">
+          <%= t(".showing_first_payments", count: schedule_entries.count, total: total_entries) %>
+        </p>
+        <%= link_to t(".view_all"), loan_amortization_schedules_path(loan), class: "link link-primary" %>
+      </div>
+    <% end %>
+  <% end %>
+</div>

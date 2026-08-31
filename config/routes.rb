@@ -591,6 +591,7 @@ Rails.application.routes.draw do
     end
 
     resource :sharing, only: [ :show, :update ], controller: "account_sharings"
+    resources :loan_amortization_schedules, only: %i[index create]
   end
 
   resources :account_statements, only: %i[index show create update destroy] do
