@@ -122,4 +122,67 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert projection.months_saved > 0
     assert_equal BigDecimal("0"), projection.total_interest.amount
   end
+
+  # Regression: the simulation used to start at Date.current.next_month,
+  # which uses *today's* day-of-month rather than the loan's actual payment
+  # anchor day. A loan whose payments fall on the 15th, viewed on any other
+  # day, would get every projected date wrong.
+  test "anchors the first projected payment on the loan's actual next scheduled payment date, not today's day-of-month" do
+    start_date = 2.years.ago.to_date.change(day: 15)
+    loan = build_loan(balance: 500000, start_date: start_date)
+    loan.ensure_amortization_schedule_current!
+    loan.account.update!(balance: 450000)
+
+    next_scheduled_date = loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
+    assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+
+    projection = loan.payoff_projection
+
+    assert_equal next_scheduled_date, projection.payments.first[:payment_date]
+  end
+
+  # Regression: a payment that technically covers first-period interest but
+  # only barely (a real, if unusual, input -- e.g. a much larger balance
+  # than originally contracted) can take far longer than the iteration cap
+  # to actually reach zero. The old code let the loop exit early and still
+  # reported the last simulated date as a "payoff" -- a fabricated result.
+  test "is not applicable when the simulation does not converge within the iteration cap" do
+    loan = build_loan(balance: 100000, interest_rate: 5.0, term_months: 12)
+    payment = loan.amortization_schedule.monthly_payment.amount
+    monthly_rate = BigDecimal("5.0") / 100 / 12
+    threshold_balance = payment / monthly_rate # balance at which payment == first-period interest
+
+    non_converging_balance = (threshold_balance * BigDecimal("0.995")).round(2)
+    loan.account.update!(balance: non_converging_balance)
+
+    # Payment still exceeds first-period interest -- not "unamortizable" by
+    # that cheaper check -- but the payoff genuinely takes more than
+    # MAX_ITERATIONS_MULTIPLIER * term_months periods to reach zero.
+    first_interest = non_converging_balance * monthly_rate
+    assert payment > first_interest, "test setup should not trip the simpler unamortizable_payment? check"
+
+    projection = loan.payoff_projection
+
+    assert_not projection.applicable?
+    assert_nil projection.payoff_date
+    assert_nil projection.months_saved
+    assert_nil projection.interest_saved
+    assert_equal [], projection.payments
+  end
+
+  # Regression: Loan#payoff_projection is memoized; without invalidation, a
+  # long-lived Loan instance kept returning a projection computed against
+  # whatever balance was current the first time it was accessed.
+  test "Loan#payoff_projection recomputes when the account balance changes within the object's lifetime" do
+    loan = build_loan(balance: 500000)
+
+    first = loan.payoff_projection
+    assert_equal Money.new(500000, "USD"), first.current_balance
+
+    loan.account.update!(balance: 450000)
+    second = loan.payoff_projection
+
+    assert_not_same first, second
+    assert_equal Money.new(450000, "USD"), second.current_balance
+  end
 end
