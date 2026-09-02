@@ -21,12 +21,53 @@ class Loan
   # balance that includes escrow will understate interest/time saved.
   class PayoffProjection
     MAX_ITERATIONS_MULTIPLIER = 2
+    EXTRA_PAYMENT_FREQUENCIES = %w[weekly monthly yearly].freeze
 
-    attr_reader :loan
+    attr_reader :loan, :extra_payment
 
-    def initialize(loan)
+    # extra_payment: an optional hypothetical monthly-equivalent Money
+    # amount added on top of the original schedule's payment -- used to
+    # model "what if I also paid an extra $X/week|month|year" without
+    # touching the account's real balance or the persisted schedule. See
+    # .monthly_equivalent for how a user-entered amount + cadence becomes
+    # this value.
+    def initialize(loan, extra_payment: nil)
       @loan = loan
+      @extra_payment = extra_payment
       @loan.ensure_amortization_schedule_current!
+    end
+
+    # Converts a user-entered amount + cadence into the monthly-equivalent
+    # Money this class models payments in. This is an approximation --
+    # weekly extra payments really do compound faster than a monthly lump
+    # sum, because they reduce principal between the monthly accrual points
+    # this simulation (and the rest of the amortization feature) uses -- but
+    # no part of this codebase models daily/weekly accrual, so a monthly
+    # equivalent is consistent with the existing granularity rather than a
+    # new gap. Returns nil for a blank/zero/invalid amount; raises on an
+    # unrecognized frequency (callers are expected to validate frequency at
+    # the request boundary, not rely on this method to sanitize it).
+    def self.monthly_equivalent(amount:, frequency:, currency:)
+      unless EXTRA_PAYMENT_FREQUENCIES.include?(frequency.to_s)
+        raise ArgumentError, "unsupported frequency: #{frequency.inspect}"
+      end
+
+      return nil if amount.blank?
+
+      parsed = begin
+        BigDecimal(amount.to_s)
+      rescue ArgumentError, TypeError
+        nil
+      end
+      return nil if parsed.nil? || parsed <= 0
+
+      monthly_amount = case frequency.to_s
+      when "weekly" then parsed * 52 / 12
+      when "yearly" then parsed / 12
+      else parsed
+      end
+
+      Money.new(monthly_amount, currency)
     end
 
     def currency
@@ -53,8 +94,12 @@ class Loan
       Money.new(loan.account.balance, currency)
     end
 
+    # The payment this projection actually models -- the original
+    # schedule's payment, plus the hypothetical extra when one is present.
     def monthly_payment
-      loan.amortization_schedule.monthly_payment
+      base = loan.amortization_schedule.monthly_payment
+      return base if extra_payment.blank? || extra_payment.amount.zero?
+      base + extra_payment
     end
 
     # The simulated forward schedule from today until the balance is paid off.

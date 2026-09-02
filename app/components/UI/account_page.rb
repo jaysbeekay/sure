@@ -112,8 +112,14 @@ class UI::AccountPage < ApplicationComponent
     }
   end
 
+  # Mirrors render_statement_tab: the eager branch still renders through the
+  # frame partial (not the bare "loans/tabs/schedule" template) so a
+  # <turbo-frame> element is always present on the page. Without it, a form
+  # inside the schedule tab (e.g. the what-if extra-payment form) auto-scopes
+  # to nothing when the schedule tab happens to be the one active on initial
+  # load, and Turbo falls back to a full page navigation on submit.
   def render_schedule_tab
-    return render "loans/tabs/schedule", account: account if active_tab == :schedule
+    return render "accounts/show/schedule_frame", account: account if active_tab == :schedule
 
     turbo_frame_tag schedule_tab_frame_id,
                     src: helpers.account_path(account, tab: "schedule"),

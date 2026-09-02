@@ -708,6 +708,66 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "button[data-id='schedule']", count: 0
   end
+
+  test "schedule tab shows a payoff projection when a what-if extra payment is applied" do
+    loan_account = accounts(:loan) # unchanged balance -- no divergence without the what-if
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200", frequency: "monthly" } }
+
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date")
+    assert_select "*", text: "Modeling an extra $200.00 per month"
+    assert_select "[data-controller='loan-payoff-chart']"
+  end
+
+  test "schedule tab ignores a what-if with an unsupported frequency instead of erroring" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200", frequency: "fortnightly" } }
+
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  test "schedule tab ignores a what-if with a negative or non-numeric amount instead of erroring" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "-50", frequency: "monthly" } }
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "not-a-number", frequency: "monthly" } }
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  test "schedule tab ignores a what-if missing half the amount/frequency pair" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200" } }
+
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  test "a what-if request never mutates the account balance or the persisted schedule" do
+    loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
+    original_balance = loan_account.balance
+    original_amortization_count = loan_account.loan.amortizations.count
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200", frequency: "monthly" } }
+
+    assert_response :success
+    assert_equal original_balance, loan_account.reload.balance
+    assert_equal original_amortization_count, loan_account.loan.amortizations.count
+  end
 end
 
 class AccountsControllerSimplefinCtaTest < ActionDispatch::IntegrationTest
