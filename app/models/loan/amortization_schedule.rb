@@ -147,36 +147,22 @@ class Loan
             # Use the rate already computed for this segment
             monthly_rate = (segment[:rate] / BigDecimal("100")) / BigDecimal("12")
 
-            interest = (balance * monthly_rate).round(currency_precision)
-            principal = segment_payment - interest
-
-            # On final payment, adjust principal to exactly clear the balance
-            if payment_num == loan.term_months
-              principal = balance
-            end
-
-            ending_balance = (balance - principal).round(currency_precision)
-            ending_balance = BigDecimal(0) if ending_balance < 0
-
-            # Recalculate payment_amount on final payment to match principal + interest after rounding
-            payment_amount = if payment_num == loan.term_months
-              (principal + interest).round(currency_precision)
-            else
-              segment_payment.round(currency_precision)
-            end
+            step = AmortizationMath.step(
+              balance: balance,
+              payment: segment_payment,
+              monthly_rate: monthly_rate,
+              currency_precision: currency_precision,
+              final: payment_num == loan.term_months
+            )
 
             schedule << {
               payment_number: payment_num,
               payment_date: payment_dates[payment_num - 1],
-              payment_amount: payment_amount,
-              principal_payment: principal.round(currency_precision),
-              interest_payment: interest.round(currency_precision),
-              beginning_balance: balance.round(currency_precision),
-              ending_balance: ending_balance,
-              interest_rate: segment[:rate]
+              interest_rate: segment[:rate],
+              **step
             }
 
-            balance = ending_balance
+            balance = step[:ending_balance]
             payment_num += 1
 
             break if balance <= 0

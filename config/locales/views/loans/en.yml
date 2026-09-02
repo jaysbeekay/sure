@@ -43,6 +43,15 @@ en:
         total_interest: Total Interest
         total_cost: Total Cost
         payoff_date: Payoff Date
+        projected_payoff_date: Projected Payoff
+        interest_saved: Interest Saved
+        interest_added: Additional Interest
+        months_saved:
+          one: "%{count} month sooner"
+          other: "%{count} months sooner"
+        months_behind:
+          one: "%{count} month later"
+          other: "%{count} months later"
         variable_rate_notice: "This loan has a variable interest rate. The schedule below reflects the current rate and any recorded rate changes -- future rate changes will shift it."
         number: "#"
         date: Date

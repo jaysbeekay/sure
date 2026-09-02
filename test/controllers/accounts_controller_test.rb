@@ -652,6 +652,43 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)}"
   end
 
+  test "schedule tab shows a payoff projection when the current balance is ahead of the original schedule" do
+    start_date = Date.current
+    loan_account = Account.create! \
+      family: @user.family,
+      name: "Ahead Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed",
+        start_date: start_date
+      )
+    loan_account.entries.create!(
+      name: "Starting balance",
+      amount: 500000,
+      currency: "USD",
+      date: start_date,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan_account.update!(balance: 450000) # extra $50k paid toward principal
+
+    get account_url(loan_account, tab: "schedule")
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date")
+    assert_select "*", text: I18n.t("loans.tabs.schedule.interest_saved")
+  end
+
+  test "schedule tab omits the payoff projection when the current balance matches the original schedule" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule")
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
   test "schedule tab is absent for a loan without an interest rate" do
     loan_account = Account.create! \
       family: @user.family,

@@ -19,6 +19,23 @@ json.schedule do
   json.has_rate_changes schedule.has_rate_changes?
 end
 
+# Actual-balance-based projection: how the payoff shifts if the current
+# balance (reflecting any extra/lump-sum payments) is carried forward at the
+# same monthly payment, versus the original schedule above. Only present
+# when applicable (fixed-rate, amortizable, current balance still positive
+# and coverable by the existing payment amount) -- see Loan::PayoffProjection.
+if projection.applicable?
+  json.payoff_projection do
+    json.current_balance projection.current_balance.to_s
+    json.projected_payoff_date projection.payoff_date
+    json.projected_total_interest projection.total_interest.to_s
+    json.months_saved projection.months_saved
+    json.interest_saved projection.interest_saved.to_s
+  end
+else
+  json.payoff_projection nil
+end
+
 json.pagination do
   json.limit limit
   json.offset offset

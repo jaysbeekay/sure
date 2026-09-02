@@ -1807,6 +1807,19 @@ RSpec.configure do |config|
               payments: {
                 type: :array,
                 items: { '$ref' => '#/components/schemas/AmortizationSchedulePayment' }
+              },
+              payoff_projection: {
+                type: :object,
+                nullable: true,
+                description: 'Projected payoff based on the account\'s current actual balance, carried forward at the same monthly payment as `schedule` -- reflects extra/lump-sum principal payments. Null when not applicable (e.g. variable-rate loans, a fully paid-off balance, or a balance too high for the existing payment to cover interest).',
+                required: %w[current_balance projected_payoff_date projected_total_interest months_saved interest_saved],
+                properties: {
+                  current_balance: { type: :string },
+                  projected_payoff_date: { type: :string, format: :date },
+                  projected_total_interest: { type: :string },
+                  months_saved: { type: :integer, description: 'Fewer payments than the original schedule\'s remaining payments as of today. Negative means behind schedule.' },
+                  interest_saved: { type: :string, description: 'Less interest than the original schedule\'s remaining interest as of today. Negative means more interest will be paid.' }
+                }
               }
             }
           }

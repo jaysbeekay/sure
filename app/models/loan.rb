@@ -40,6 +40,11 @@ class Loan < ApplicationRecord
     @amortization_schedule
   end
 
+  # Get or create the actual-balance-based payoff projection calculator
+  def payoff_projection
+    @payoff_projection ||= PayoffProjection.new(self)
+  end
+
   def amortizable?
     amortization_schedule.amortizable?
   end
