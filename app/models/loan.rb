@@ -67,7 +67,12 @@ class Loan < ApplicationRecord
     {
       today: today.iso8601,
       currency: account.currency,
-      history: amortizations.ordered.where("payment_date <= ?", today).map { |p|
+      # NOTE: these are the *scheduled/contracted* balances from the persisted
+      # AmortizationSchedule rows -- what the original schedule predicted for
+      # each past date -- not actual historical account-balance snapshots
+      # (this app doesn't track those). Named/labeled "scheduled", not
+      # "history", so the chart can't be read as showing real past balances.
+      scheduled_history: amortizations.ordered.where("payment_date <= ?", today).map { |p|
         { date: p.payment_date.iso8601, balance: p.ending_balance.to_f }
       },
       current_balance: { date: today.iso8601, balance: payoff_projection.current_balance.amount.to_f },
@@ -82,9 +87,20 @@ class Loan < ApplicationRecord
       ahead: payoff_projection.months_saved.positive?,
       labels: {
         today: I18n.t("loans.tabs.schedule.chart.today"),
+        scheduled: I18n.t("loans.tabs.schedule.chart.scheduled_history"),
         original: I18n.t("loans.tabs.schedule.chart.original_payoff"),
         accelerated: I18n.t("loans.tabs.schedule.chart.accelerated_payoff")
-      }
+      },
+      # Server-built accessible description: an SVG aria-label alone doesn't
+      # expose the chart's actual figures to screen-reader/keyboard users.
+      # Gives the same key numbers the sighted summary cards above it show.
+      aria_label: I18n.t("loans.tabs.schedule.chart.aria_label"),
+      aria_description: I18n.t(
+        "loans.tabs.schedule.chart.aria_description",
+        current_balance: payoff_projection.current_balance.to_s,
+        original_payoff_date: I18n.l(amortization_schedule.payoff_date, format: :long),
+        accelerated_payoff_date: I18n.l(payoff_projection.payoff_date, format: :long)
+      )
     }
   end
 

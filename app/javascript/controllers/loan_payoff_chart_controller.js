@@ -80,7 +80,7 @@ export default class extends Controller {
     const today = parseLocalDate(data.today);
     const currentBalancePoint = data.current_balance ? toPoint(data.current_balance) : { date: today, balance: 0 };
 
-    const historySeries = (data.history || []).map(toPoint);
+    const historySeries = (data.scheduled_history || []).map(toPoint);
     // Close the solid line at (today, currentBalance) -- the actual, live
     // balance, which can differ from the last scheduled payment's balance
     // when extra payments were made. That gap is deliberate: it's the
@@ -123,7 +123,16 @@ export default class extends Controller {
       .attr("height", height)
       .attr("viewBox", `0 0 ${width} ${height}`);
 
-    svg.attr("role", "img").attr("aria-label", "Loan payoff projection");
+    // Server-built label/description (Loan#payoff_chart_payload) carry the
+    // chart's actual figures, not just a generic title -- the SVG's own
+    // <desc> is the only content assistive tech gets from it; the visible
+    // sr-only paragraph below the chart (see the schedule tab partial)
+    // duplicates aria_description as real DOM text so it doesn't depend on
+    // desc support either.
+    const descId = `payoff-chart-desc-${this._id()}`;
+    svg.attr("role", "img").attr("aria-label", data.aria_label || "Loan payoff comparison chart");
+    svg.append("desc").attr("id", descId).text(data.aria_description || "");
+    svg.attr("aria-describedby", descId);
 
     const defs = svg.append("defs");
     const gradient = defs
@@ -332,7 +341,9 @@ export default class extends Controller {
         tooltipAccelerated.style.display = acceleratedPoint ? "" : "none";
       } else {
         const historyPoint = nearestValue(historySeries, hoverDate);
-        tooltipOriginal.textContent = historyPoint ? this._fmtMoney(historyPoint.balance) : "";
+        tooltipOriginal.textContent = historyPoint
+          ? `${(data.labels?.scheduled) || "Scheduled"}: ${this._fmtMoney(historyPoint.balance)}`
+          : "";
         tooltipOriginal.style.display = historyPoint ? "" : "none";
         tooltipAccelerated.style.display = "none";
       }

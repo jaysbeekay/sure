@@ -320,6 +320,54 @@ class LoanTest < ActiveSupport::TestCase
     assert_equal false, payload[:ahead]
   end
 
+  # Regression: the solid line's data used to be keyed "history", which
+  # implies real historical balances. It's actually the original schedule's
+  # theoretical/contracted trajectory (this app doesn't track daily balance
+  # history) -- keyed and labeled accordingly so the chart can't be
+  # misread as showing real past balances.
+  test "payoff_chart_payload labels the scheduled trajectory explicitly rather than as history" do
+    loan = build_chart_loan(balance: 500000)
+    loan.account.update!(balance: 450000)
+
+    payload = loan.payoff_chart_payload
+
+    assert_not payload.key?(:history)
+    assert payload.key?(:scheduled_history)
+    assert_equal "Scheduled (contracted terms)", payload[:labels][:scheduled]
+  end
+
+  test "payoff_chart_payload includes an accessible label and description with the key figures" do
+    loan = build_chart_loan(balance: 500000)
+    loan.account.update!(balance: 450000)
+
+    payload = loan.payoff_chart_payload
+
+    assert_equal "Loan payoff comparison chart", payload[:aria_label]
+    assert_includes payload[:aria_description], loan.payoff_projection.current_balance.to_s
+    assert_includes payload[:aria_description], I18n.l(loan.amortization_schedule.payoff_date, format: :long)
+    assert_includes payload[:aria_description], I18n.l(loan.payoff_projection.payoff_date, format: :long)
+  end
+
+  # Regression: chart dates used to inherit PayoffProjection's payment-date
+  # anchoring bug (Date.current.next_month instead of the loan's real
+  # payment anchor day). Verifies the chart's forward-looking series line up
+  # with the persisted schedule's actual next payment date for a loan whose
+  # anchor day differs from today's.
+  test "payoff_chart_payload's projection series start on the loan's actual next scheduled payment date" do
+    start_date = 2.years.ago.to_date.change(day: 15)
+    loan = build_chart_loan(balance: 500000, start_date: start_date)
+    loan.ensure_amortization_schedule_current!
+    loan.account.update!(balance: 450000)
+
+    next_scheduled_date = loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
+    assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+
+    payload = loan.payoff_chart_payload
+
+    assert_equal next_scheduled_date.iso8601, payload[:accelerated_projection].first[:date]
+    assert_equal next_scheduled_date.iso8601, payload[:original_projection].first[:date]
+  end
+
   private
     def build_chart_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
       account = Account.create! \
