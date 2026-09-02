@@ -302,4 +302,23 @@ class LoanTest < ActiveSupport::TestCase
     assert_equal 4.0, loan.current_variable_rate(Date.new(2026, 6, 1))
     assert_equal 4.5, loan.current_variable_rate(Date.new(2027, 6, 1))
   end
+
+  test "payoff_projection returns a memoized PayoffProjection for the loan" do
+    loan_account = Account.create! \
+      family: families(:dylan_family),
+      name: "Mortgage Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed",
+        start_date: Date.current
+      )
+
+    loan = loan_account.loan
+    assert_instance_of Loan::PayoffProjection, loan.payoff_projection
+    assert_same loan.payoff_projection, loan.payoff_projection
+  end
 end

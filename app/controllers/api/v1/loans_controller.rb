@@ -28,6 +28,8 @@ class Api::V1::LoansController < Api::V1::BaseController
     render :amortization_schedule, locals: {
       loan: @loan,
       status: status,
+      schedule: @loan.amortization_schedule,
+      projection: @loan.payoff_projection,
       payments: @loan.amortizations.ordered.offset(offset).limit(limit),
       total_count: @loan.amortizations.count,
       limit: limit,

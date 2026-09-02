@@ -72,6 +72,48 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert_kind_of String, json["payments"].first["principal_payment"]
     assert_kind_of String, json["payments"].first["interest_payment"]
     assert_kind_of String, json["payments"].first["interest_rate"]
+    assert json.key?("payoff_projection")
+  end
+
+  test "returns a payoff projection reflecting extra principal already paid" do
+    start_date = Date.current
+    loan_account = Account.create! \
+      family: @family,
+      name: "Ahead Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed",
+        start_date: start_date
+      )
+    loan_account.entries.create!(
+      name: "Starting balance",
+      amount: 500000,
+      currency: "USD",
+      date: start_date,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan_account.update!(balance: 450000)
+
+    get api_v1_loan_amortization_schedule_path(loan_account.accountable), headers: api_headers
+    assert_response :success
+
+    projection = JSON.parse(response.body)["payoff_projection"]
+    assert projection.present?
+    assert_equal "$450,000.00", projection["current_balance"]
+    assert projection["months_saved"] > 0
+    assert projection["interest_saved"].to_f > 0
+  end
+
+  test "omits the payoff projection for a variable rate loan" do
+    loan = @variable_loan_account.accountable
+    get api_v1_loan_amortization_schedule_path(loan), headers: api_headers
+    assert_response :success
+
+    assert_nil JSON.parse(response.body)["payoff_projection"]
   end
 
   test "returns paginated payments" do
