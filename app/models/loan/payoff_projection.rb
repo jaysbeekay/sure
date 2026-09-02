@@ -27,7 +27,6 @@ class Loan
     def initialize(loan)
       @loan = loan
       @loan.ensure_amortization_schedule_current!
-      @schedule_cache = nil
     end
 
     def currency
@@ -36,13 +35,18 @@ class Loan
 
     # Only fixed-rate loans with a real payment amount and a positive
     # current balance are eligible -- and only when there's actually
-    # something to project (the original schedule must be amortizable).
+    # something to project (the original schedule must be amortizable) AND
+    # the simulation actually converges to zero within the iteration cap
+    # (see #converged? -- a payment that technically covers interest but
+    # would take an implausibly long time is treated as not applicable
+    # rather than silently reporting a truncated, non-payoff "payoff date").
     def applicable?
       loan.amortization_schedule.amortizable? &&
         loan.amortization_schedule.fixed_rate? &&
         monthly_payment.present? && monthly_payment.amount.positive? &&
         current_balance.amount.positive? &&
-        !unamortizable_payment?
+        !unamortizable_payment? &&
+        converged?
     end
 
     def current_balance
@@ -56,7 +60,7 @@ class Loan
     # The simulated forward schedule from today until the balance is paid off.
     def payments
       return [] unless applicable?
-      @schedule_cache ||= generate_schedule
+      raw_schedule
     end
 
     def payment_count
@@ -114,13 +118,32 @@ class Loan
         original_remaining_payments.sum(:interest_payment)
       end
 
+      # True only if the simulated schedule actually reaches a zero balance
+      # within the iteration cap -- distinguishes a real payoff from a loop
+      # that simply ran out of iterations while still owing money.
+      def converged?
+        schedule = raw_schedule
+        schedule.present? && schedule.last[:ending_balance].zero?
+      end
+
+      # The raw simulation, independent of #applicable? (which itself needs
+      # to inspect this to determine convergence -- see #converged?).
+      # Memoized: safe to call repeatedly within one instance's lifetime.
+      def raw_schedule
+        @raw_schedule ||= generate_schedule
+      end
+
       def generate_schedule
         schedule = []
         balance = current_balance.amount
         payment = monthly_payment.amount
         annual_rate = loan.interest_rate / 100.0
         monthly_rate = annual_rate / 12.0
-        current_date = Date.current.next_month
+        # Anchor on the loan's actual next scheduled payment date, not
+        # today's day-of-month -- Date.current.next_month would shift every
+        # projected date whenever today isn't the loan's payment anchor day
+        # (e.g. viewing a loan due on the 1st, on the 15th).
+        current_date = original_remaining_payments.first&.payment_date || Date.current.next_month
         payment_num = 1
         max_iterations = MAX_ITERATIONS_MULTIPLIER * loan.term_months
 
