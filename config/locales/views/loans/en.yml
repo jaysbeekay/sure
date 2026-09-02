@@ -68,10 +68,13 @@ en:
         extra_payment:
           amount_label: Extra payment
           amount_placeholder: "0.00"
+          frequency_label: Frequency
           weekly: per week
           monthly: per month
           yearly: per year
+          apply: Apply
           clear: Clear
+          approximation_notice: "Weekly and yearly amounts are converted to a monthly-equivalent figure for modeling -- this is an approximation, not a true weekly/annual payment schedule."
         number: "#"
         date: Date
         payment: Payment

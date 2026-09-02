@@ -235,4 +235,30 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
       Loan::PayoffProjection.monthly_equivalent(amount: 50, frequency: "fortnightly", currency: "USD")
     end
   end
+
+  # Regression: eligible_for_extra_payment? is the coarser check used to
+  # decide whether to show the what-if form -- it must stay true even when
+  # the baseline (no-extra) #applicable? is false, since "the current
+  # payment doesn't cover interest" is exactly when a user wants to model
+  # paying more.
+  test "eligible_for_extra_payment? is true even when the baseline payment doesn't cover interest" do
+    loan = build_loan(balance: 500000)
+    loan.account.update!(balance: 800000)
+
+    assert_not loan.payoff_projection.applicable?
+    assert Loan::PayoffProjection.eligible_for_extra_payment?(loan)
+  end
+
+  test "eligible_for_extra_payment? is false for a variable rate loan" do
+    loan = build_loan(balance: 500000, rate_type: "variable")
+
+    assert_not Loan::PayoffProjection.eligible_for_extra_payment?(loan)
+  end
+
+  test "eligible_for_extra_payment? is false when the balance is already zero" do
+    loan = build_loan(balance: 500000)
+    loan.account.update!(balance: 0)
+
+    assert_not Loan::PayoffProjection.eligible_for_extra_payment?(loan)
+  end
 end

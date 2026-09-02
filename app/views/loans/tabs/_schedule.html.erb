@@ -40,7 +40,7 @@
     <% end %>
   </div>
 
-  <% if loan.payoff_projection.applicable? %>
+  <% if Loan::PayoffProjection.eligible_for_extra_payment?(loan) %>
     <%= form_with url: account_path(account, tab: "schedule"), scope: :extra_payment, method: :get,
                   data: { controller: "auto-submit-form" } do |f| %>
       <div class="flex flex-wrap items-end gap-2">
@@ -51,16 +51,23 @@
                 "data-auto-submit-form-target": "auto" %>
         </div>
         <div class="form-field">
+          <%= f.label :frequency, t(".extra_payment.frequency_label"), class: "text-xs text-secondary" %>
           <%= f.select :frequency,
                 [ [ t(".extra_payment.weekly"), "weekly" ], [ t(".extra_payment.monthly"), "monthly" ], [ t(".extra_payment.yearly"), "yearly" ] ],
                 { selected: extra_payment_params["frequency"] || "monthly" },
                 "data-auto-submit-form-target": "auto" %>
         </div>
+        <%# Auto-submit (JS) fires on change; this button is the real,
+            always-working submit control -- required for JS-disabled
+            clients and as a visible affordance rather than relying
+            entirely on auto-submit behavior. %>
+        <%= render DS::Button.new(text: t(".extra_payment.apply"), type: "submit", variant: "outline", size: "sm") %>
         <% if extra_payment_active %>
           <%= link_to t(".extra_payment.clear"), account_path(account, tab: "schedule"),
                 class: "text-sm text-secondary underline" %>
         <% end %>
       </div>
+      <p class="text-xs text-subdued mt-1"><%= t(".extra_payment.approximation_notice") %></p>
     <% end %>
   <% end %>
 

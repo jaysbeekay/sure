@@ -70,6 +70,21 @@ class Loan
       Money.new(monthly_amount, currency)
     end
 
+    # Coarser eligibility than #applicable? -- true whenever a hypothetical
+    # extra payment *could* make this loan's projection applicable, even if
+    # the baseline (no-extra) payment currently doesn't cover interest or
+    # converge. Used to decide whether to show the what-if input at all: a
+    # loan whose current payment barely covers interest is exactly the case
+    # where a user most wants to model paying more, so the input shouldn't
+    # be hidden based on the unboosted result.
+    def self.eligible_for_extra_payment?(loan)
+      loan.amortization_schedule.amortizable? &&
+        loan.amortization_schedule.fixed_rate? &&
+        loan.account.present? &&
+        loan.account.balance.present? &&
+        loan.account.balance.positive?
+    end
+
     def currency
       @currency ||= loan.account.currency
     end
