@@ -48,6 +48,13 @@
         <%= format_money Money.new(projection.interest_saved.abs, account.currency) %>
       <% end %>
     </div>
+
+    <% if (chart_payload = loan.payoff_chart_payload) %>
+      <div data-controller="loan-payoff-chart"
+           data-loan-payoff-chart-data-value="<%= chart_payload.to_json %>"
+           class="h-64">
+      </div>
+    <% end %>
   <% end %>
 
   <% if loan.rate_type == "variable" %>

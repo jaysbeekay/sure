@@ -54,6 +54,40 @@ class Loan < ApplicationRecord
     @payoff_projection
   end
 
+  # Chart payload contrasting the original schedule's remaining trajectory
+  # against the actual-balance projection -- nil unless there's a real,
+  # meaningful divergence to show (mirrors the Schedule tab's summary-card
+  # gate, so the chart and cards appear/disappear together).
+  def payoff_chart_payload
+    return nil unless payoff_projection.applicable?
+    return nil unless payoff_projection.months_saved.abs > 1 || payoff_projection.interest_saved.abs >= 1
+
+    today = Date.current
+
+    {
+      today: today.iso8601,
+      currency: account.currency,
+      history: amortizations.ordered.where("payment_date <= ?", today).map { |p|
+        { date: p.payment_date.iso8601, balance: p.ending_balance.to_f }
+      },
+      current_balance: { date: today.iso8601, balance: payoff_projection.current_balance.amount.to_f },
+      original_projection: amortizations.ordered.where("payment_date > ?", today).map { |p|
+        { date: p.payment_date.iso8601, balance: p.ending_balance.to_f }
+      },
+      accelerated_projection: payoff_projection.payments.map { |p|
+        { date: p[:payment_date].iso8601, balance: p[:ending_balance].to_f }
+      },
+      original_payoff_date: amortization_schedule.payoff_date&.iso8601,
+      accelerated_payoff_date: payoff_projection.payoff_date&.iso8601,
+      ahead: payoff_projection.months_saved.positive?,
+      labels: {
+        today: I18n.t("loans.tabs.schedule.chart.today"),
+        original: I18n.t("loans.tabs.schedule.chart.original_payoff"),
+        accelerated: I18n.t("loans.tabs.schedule.chart.accelerated_payoff")
+      }
+    }
+  end
+
   def amortizable?
     amortization_schedule.amortizable?
   end

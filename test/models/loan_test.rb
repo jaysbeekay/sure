@@ -279,4 +279,70 @@ class LoanTest < ActiveSupport::TestCase
     assert_instance_of Loan::PayoffProjection, loan.payoff_projection
     assert_same loan.payoff_projection, loan.payoff_projection
   end
+
+  test "payoff_chart_payload is nil when the current balance matches the original schedule" do
+    loan = build_chart_loan(balance: 500000)
+
+    assert_nil loan.payoff_chart_payload
+  end
+
+  test "payoff_chart_payload is nil for a variable rate loan" do
+    loan = build_chart_loan(balance: 500000, rate_type: "variable")
+    loan.account.update!(balance: 450000)
+
+    assert_nil loan.payoff_chart_payload
+  end
+
+  test "payoff_chart_payload includes both forward series and a green accent when ahead of schedule" do
+    loan = build_chart_loan(balance: 500000)
+    loan.account.update!(balance: 450000) # extra $50k paid toward principal
+
+    payload = loan.payoff_chart_payload
+
+    assert payload.present?
+    assert_equal true, payload[:ahead]
+    assert_equal "USD", payload[:currency]
+    assert_equal Date.current.iso8601, payload[:today]
+    assert_equal 450000.0, payload[:current_balance][:balance]
+    assert payload[:original_projection].length > payload[:accelerated_projection].length
+    assert payload[:original_payoff_date].present?
+    assert payload[:accelerated_payoff_date].present?
+    assert payload[:accelerated_payoff_date] < payload[:original_payoff_date]
+  end
+
+  test "payoff_chart_payload reflects a behind-schedule balance with ahead false" do
+    loan = build_chart_loan(balance: 500000)
+    loan.account.update!(balance: 550000) # owes more than originally contracted
+
+    payload = loan.payoff_chart_payload
+
+    assert payload.present?
+    assert_equal false, payload[:ahead]
+  end
+
+  private
+    def build_chart_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
+      account = Account.create! \
+        family: families(:dylan_family),
+        name: "Chart Loan #{SecureRandom.hex(4)}",
+        balance: balance,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage",
+          interest_rate: interest_rate,
+          term_months: term_months,
+          rate_type: rate_type,
+          start_date: start_date
+        )
+
+      account.entries.create!(
+        name: "Starting balance",
+        amount: balance,
+        currency: "USD",
+        date: start_date,
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+
+      account.loan
+    end
 end
