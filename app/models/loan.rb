@@ -158,6 +158,15 @@ class Loan < ApplicationRecord
   # re-checked inside the lock (below) as the authoritative read once
   # concurrent writers are excluded.
   def ensure_amortization_schedule_current!
+    # Must run before the lock-free #schedule_current? below, not just
+    # inside the lock: #original_balance/#account_opening_anchor_date are
+    # memoized per instance, so a repeat call on the same Loan object after
+    # an external Account mutation (e.g. a test or caller doing
+    # `account.update!(balance: ...)` on its own reference) would otherwise
+    # keep computing the signature from stale memoized values regardless of
+    # #amortization_schedule_signature's own account.reload -- that reload
+    # refreshes `account`'s raw attributes, but not these derived memos.
+    clear_amortization_schedule_cache!
     return if schedule_current?
 
     with_lock do
