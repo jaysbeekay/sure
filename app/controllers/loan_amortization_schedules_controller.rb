@@ -1,6 +1,6 @@
 class LoanAmortizationSchedulesController < ApplicationController
   before_action :set_account
-  before_action :authorize_account!
+  before_action :authorize_manage!, only: :create
 
   def index
     @loan = @account.loan
@@ -36,10 +36,11 @@ class LoanAmortizationSchedulesController < ApplicationController
     end
 
     def set_account
-      @account = Account.find(params[:account_id])
+      @account = Current.user.accessible_accounts.find(params[:account_id])
     end
 
-    def authorize_account!
-      redirect_to root_path, status: :unauthorized unless current_user.can_manage?(@account)
+    def authorize_manage!
+      permission = @account.permission_for(Current.user)
+      redirect_to @account, alert: t("accounts.not_authorized") unless permission.in?([ :owner, :full_control ])
     end
 end
