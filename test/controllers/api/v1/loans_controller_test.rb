@@ -23,6 +23,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
         term_months: 360,
         rate_type: "fixed"
       )
+    @loan_account.accountable.rebuild_amortization_schedule
 
     @variable_loan_account = Account.create! \
       family: @family,
@@ -35,6 +36,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
         term_months: 360,
         rate_type: "variable"
       )
+    @variable_loan_account.accountable.rebuild_amortization_schedule
 
     @non_amortizable_loan_account = Account.create! \
       family: @family,
@@ -61,7 +63,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     json = JSON.parse(response.body)
     assert_equal loan.id, json["loan"]["id"]
     assert_equal loan.account.id, json["loan"]["account_id"]
-    assert json["schedule"].present?
+    assert_equal "current", json["schedule"]["status"]
     assert json["payments"].present?
     assert json["schedule"]["monthly_payment"].present?
     assert json["schedule"]["total_interest"].present?
@@ -69,6 +71,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert_kind_of String, json["payments"].first["payment_amount"]
     assert_kind_of String, json["payments"].first["principal_payment"]
     assert_kind_of String, json["payments"].first["interest_payment"]
+    assert_kind_of String, json["payments"].first["interest_rate"]
     assert json.key?("payoff_projection")
   end
 
@@ -93,6 +96,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
       date: start_date,
       entryable: Valuation.new(kind: "opening_anchor")
     )
+    loan_account.accountable.ensure_amortization_schedule_current!
     loan_account.update!(balance: 450000)
 
     get api_v1_loan_amortization_schedule_path(loan_account.accountable), headers: api_headers
@@ -159,6 +163,37 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert_nil json["payoff_projection"]
   end
 
+  # Regression: this is a read-scoped endpoint. A GET must never take a loan
+  # lock or delete/insert amortization rows itself -- see
+  # Api::V1::LoansController#amortization_schedule's comment and
+  # Loan#ensure_amortization_schedule_current!'s "Mutates" warning. A loan
+  # whose schedule was never built (or has gone stale) instead gets a
+  # "missing"/"stale" status and a background rebuild is enqueued; the rows
+  # themselves are left for the job.
+  test "does not create amortization rows for a loan whose schedule has never been built" do
+    loan_account = Account.create! \
+      family: @family,
+      name: "Never Built Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed"
+      )
+
+    assert_equal 0, loan_account.accountable.amortizations.count
+
+    assert_enqueued_with(job: LoanAmortizationRebuildJob, args: [ loan_account.accountable.id ]) do
+      get api_v1_loan_amortization_schedule_path(loan_account.accountable), headers: api_headers
+    end
+
+    assert_response :success
+    assert_equal "missing", JSON.parse(response.body)["schedule"]["status"]
+    assert_equal 0, loan_account.accountable.amortizations.count
+  end
+
   test "returns paginated payments" do
     loan = @loan_account.accountable
     get api_v1_loan_amortization_schedule_path(loan),
@@ -172,38 +207,64 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal 0, json["pagination"]["offset"]
   end
 
-  test "lazily builds the schedule on first read, then reuses it on later reads" do
-    loan = @loan_account.accountable
-    # Loan.create! commonly runs before the loan has an account (it's created
-    # standalone, then passed into Account.create!(accountable: loan)), so
-    # the schedule isn't built until something actually needs it.
+  test "a read-scoped request never mutates the database, even for a never-built schedule" do
+    loan = @non_amortizable_loan_account.accountable
+    loan.update_column(:interest_rate, 3.5) # make it amortizable without going through the save callback
     assert_equal 0, loan.amortizations.count
 
-    assert_difference -> { loan.amortizations.count }, 360 do
-      get api_v1_loan_amortization_schedule_path(loan),
-          params: { page: 1, per_page: 5 },
-          headers: api_headers
+    assert_no_difference -> { loan.reload.amortizations.count } do
+      assert_enqueued_with(job: LoanAmortizationRebuildJob, args: [ loan.id ]) do
+        get api_v1_loan_amortization_schedule_path(loan),
+            params: { page: 1, per_page: 5 },
+            headers: api_headers
+      end
     end
     assert_response :success
 
+    json = JSON.parse(response.body)
+    assert_equal "missing", json["schedule"]["status"]
+    assert_equal [], json["payments"]
+  end
+
+  test "lazily builds the schedule in the background on first read, then reuses it on later reads" do
+    loan = @non_amortizable_loan_account.accountable
+    loan.update_column(:interest_rate, 3.5)
+    assert_equal 0, loan.amortizations.count
+
+    get api_v1_loan_amortization_schedule_path(loan),
+        params: { page: 1, per_page: 5 },
+        headers: api_headers
+    assert_response :success
+    assert_equal "missing", JSON.parse(response.body)["schedule"]["status"]
+    assert_equal 0, loan.amortizations.count
+
+    perform_enqueued_jobs
+    assert_equal 360, loan.amortizations.count
+
     # Later reads shouldn't rebuild -- cost scales with the page, not the term
-    assert_no_difference -> { loan.amortizations.count } do
+    assert_no_enqueued_jobs do
       get api_v1_loan_amortization_schedule_path(loan),
           params: { page: 2, per_page: 5 },
           headers: api_headers
     end
     assert_response :success
+    assert_equal "current", JSON.parse(response.body)["schedule"]["status"]
   end
 
-  test "rebuilds the persisted schedule when loan terms change" do
+  test "serves the last known-good schedule and reports it stale when loan terms change" do
     loan = @loan_account.accountable
-    loan.rebuild_amortization_schedule
-    assert_equal 360, loan.amortizations.count
     original_payment = loan.amortizations.ordered.first.payment_amount
 
-    loan.update!(interest_rate: 5.0)
+    loan.update!(interest_rate: 5.0) # enqueues a rebuild but does not run it inline
 
-    assert_equal 360, loan.amortizations.count
+    get api_v1_loan_amortization_schedule_path(loan), headers: api_headers
+    assert_response :success
+
+    json = JSON.parse(response.body)
+    assert_equal "stale", json["schedule"]["status"]
+    assert_equal original_payment.to_s, json["payments"].first["payment_amount"]
+
+    perform_enqueued_jobs
     assert_not_equal original_payment, loan.amortizations.ordered.first.payment_amount
   end
 
@@ -242,7 +303,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     json = JSON.parse(response.body)
-    assert json["schedule"].present?
+    assert_equal "current", json["schedule"]["status"]
     assert json["payments"].present?
     assert_equal loan.interest_rate.to_f, json["payments"].first["interest_rate"].to_f
   end
@@ -251,12 +312,13 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     loan = @variable_loan_account.accountable
     loan.add_variable_rate_change(Date.current - 1.year, 3.5)
     loan.add_variable_rate_change(Date.current + 1.year, 4.0)
+    perform_enqueued_jobs
 
     get api_v1_loan_amortization_schedule_path(loan), headers: api_headers
     assert_response :success
 
     json = JSON.parse(response.body)
-    assert json["schedule"].present?
+    assert_equal "current", json["schedule"]["status"]
     assert json["payments"].present?
   end
 
@@ -276,7 +338,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert_response :unauthorized
   end
 
-  test "respects account access control" do
+  test "returns 404, not 403, for a loan belonging to another family" do
     other_user = users(:empty) # admin of the `empty` family, unrelated to dylan_family
     other_api_key = ApiKey.create!(
       user: other_user,
@@ -289,8 +351,11 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     loan = @loan_account.accountable
     get api_v1_loan_amortization_schedule_path(loan),
         headers: api_headers(other_api_key)
-    assert_response :forbidden
-    assert_equal "unauthorized", JSON.parse(response.body)["error"]
+    # A distinct status here (e.g. 403) would let a caller enumerate loan ids
+    # that exist but aren't theirs, so this must be indistinguishable from a
+    # nonexistent loan.
+    assert_response :not_found
+    assert_equal "not_found", JSON.parse(response.body)["error"]
   end
 
   test "returns 404 for non-existent loan" do

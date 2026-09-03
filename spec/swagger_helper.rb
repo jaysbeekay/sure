@@ -795,10 +795,38 @@ RSpec.configure do |config|
               expected_day_of_month: { type: :integer, minimum: 1, maximum: 31 },
               last_occurrence_date: { type: :string, format: :date },
               next_expected_date: { type: :string, format: :date },
-              status: { type: :string, enum: %w[active inactive] },
+              status: { type: :string, enum: %w[suggested active paused inactive ended] },
               occurrence_count: { type: :integer, minimum: 0 },
               name: { type: :string, nullable: true },
               manual: { type: :boolean },
+              payment_url: { type: :string, nullable: true, description: 'Link to the biller portal where this bill is paid. Only http and https are accepted; a bare host is stored as https.' },
+              autopay: { type: :boolean, description: 'Whether this bill pays itself automatically.' },
+              notes: { type: :string, nullable: true, description: 'Free-text notes shown alongside the bill.' },
+              bill_type: { type: :string, enum: %w[bill subscription installment income transfer other], description: 'What kind of obligation this is.' },
+              category_id: { type: :string, format: :uuid, nullable: true },
+              anchor_date: { type: :string, format: :date, nullable: true, description: 'Reference occurrence that phases every-N cadences.' },
+              weekend_adjust: { type: :string, enum: %w[none skip before after] },
+              end_mode: { type: :string, enum: %w[never on_date after_count] },
+              end_on: { type: :string, format: :date, nullable: true },
+              end_after_count: { type: :integer, nullable: true },
+              renews_on: { type: :string, format: :date, nullable: true },
+              trial_ends_on: { type: :string, format: :date, nullable: true },
+              cancelled_on: { type: :string, format: :date, nullable: true },
+              recurrence_rules: {
+                type: :array,
+                description: 'Repetition patterns; multiple rows express semimonthly and similar multi-pattern cadences. Empty means legacy monthly on expected_day_of_month.',
+                items: {
+                  type: :object,
+                  properties: {
+                    frequency: { type: :string, enum: %w[weekly monthly yearly] },
+                    interval: { type: :integer },
+                    day_of_month: { type: :integer, nullable: true, description: '-1 means the last day of the month.' },
+                    weekday: { type: :integer, nullable: true },
+                    weekday_ordinal: { type: :integer, nullable: true, description: '-1 means the last such weekday.' },
+                    month_of_year: { type: :integer, nullable: true }
+                  }
+                }
+              },
               expected_amount_min: { type: :string, nullable: true },
               expected_amount_min_cents: { type: :integer, nullable: true, description: 'Minimum expected amount in currency minor units' },
               expected_amount_max: { type: :string, nullable: true },
@@ -1756,7 +1784,7 @@ RSpec.configure do |config|
               interest_payment: { type: :string },
               beginning_balance: { type: :string },
               ending_balance: { type: :string },
-              interest_rate: { type: :number, description: 'Rate effective for this payment, as a percentage (e.g. 3.5 for 3.5%)' }
+              interest_rate: { type: :string, description: 'Rate effective for this payment, as a decimal percentage string (e.g. "3.500" for 3.5%)' }
             }
           },
           AmortizationScheduleResponse: {
@@ -1771,7 +1799,7 @@ RSpec.configure do |config|
                   account_id: { type: :string, format: :uuid },
                   name: { type: :string },
                   rate_type: { type: :string, enum: %w[fixed variable] },
-                  interest_rate: { type: :number },
+                  interest_rate: { type: :string, description: 'Base rate as a decimal percentage string (e.g. "3.500" for 3.5%)' },
                   term_months: { type: :integer, minimum: 1 },
                   original_balance: { type: :string },
                   currency: { type: :string },
@@ -1785,11 +1813,16 @@ RSpec.configure do |config|
               },
               schedule: {
                 type: :object,
-                required: %w[monthly_payment total_interest total_cost payoff_date payment_count has_rate_changes],
+                required: %w[status monthly_payment total_interest total_cost payoff_date payment_count has_rate_changes],
                 properties: {
-                  monthly_payment: { type: :string },
-                  total_interest: { type: :string },
-                  total_cost: { type: :string },
+                  status: {
+                    type: :string,
+                    enum: %w[current stale missing],
+                    description: 'Freshness of the persisted schedule relative to the loan\'s current inputs. "current" means the payments below reflect the loan as it stands now. "stale" means the loan changed since these payments were built and a rebuild has been enqueued -- the payments shown are the last successfully built schedule. "missing" means no schedule has ever been built yet; a rebuild has been enqueued and the payments array is empty. This endpoint never rebuilds synchronously, so a read-scoped API key can never trigger a write.'
+                  },
+                  monthly_payment: { type: :string, nullable: true },
+                  total_interest: { type: :string, nullable: true },
+                  total_cost: { type: :string, nullable: true },
                   payoff_date: { type: :string, format: :date, nullable: true },
                   payment_count: { type: :integer, minimum: 0 },
                   has_rate_changes: { type: :boolean, description: 'True for variable-rate loans with at least one recorded rate change.' }

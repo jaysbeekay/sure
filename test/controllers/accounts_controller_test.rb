@@ -15,6 +15,19 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "p.ml-auto.privacy-sensitive"
   end
 
+  test "index localizes the Plaid add accounts action" do
+    ensure_tailwind_build
+    @user.update!(locale: "de")
+
+    get accounts_url
+
+    assert_response :success
+    assert_select "a[href=?]",
+                  edit_plaid_item_path(plaid_items(:one), add_accounts: true),
+                  text: "Konten hinzufügen",
+                  count: 1
+  end
+
   test "index renders kraken items" do
     kraken_item = kraken_items(:one)
     get accounts_url
@@ -80,7 +93,20 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "sync all requests fresh Plaid transactions before syncing the family" do
-    PlaidItem.any_instance.expects(:request_transactions_refresh_later).once
+    sequence = sequence("manual sync all")
+    Family.any_instance
+      .expects(:request_plaid_transactions_refreshes_later)
+      .with(source: "AccountsController#sync_all")
+      .in_sequence(sequence)
+    Family.any_instance.expects(:sync_later).once.in_sequence(sequence)
+
+    post sync_all_accounts_url
+
+    assert_redirected_to accounts_url
+  end
+
+  test "sync all continues when Plaid refresh orchestration cannot be enqueued" do
+    PlaidTransactionsRefreshAllJob.stubs(:perform_later).raises(RedisClient::Error, "Redis unavailable")
     Family.any_instance.expects(:sync_later).once
 
     post sync_all_accounts_url
@@ -620,6 +646,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
   test "schedule tab renders the full amortization schedule for an amortizable loan" do
     loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
 
     get account_url(loan_account, tab: "schedule")
     assert_response :success
@@ -641,15 +668,37 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame[src='#{account_path(loan_account, tab: 'schedule')}']"
   end
 
-  test "schedule frame builds the schedule when requested" do
+  # Regression: reads must not materialize the schedule inline (that would
+  # make a GET take a loan lock and delete/insert rows -- see
+  # Loan#ensure_amortization_schedule_current! and
+  # AccountsController#build_schedule_tab_data). The frame request instead
+  # enqueues the same background rebuild job and renders whatever is
+  # currently persisted (nothing, for a loan whose schedule was never
+  # built), leaving row creation to the job.
+  test "schedule frame enqueues a background rebuild instead of building the schedule inline" do
     loan_account = accounts(:loan)
 
-    get account_url(loan_account, tab: "schedule"),
-        headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab) }
+    assert_enqueued_with(job: LoanAmortizationRebuildJob, args: [ loan_account.loan.id ]) do
+      get account_url(loan_account, tab: "schedule"),
+          headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab) }
+    end
+
+    assert_response :success
+    assert_equal 0, loan_account.loan.amortizations.count
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)}"
+  end
+
+  test "schedule frame does not enqueue a rebuild when the schedule is already current" do
+    loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
+
+    assert_no_enqueued_jobs(only: LoanAmortizationRebuildJob) do
+      get account_url(loan_account, tab: "schedule"),
+          headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab) }
+    end
 
     assert_response :success
     assert_equal loan_account.loan.term_months, loan_account.loan.amortizations.count
-    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)}"
   end
 
   test "schedule tab shows a payoff projection when the current balance is ahead of the original schedule" do
@@ -673,6 +722,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       date: start_date,
       entryable: Valuation.new(kind: "opening_anchor")
     )
+    loan_account.loan.ensure_amortization_schedule_current!
     loan_account.update!(balance: 450000) # extra $50k paid toward principal
 
     get account_url(loan_account, tab: "schedule")
@@ -727,6 +777,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
   test "schedule tab omits the payoff projection when the current balance matches the original schedule" do
     loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
 
     get account_url(loan_account, tab: "schedule")
     assert_response :success
@@ -754,6 +805,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
   test "schedule tab shows a payoff projection when a what-if extra payment is applied" do
     loan_account = accounts(:loan) # unchanged balance -- no divergence without the what-if
+    loan_account.loan.ensure_amortization_schedule_current!
 
     get account_url(loan_account, tab: "schedule"),
         params: { extra_payment: { amount: "200", frequency: "monthly" } }

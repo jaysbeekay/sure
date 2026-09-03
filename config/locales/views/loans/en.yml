@@ -52,7 +52,7 @@ en:
         months_behind:
           one: "%{count} month later"
           other: "%{count} months later"
-        variable_rate_notice: "This loan has a variable interest rate. The schedule below reflects the current rate and any recorded rate changes -- future rate changes will shift it."
+        variable_rate_notice: "This loan has a variable interest rate. The schedule below reflects the current rate and any recorded rate changes; future rate changes will shift it."
         chart:
           today: Today
           scheduled_history: "Scheduled (contracted terms)"
