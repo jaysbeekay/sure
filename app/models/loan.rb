@@ -125,6 +125,20 @@ class Loan < ApplicationRecord
     generate_amortization_schedule(start_date: (amortization_schedules.order(:payment_date).first&.payment_date || Date.today))
   end
 
+  class << self
+    def color
+      "#D444F1"
+    end
+
+    def icon
+      "hand-coins"
+    end
+
+    def classification
+      "liability"
+    end
+  end
+
   private
 
     def calculate_fixed_rate_payment
@@ -151,18 +165,4 @@ class Loan < ApplicationRecord
     def original_balance
       Money.new(account.first_valuation_amount, account.currency)
     end
-
-  class << self
-    def color
-      "#D444F1"
-    end
-
-    def icon
-      "hand-coins"
-    end
-
-    def classification
-      "liability"
-    end
-  end
 end

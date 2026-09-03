@@ -13,7 +13,7 @@ class CreateLoanAmortizationSchedules < ActiveRecord::Migration[7.2]
       t.timestamps
 
       t.foreign_key :loans, column: :loan_id
-      t.index [:loan_id, :payment_number], unique: true
+      t.index [ :loan_id, :payment_number ], unique: true
       t.index :payment_date
     end
   end
