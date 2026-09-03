@@ -143,16 +143,10 @@ resubmitted) or this fork (if the feature gets adopted here):
 9. Add `loan_test.rb` coverage for the new fields and the DoS boundary, plus a
    system test for the overview insights.
 
-## Decision needed
+## Decision: leave #1775 to upstream
 
-This fork doesn't contain the feature #1775 touches, so there's no code here to
-patch today. Two options:
-
-- **(a) Informational only** — leave #1775 to its upstream maintainers; this
-  document stands as the triage record in case the feature is adopted later.
-- **(b) Adopt the feature here** — implement it fresh on top of this fork's
-  current `Loan` model, designed to satisfy all the points above from the
-  start (rather than porting #1775's code and its defects).
-
-No decision was made in this pass; flagging for @jonathan.kaiser to choose
-before further implementation work is scheduled.
+Decided by @jonathan.kaiser (2026-09-03): leave upstream PR #1775 to its own
+maintainers. This fork will not port or re-implement its "loans overview new
+insights" feature. This document stands only as an (unverified — see above)
+triage record in case that changes later; no further implementation work is
+planned from it.
