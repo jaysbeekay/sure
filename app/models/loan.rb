@@ -140,7 +140,17 @@ class Loan < ApplicationRecord
   # callers that must not write on a read (e.g. a read-scoped API request)
   # should use #schedule_current? instead and let the background job handle
   # regeneration.
+  #
+  # Standard double-checked locking: #schedule_current? (a single indexed
+  # exists? query) is checked once, lock-free, before deciding whether a
+  # rebuild might be needed at all -- the common case, since this is also
+  # called from the rebuild job itself and could otherwise take a row lock
+  # on every run even when a concurrent request already rebuilt it. It's
+  # re-checked inside the lock (below) as the authoritative read once
+  # concurrent writers are excluded.
   def ensure_amortization_schedule_current!
+    return if schedule_current?
+
     with_lock do
       clear_amortization_schedule_cache!
 
