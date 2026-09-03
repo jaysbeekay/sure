@@ -375,6 +375,57 @@ export default class extends Controller {
       showAt(mx);
     });
     overlay.on("pointerleave", hide);
+
+    // Keyboard equivalent of the hover tooltip above -- the visible sr-only
+    // paragraph next to this chart (see the Schedule tab partial) already
+    // gives screen-reader users the key figures as real text, but only a
+    // pointer could previously inspect any *other* point on the lines.
+    // Arrow keys step through the same nearest-point data a hover would
+    // show, landing on each series' real monthly dates rather than an
+    // arbitrary pixel -- useful past pure screen-reader use too, for
+    // keyboard/low-vision users who can't drive a mouse precisely enough to
+    // scrub the chart. tooltip's aria-live announces each step's content.
+    tooltip.setAttribute("role", "status");
+    tooltip.setAttribute("aria-live", "polite");
+
+    const stopDates = Array.from(
+      new Set([ ...historySeries, ...originalSeries, ...acceleratedSeries ].map((d) => d.date.getTime()))
+    ).sort((a, b) => a - b).map((t) => new Date(t));
+
+    if (stopDates.length > 0) {
+      svg.attr("tabindex", 0);
+      let focusedIndex = null;
+
+      svg.on("keydown", (event) => {
+        if (![ "ArrowLeft", "ArrowRight", "Home", "End", "Escape" ].includes(event.key)) return;
+        event.preventDefault();
+
+        if (event.key === "Escape") {
+          focusedIndex = null;
+          hide();
+          return;
+        }
+
+        if (focusedIndex === null) {
+          focusedIndex = event.key === "ArrowLeft" ? stopDates.length - 1 : 0;
+        } else if (event.key === "ArrowLeft") {
+          focusedIndex = Math.max(0, focusedIndex - 1);
+        } else if (event.key === "ArrowRight") {
+          focusedIndex = Math.min(stopDates.length - 1, focusedIndex + 1);
+        } else if (event.key === "Home") {
+          focusedIndex = 0;
+        } else {
+          focusedIndex = stopDates.length - 1;
+        }
+
+        showAt(x(stopDates[focusedIndex]));
+      });
+
+      svg.on("blur", () => {
+        focusedIndex = null;
+        hide();
+      });
+    }
   }
 
   _fmtMoney(amount) {
