@@ -81,6 +81,12 @@ class Loan < ApplicationRecord
   # Schedule tab's summary-card gate, so the chart and cards appear/disappear
   # together).
   def payoff_chart_payload(projection: payoff_projection, extra_payment_amount: nil, extra_payment_frequency: nil)
+    # `amortization_schedule` recomputes its memoization signature (which
+    # reloads `account`) on every call -- read it once here rather than
+    # repeating calls throughout this method (`projection` is already the
+    # one instance the caller resolved, per the note above).
+    schedule = amortization_schedule
+
     return nil unless projection.applicable?
     return nil unless projection.months_saved.abs > 1 || projection.interest_saved.abs >= 1
 
@@ -104,7 +110,7 @@ class Loan < ApplicationRecord
       accelerated_projection: projection.payments.map { |p|
         { date: p[:payment_date].iso8601, balance: p[:ending_balance].to_f }
       },
-      original_payoff_date: amortization_schedule.payoff_date&.iso8601,
+      original_payoff_date: schedule.payoff_date&.iso8601,
       accelerated_payoff_date: projection.payoff_date&.iso8601,
       ahead: projection.months_saved.positive?,
       extra_payment_label: extra_payment_label(projection, extra_payment_amount, extra_payment_frequency),
@@ -120,9 +126,9 @@ class Loan < ApplicationRecord
       aria_label: I18n.t("loans.tabs.schedule.chart.aria_label"),
       aria_description: I18n.t(
         "loans.tabs.schedule.chart.aria_description",
-        current_balance: payoff_projection.current_balance.to_s,
-        original_payoff_date: I18n.l(amortization_schedule.payoff_date, format: :long),
-        accelerated_payoff_date: I18n.l(payoff_projection.payoff_date, format: :long)
+        current_balance: projection.current_balance.to_s,
+        original_payoff_date: I18n.l(schedule.payoff_date, format: :long),
+        accelerated_payoff_date: I18n.l(projection.payoff_date, format: :long)
       )
     }
   end
