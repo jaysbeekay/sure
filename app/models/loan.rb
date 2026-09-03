@@ -59,8 +59,14 @@ class Loan < ApplicationRecord
   # meaningful divergence to show (mirrors the Schedule tab's summary-card
   # gate, so the chart and cards appear/disappear together).
   def payoff_chart_payload
-    return nil unless payoff_projection.applicable?
-    return nil unless payoff_projection.months_saved.abs > 1 || payoff_projection.interest_saved.abs >= 1
+    # `payoff_projection`/`amortization_schedule` recompute their memoization
+    # signature (which reloads `account`) on every call, so read each once
+    # here rather than repeating calls throughout this method.
+    projection = payoff_projection
+    schedule = amortization_schedule
+
+    return nil unless projection.applicable?
+    return nil unless projection.months_saved.abs > 1 || projection.interest_saved.abs >= 1
 
     today = Date.current
 
@@ -75,16 +81,16 @@ class Loan < ApplicationRecord
       scheduled_history: amortizations.ordered.where("payment_date <= ?", today).map { |p|
         { date: p.payment_date.iso8601, balance: p.ending_balance.to_f }
       },
-      current_balance: { date: today.iso8601, balance: payoff_projection.current_balance.amount.to_f },
+      current_balance: { date: today.iso8601, balance: projection.current_balance.amount.to_f },
       original_projection: amortizations.ordered.where("payment_date > ?", today).map { |p|
         { date: p.payment_date.iso8601, balance: p.ending_balance.to_f }
       },
-      accelerated_projection: payoff_projection.payments.map { |p|
+      accelerated_projection: projection.payments.map { |p|
         { date: p[:payment_date].iso8601, balance: p[:ending_balance].to_f }
       },
-      original_payoff_date: amortization_schedule.payoff_date&.iso8601,
-      accelerated_payoff_date: payoff_projection.payoff_date&.iso8601,
-      ahead: payoff_projection.months_saved.positive?,
+      original_payoff_date: schedule.payoff_date&.iso8601,
+      accelerated_payoff_date: projection.payoff_date&.iso8601,
+      ahead: projection.months_saved.positive?,
       labels: {
         today: I18n.t("loans.tabs.schedule.chart.today"),
         scheduled: I18n.t("loans.tabs.schedule.chart.scheduled_history"),
@@ -97,9 +103,9 @@ class Loan < ApplicationRecord
       aria_label: I18n.t("loans.tabs.schedule.chart.aria_label"),
       aria_description: I18n.t(
         "loans.tabs.schedule.chart.aria_description",
-        current_balance: payoff_projection.current_balance.to_s,
-        original_payoff_date: I18n.l(amortization_schedule.payoff_date, format: :long),
-        accelerated_payoff_date: I18n.l(payoff_projection.payoff_date, format: :long)
+        current_balance: projection.current_balance.to_s,
+        original_payoff_date: I18n.l(schedule.payoff_date, format: :long),
+        accelerated_payoff_date: I18n.l(projection.payoff_date, format: :long)
       )
     }
   end

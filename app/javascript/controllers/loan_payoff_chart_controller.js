@@ -56,8 +56,8 @@ export default class extends Controller {
     root.innerHTML = "";
 
     const data = this.dataValue || {};
-    const width = root.clientWidth || 720;
-    const height = root.clientHeight || 240;
+    const width = root.clientWidth;
+    const height = root.clientHeight;
     if (width <= 0 || height <= 0) return;
 
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
