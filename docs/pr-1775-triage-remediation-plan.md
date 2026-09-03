@@ -127,9 +127,9 @@ resubmitted) or this fork (if the feature gets adopted here):
    cleanly, dropping the unrelated holdings/trades diff.
 2. Cap `term_months` at the model-validation layer and add a guard clause in
    `generate_amortization_schedule` (fixes the P1 DoS).
-3. Add `precision: 15, scale: 2` to `down_payment`; make the new `NOT NULL`
-   column migration-safe (default + backfill, or nullable + app-level
-   validation).
+3. Add `precision: 15, scale: 2` to `down_payment`; use a default and
+   backfill before enforcing `NOT NULL`. If a temporary nullable phase is
+   required, backfill existing rows and add a follow-up `NOT NULL` constraint.
 4. Restore the actual account balance alongside the new progress ring; restore
    an "Edit loan details" entry point.
 5. Fix the `amortization_schedule` cache key to invalidate on balance change.
