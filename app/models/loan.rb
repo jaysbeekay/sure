@@ -185,17 +185,26 @@ class Loan < ApplicationRecord
   # Lazily build or replace the persisted schedule when it is missing or stale.
   # This also removes rows when a loan is no longer amortizable.
   #
-  # Memoized by signature so repeat calls against the same in-memory Loan
-  # instance (e.g. a controller building a projection after already ensuring
-  # the schedule, or a view/API path that reads it more than once per
-  # request) skip the row lock and existence query entirely once the schedule
-  # is known current for this signature -- avoiding request-scoped, avoidable
-  # lock contention on what is otherwise a read path. A genuinely stale
-  # schedule (interest_rate/term/etc. actually changed) still gets a fresh
-  # signature and is rebuilt normally.
+  # Two layers avoid taking the row lock on the common "nothing to do" path,
+  # which matters because this is called from read paths (Schedule tab,
+  # amortization_schedule API) as well as writes:
+  #   1. Memoized by signature on this in-memory Loan instance -- repeat
+  #      calls against the same instance (e.g. a controller ensuring the
+  #      schedule, then building a projection that ensures it again) skip
+  #      everything below once the schedule is known current for this
+  #      signature.
+  #   2. A lock-free #schedule_current? check (standard double-checked
+  #      locking): only acquire with_lock when that check says a rebuild
+  #      might be needed. It's re-verified with the same logic once the lock
+  #      is held (below), so a false "not current" from a lock-free read
+  #      racing a concurrent writer just costs a redundant lock+no-op --
+  #      never an incorrect rebuild.
+  # A genuinely stale schedule (interest_rate/term/etc. actually changed)
+  # still gets a fresh signature and is rebuilt normally.
   def ensure_amortization_schedule_current!
     signature = amortization_schedule_signature
     return if @amortization_schedule_ensured_signature == signature
+    return if schedule_current?(signature)
 
     with_lock do
       clear_amortization_schedule_cache!
@@ -207,15 +216,25 @@ class Loan < ApplicationRecord
         next
       end
 
-      schedule = amortization_schedule
-      matching_rows = amortizations.where(schedule_signature: signature).count
-      current = matching_rows == schedule.payment_count && amortizations.count == schedule.payment_count
-      rebuild_amortization_schedule_locked! unless current
+      rebuild_amortization_schedule_locked! unless schedule_current?(signature)
       @amortization_schedule_ensured_signature = signature
     end
   end
 
   private
+
+    # Whether the persisted amortizations already match `signature`, with no
+    # writes and (on the caller's part) no lock. Used both as the lock-free
+    # fast path above and, called again, as the authoritative check once
+    # with_lock is held -- same logic either way, just a live query against
+    # amortizations either time, never a cached read.
+    def schedule_current?(signature)
+      return !amortizations.exists? unless amortizable?
+
+      schedule = amortization_schedule
+      matching_rows = amortizations.where(schedule_signature: signature).count
+      matching_rows == schedule.payment_count && amortizations.count == schedule.payment_count
+    end
 
     def rebuild_amortization_schedule_locked!
       clear_amortization_schedule_cache!
