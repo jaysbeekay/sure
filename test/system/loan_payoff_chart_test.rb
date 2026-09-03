@@ -17,44 +17,49 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
   # correct payload actually reaches the browser and mounts the controller,
   # not to re-verify the underlying math.
   test "schedule tab mounts the payoff chart with the anchored dates for a mid-cycle, behind-schedule loan" do
-    start_date = 2.years.ago.to_date.change(day: 15)
-    loan_account = Account.create! \
-      family: @user.family,
-      name: "Mid-Cycle Behind Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        subtype: "mortgage",
-        interest_rate: 3.5,
-        term_months: 360,
-        rate_type: "fixed",
-        start_date: start_date
+    # Pinned: if this ran on the 15th of any month, start_date's day-15
+    # anchor would coincide with Date.current.next_month, defeating the
+    # "real anchor mismatch" guard below and the point of the regression.
+    travel_to Date.new(2026, 3, 20) do
+      start_date = 2.years.ago.to_date.change(day: 15)
+      loan_account = Account.create! \
+        family: @user.family,
+        name: "Mid-Cycle Behind Loan",
+        balance: 500000,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage",
+          interest_rate: 3.5,
+          term_months: 360,
+          rate_type: "fixed",
+          start_date: start_date
+        )
+      loan_account.entries.create!(
+        name: "Starting balance",
+        amount: 500000,
+        currency: "USD",
+        date: start_date,
+        entryable: Valuation.new(kind: "opening_anchor")
       )
-    loan_account.entries.create!(
-      name: "Starting balance",
-      amount: 500000,
-      currency: "USD",
-      date: start_date,
-      entryable: Valuation.new(kind: "opening_anchor")
-    )
-    loan_account.update!(balance: 550000) # behind schedule: balance grew, not shrank
-    loan_account.loan.ensure_amortization_schedule_current!
+      loan_account.update!(balance: 550000) # behind schedule: balance grew, not shrank
+      loan_account.loan.ensure_amortization_schedule_current!
 
-    next_scheduled_date = loan_account.loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
-    assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+      next_scheduled_date = loan_account.loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
+      assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
 
-    projection = loan_account.loan.payoff_projection
-    assert_not projection.months_saved.positive?, "test setup should exercise a behind-schedule projection"
-    schedule = loan_account.loan.amortization_schedule
+      projection = loan_account.loan.payoff_projection
+      assert_not projection.months_saved.positive?, "test setup should exercise a behind-schedule projection"
+      schedule = loan_account.loan.amortization_schedule
 
-    visit account_path(loan_account, tab: "schedule")
+      visit account_path(loan_account, tab: "schedule")
 
-    chart = find("[data-controller='loan-payoff-chart']")
-    payload = JSON.parse(chart["data-loan-payoff-chart-data-value"])
+      chart = find("[data-controller='loan-payoff-chart']")
+      payload = JSON.parse(chart["data-loan-payoff-chart-data-value"])
 
-    assert_equal false, payload["ahead"]
-    assert_equal schedule.payoff_date.iso8601, payload["original_payoff_date"]
-    assert_equal projection.payoff_date.iso8601, payload["accelerated_payoff_date"]
-    assert_equal next_scheduled_date.iso8601, payload["original_projection"].first["date"]
+      assert_equal false, payload["ahead"]
+      assert_equal schedule.payoff_date.iso8601, payload["original_payoff_date"]
+      assert_equal projection.payoff_date.iso8601, payload["accelerated_payoff_date"]
+      assert_equal next_scheduled_date.iso8601, payload["original_projection"].first["date"]
+    end
   end
 end

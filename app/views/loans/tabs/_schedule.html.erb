@@ -85,13 +85,15 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
       <%= summary_card title: t(".projected_payoff_date") do %>
         <%= l projection.payoff_date, format: :long %>
-        <p class="text-xs text-secondary mt-1">
-          <% if projection.months_saved.positive? %>
-            <%= t(".months_saved", count: projection.months_saved) %>
-          <% else %>
-            <%= t(".months_behind", count: projection.months_saved.abs) %>
-          <% end %>
-        </p>
+        <% if projection.months_saved.nonzero? %>
+          <p class="text-xs text-secondary mt-1">
+            <% if projection.months_saved.positive? %>
+              <%= t(".months_saved", count: projection.months_saved) %>
+            <% else %>
+              <%= t(".months_behind", count: projection.months_saved.abs) %>
+            <% end %>
+          </p>
+        <% end %>
       <% end %>
 
       <%= summary_card title: projection.interest_saved.positive? ? t(".interest_saved") : t(".interest_added") do %>
