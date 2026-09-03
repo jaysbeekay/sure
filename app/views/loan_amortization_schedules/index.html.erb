@@ -73,6 +73,6 @@
 
   <div class="flex justify-center gap-2 mt-8">
     <%= link_to t(".back_to_account"), @account, class: "btn btn-ghost" %>
-    <%= button_to t(".regenerate"), loan_amortization_schedule_path(@account), method: :post, class: "btn btn-primary" %>
+    <%= button_to t(".regenerate"), account_loan_amortization_schedules_path(@account), method: :post, class: "btn btn-primary" %>
   </div>
 </div>

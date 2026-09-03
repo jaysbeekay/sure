@@ -15,11 +15,25 @@ class LoanAmortizationSchedulesController < ApplicationController
       return
     end
 
-    @loan.generate_amortization_schedule(start_date: params[:start_date].present? ? Date.parse(params[:start_date]) : Date.today)
+    start_date = parsed_start_date
+    if start_date == :invalid
+      redirect_to @account, alert: t(".invalid_start_date")
+      return
+    end
+
+    @loan.generate_amortization_schedule(start_date: start_date || Date.today)
     redirect_to @account, notice: t(".schedule_generated")
   end
 
   private
+
+  def parsed_start_date
+    return nil if params[:start_date].blank?
+
+    Date.iso8601(params[:start_date])
+  rescue ArgumentError, TypeError
+    :invalid
+  end
 
   def set_account
     @account = Account.find(params[:account_id])

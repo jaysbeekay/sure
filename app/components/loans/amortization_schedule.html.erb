@@ -2,12 +2,12 @@
   <div class="flex items-center justify-between">
     <h3 class="text-lg font-semibold"><%= t(".title") %></h3>
     <% if can_generate? && !has_schedule? %>
-      <%= button_to loan_amortization_schedule_path(loan), method: :post, class: "btn btn-sm btn-primary" do %>
+      <%= button_to account_loan_amortization_schedules_path(loan.account), method: :post, class: "btn btn-sm btn-primary" do %>
         <%= icon("refresh-cw", class: "w-4 h-4") %>
         <%= t(".generate") %>
       <% end %>
     <% elsif has_schedule? %>
-      <%= button_to loan_amortization_schedule_path(loan), method: :post, class: "btn btn-sm btn-ghost" do %>
+      <%= button_to account_loan_amortization_schedules_path(loan.account), method: :post, class: "btn btn-sm btn-ghost" do %>
         <%= icon("refresh-cw", class: "w-4 h-4") %>
         <%= t(".regenerate") %>
       <% end %>
@@ -74,7 +74,7 @@
         <p class="text-sm text-base-content/60 mb-2">
           <%= t(".showing_first_payments", count: schedule_entries.count, total: total_entries) %>
         </p>
-        <%= link_to t(".view_all"), loan_amortization_schedules_path(loan), class: "link link-primary" %>
+        <%= link_to t(".view_all"), account_loan_amortization_schedules_path(loan.account), class: "link link-primary" %>
       </div>
     <% end %>
   <% end %>

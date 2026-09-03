@@ -81,3 +81,4 @@ en:
     create:
       schedule_generated: Amortization schedule generated successfully
       missing_loan_details: "Cannot generate schedule: missing loan details (term or interest rate)"
+      invalid_start_date: "Cannot generate schedule: invalid start date"

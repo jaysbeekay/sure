@@ -29,57 +29,68 @@ class Loan < ApplicationRecord
     end
   end
 
+  # The payment effective right now -- the most recent payment on or before
+  # today, so a variable-rate loan's displayed payment reflects the current
+  # rate period rather than (as `.last` would) whatever the final period's
+  # payment happens to be. Falls back to the first scheduled payment for a
+  # schedule that hasn't started yet (start_date in the future).
   def current_payment_amount
-    latest_schedule = amortization_schedules.order(:payment_number).last
-    return nil if latest_schedule.blank?
+    current_schedule = amortization_schedules.where("payment_date <= ?", Date.today).order(:payment_number).last ||
+      amortization_schedules.order(:payment_number).first
+    return nil if current_schedule.blank?
 
-    Money.new(latest_schedule.payment_amount.round, account.currency)
+    Money.new(current_schedule.payment_amount.round, account.currency)
   end
 
+  # Replaces the persisted schedule atomically: if any row fails to
+  # generate, the transaction rolls back and the prior schedule (if any)
+  # is left intact, rather than deleting it up front and risking a
+  # partial replacement on failure.
   def generate_amortization_schedule(start_date: Date.today)
     return if term_months.nil? || interest_rate.nil?
 
-    amortization_schedules.delete_all
-    remaining_balance = original_balance.amount
-    payment_number = 1
-    current_date = start_date
-    current_rate = interest_rate
+    transaction do
+      amortization_schedules.delete_all
+      remaining_balance = original_balance.amount
+      payment_number = 1
+      current_date = start_date
+      current_rate = interest_rate
 
-    term_months.times do |i|
-      rate_at_period = rate_for_date(current_date)
-      current_rate = rate_at_period if rate_at_period.present?
+      term_months.times do |i|
+        current_rate = rate_for_date(current_date)
 
-      monthly_rate = (current_rate / 100.0) / 12.0
-      remaining_months = term_months - i
+        monthly_rate = (current_rate / 100.0) / 12.0
+        remaining_months = term_months - i
 
-      # For variable rate loans, recalculate payment based on remaining balance and months
-      if rate_type == "variable" && i > 0
-        monthly_payment_amount = calculate_payment_amount(remaining_balance, monthly_rate, remaining_months)
-      elsif monthly_rate.zero?
-        monthly_payment_amount = remaining_balance / remaining_months
-      else
-        monthly_payment_amount = (remaining_balance * monthly_rate * (1 + monthly_rate)**remaining_months) / ((1 + monthly_rate)**remaining_months - 1)
+        # For variable rate loans, recalculate payment based on remaining balance and months
+        if rate_type == "variable" && i > 0
+          monthly_payment_amount = calculate_payment_amount(remaining_balance, monthly_rate, remaining_months)
+        elsif monthly_rate.zero?
+          monthly_payment_amount = remaining_balance / remaining_months
+        else
+          monthly_payment_amount = (remaining_balance * monthly_rate * (1 + monthly_rate)**remaining_months) / ((1 + monthly_rate)**remaining_months - 1)
+        end
+
+        interest_payment = remaining_balance * monthly_rate
+        principal_payment = monthly_payment_amount - interest_payment
+        ending_balance = remaining_balance - principal_payment
+
+        LoanAmortizationSchedule.create!(
+          loan_id: id,
+          payment_number: payment_number,
+          payment_date: current_date,
+          beginning_balance: remaining_balance,
+          payment_amount: monthly_payment_amount,
+          principal_payment: principal_payment,
+          interest_payment: interest_payment,
+          ending_balance: [ending_balance, 0].max,
+          interest_rate: current_rate
+        )
+
+        remaining_balance = [ending_balance, 0].max
+        payment_number += 1
+        current_date = current_date.next_month
       end
-
-      interest_payment = remaining_balance * monthly_rate
-      principal_payment = monthly_payment_amount - interest_payment
-      ending_balance = remaining_balance - principal_payment
-
-      LoanAmortizationSchedule.create!(
-        loan_id: id,
-        payment_number: payment_number,
-        payment_date: current_date,
-        beginning_balance: remaining_balance,
-        payment_amount: monthly_payment_amount,
-        principal_payment: principal_payment,
-        interest_payment: interest_payment,
-        ending_balance: [ending_balance, 0].max,
-        interest_rate: current_rate
-      )
-
-      remaining_balance = [ending_balance, 0].max
-      payment_number += 1
-      current_date = current_date.next_month
     end
   end
 
@@ -94,14 +105,17 @@ class Loan < ApplicationRecord
     regenerate_amortization_schedule if amortization_schedules.exists?
   end
 
+  # The rate in effect on `date` -- the loan's original `interest_rate`
+  # before any configured change has taken effect yet (or none exist),
+  # otherwise the most recent rate change at or before `date`.
   def rate_for_date(date)
-    return nil if rate_change_schedule.blank?
+    return interest_rate if rate_change_schedule.blank?
 
     applicable_rates = rate_change_schedule.select do |effective_date, _rate|
       Date.parse(effective_date) <= date
     end
 
-    return nil if applicable_rates.empty?
+    return interest_rate if applicable_rates.empty?
 
     latest_date = applicable_rates.keys.map { |d| Date.parse(d) }.max
     rate_change_schedule[latest_date.to_s]
