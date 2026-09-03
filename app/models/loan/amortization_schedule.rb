@@ -206,9 +206,18 @@ class Loan
         scheduled_payment_dates.first
       end
 
+      # `Loan#start_date` (falling back to the account's opening-anchor
+      # valuation date when unset) is the loan's ORIGINATION/anchor date --
+      # e.g. the closing date on a mortgage -- not the first payment date.
+      # The first payment falls one calendar month after it, and every
+      # subsequent payment one month after that, regardless of which
+      # day-of-month the anchor falls on (`Date#next_month` clamps to the
+      # shorter month where needed, e.g. Jan 31 -> Feb 28/29 -> Mar 28/29,
+      # not Mar 31 -- see `Date#next_month` boundary tests in
+      # test/models/loan/amortization_schedule_test.rb).
       def scheduled_payment_dates
         @scheduled_payment_dates ||= begin
-          date = loan.start_date || loan.account.opening_anchor_date
+          date = loan.start_date || loan.account_opening_anchor_date
           Array.new(loan.term_months) do
             date = date.next_month
           end

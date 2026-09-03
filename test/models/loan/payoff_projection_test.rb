@@ -32,6 +32,14 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
       entryable: Valuation.new(kind: "opening_anchor")
     )
 
+    # PayoffProjection is a read-only calculator now (see
+    # PayoffProjection#initialize) -- it no longer materializes the
+    # persisted original schedule itself, and #applicable? requires that
+    # schedule to already be current. Build it explicitly here so every
+    # test using this factory has a real baseline to compare against,
+    # matching what the background rebuild job would produce in production.
+    account.loan.ensure_amortization_schedule_current!
+
     account.loan
   end
 
@@ -107,7 +115,6 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
 
   test "all persisted original payments are in the future for a loan starting today" do
     loan = build_loan(balance: 500000)
-    loan.payoff_projection # triggers ensure_amortization_schedule_current!
 
     assert_equal 360, loan.amortizations.where("payment_date > ?", Date.current).count
   end

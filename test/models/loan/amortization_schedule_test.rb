@@ -158,13 +158,25 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
     assert_not schedule.amortizable?
   end
 
+  test "rejects zero or negative term at the validation layer" do
+    loan = Loan.new(rate_type: "fixed", interest_rate: 3.5, term_months: 0)
+    assert_not loan.valid?
+    assert_includes loan.errors[:term_months], "must be greater than 0"
+  end
+
+  test "rejects a term months beyond the supported maximum" do
+    loan = Loan.new(rate_type: "fixed", interest_rate: 3.5, term_months: Loan::MAX_TERM_MONTHS + 1)
+    assert_not loan.valid?
+    assert_includes loan.errors[:term_months], "must be less than or equal to #{Loan::MAX_TERM_MONTHS}"
+  end
+
   test "schedule is not amortizable for zero term" do
-    zero_term_loan = Account.create! \
+    zero_term_loan = Account.new \
       family: @family,
       name: "Zero Term Loan",
       balance: 500000,
       currency: "USD",
-      accountable: Loan.create!(
+      accountable: Loan.new(
         rate_type: "fixed",
         interest_rate: 3.5,
         term_months: 0
@@ -249,6 +261,63 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
     assert_equal 3.5, payments[0][:interest_rate].to_f
     assert_equal Date.new(2023, 3, 1), payments[1][:payment_date]
     assert_equal 4.5, payments[1][:interest_rate].to_f
+  end
+
+  # Regression/contract test: start_date is the loan's origination/anchor
+  # date, not the first payment date -- the first payment falls one
+  # calendar month after it. See the doc comment on
+  # Loan::AmortizationSchedule#scheduled_payment_dates.
+  test "the first payment date is one calendar month after start_date, regardless of its day-of-month" do
+    first_of_month_loan = Account.create! \
+      family: @family,
+      name: "First-of-Month Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        rate_type: "fixed",
+        interest_rate: 3.5,
+        term_months: 12,
+        start_date: Date.new(2024, 1, 1)
+      )
+    assert_equal Date.new(2024, 2, 1), first_of_month_loan.loan.amortization_schedule.payments.first[:payment_date]
+
+    mid_month_loan = Account.create! \
+      family: @family,
+      name: "Mid-Month Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        rate_type: "fixed",
+        interest_rate: 3.5,
+        term_months: 12,
+        start_date: Date.new(2024, 1, 15)
+      )
+    assert_equal Date.new(2024, 2, 15), mid_month_loan.loan.amortization_schedule.payments.first[:payment_date]
+  end
+
+  # Date#next_month clamps to the shorter month rather than overflowing --
+  # an anchor on Jan 31 lands its first payment on Feb 29 (2024 is a leap
+  # year), not Mar 2/3. Each subsequent month's date is computed by calling
+  # #next_month again on the *previous, already-clamped* date rather than
+  # re-clamping from the original day-31 anchor each time, so once clamped
+  # to 29 the schedule stays on the 29th (not drifting back to 30/31 in a
+  # longer month) -- see Ruby's own Date#next_month semantics.
+  test "an anchor on the 31st clamps into shorter months and stays clamped" do
+    loan_account = Account.create! \
+      family: @family,
+      name: "End-of-Month Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        rate_type: "fixed",
+        interest_rate: 3.5,
+        term_months: 3,
+        start_date: Date.new(2024, 1, 31)
+      )
+
+    dates = loan_account.loan.amortization_schedule.payments.map { |p| p[:payment_date] }
+
+    assert_equal [ Date.new(2024, 2, 29), Date.new(2024, 3, 29), Date.new(2024, 4, 29) ], dates
   end
 
   test "zero interest rate calculates straight line principal" do

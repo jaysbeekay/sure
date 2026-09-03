@@ -26,7 +26,14 @@ class Loan
 
     def initialize(loan)
       @loan = loan
-      @loan.ensure_amortization_schedule_current!
+      # Read-only: never rebuilds inline (that would make a read take a loan
+      # lock and delete/insert rows). If the persisted schedule this
+      # projection compares against (#months_saved / #interest_saved read
+      # loan.amortizations -- see #original_remaining_payments) is stale or
+      # missing, enqueue the same background rebuild the API/web read paths
+      # use, and #applicable? reports false in the meantime (see there)
+      # rather than comparing against a stale or empty baseline.
+      LoanAmortizationRebuildJob.perform_later(loan.id) unless loan.schedule_current?
     end
 
     def currency
@@ -39,9 +46,17 @@ class Loan
     # the simulation actually converges to zero within the iteration cap
     # (see #converged? -- a payment that technically covers interest but
     # would take an implausibly long time is treated as not applicable
-    # rather than silently reporting a truncated, non-payoff "payoff date").
+    # rather than silently reporting a truncated, non-payoff "payoff date")
+    # AND the persisted original schedule (#months_saved / #interest_saved's
+    # comparison baseline -- see #original_remaining_payments) is actually
+    # current. That last check matters because this read path never
+    # rebuilds a stale/missing schedule inline (see #initialize) -- without
+    # it, a loan whose background rebuild hasn't run yet would compare
+    # against zero or outdated persisted rows and report a fabricated
+    # months/interest delta instead of just not showing a projection yet.
     def applicable?
-      loan.amortization_schedule.amortizable? &&
+      loan.schedule_current? &&
+        loan.amortization_schedule.amortizable? &&
         loan.amortization_schedule.fixed_rate? &&
         monthly_payment.present? && monthly_payment.amount.positive? &&
         current_balance.amount.positive? &&
