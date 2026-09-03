@@ -167,6 +167,10 @@ class Loan < ApplicationRecord
   # still gets a fresh signature and is rebuilt normally. Callers that must
   # not write on a read should use #schedule_current? instead.
   def ensure_amortization_schedule_current!
+    # Clear memoized account-derived values before computing the lock-free
+    # signature so an external Account update cannot be hidden by this Loan's
+    # cached balance or opening date.
+    clear_amortization_schedule_cache!
     signature = amortization_schedule_signature
     return if @amortization_schedule_ensured_signature == signature
     return if schedule_current?(signature)
