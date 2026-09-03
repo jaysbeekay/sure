@@ -1,16 +1,42 @@
 # Triage: we-promise/sure PR #1775 ("Feat/loans overview new insights")
 
-Source: https://github.com/we-promise/sure/pull/1775 (upstream, open, author @HugoleDino).
-This file records the triage of feedback left on that PR and a remediation plan.
+Source: https://github.com/we-promise/sure/pull/1775 (upstream repo, not this fork).
 
-## PR summary
+## ⚠️ Sourcing & confidence — read this first
+
+This session has **no verified access** to `we-promise/sure`: it's a different
+GitHub owner than this fork (`jaysbeekay/sure`), and attaching it was refused
+("cross-tier adds are not supported"). Direct requests to
+`api.github.com/repos/we-promise/sure/...`, and even the plain PR HTML page and
+`.diff`/`.patch` endpoints, all return 403 ("GitHub access to this repository
+is not enabled for this session") when hit directly.
+
+The only thing that returned data was the `WebFetch` tool, which does **not**
+give raw page content — it renders the page and then runs a separate, smaller
+model over it to answer a prompt. Every detail below (reviewer usernames, bot
+names, specific numbers like the suggested `term_months` cap, class names like
+`stroke-zinc-700`, the "80%" coverage figure, dates, the exact YAML
+indentation claim) came from that paraphrase, with no second source to
+cross-check it against. **None of it should be treated as confirmed** until
+someone with real access to `we-promise/sure` (API, or this session re-run
+with that repo as its initial source) verifies it against the actual PR
+timeline and diff.
+
+The one section below that *is* independently verified is "Current state in
+this fork" — that came from grepping this repository's actual files, not from
+WebFetch.
+
+Given that, treat everything in "PR summary" through "Test coverage" as a
+**lead to verify, not a finding to act on**.
+
+## PR summary (unverified — see above)
 
 Adds editable loan fields (`down_payment`, `insurance_rate`, `insurance_rate_type`,
 `start_date`) plus derived insights: remaining loan amount, initial leverage, and a
 monthly payment breakdown by principal/interest/insurance, with a cached amortization
 schedule and a redesigned overview UI.
 
-## Status at triage time
+## Status at triage time (unverified — see above)
 
 - Open, stale: no substantive commits since May 15; last activity is maintainer
   nudges.
@@ -19,7 +45,7 @@ schedule and a redesigned overview UI.
   if the author doesn't respond.
 - CI: failing checks / conflicts blocking merge.
 
-## Feedback, by category
+## Feedback, by category (unverified — see above)
 
 ### 1. Correctness & security (must-fix)
 
@@ -77,7 +103,7 @@ schedule and a redesigned overview UI.
   `loan_test.rb` coverage for the new fields and the DoS guard boundary, plus
   system-test coverage for the new overview insights.
 
-## Current state in this fork (jaysbeekay/sure)
+## Current state in this fork (jaysbeekay/sure) — verified directly against this repo's files
 
 - `main` already has a simpler `Loan` model (`term_months`, `interest_rate`,
   `rate_type`) with **no** `down_payment`, `insurance_rate`,
@@ -88,10 +114,14 @@ schedule and a redesigned overview UI.
 - None of #1775's flagged defects currently exist in this repo's code, so there
   is nothing here today that needs a code fix for them.
 
-## Remediation plan
+## Remediation plan (contingent on verifying the feedback above first)
 
-Ordered for whoever picks this up next, whether that's upstream (if #1775 is
-rebased and resubmitted) or this fork (if the feature gets adopted here):
+This is a plan for *if* the unverified feedback above checks out — not a
+confirmed action list. Before anyone works from it: pull the real PR #1775
+timeline and diff (via `gh`/GitHub API from a session or account with access
+to `we-promise/sure`) and confirm each item actually appears. Ordered for
+whoever picks this up next, whether that's upstream (if #1775 is rebased and
+resubmitted) or this fork (if the feature gets adopted here):
 
 1. Rebase onto current `main`; resolve merge conflicts; regenerate `schema.rb`
    cleanly, dropping the unrelated holdings/trades diff.
