@@ -3429,6 +3429,7 @@ components:
       - schedule
       - pagination
       - payments
+      - payoff_projection
       properties:
         loan:
           type: object

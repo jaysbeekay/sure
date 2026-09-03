@@ -108,12 +108,52 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert projection["interest_saved"].to_f > 0
   end
 
+  # Regression: the projection used to anchor on Date.current.next_month
+  # (today's day-of-month) instead of the loan's real payment anchor day.
+  # Covers the fix end-to-end through the API/serializer, not just the
+  # model (see Loan::PayoffProjectionTest for the underlying calculation).
+  test "payoff projection's payoff date reflects the loan's real payment anchor, not today's day-of-month" do
+    start_date = 2.years.ago.to_date.change(day: 15)
+    loan_account = Account.create! \
+      family: @family,
+      name: "Mid-Cycle Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed",
+        start_date: start_date
+      )
+    loan_account.entries.create!(
+      name: "Starting balance",
+      amount: 500000,
+      currency: "USD",
+      date: start_date,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan_account.update!(balance: 450000)
+
+    next_scheduled_date = loan_account.loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
+    assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+    expected_payoff_date = loan_account.loan.payoff_projection.payoff_date
+
+    get api_v1_loan_amortization_schedule_path(loan_account.accountable), headers: api_headers
+    assert_response :success
+
+    projection = JSON.parse(response.body)["payoff_projection"]
+    assert_equal expected_payoff_date.iso8601, projection["projected_payoff_date"]
+  end
+
   test "omits the payoff projection for a variable rate loan" do
     loan = @variable_loan_account.accountable
     get api_v1_loan_amortization_schedule_path(loan), headers: api_headers
     assert_response :success
 
-    assert_nil JSON.parse(response.body)["payoff_projection"]
+    json = JSON.parse(response.body)
+    assert json.key?("payoff_projection"), "payoff_projection should be present as an explicit null, not omitted"
+    assert_nil json["payoff_projection"]
   end
 
   test "returns paginated payments" do

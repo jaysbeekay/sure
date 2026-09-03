@@ -1789,7 +1789,7 @@ RSpec.configure do |config|
           },
           AmortizationScheduleResponse: {
             type: :object,
-            required: %w[loan schedule pagination payments],
+            required: %w[loan schedule pagination payments payoff_projection],
             properties: {
               loan: {
                 type: :object,

@@ -248,6 +248,33 @@ class LoanTest < ActiveSupport::TestCase
     loan.ensure_amortization_schedule_current!
   end
 
+  # Regression: ensure_amortization_schedule_current! is called from read
+  # paths (Schedule tab, amortization_schedule API), not just writes -- it
+  # must not take a row lock (contending with concurrent readers/writers of
+  # the same loan) when the persisted schedule already matches, which is the
+  # overwhelmingly common case. A fresh Loan instance stands in for a new
+  # request, since the in-memory ensured-signature memo only covers repeat
+  # calls on the *same* instance.
+  test "ensure_amortization_schedule_current! does not acquire the row lock when the schedule is already current" do
+    loan_account = Account.create! \
+      family: families(:dylan_family),
+      name: "Mortgage Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed"
+      )
+
+    loan_account.loan.ensure_amortization_schedule_current!
+
+    fresh_loan = Loan.find(loan_account.loan.id)
+    fresh_loan.expects(:with_lock).never
+    fresh_loan.ensure_amortization_schedule_current!
+  end
+
   test "adds variable rate changes" do
     loan_account = Account.create! \
       family: families(:dylan_family),
