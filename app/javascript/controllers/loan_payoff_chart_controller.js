@@ -81,13 +81,24 @@ export default class extends Controller {
     const currentBalancePoint = data.current_balance ? toPoint(data.current_balance) : { date: today, balance: 0 };
 
     const historySeries = (data.scheduled_history || []).map(toPoint);
+    // The contracted trajectory's last known point before today -- anchors
+    // originalSeries below so that purely-contracted line stays independent
+    // of the live balance even when it's diverged (extra payments made).
+    // Falls back to currentBalancePoint only for a brand-new loan with no
+    // scheduled history yet -- there's no contracted "before" to anchor to.
+    const lastContractedPoint = historySeries.length > 0 ? historySeries[historySeries.length - 1] : currentBalancePoint;
     // Close the solid line at (today, currentBalance) -- the actual, live
     // balance, which can differ from the last scheduled payment's balance
     // when extra payments were made. That gap is deliberate: it's the
     // visual signal of the extra payment.
     historySeries.push(currentBalancePoint);
 
-    const originalSeries = [currentBalancePoint, ...(data.original_projection || []).map(toPoint)];
+    // originalSeries is the "if you'd only ever made the contracted
+    // payment" reference -- it must stay independent of the live balance,
+    // so it continues from the contracted trajectory's own last point, not
+    // currentBalancePoint (unlike acceleratedSeries below, which is
+    // *defined* as starting from today's real balance).
+    const originalSeries = [lastContractedPoint, ...(data.original_projection || []).map(toPoint)];
     const acceleratedSeries = [currentBalancePoint, ...(data.accelerated_projection || []).map(toPoint)];
 
     if (historySeries.length < 2 && originalSeries.length < 2 && acceleratedSeries.length < 2) return;
