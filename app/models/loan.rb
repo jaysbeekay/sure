@@ -83,11 +83,11 @@ class Loan < ApplicationRecord
           payment_amount: monthly_payment_amount,
           principal_payment: principal_payment,
           interest_payment: interest_payment,
-          ending_balance: [ending_balance, 0].max,
+          ending_balance: [ ending_balance, 0 ].max,
           interest_rate: current_rate
         )
 
-        remaining_balance = [ending_balance, 0].max
+        remaining_balance = [ ending_balance, 0 ].max
         payment_number += 1
         current_date = current_date.next_month
       end
@@ -127,30 +127,30 @@ class Loan < ApplicationRecord
 
   private
 
-  def calculate_fixed_rate_payment
-    annual_rate = interest_rate / 100.0
-    monthly_rate = annual_rate / 12.0
+    def calculate_fixed_rate_payment
+      annual_rate = interest_rate / 100.0
+      monthly_rate = annual_rate / 12.0
 
-    if monthly_rate.zero?
-      payment = account.loan.original_balance.amount / term_months
-    else
-      payment = (account.loan.original_balance.amount * monthly_rate * (1 + monthly_rate)**term_months) / ((1 + monthly_rate)**term_months - 1)
+      if monthly_rate.zero?
+        payment = account.loan.original_balance.amount / term_months
+      else
+        payment = (account.loan.original_balance.amount * monthly_rate * (1 + monthly_rate)**term_months) / ((1 + monthly_rate)**term_months - 1)
+      end
+
+      Money.new(payment.round, account.currency)
     end
 
-    Money.new(payment.round, account.currency)
-  end
-
-  def calculate_payment_amount(principal, monthly_rate, months_remaining)
-    if monthly_rate.zero?
-      principal / months_remaining
-    else
-      (principal * monthly_rate * (1 + monthly_rate)**months_remaining) / ((1 + monthly_rate)**months_remaining - 1)
+    def calculate_payment_amount(principal, monthly_rate, months_remaining)
+      if monthly_rate.zero?
+        principal / months_remaining
+      else
+        (principal * monthly_rate * (1 + monthly_rate)**months_remaining) / ((1 + monthly_rate)**months_remaining - 1)
+      end
     end
-  end
 
-  def original_balance
-    Money.new(account.first_valuation_amount, account.currency)
-  end
+    def original_balance
+      Money.new(account.first_valuation_amount, account.currency)
+    end
 
   class << self
     def color

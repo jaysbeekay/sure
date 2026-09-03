@@ -27,19 +27,19 @@ class LoanAmortizationSchedulesController < ApplicationController
 
   private
 
-  def parsed_start_date
-    return nil if params[:start_date].blank?
+    def parsed_start_date
+      return nil if params[:start_date].blank?
 
-    Date.iso8601(params[:start_date])
-  rescue ArgumentError, TypeError
-    :invalid
-  end
+      Date.iso8601(params[:start_date])
+    rescue ArgumentError, TypeError
+      :invalid
+    end
 
-  def set_account
-    @account = Account.find(params[:account_id])
-  end
+    def set_account
+      @account = Account.find(params[:account_id])
+    end
 
-  def authorize_account!
-    redirect_to root_path, status: :unauthorized unless current_user.can_manage?(@account)
-  end
+    def authorize_account!
+      redirect_to root_path, status: :unauthorized unless current_user.can_manage?(@account)
+    end
 end
