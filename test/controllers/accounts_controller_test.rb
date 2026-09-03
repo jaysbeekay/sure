@@ -708,6 +708,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       entryable: Valuation.new(kind: "opening_anchor")
     )
     loan_account.update!(balance: 450000) # extra paid toward principal
+    loan_account.loan.ensure_amortization_schedule_current!
 
     next_scheduled_date = loan_account.loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
     assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
