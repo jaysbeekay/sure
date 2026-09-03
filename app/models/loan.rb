@@ -112,8 +112,17 @@ class Loan < ApplicationRecord
 
   # Fingerprint every input used by AmortizationSchedule. It lets persisted
   # rows be invalidated when the source change happens on Account data.
+  #
+  # Reloads the cached account association first: `account` here can be a
+  # separate in-memory object from whichever reference a caller mutated
+  # (e.g. `account.update!(balance: ...)` on one Account instance doesn't
+  # touch a different Loan instance's own cached `account` association),
+  # so without this a signature computed right after such an update can
+  # still reflect the pre-update balance.
   def amortization_schedule_signature
     return nil unless account
+
+    account.reload
 
     Digest::SHA256.hexdigest([
       AmortizationSchedule::ALGORITHM_VERSION,
