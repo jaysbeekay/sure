@@ -125,6 +125,13 @@ class Loan < ApplicationRecord
     generate_amortization_schedule(start_date: (amortization_schedules.order(:payment_date).first&.payment_date || Date.today))
   end
 
+  # Called externally (account.loan.original_balance) from views and from
+  # this model's own payment calculations via the same explicit-receiver
+  # form, so it can't be private.
+  def original_balance
+    Money.new(account.first_valuation_amount, account.currency)
+  end
+
   class << self
     def color
       "#D444F1"
@@ -160,9 +167,5 @@ class Loan < ApplicationRecord
       else
         (principal * monthly_rate * (1 + monthly_rate)**months_remaining) / ((1 + monthly_rate)**months_remaining - 1)
       end
-    end
-
-    def original_balance
-      Money.new(account.first_valuation_amount, account.currency)
     end
 end
