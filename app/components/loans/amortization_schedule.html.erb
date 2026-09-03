@@ -24,17 +24,20 @@
   <% else %>
     <% if schedule_summary %>
       <div class="grid grid-cols-3 gap-2">
-        <%= summary_card title: t(".total_payments") do %>
-          <%= schedule_summary[:total_payments] %>
-        <% end %>
+        <div class="rounded-xl bg-container shadow-xs border border-alpha-black-25 p-4">
+          <h4 class="text-secondary text-sm"><%= t(".total_payments") %></h4>
+          <p class="text-xl font-medium text-primary privacy-sensitive"><%= schedule_summary[:total_payments] %></p>
+        </div>
 
-        <%= summary_card title: t(".total_principal") do %>
-          <%= format_money(schedule_summary[:total_principal]) %>
-        <% end %>
+        <div class="rounded-xl bg-container shadow-xs border border-alpha-black-25 p-4">
+          <h4 class="text-secondary text-sm"><%= t(".total_principal") %></h4>
+          <p class="text-xl font-medium text-primary privacy-sensitive"><%= schedule_summary[:total_principal].format %></p>
+        </div>
 
-        <%= summary_card title: t(".total_interest") do %>
-          <%= format_money(schedule_summary[:total_interest]) %>
-        <% end %>
+        <div class="rounded-xl bg-container shadow-xs border border-alpha-black-25 p-4">
+          <h4 class="text-secondary text-sm"><%= t(".total_interest") %></h4>
+          <p class="text-xl font-medium text-primary privacy-sensitive"><%= schedule_summary[:total_interest].format %></p>
+        </div>
       </div>
     <% end %>
 
@@ -57,12 +60,12 @@
             <tr class="hover:bg-base-200">
               <td><strong><%= entry.payment_number %></strong></td>
               <td><%= l(entry.payment_date, format: :short) %></td>
-              <td><%= number_to_percentage(entry.interest_rate, precision: 3) %></td>
-              <td class="text-right"><%= format_money(Money.new(entry.beginning_balance.round, loan.account.currency)) %></td>
-              <td class="text-right font-semibold"><%= format_money(Money.new(entry.payment_amount.round, loan.account.currency)) %></td>
-              <td class="text-right text-success"><%= format_money(Money.new(entry.principal_payment.round, loan.account.currency)) %></td>
-              <td class="text-right text-warning"><%= format_money(Money.new(entry.interest_payment.round, loan.account.currency)) %></td>
-              <td class="text-right"><%= format_money(Money.new(entry.ending_balance.round, loan.account.currency)) %></td>
+              <td><%= helpers.number_to_percentage(entry.interest_rate, precision: 3) %></td>
+              <td class="text-right"><%= Money.new(entry.beginning_balance.round, loan.account.currency).format %></td>
+              <td class="text-right font-semibold"><%= Money.new(entry.payment_amount.round, loan.account.currency).format %></td>
+              <td class="text-right text-success"><%= Money.new(entry.principal_payment.round, loan.account.currency).format %></td>
+              <td class="text-right text-warning"><%= Money.new(entry.interest_payment.round, loan.account.currency).format %></td>
+              <td class="text-right"><%= Money.new(entry.ending_balance.round, loan.account.currency).format %></td>
             </tr>
           <% end %>
         </tbody>
