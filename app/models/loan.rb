@@ -168,8 +168,17 @@ class Loan < ApplicationRecord
 
   # Fingerprint every input used by AmortizationSchedule. It lets persisted
   # rows be invalidated when the source change happens on Account data.
+  #
+  # Reloads the cached account association first: `account` here can be a
+  # separate in-memory object from whichever reference a caller mutated
+  # (e.g. `account.update!(balance: ...)` on one Account instance doesn't
+  # touch a different Loan instance's own cached `account` association),
+  # so without this a signature computed right after such an update can
+  # still reflect the pre-update balance.
   def amortization_schedule_signature
     return nil unless account
+
+    account.reload
 
     Digest::SHA256.hexdigest([
       AmortizationSchedule::ALGORITHM_VERSION,
@@ -196,7 +205,26 @@ class Loan < ApplicationRecord
   # callers that must not write on a read (e.g. a read-scoped API request)
   # should use #schedule_current? instead and let the background job handle
   # regeneration.
+  #
+  # Standard double-checked locking: #schedule_current? (a single indexed
+  # exists? query) is checked once, lock-free, before deciding whether a
+  # rebuild might be needed at all -- the common case, since this is also
+  # called from the rebuild job itself and could otherwise take a row lock
+  # on every run even when a concurrent request already rebuilt it. It's
+  # re-checked inside the lock (below) as the authoritative read once
+  # concurrent writers are excluded.
   def ensure_amortization_schedule_current!
+    # Must run before the lock-free #schedule_current? below, not just
+    # inside the lock: #original_balance/#account_opening_anchor_date are
+    # memoized per instance, so a repeat call on the same Loan object after
+    # an external Account mutation (e.g. a test or caller doing
+    # `account.update!(balance: ...)` on its own reference) would otherwise
+    # keep computing the signature from stale memoized values regardless of
+    # #amortization_schedule_signature's own account.reload -- that reload
+    # refreshes `account`'s raw attributes, but not these derived memos.
+    clear_amortization_schedule_cache!
+    return if schedule_current?
+
     with_lock do
       clear_amortization_schedule_cache!
 
