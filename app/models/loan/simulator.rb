@@ -66,7 +66,7 @@ class Loan
           # These resolvers are intentionally called at the period boundary.
           # Their change-point semantics are used by the daily-accrual and
           # offset extensions; L3 preserves the existing monthly result.
-          @extra_for.call(previous_date, payment_date)
+          extra_changes = @extra_for.call(previous_date, payment_date)
           offset_changes = @offset_for.call(previous_date, payment_date)
 
           interest = if @interest_for
@@ -78,14 +78,17 @@ class Loan
               rate: segment[:rate]
             )
           elsif @daily_accrual
-            InterestAccrual.charge(
-              currency_precision: @currency_precision,
+            accrual_rate = accrual_rate_at(previous_date, segment[:rate])
+            interest, balance = accrue_daily_period(
               from_date: previous_date,
               to_date: payment_date,
               balance: balance,
-              annual_rate: segment[:rate],
+              annual_rate: accrual_rate,
+              annual_rate_changes: rate_changes_between(previous_date, payment_date),
+              extra_changes: extra_changes,
               offset_changes: offset_changes
             )
+            interest.round(@currency_precision)
           else
             monthly_rate = (decimal(segment[:rate]) / BigDecimal("100")) / BigDecimal("12")
             (balance * monthly_rate).round(@currency_precision)
@@ -146,6 +149,66 @@ class Loan
           rate = event.fetch(:rate)
           [ date, decimal(rate) ]
         end.sort_by(&:first)
+      end
+
+      def rate_changes_between(from_date, to_date)
+        normalized_re_amortisation_rates.filter_map do |date, rate|
+          next unless date >= from_date && date < to_date
+
+          { date: date, amount: rate }
+        end
+      end
+
+      def accrual_rate_at(date, fallback)
+        normalized_re_amortisation_rates.reverse_each do |event_date, rate|
+          return rate if event_date <= date
+        end
+        @accrual_rate_for.call(date) || fallback
+      end
+
+      def accrue_daily_period(from_date:, to_date:, balance:, annual_rate:, annual_rate_changes:, extra_changes:, offset_changes:)
+        if Array(extra_changes).empty? && Array(annual_rate_changes).empty?
+          return [ InterestAccrual.calculate(
+            from_date: from_date,
+            to_date: to_date,
+            balance: balance,
+            annual_rate: annual_rate,
+            offset_changes: offset_changes
+          ), balance ]
+        end
+
+        extras = normalize_amount_changes(extra_changes, from_date, to_date)
+        rates = normalize_amount_changes(annual_rate_changes, from_date, to_date)
+        offsets = normalize_amount_changes(offset_changes, from_date, to_date)
+        dates = ([ from_date ] + extras.keys + rates.keys + offsets.keys + [ to_date ]).uniq.sort
+        interest = BigDecimal("0")
+        current_rate = annual_rate
+        current_offset = BigDecimal("0")
+
+        dates.each_cons(2) do |segment_start, segment_end|
+          current_rate = rates[segment_start] if rates.key?(segment_start)
+          current_offset = offsets[segment_start] if offsets.key?(segment_start)
+          interest += InterestAccrual.calculate(
+            from_date: segment_start,
+            to_date: segment_end,
+            balance: balance,
+            annual_rate: current_rate,
+            offset_changes: [ { date: segment_start, amount: current_offset } ]
+          )
+          balance -= extras[segment_end] if extras.key?(segment_end)
+          balance = BigDecimal("0") if balance.negative?
+        end
+
+        [ interest, balance ]
+      end
+
+      def normalize_amount_changes(changes, from_date, to_date)
+        Array(changes).each_with_object({}) do |change, normalized|
+          date, amount = change.is_a?(Array) ? change : [ change.fetch(:date), change.fetch(:amount) ]
+          next unless date >= from_date && date <= to_date
+
+          normalized[date] = decimal(amount)
+        end
       end
 
       def re_amortisation_rate_for(payment_date, events)

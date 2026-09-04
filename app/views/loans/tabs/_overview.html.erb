@@ -1,6 +1,6 @@
 <%# locals: (account:) %>
 
-<% payoff_date = account.loan.amortization_schedule.payoff_date %>
+<% payoff_date = account.loan.amortizations.ordered.last&.payment_date %>
 
 <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
   <%= summary_card title: t(".original_principal") do %>

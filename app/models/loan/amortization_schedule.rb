@@ -1,7 +1,9 @@
 class Loan
   # Calculates amortization schedules for loans using the constant-payment method
   class AmortizationSchedule
-    ALGORITHM_VERSION = 3
+    # Version 2 is the currently persisted monthly algorithm. Daily accrual is
+    # still an explicit comparison path until its release gates are approved.
+    ALGORITHM_VERSION = 2
 
     attr_reader :loan
 

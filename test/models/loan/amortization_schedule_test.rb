@@ -505,10 +505,30 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
   end
 
   test "characterization assertion fails on a deliberate one-cent mutation" do
-    expected = characterized_row(1, "2024-02-01", "0.0", "33.33", "33.33", "0.00", "100.00", "66.67")
-    mutated = expected.merge(payment_amount: BigDecimal("33.34"))
+    loan = accounts(:characterization_short).loan
+    expected = [ characterized_row(1, "2024-02-15", "12.0", "1010.00", "1000.00", "10.00", "1000.00", "0.00") ]
+    original_step = Loan::AmortizationMath.method(:step)
 
-    assert_raises(Minitest::Assertion) { assert_equal expected, mutated }
+    mutation = lambda do |**arguments|
+      original_step.call(**arguments).merge(payment_amount: arguments[:payment].round(2) + BigDecimal("0.01"))
+    end
+
+    Loan::AmortizationMath.stub(:step, mutation) do
+      actual = loan.amortization_schedule.payments.map do |row|
+        row.slice(
+          :payment_number,
+          :payment_date,
+          :interest_rate,
+          :payment_amount,
+          :principal_payment,
+          :interest_payment,
+          :beginning_balance,
+          :ending_balance
+        )
+      end
+
+      assert_raises(Minitest::Assertion) { assert_equal expected, actual }
+    end
   end
 
   private

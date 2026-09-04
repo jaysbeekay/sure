@@ -23,7 +23,7 @@ en:
       monthly_payment: Monthly Payment
       not_applicable: N/A
       original_principal: Original Principal
-      remaining_principal: Remaining Principal
+      remaining_principal: Remaining loan balance
       term: Term
       type: Type
       unknown: Unknown

@@ -4,21 +4,30 @@ namespace :loans do
     require "benchmark"
 
     dates = Array.new(361) { |index| Date.new(2024, 1, 1) >> index }
-    workloads = dates.each_cons(2).map do |from_date, to_date|
-      changes = (1...31).map { |day| [ from_date + day, BigDecimal("100000") ] }
-      [ from_date, to_date, changes ]
-    end
+    payment_amount = ->(rate:, balance:, remaining_payments:, **_) {
+      monthly_rate = BigDecimal(rate.to_s) / 100 / 12
+      next (balance / remaining_payments).round(2) if monthly_rate.zero?
+
+      factor = (1 + monthly_rate) ** remaining_payments
+      (balance * monthly_rate * factor / (factor - 1)).round(2)
+    }
     elapsed = Benchmark.realtime do
       4.times do
-        workloads.each do |from_date, to_date, offset_changes|
-          Loan::InterestAccrual.calculate(
-            from_date: from_date,
-            to_date: to_date,
-            balance: BigDecimal("500000"),
-            annual_rate: BigDecimal("6"),
-            offset_changes: offset_changes
-          )
-        end
+        Loan::Simulator.new(
+          starting_balance: BigDecimal("500000"),
+          starting_balance_as_of: dates.first,
+          accrual_start_date: dates.first,
+          payment_schedule: dates.drop(1),
+          accrual_rate_for: ->(_date) { BigDecimal("6") },
+          re_amortisation_events: ->(_from_date, _to_date) { [] },
+          payment_strategy: :reamortize,
+          payment_amount_for: payment_amount,
+          currency_precision: 2,
+          daily_accrual: true,
+          offset_for: ->(from_date, _to_date) {
+            (1...31).map { |day| { date: from_date + day, amount: BigDecimal("100000") } }
+          }
+        ).run
       end
     end
     elapsed_ms = elapsed * 1000

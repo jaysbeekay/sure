@@ -91,7 +91,7 @@ reconciliation gate has been reviewed line by line.
 | FR-302 extra repayments | planned |
 | FR-303 saved scenarios | planned |
 | FR-401 variable-rate projection | planned |
-| FR-404 original payoff date | planned |
+| FR-404 original payoff date | delivered in loan Overview |
 | FR-405 rate-change table | planned |
 | FR-408 scenario persistence | planned |
 | FR-409 scenario comparison | planned |
@@ -103,8 +103,8 @@ reconciliation gate has been reviewed line by line.
 | FR-506 scenario API/CSV | planned |
 | FR-507 methodology documentation | planned |
 | FR-509 accessible chart alternative | planned |
-| FR-510 remaining-balance wording | planned |
-| FR-511 Overview default tab | planned |
+| FR-510 remaining-balance wording | delivered in loan Overview |
+| FR-511 Overview default tab | delivered in loan navigation |
 
 ## Gate G1 and remaining approval
 
