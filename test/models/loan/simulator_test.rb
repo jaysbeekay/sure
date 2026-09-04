@@ -94,7 +94,7 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
       starting_balance: "1000.00",
       accrual_start_date: Date.new(2024, 1, 1),
       payment_schedule: [ Date.new(2024, 2, 1) ],
-      rates: [ BigDecimal("12") ],
+      rates: [ BigDecimal("12"), BigDecimal("12") ],
       payment_strategy: :hold,
       payment_amount_for: ->(**_args) { BigDecimal("1010.00") },
       daily_accrual: true,
@@ -105,6 +105,97 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
 
     assert result.converged?
     assert_equal BigDecimal("4.60"), result.payments.first[:interest_payment]
+  end
+
+  test "daily accrual applies a mid-period rate change only from its effective date" do
+    result = build_simulator(
+      starting_balance: "100000.00",
+      accrual_start_date: Date.new(2024, 2, 1),
+      payment_schedule: [ Date.new(2024, 3, 1) ],
+      rates: [ BigDecimal("3"), BigDecimal("3") ],
+      payment_strategy: :hold,
+      payment_amount_for: ->(**_args) { BigDecimal("100000.00") },
+      daily_accrual: true,
+      re_amortisation_events: ->(_from_date, _to_date) {
+        [ { date: Date.new(2024, 2, 15), rate: BigDecimal("12") } ]
+      },
+      interest_for: nil
+    ).run
+
+    assert_equal BigDecimal("608.22"), result.payments.first[:interest_payment]
+  end
+
+  test "daily accrual applies an extra repayment at its effective date" do
+    result = build_simulator(
+      starting_balance: "1000.00",
+      payment_schedule: [ Date.new(2024, 2, 1) ],
+      payment_strategy: :hold,
+      payment_amount_for: ->(**_args) { BigDecimal("1000.00") },
+      daily_accrual: true,
+      extra_for: ->(_from_date, _to_date) {
+        [ { date: Date.new(2024, 1, 15), amount: BigDecimal("100.00") } ]
+      }
+    ).run
+
+    assert_equal BigDecimal("900.00"), result.payments.first[:beginning_balance]
+    assert_equal BigDecimal("900.00"), result.payments.first[:payment_amount]
+  end
+
+  test "a rate change on a payment date affects the next period only" do
+    result = build_simulator(
+      starting_balance: "1000.00",
+      payment_schedule: [ Date.new(2024, 2, 1), Date.new(2024, 3, 1), Date.new(2024, 4, 1) ],
+      rates: [ BigDecimal("0"), BigDecimal("0"), BigDecimal("12") ],
+      payment_strategy: :hold,
+      payment_amount_for: ->(**_args) { BigDecimal("0.00") },
+      daily_accrual: true,
+      re_amortisation_events: ->(_from_date, _to_date) {
+        [ { date: Date.new(2024, 3, 1), rate: BigDecimal("12") } ]
+      }
+    ).run
+
+    assert_equal BigDecimal("0.00"), result.payments[0][:interest_payment]
+    assert_equal BigDecimal("9.53"), result.payments[1][:interest_payment]
+  end
+
+  test "an extra repayment on a payment date is applied before payment" do
+    result = build_simulator(
+      starting_balance: "1000.00",
+      payment_schedule: [ Date.new(2024, 2, 1) ],
+      payment_strategy: :hold,
+      payment_amount_for: ->(**_args) { BigDecimal("1000.00") },
+      daily_accrual: true,
+      extra_for: ->(_from_date, _to_date) {
+        [ { date: Date.new(2024, 2, 1), amount: BigDecimal("100.00") } ]
+      }
+    ).run
+
+    assert_equal BigDecimal("900.00"), result.payments.first[:beginning_balance]
+    assert_equal BigDecimal("900.00"), result.payments.first[:payment_amount]
+  end
+
+  test "extra repayment and offset movement on one date affect the next period" do
+    result = build_simulator(
+      starting_balance: "1000.00",
+      payment_schedule: [ Date.new(2024, 2, 1), Date.new(2024, 3, 1), Date.new(2024, 4, 1) ],
+      rates: [ BigDecimal("0"), BigDecimal("0"), BigDecimal("12") ],
+      payment_strategy: :hold,
+      payment_amount_for: ->(**_args) { BigDecimal("0.00") },
+      daily_accrual: true,
+      extra_for: ->(from_date, to_date) {
+        next [] unless from_date < Date.new(2024, 3, 1) && Date.new(2024, 3, 1) <= to_date
+
+        [ { date: Date.new(2024, 3, 1), amount: BigDecimal("100.00") } ]
+      },
+      offset_for: ->(from_date, to_date) {
+        next [] unless from_date <= Date.new(2024, 3, 1) && Date.new(2024, 3, 1) < to_date
+
+        [ { date: Date.new(2024, 3, 1), amount: BigDecimal("200.00") } ]
+      }
+    ).run
+
+    assert_equal BigDecimal("900.00"), result.payments[2][:beginning_balance]
+    assert_equal BigDecimal("7.13"), result.payments[2][:interest_payment]
   end
 
   test "reports a non-converged run with its remaining balloon" do
