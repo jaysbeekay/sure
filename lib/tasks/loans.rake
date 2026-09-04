@@ -1,4 +1,32 @@
 namespace :loans do
+  desc "Benchmark four 30-year daily-accrual workloads with monthly offset changes"
+  task amortization_benchmark: :environment do
+    require "benchmark"
+
+    dates = Array.new(361) { |index| Date.new(2024, 1, 1) >> index }
+    workloads = dates.each_cons(2).map do |from_date, to_date|
+      changes = (1...31).map { |day| { date: from_date + day, amount: BigDecimal("100000") } }
+      [ from_date, to_date, changes ]
+    end
+    elapsed = Benchmark.realtime do
+      4.times do
+        workloads.each do |from_date, to_date, offset_changes|
+          Loan::InterestAccrual.calculate(
+            from_date: from_date,
+            to_date: to_date,
+            balance: BigDecimal("500000"),
+            annual_rate: BigDecimal("6"),
+            offset_changes: offset_changes
+          )
+        end
+      end
+    end
+    elapsed_ms = elapsed * 1000
+    threshold_ms = (ENV["MAX_MS"].presence || "50").to_f
+    puts format("elapsed_ms=%.3f threshold_ms=%.3f", elapsed_ms, threshold_ms)
+    abort "amortization benchmark exceeded threshold" if elapsed_ms > threshold_ms
+  end
+
   desc "Compare monthly and daily loan calculations for a bounded sample"
   task :amortization_variance, [ :limit, :output ] => :environment do |_, args|
     require "csv"

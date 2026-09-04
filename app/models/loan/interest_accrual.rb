@@ -20,14 +20,12 @@ class Loan
       principal = decimal(balance)
       rate = decimal(annual_rate) / PERCENT / DAY_COUNT
       changes = normalize_changes(offset_changes, from_date, to_date)
-      boundaries = [ from_date, *changes.map(&:first), to_date ].uniq.sort
-
-      boundaries.each_cons(2).sum do |segment_start, segment_end|
-        days = BigDecimal((segment_end - segment_start).to_i.to_s)
-        offset = changes.reverse_each.find { |date, _amount| date <= segment_start }&.last || BigDecimal("0")
-        interest_bearing_balance = [ principal - offset, BigDecimal("0") ].max
-        (days * interest_bearing_balance * rate).to_d
-      end
+      balance_days = principal * BigDecimal((to_date - from_date).to_i.to_s)
+      changes.each_with_index.sum do |(change_date, offset), index|
+        segment_end = changes[index + 1]&.first || to_date
+        days = BigDecimal((segment_end - change_date).to_i.to_s)
+        [ offset, principal ].min * days
+      end.then { |offset_days| (balance_days - offset_days) * rate }
     end
 
     private
