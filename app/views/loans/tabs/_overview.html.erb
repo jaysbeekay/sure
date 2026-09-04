@@ -1,6 +1,8 @@
 <%# locals: (account:) %>
 
-<div class="grid grid-cols-3 gap-2">
+<% payoff_date = account.loan.amortizations.ordered.last&.payment_date %>
+
+<div class="grid grid-cols-2 gap-2 md:grid-cols-4">
   <%= summary_card title: t(".original_principal") do %>
     <%= format_money account.loan.original_balance %>
   <% end %>
@@ -34,6 +36,14 @@
       <% else %>
         <%= pluralize(account.loan.term_months / 12, "year") %>
       <% end %>
+    <% else %>
+      <%= t(".unknown") %>
+    <% end %>
+  <% end %>
+
+  <%= summary_card title: t(".original_payoff_date") do %>
+    <% if payoff_date.present? %>
+      <%= l payoff_date, format: :long %>
     <% else %>
       <%= t(".unknown") %>
     <% end %>

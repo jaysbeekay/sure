@@ -1,6 +1,8 @@
 class Loan
   # Calculates amortization schedules for loans using the constant-payment method
   class AmortizationSchedule
+    # Version 2 is the currently persisted monthly algorithm. Daily accrual is
+    # still an explicit comparison path until its release gates are approved.
     ALGORITHM_VERSION = 2
 
     attr_reader :loan
@@ -54,7 +56,18 @@ class Loan
     # Get the complete payment schedule as an array of hashes
     def payments
       return [] unless amortizable?
-      @schedule_cache ||= generate_schedule
+      @schedule_cache ||= simulation.payments
+    end
+
+    # Run an uncached calculation for release comparisons and projections.
+    # Daily accrual remains opt-in until its characterization and lender gates
+    # are approved.
+    def simulation(daily_accrual: false)
+      return Loan::SimulationResult.new(
+        payments: [], converged: true, balloon_amount: BigDecimal("0"), currency_precision: currency_precision
+      ) unless amortizable?
+
+      generate_simulation(daily_accrual: daily_accrual)
     end
 
     # Get the total number of payments in the schedule
@@ -122,84 +135,29 @@ class Loan
 
       # Generate the complete amortization schedule using the constant-payment method
       # For variable-rate loans, applies rate changes on their effective dates
-      def generate_schedule
-        schedule = []
-        balance = loan.original_balance.amount
+      def generate_simulation(daily_accrual: false)
         payment_dates = scheduled_payment_dates
+        rate_resolver = RateResolver.for(loan)
 
-        # Build segments from actual payment dates. A rate change between two
-        # payments affects the next payment, but does not create a synthetic
-        # payment period of its own.
-        segments = build_rate_segments(payment_dates)
-
-        payment_num = 1
-        segments.each do |segment|
-          # Amortize over the payments remaining through loan maturity, not just
-          # this segment's own length -- otherwise a segment before the last one
-          # gets treated as if the loan ended when the rate changes again, which
-          # produces a payment far larger than the correct level payment.
-          remaining_payments = loan.term_months - payment_num + 1
-          segment_payment = calculate_segment_payment(segment, balance, remaining_payments)
-
-          segment[:payment_count].times do
-            break if balance <= 0
-
-            # Use the rate already computed for this segment
-            monthly_rate = (segment[:rate] / BigDecimal("100")) / BigDecimal("12")
-
-            step = AmortizationMath.step(
-              balance: balance,
-              payment: segment_payment,
-              monthly_rate: monthly_rate,
-              currency_precision: currency_precision,
-              final: payment_num == loan.term_months
-            )
-
-            schedule << {
-              payment_number: payment_num,
-              payment_date: payment_dates[payment_num - 1],
-              interest_rate: segment[:rate],
-              **step
-            }
-
-            balance = step[:ending_balance]
-            payment_num += 1
-
-            break if balance <= 0
-          end
-        end
-
-        schedule
+        Simulator.new(
+          starting_balance: loan.original_balance.amount,
+          starting_balance_as_of: loan.start_date || loan.account_opening_anchor_date,
+          accrual_start_date: loan.start_date || loan.account_opening_anchor_date,
+          payment_schedule: payment_dates,
+          accrual_rate_for: rate_resolver.method(:accrual_rate_for),
+          re_amortisation_events: rate_resolver.method(:re_amortisation_events),
+          payment_strategy: :reamortize,
+          payment_amount_for: ->(rate:, balance:, remaining_payments:, **_kwargs) {
+            calculate_segment_payment(rate, balance, remaining_payments)
+          },
+          currency_precision: currency_precision,
+          daily_accrual: daily_accrual
+        ).run
       end
 
       # Get the interest rate effective at a given date
       def get_rate_at_date(date)
-        return loan.interest_rate unless variable_rate?
-
-        loan.current_variable_rate(date) || loan.interest_rate
-      end
-
-      # Build consecutive segments from the exact dates on which payments are
-      # scheduled. Rate changes are effective on the first payment date on or
-      # after the change date.
-      def build_rate_segments(payment_dates)
-        segments = []
-
-        payment_dates.each do |payment_date|
-          rate = get_rate_at_date(payment_date)
-          if segments.last && segments.last[:rate] == rate
-            segments.last[:payment_count] += 1
-          else
-            segments << {
-              rate: rate,
-              start_date: payment_date,
-              end_date: nil,
-              payment_count: 1
-            }
-          end
-        end
-
-        segments
+        RateResolver.for(loan).accrual_rate_for(date)
       end
 
       def first_payment_date
@@ -227,10 +185,10 @@ class Loan
       # Calculate the payment amount for a segment with a specific rate,
       # amortized over remaining_payments -- the payments left through loan
       # maturity, not just this segment's own length.
-      def calculate_segment_payment(segment, balance, remaining_payments)
+      def calculate_segment_payment(rate, balance, remaining_payments)
         return BigDecimal("0") if remaining_payments <= 0 || balance <= 0
 
-        monthly_rate = (segment[:rate] / BigDecimal("100")) / BigDecimal("12")
+        monthly_rate = (rate / BigDecimal("100")) / BigDecimal("12")
 
         if monthly_rate.zero?
           (balance / remaining_payments).round(currency_precision)

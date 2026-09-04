@@ -661,11 +661,42 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     loan_account = accounts(:loan)
     assert_equal 0, loan_account.loan.amortizations.count
 
-    get account_url(loan_account) # no tab param -- defaults to activity
+    get account_url(loan_account) # no tab param -- defaults to overview
 
     assert_response :success
     assert_equal 0, loan_account.loan.amortizations.count
     assert_select "turbo-frame[src='#{account_path(loan_account, tab: 'schedule')}']"
+  end
+
+  test "loan account defaults to overview and shows the original payoff date" do
+    loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
+    payoff_date = loan_account.loan.amortization_schedule.payoff_date
+
+    get account_url(loan_account)
+
+    assert_response :success
+    assert_select "button[data-id='overview'][aria-selected='true']"
+    assert_select "button[data-id='activity']"
+    assert_operator response.body.index("data-id=\"overview\""), :<, response.body.index("data-id=\"activity\"")
+    assert_select "h4", text: I18n.t("loans.tabs.overview.original_payoff_date")
+    assert_select "p", text: I18n.l(payoff_date, format: :long)
+    assert_select "p", text: I18n.t("UI.account.chart.title.remaining_principal_balance")
+  end
+
+  test "loan overview shows Unknown when no payoff date is available" do
+    loan_account = Account.create!(
+      family: @user.family,
+      name: "Unconfigured Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(subtype: "other", rate_type: "fixed")
+    )
+
+    get account_url(loan_account)
+
+    assert_response :success
+    assert_select "div.rounded-xl", text: /#{Regexp.escape(I18n.t("loans.tabs.overview.original_payoff_date"))}.*#{Regexp.escape(I18n.t("loans.tabs.overview.unknown"))}/m, count: 1
   end
 
   # Regression: reads must not materialize the schedule inline (that would
@@ -801,6 +832,144 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     get account_url(loan_account)
     assert_response :success
     assert_select "button[data-id='schedule']", count: 0
+  end
+
+  test "schedule tab shows a payoff projection when a what-if extra payment is applied" do
+    loan_account = accounts(:loan) # unchanged balance -- no divergence without the what-if
+    loan_account.loan.ensure_amortization_schedule_current!
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200", frequency: "monthly" } }
+
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date")
+    assert_select "*", text: "Modeling an extra $200.00 per month"
+    assert_select "[data-controller='loan-payoff-chart']"
+  end
+
+  test "schedule tab ignores a what-if with an unsupported frequency instead of erroring" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200", frequency: "fortnightly" } }
+
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  test "schedule tab ignores a what-if with a negative or non-numeric amount instead of erroring" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "-50", frequency: "monthly" } }
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "not-a-number", frequency: "monthly" } }
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  test "schedule tab ignores a what-if missing half the amount/frequency pair" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200" } }
+
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  # Regression: params.fetch(:extra_payment, {}).permit(...) raises
+  # NoMethodError (-> 500) when the query param is scalar/array-shaped
+  # instead of a hash, e.g. ?extra_payment=foo or ?extra_payment[]=1.
+  test "schedule tab does not error when the extra_payment param is not hash-shaped" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"), params: { extra_payment: "foo" }
+    assert_response :success
+
+    get account_url(loan_account, tab: "schedule"), params: { extra_payment: [ "1", "2" ] }
+    assert_response :success
+  end
+
+  # Regression: BigDecimal("1e400") parses to BigDecimal::INFINITY without
+  # raising, so a naive "> 0" check alone would accept it and feed an
+  # infinite payment into the simulation.
+  test "schedule tab ignores a non-finite or unreasonably large what-if amount" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "1e400", frequency: "monthly" } }
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "99999999999", frequency: "monthly" } }
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
+  # Regression: the what-if form used to be gated on the baseline (no-extra)
+  # projection's #applicable?, hiding it exactly when a user most wants it --
+  # a loan whose current payment doesn't quite cover interest can become
+  # viable once a large enough extra payment is modeled.
+  test "schedule tab still shows the what-if form when the baseline payment doesn't cover interest" do
+    start_date = Date.current
+    loan_account = Account.create! \
+      family: @user.family,
+      name: "Barely Amortizing Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed",
+        start_date: start_date
+      )
+    # Pin the original balance via an explicit valuation so the schedule
+    # stays based on 500000 -- otherwise original_balance would float to
+    # match the balance update below (no mismatch to test).
+    loan_account.entries.create!(
+      name: "Starting balance",
+      amount: 500000,
+      currency: "USD",
+      date: start_date,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan_account.update!(balance: 800000) # baseline payment no longer covers interest
+
+    get account_url(loan_account, tab: "schedule")
+
+    assert_response :success
+    assert_not loan_account.loan.payoff_projection.applicable?
+    assert_select "input[name='extra_payment[amount]']"
+  end
+
+  test "schedule tab's what-if form includes a non-JS submit button and an approximation notice" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule")
+
+    assert_response :success
+    assert_select "form[action='#{account_path(loan_account, tab: 'schedule')}'] button[type='submit']"
+    assert_select "*", text: I18n.t("loans.tabs.schedule.extra_payment.approximation_notice")
+  end
+
+  test "a what-if request never mutates the account balance or the persisted schedule" do
+    loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
+    original_balance = loan_account.balance
+    original_amortization_count = loan_account.loan.amortizations.count
+
+    get account_url(loan_account, tab: "schedule"),
+        params: { extra_payment: { amount: "200", frequency: "monthly" } }
+
+    assert_response :success
+    assert_equal original_balance, loan_account.reload.balance
+    assert_equal original_amortization_count, loan_account.loan.amortizations.count
   end
 end
 

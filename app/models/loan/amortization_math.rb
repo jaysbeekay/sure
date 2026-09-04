@@ -10,8 +10,8 @@ class Loan
     # amount against a given balance. Pass final: true on the period that
     # clears the loan so principal (and therefore payment_amount) is
     # adjusted to exactly zero out the balance after rounding.
-    def step(balance:, payment:, monthly_rate:, currency_precision:, final: false)
-      interest = (balance * monthly_rate).round(currency_precision)
+    def step(balance:, payment:, monthly_rate:, currency_precision:, final: false, interest_bearing_balance: balance, interest: nil)
+      interest ||= (interest_bearing_balance * monthly_rate).round(currency_precision)
       principal = final ? balance : payment - interest
 
       ending_balance = (balance - principal).round(currency_precision)

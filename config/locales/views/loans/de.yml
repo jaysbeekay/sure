@@ -35,6 +35,7 @@ de:
         not_applicable: "–"
         original_principal: Ursprüngliche Kreditsumme
         remaining_principal: Restschuld
+        original_payoff_date: Ursprüngliches Tilgungsdatum
         term: Laufzeit
         type: Art
         unknown: Unbekannt
