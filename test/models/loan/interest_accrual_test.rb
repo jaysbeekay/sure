@@ -48,6 +48,27 @@ class Loan::InterestAccrualTest < ActiveSupport::TestCase
     assert_equal daily.round(20), segmented.round(20)
   end
 
+  test "a unified change-point list applies balance, offset, and rate changes" do
+    change_points = [
+      { date: Date.new(2024, 1, 1), balance: "1000", offset: "0", rate: "12" },
+      { date: Date.new(2024, 1, 11), balance: "1000", offset: "200", rate: "12" },
+      { date: Date.new(2024, 1, 21), balance: "900", offset: "200", rate: "6" }
+    ]
+    segmented = accrue(
+      from_date: Date.new(2024, 1, 1), to_date: Date.new(2024, 2, 1),
+      balance: "1000", annual_rate: "12", change_points: change_points
+    )
+
+    daily = (Date.new(2024, 1, 1)...Date.new(2024, 2, 1)).sum do |date|
+      balance = date < Date.new(2024, 1, 21) ? BigDecimal("1000") : BigDecimal("900")
+      offset = date < Date.new(2024, 1, 11) ? BigDecimal("0") : BigDecimal("200")
+      rate = date < Date.new(2024, 1, 21) ? BigDecimal("12") : BigDecimal("6")
+      [ balance - offset, BigDecimal("0") ].max * rate / 100 / 365
+    end
+
+    assert_equal daily.round(20), segmented.round(20)
+  end
+
   test "offset at or above the balance produces no interest for that segment" do
     interest = accrue(
       from_date: Date.new(2024, 1, 1), to_date: Date.new(2024, 2, 1),
