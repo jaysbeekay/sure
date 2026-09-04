@@ -54,7 +54,18 @@ class Loan
     # Get the complete payment schedule as an array of hashes
     def payments
       return [] unless amortizable?
-      @schedule_cache ||= generate_schedule
+      @schedule_cache ||= simulation.payments
+    end
+
+    # Run an uncached calculation for release comparisons and projections.
+    # Daily accrual remains opt-in until its characterization and lender gates
+    # are approved.
+    def simulation(daily_accrual: false)
+      return Loan::SimulationResult.new(
+        payments: [], converged: true, balloon_amount: BigDecimal("0"), currency_precision: currency_precision
+      ) unless amortizable?
+
+      generate_simulation(daily_accrual: daily_accrual)
     end
 
     # Get the total number of payments in the schedule
@@ -122,7 +133,7 @@ class Loan
 
       # Generate the complete amortization schedule using the constant-payment method
       # For variable-rate loans, applies rate changes on their effective dates
-      def generate_schedule
+      def generate_simulation(daily_accrual: false)
         payment_dates = scheduled_payment_dates
         rate_resolver = RateResolver.for(loan)
 
@@ -137,8 +148,9 @@ class Loan
           payment_amount_for: ->(rate:, balance:, remaining_payments:, **_kwargs) {
             calculate_segment_payment(rate, balance, remaining_payments)
           },
-          currency_precision: currency_precision
-        ).run.payments
+          currency_precision: currency_precision,
+          daily_accrual: daily_accrual
+        ).run
       end
 
       # Get the interest rate effective at a given date
