@@ -68,6 +68,7 @@ class Loan
           # offset extensions; L3 preserves the existing monthly result.
           extra_changes = @extra_for.call(previous_date, payment_date)
           offset_changes = @offset_for.call(previous_date, payment_date)
+          monthly_rate = (decimal(segment[:rate]) / BigDecimal("100")) / BigDecimal("12")
 
           interest = if @interest_for
             @interest_for.call(
@@ -90,7 +91,6 @@ class Loan
             )
             interest.round(@currency_precision)
           else
-            monthly_rate = (decimal(segment[:rate]) / BigDecimal("100")) / BigDecimal("12")
             (balance * monthly_rate).round(@currency_precision)
           end
 
@@ -167,39 +167,33 @@ class Loan
       end
 
       def accrue_daily_period(from_date:, to_date:, balance:, annual_rate:, annual_rate_changes:, extra_changes:, offset_changes:)
-        if Array(extra_changes).empty? && Array(annual_rate_changes).empty?
-          return [ InterestAccrual.calculate(
-            from_date: from_date,
-            to_date: to_date,
-            balance: balance,
-            annual_rate: annual_rate,
-            offset_changes: offset_changes
-          ), balance ]
-        end
-
         extras = normalize_amount_changes(extra_changes, from_date, to_date)
         rates = normalize_amount_changes(annual_rate_changes, from_date, to_date)
         offsets = normalize_amount_changes(offset_changes, from_date, to_date)
         dates = ([ from_date ] + extras.keys + rates.keys + offsets.keys + [ to_date ]).uniq.sort
         interest = BigDecimal("0")
+        current_balance = balance
         current_rate = annual_rate
         current_offset = BigDecimal("0")
+        change_points = dates.filter_map do |date|
+          current_balance -= extras[date] if extras.key?(date)
+          current_balance = BigDecimal("0") if current_balance.negative?
+          current_rate = rates[date] if rates.key?(date)
+          current_offset = offsets[date] if offsets.key?(date)
+          next if date == to_date
 
-        dates.each_cons(2) do |segment_start, segment_end|
-          current_rate = rates[segment_start] if rates.key?(segment_start)
-          current_offset = offsets[segment_start] if offsets.key?(segment_start)
-          interest += InterestAccrual.calculate(
-            from_date: segment_start,
-            to_date: segment_end,
-            balance: balance,
-            annual_rate: current_rate,
-            offset_changes: [ { date: segment_start, amount: current_offset } ]
-          )
-          balance -= extras[segment_end] if extras.key?(segment_end)
-          balance = BigDecimal("0") if balance.negative?
+          { date: date, balance: current_balance, offset: current_offset, rate: current_rate }
         end
 
-        [ interest, balance ]
+        interest = InterestAccrual.calculate(
+          from_date: from_date,
+          to_date: to_date,
+          balance: balance,
+          annual_rate: annual_rate,
+          change_points: change_points
+        )
+
+        [ interest, current_balance ]
       end
 
       def normalize_amount_changes(changes, from_date, to_date)
