@@ -47,6 +47,6 @@ rolled back and re-applied successfully. Both `algorithm_version` and
 Command: `RAILS_ENV=test bin/rails loans:amortization_benchmark`
 
 The four-simulation, 30-year workload with 30 offset changes per month measured
-about 277 ms in the Docker runtime, against the 50 ms gate. The task fails when
+about 147 ms in the Docker runtime, against the 50 ms gate. The task fails when
 the measured value exceeds `MAX_MS` (50 by default). This is an open
 performance blocker; the result is not being treated as a pass.

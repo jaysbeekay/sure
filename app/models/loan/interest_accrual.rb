@@ -20,10 +20,10 @@ class Loan
       principal = decimal(balance)
       rate = decimal(annual_rate) / PERCENT / DAY_COUNT
       changes = normalize_changes(offset_changes, from_date, to_date)
-      balance_days = principal * BigDecimal((to_date - from_date).to_i.to_s)
+      balance_days = principal * (to_date - from_date).to_i
       changes.each_with_index.sum do |(change_date, offset), index|
         segment_end = changes[index + 1]&.first || to_date
-        days = BigDecimal((segment_end - change_date).to_i.to_s)
+        days = (segment_end - change_date).to_i
         [ offset, principal ].min * days
       end.then { |offset_days| (balance_days - offset_days) * rate }
     end
@@ -31,11 +31,16 @@ class Loan
     private
 
       def normalize_changes(changes, from_date, to_date)
-        changes.map do |change|
-          date = change.fetch(:date)
-          amount = decimal(change.fetch(:amount))
-          [ date, amount ]
-        end.select { |date, _amount| date >= from_date && date < to_date }.sort_by(&:first)
+        changes.filter_map do |change|
+          date, amount = if change.is_a?(Array)
+            change
+          else
+            [ change.fetch(:date), change.fetch(:amount) ]
+          end
+          next unless date >= from_date && date < to_date
+
+          [ date, decimal(amount) ]
+        end.sort_by(&:first)
       end
 
       def validate_dates!(from_date, to_date)

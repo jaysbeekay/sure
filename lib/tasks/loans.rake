@@ -5,7 +5,7 @@ namespace :loans do
 
     dates = Array.new(361) { |index| Date.new(2024, 1, 1) >> index }
     workloads = dates.each_cons(2).map do |from_date, to_date|
-      changes = (1...31).map { |day| { date: from_date + day, amount: BigDecimal("100000") } }
+      changes = (1...31).map { |day| [ from_date + day, BigDecimal("100000") ] }
       [ from_date, to_date, changes ]
     end
     elapsed = Benchmark.realtime do
