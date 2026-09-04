@@ -134,7 +134,7 @@ class UI::AccountPage < ApplicationComponent
     # Only show the Schedule tab when the loan actually has a schedule to
     # show -- e.g. not for a loan missing a rate or term.
     def loan_tabs
-      base = [ :activity, :overview ]
+      base = [ :overview, :activity ]
       base << :schedule if account.loan&.amortizable?
       base
     end

@@ -661,11 +661,42 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     loan_account = accounts(:loan)
     assert_equal 0, loan_account.loan.amortizations.count
 
-    get account_url(loan_account) # no tab param -- defaults to activity
+    get account_url(loan_account) # no tab param -- defaults to overview
 
     assert_response :success
     assert_equal 0, loan_account.loan.amortizations.count
     assert_select "turbo-frame[src='#{account_path(loan_account, tab: 'schedule')}']"
+  end
+
+  test "loan account defaults to overview and shows the original payoff date" do
+    loan_account = accounts(:loan)
+    loan_account.loan.ensure_amortization_schedule_current!
+    payoff_date = loan_account.loan.amortization_schedule.payoff_date
+
+    get account_url(loan_account)
+
+    assert_response :success
+    assert_select "button[data-id='overview'][aria-selected='true']"
+    assert_select "button[data-id='activity']"
+    assert_operator response.body.index("data-id=\"overview\""), :<, response.body.index("data-id=\"activity\"")
+    assert_select "h4", text: I18n.t("loans.tabs.overview.original_payoff_date")
+    assert_select "p", text: I18n.l(payoff_date, format: :long)
+    assert_select "p", text: I18n.t("UI.account.chart.title.remaining_principal_balance")
+  end
+
+  test "loan overview shows Unknown when no payoff date is available" do
+    loan_account = Account.create!(
+      family: @user.family,
+      name: "Unconfigured Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(subtype: "other", rate_type: "fixed")
+    )
+
+    get account_url(loan_account)
+
+    assert_response :success
+    assert_select "div.rounded-xl", text: /#{Regexp.escape(I18n.t("loans.tabs.overview.original_payoff_date"))}.*#{Regexp.escape(I18n.t("loans.tabs.overview.unknown"))}/m, count: 1
   end
 
   # Regression: reads must not materialize the schedule inline (that would
