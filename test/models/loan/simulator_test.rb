@@ -119,6 +119,15 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
     assert_equal BigDecimal("4.60"), result.payments.first[:interest_payment]
   end
 
+  # #25's worked example. 100,000 at 3%, changing to 12% effective 2024-02-15,
+  # over 2024-02-01..2024-03-01 (29 days, leap February):
+  #   14 days @ 3%  = 100000 * 14 * 3  / 100 / 365 = 115.0685
+  #   15 days @ 12% = 100000 * 15 * 12 / 100 / 365 = 493.1507
+  #                                                = 608.2192 -> 608.22
+  # Applying 12% across all 29 days gives 953.42, a 56.8% overstatement.
+  #
+  # Driven by the ACCRUAL clock alone -- no re-amortisation event -- which is
+  # what makes C7 and C8 separable.
   test "daily accrual applies a mid-period rate change only from its effective date" do
     result = build_simulator(
       starting_balance: "100000.00",
@@ -128,13 +137,71 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
       payment_strategy: :hold,
       payment_amount_for: ->(**_args) { BigDecimal("100000.00") },
       daily_accrual: true,
-      re_amortisation_events: ->(_from_date, _to_date) {
+      accrual_rate_changes: ->(_from_date, _to_date) {
         [ { date: Date.new(2024, 2, 15), rate: BigDecimal("12") } ]
       },
       interest_for: nil
     ).run
 
     assert_equal BigDecimal("608.22"), result.payments.first[:interest_payment]
+  end
+
+  # C7 and C8 are two clocks. These two tests move one without the other; if
+  # either input silently fed the other, one of them would fail.
+  test "the accrual clock moves interest without resizing the contracted payment" do
+    sizing_rates = []
+    result = build_simulator(
+      starting_balance: "100000.00",
+      accrual_start_date: Date.new(2024, 2, 1),
+      payment_schedule: [ Date.new(2024, 3, 1), Date.new(2024, 4, 1) ],
+      rates: [ BigDecimal("3"), BigDecimal("3") ],
+      payment_strategy: :reamortize,
+      payment_amount_for: ->(rate:, **_args) {
+        sizing_rates << rate
+        BigDecimal("0.00")
+      },
+      daily_accrual: true,
+      accrual_rate_changes: ->(from_date, to_date) {
+        next [] unless from_date <= Date.new(2024, 2, 15) && Date.new(2024, 2, 15) < to_date
+
+        [ { date: Date.new(2024, 2, 15), rate: BigDecimal("12") } ]
+      }
+    ).run
+
+    assert_equal BigDecimal("608.22"), result.payments.first[:interest_payment],
+      "the accrual clock must segment interest at the effective date (C7)"
+    assert_equal [ BigDecimal("3") ], sizing_rates.uniq,
+      "the payment must still be sized at the contracted rate -- the accrual clock is not the payment clock (C8)"
+  end
+
+  test "the payment clock resizes the payment without re-segmenting accrual" do
+    sizing_rates = []
+    result = build_simulator(
+      starting_balance: "100000.00",
+      accrual_start_date: Date.new(2024, 2, 1),
+      payment_schedule: [ Date.new(2024, 3, 1), Date.new(2024, 4, 1) ],
+      rates: [ BigDecimal("3"), BigDecimal("3") ],
+      payment_strategy: :reamortize,
+      payment_amount_for: ->(rate:, **_args) {
+        sizing_rates << rate
+        BigDecimal("0.00")
+      },
+      daily_accrual: true,
+      re_amortisation_events: ->(_from_date, _to_date) {
+        [ { date: Date.new(2024, 3, 1), rate: BigDecimal("12") } ]
+      }
+    ).run
+
+    assert_includes sizing_rates, BigDecimal("12"),
+      "the payment clock must resize the payment from the first payment date on or after the change (C8, C10)"
+
+    # NOT asserted here, and open on #25: the period ENDING 2024-03-01 still
+    # accrues at 12%, because the accrual base rate is still the
+    # payment-sizing rate rather than the accrual rate at period start.
+    # C10 says the accrual clock includes the effective date, so 12% should
+    # apply from 2024-03-01 -- to the NEXT period, not the one that ends on it.
+    # Asserting the corrected figure here would fail; asserting the current one
+    # would pin a suspected defect. Neither belongs in a green suite.
   end
 
   test "daily accrual applies an extra repayment at its effective date" do
@@ -243,6 +310,37 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
     assert Loan::Simulator::EVENT_ORDER.frozen?
   end
 
+  # EVENT_ORDER is now dispatched through, not merely declared. This is the
+  # assertion with teeth: an event the accrual loop does not handle must raise
+  # rather than be silently skipped, so the constant cannot gain a member that
+  # the calculation quietly ignores.
+  #
+  # Honest limitation, recorded on #25: REORDERING the three intra-day events
+  # does not change any figure, because rate, balance and offset are
+  # independent variables applied at the same instant. Only the literal
+  # assertion above catches a reorder. Ordering becomes numerically meaningful
+  # when the events interact -- e.g. once C6's end-of-day semantics land.
+  test "an event in EVENT_ORDER with no handler raises rather than being skipped" do
+    original = Loan::Simulator::EVENT_ORDER
+    Loan::Simulator.send(:remove_const, :EVENT_ORDER)
+    Loan::Simulator.const_set(:EVENT_ORDER, (original + [ :unhandled_event ]).freeze)
+
+    error = assert_raises(ArgumentError) do
+      build_simulator(
+        starting_balance: "1000.00",
+        payment_schedule: [ Date.new(2024, 2, 1) ],
+        payment_strategy: :hold,
+        payment_amount_for: ->(**_args) { BigDecimal("1000.00") },
+        daily_accrual: true
+      ).run
+    end
+
+    assert_match(/unhandled event in EVENT_ORDER/, error.message)
+  ensure
+    Loan::Simulator.send(:remove_const, :EVENT_ORDER)
+    Loan::Simulator.const_set(:EVENT_ORDER, original)
+  end
+
   test "requests extra and offset change points over each period range" do
     ranges = []
     result = build_simulator(
@@ -250,8 +348,12 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
       payment_schedule: [ Date.new(2024, 1, 1) ],
       payment_strategy: :hold,
       payment_amount_for: ->(**_args) { BigDecimal("100.00") },
-      extra_for: ->(from_date, to_date) { ranges << [ :extra, from_date, to_date ] },
-      offset_for: ->(from_date, to_date) { ranges << [ :offset, from_date, to_date ] }
+      # These record the ranges they are asked about and return no changes.
+      # Returning the accumulator (which is what this test used to do) only
+      # went unnoticed while the simulator discarded the return value -- it
+      # now consumes it, which is the point of #25.
+      extra_for: ->(from_date, to_date) { ranges << [ :extra, from_date, to_date ]; [] },
+      offset_for: ->(from_date, to_date) { ranges << [ :offset, from_date, to_date ]; [] }
     ).run
 
     assert result.converged?
@@ -293,7 +395,8 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
       max_iterations: nil,
       extra_for: nil,
       offset_for: nil,
-      re_amortisation_events: nil
+      re_amortisation_events: nil,
+      accrual_rate_changes: nil
     )
       rates ||= Array.new(payment_schedule.length, BigDecimal("0"))
       rate_index = 0
@@ -309,6 +412,7 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
           rate
         },
         re_amortisation_events: re_amortisation_events || ->(_from_date, _to_date) { [] },
+        accrual_rate_changes: accrual_rate_changes,
         payment_strategy: payment_strategy,
         payment_amount_for: payment_amount_for,
         interest_for: interest_for,

@@ -203,6 +203,7 @@ class Loan
           accrual_start_date: loan.start_date || loan.account_opening_anchor_date,
           payment_schedule: payment_dates,
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
+          accrual_rate_changes: rate_resolver.method(:accrual_rate_changes),
           re_amortisation_events: rate_resolver.method(:re_amortisation_events),
           payment_strategy: :reamortize,
           payment_amount_for: ->(rate:, balance:, remaining_payments:, **_kwargs) {

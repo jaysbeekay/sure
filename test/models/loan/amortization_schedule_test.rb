@@ -545,11 +545,38 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
     assert result.converged?
   end
 
-  test "characterization assertion fails on a deliberate one-cent mutation" do
-    expected = characterized_row(1, "2024-02-01", "0.0", "33.33", "33.33", "0.00", "100.00", "66.67")
-    mutated = expected.merge(payment_amount: BigDecimal("33.34"))
+  # #8's gate: "Tests fail loudly on a deliberately introduced one-cent change
+  # (verify this -- an assertion that cannot fail is not a gate)."
+  #
+  # This replaces a test that built two hashes in its own body and asserted
+  # assert_equal raised on them. It never called the engine, so it passed
+  # against any implementation, correct or broken -- including a deliberately
+  # broken one. It was named as the gate for two tranches.
+  #
+  # This version perturbs Loan::AmortizationMath.step, the shared per-period
+  # math both the schedule and the projection run through, and asserts the
+  # golden master notices.
+  test "the golden masters fail when the engine's per-period math moves by one cent" do
+    loan = accounts(:characterization_fixed).loan
+    rows = [
+      characterized_row(1, "2024-02-15", "12.0", "340.02", "330.02", "10.00", "1000.00", "669.98"),
+      characterized_row(2, "2024-03-15", "12.0", "340.02", "333.32", "6.70", "669.98", "336.66"),
+      characterized_row(3, "2024-04-15", "12.0", "340.03", "336.66", "3.37", "336.66", "0.00")
+    ]
 
-    assert_raises(Minitest::Assertion) { assert_equal expected, mutated }
+    assert_characterized_schedule loan, rows
+
+    with_one_cent_mutation do
+      error = assert_raises(Minitest::Assertion) do
+        assert_equal rows, uncached_schedule_rows(loan)
+      end
+      assert_match(/interest_payment/, error.message,
+        "the failure must name the field that moved, not merely that something differs")
+    end
+
+    # And the gate must go green again once the mutation is removed, so a
+    # permanently-red harness cannot masquerade as a working one.
+    assert_characterized_schedule loan, rows
   end
 
   private
@@ -565,6 +592,31 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
         beginning_balance: BigDecimal(beginning),
         ending_balance: BigDecimal(ending)
       }
+    end
+
+    # Adds a cent to every period's interest, through the module both the
+    # schedule and the projection share. Restored unconditionally.
+    def with_one_cent_mutation
+      original = Loan::AmortizationMath.method(:step)
+      Loan::AmortizationMath.singleton_class.send(:define_method, :step) do |**kwargs|
+        row = original.call(**kwargs)
+        row.merge(interest_payment: row[:interest_payment] + BigDecimal("0.01"))
+      end
+      yield
+    ensure
+      Loan::AmortizationMath.singleton_class.send(:define_method, :step, original)
+    end
+
+    # Bypasses both memoisation layers -- Loan#amortization_schedule caches by
+    # signature and AmortizationSchedule#payments caches its own rows, so a
+    # mutation applied after a first read would otherwise be invisible.
+    def uncached_schedule_rows(loan)
+      Loan::AmortizationSchedule.new(loan).payments.map do |row|
+        row.slice(
+          :payment_number, :payment_date, :interest_rate, :payment_amount,
+          :principal_payment, :interest_payment, :beginning_balance, :ending_balance
+        )
+      end
     end
 
     def assert_characterized_schedule(loan, expected_rows)

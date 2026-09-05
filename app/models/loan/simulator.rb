@@ -16,6 +16,7 @@ class Loan
       payment_schedule:,
       accrual_rate_for:,
       re_amortisation_events:,
+      accrual_rate_changes: nil,
       payment_strategy:,
       payment_amount_for:,
       currency_precision:,
@@ -32,6 +33,22 @@ class Loan
       @payment_schedule = payment_schedule.to_a.freeze
       @accrual_rate_for = callable!(accrual_rate_for, :accrual_rate_for)
       @re_amortisation_events = callable!(re_amortisation_events, :re_amortisation_events)
+      # The two rate clocks are SEPARATE inputs (C7/C8).
+      #
+      # accrual_rate_changes drives where interest accrual segments; the rate
+      # in force at each payment date drives payment sizing. They previously
+      # both came from re_amortisation_events, which made a rate that moves
+      # accrual without moving the contracted repayment unrepresentable (#25).
+      #
+      # The default is "no intra-period rate change", NOT "fall back to the
+      # payment clock" -- falling back is the conflation this exists to remove.
+      # Sampling accrual_rate_for day by day was considered and rejected: the
+      # resolver is an arbitrary caller-supplied callable, and calling it ~30x
+      # per period punishes anything stateful or expensive.
+      @accrual_rate_changes = callable!(
+        accrual_rate_changes || ->(_from_date, _to_date) { [] },
+        :accrual_rate_changes
+      )
       @payment_amount_for = callable!(payment_amount_for, :payment_amount_for)
       @currency_precision = currency_precision
       @daily_accrual = daily_accrual
@@ -82,18 +99,26 @@ class Loan
               rate: segment[:rate]
             )
           elsif @daily_accrual
-            accrual_rate = accrual_rate_at(previous_date, segment[:rate])
             interest, balance = accrue_daily_period(
               from_date: previous_date,
               to_date: payment_date,
               balance: balance,
-              annual_rate: accrual_rate,
-              annual_rate_changes: rate_changes_between(previous_date, payment_date),
+              # The period's contracted rate is the accrual base; C7 movement
+              # WITHIN the period comes from the accrual clock below. Where
+              # there is no intra-period change the two clocks agree by
+              # definition, so there is nothing to separate.
+              annual_rate: segment[:rate],
+              annual_rate_changes: accrual_rate_changes_between(previous_date, payment_date),
               extra_changes: extra_changes,
               offset_changes: offset_changes
             )
             interest.round(@currency_precision)
           else
+            # Monthly accrual still honours extra repayments: they reduce the
+            # interest-bearing balance from their effective date (C6). Without
+            # this the resolver's return value was computed and thrown away
+            # on the path production actually runs (#25).
+            balance = apply_extra_repayments(balance, extra_changes, previous_date, payment_date)
             (balance * monthly_rate).round(@currency_precision)
           end
 
@@ -154,19 +179,22 @@ class Loan
         end.sort_by(&:first)
       end
 
-      def rate_changes_between(from_date, to_date)
-        normalized_re_amortisation_rates.filter_map do |date, rate|
+      # Change points for the ACCRUAL clock over one period, normalised to the
+      # {date:, amount:} shape the accrual segmenter consumes.
+      def accrual_rate_changes_between(from_date, to_date)
+        Array(@accrual_rate_changes.call(from_date, to_date)).filter_map do |change|
+          date = change.fetch(:date)
           next unless date >= from_date && date < to_date
 
-          { date: date, amount: rate }
-        end
+          { date: date, amount: decimal(change.fetch(:rate, change[:amount])) }
+        end.sort_by { |change| change.fetch(:date) }
       end
 
-      def accrual_rate_at(date, fallback)
-        normalized_re_amortisation_rates.reverse_each do |event_date, rate|
-          return rate if event_date <= date
-        end
-        @accrual_rate_for.call(date) || fallback
+      def apply_extra_repayments(balance, extra_changes, from_date, to_date)
+        reduced = normalize_amount_changes(extra_changes, from_date, to_date)
+          .values
+          .sum(BigDecimal("0"))
+        [ balance - reduced, BigDecimal("0") ].max
       end
 
       def accrue_daily_period(from_date:, to_date:, balance:, annual_rate:, annual_rate_changes:, extra_changes:, offset_changes:)
@@ -179,10 +207,30 @@ class Loan
         current_rate = annual_rate
         current_offset = BigDecimal("0")
         change_points = dates.filter_map do |date|
-          current_balance -= extras[date] if extras.key?(date)
-          current_balance = BigDecimal("0") if current_balance.negative?
-          current_rate = rates[date] if rates.key?(date)
-          current_offset = offsets[date] if offsets.key?(date)
+          # EVENT_ORDER is executed here, not merely declared. C9 fixes the
+          # sequence in which same-day events are applied; running the constant
+          # rather than hardcoding an equivalent order means the contract and
+          # the code cannot drift apart, and reordering the constant reorders
+          # the calculation.
+          EVENT_ORDER.each do |event|
+            case event
+            when :accrual
+              current_rate = rates[date] if rates.key?(date)
+            when :extra_repayment
+              next unless extras.key?(date)
+
+              current_balance = [ current_balance - extras[date], BigDecimal("0") ].max
+            when :offset_movement
+              current_offset = offsets[date] if offsets.key?(date)
+            when :payment, :re_amortisation
+              # Both occur at the period boundary, which the outer loop owns.
+              # Named here so an unhandled event raises rather than passing
+              # silently if EVENT_ORDER gains a member.
+              nil
+            else
+              raise ArgumentError, "unhandled event in EVENT_ORDER: #{event.inspect}"
+            end
+          end
           next if date == to_date
 
           { date: date, balance: current_balance, offset: current_offset, rate: current_rate }
