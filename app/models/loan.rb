@@ -60,6 +60,20 @@ class Loan < ApplicationRecord
     @amortization_schedule
   end
 
+  # Get or create the actual-balance-based payoff projection calculator.
+  # Recreated when its inputs change -- primarily account.balance, which
+  # (like Account changes generally) does not fire a Loan callback, so a
+  # long-lived Loan instance would otherwise keep returning a projection
+  # computed against a balance that's since moved.
+  def payoff_projection
+    signature = payoff_projection_signature
+    if @payoff_projection.nil? || @payoff_projection_signature != signature
+      @payoff_projection = PayoffProjection.new(self)
+      @payoff_projection_signature = signature
+    end
+    @payoff_projection
+  end
+
   def amortizable?
     amortization_schedule.amortizable?
   end
@@ -98,8 +112,19 @@ class Loan < ApplicationRecord
 
   # Fingerprint every input used by AmortizationSchedule. It lets persisted
   # rows be invalidated when the source change happens on Account data.
+  #
+  # Reloads the cached account association first: this is compared against
+  # by ensure_amortization_schedule_current! *before* it takes a lock (so a
+  # signature match can skip the lock+query entirely -- see there), which
+  # means it must reflect genuinely fresh account data on its own rather
+  # than relying on with_lock's reload to have already refreshed a stale
+  # cached association, the way earlier calls in the same object's lifetime
+  # could otherwise silently rely on. A plain SELECT is far cheaper than the
+  # lock this method exists to let callers avoid.
   def amortization_schedule_signature
     return nil unless account
+
+    account.reload
 
     Digest::SHA256.hexdigest([
       AmortizationSchedule::ALGORITHM_VERSION,
@@ -122,21 +147,46 @@ class Loan < ApplicationRecord
   end
 
   # Lazily build or replace the persisted schedule when it is missing or stale.
-  # This also removes rows when a loan is no longer amortizable. Mutates, so
-  # callers that must not write on a read (e.g. a read-scoped API request)
-  # should use #schedule_current? instead and let the background job handle
-  # regeneration.
+  # This also removes rows when a loan is no longer amortizable.
+  #
+  # Two layers avoid taking the row lock on the common "nothing to do" path,
+  # which matters because this is called from read paths (Schedule tab,
+  # amortization_schedule API) as well as writes:
+  #   1. Memoized by signature on this in-memory Loan instance -- repeat
+  #      calls against the same instance (e.g. a controller ensuring the
+  #      schedule, then building a projection that ensures it again) skip
+  #      everything below once the schedule is known current for this
+  #      signature.
+  #   2. A lock-free #schedule_current? check (standard double-checked
+  #      locking): only acquire with_lock when that check says a rebuild
+  #      might be needed. It's re-verified with the same logic once the lock
+  #      is held (below), so a false "not current" from a lock-free read
+  #      racing a concurrent writer just costs a redundant lock+no-op --
+  #      never an incorrect rebuild.
+  # A genuinely stale schedule (interest_rate/term/etc. actually changed)
+  # still gets a fresh signature and is rebuilt normally. Callers that must
+  # not write on a read should use #schedule_current? instead.
   def ensure_amortization_schedule_current!
+    # Clear memoized account-derived values before computing the lock-free
+    # signature so an external Account update cannot be hidden by this Loan's
+    # cached balance or opening date.
+    clear_amortization_schedule_cache!
+    signature = amortization_schedule_signature
+    return if @amortization_schedule_ensured_signature == signature
+    return if schedule_current_for_signature?(signature)
+
     with_lock do
       clear_amortization_schedule_cache!
 
       unless amortizable?
         amortizations.delete_all if amortizations.exists?
         reset_amortizations_association!
+        @amortization_schedule_ensured_signature = signature
         next
       end
 
-      rebuild_amortization_schedule_locked! unless schedule_current?
+      rebuild_amortization_schedule_locked! unless schedule_current_for_signature?(signature)
+      @amortization_schedule_ensured_signature = signature
     end
   end
 
@@ -151,6 +201,19 @@ class Loan < ApplicationRecord
   end
 
   private
+
+    # Whether the persisted amortizations already match `signature`, with no
+    # writes and (on the caller's part) no lock. Used both as the lock-free
+    # fast path above and, called again, as the authoritative check once
+    # with_lock is held -- same logic either way, just a live query against
+    # amortizations either time, never a cached read.
+    def schedule_current_for_signature?(signature)
+      return !amortizations.exists? unless amortizable?
+
+      schedule = amortization_schedule
+      matching_rows = amortizations.where(schedule_signature: signature).count
+      matching_rows == schedule.payment_count && amortizations.count == schedule.payment_count
+    end
 
     def rebuild_amortization_schedule_locked!
       clear_amortization_schedule_cache!
@@ -233,6 +296,14 @@ class Loan < ApplicationRecord
 
     def reset_amortizations_association!
       association(:amortizations).reset
+    end
+
+    # PayoffProjection's only input beyond AmortizationSchedule's own
+    # (already covered by amortization_schedule_signature) is the account's
+    # current balance -- combine them so the projection is recreated
+    # whenever either changes.
+    def payoff_projection_signature
+      "#{amortization_schedule_signature}:#{account&.balance}"
     end
 
     def variable_rate_schedule_entries_are_valid

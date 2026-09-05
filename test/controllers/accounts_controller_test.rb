@@ -740,6 +740,86 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)}"
   end
 
+  test "schedule tab shows a payoff projection when the current balance is ahead of the original schedule" do
+    start_date = Date.current
+    loan_account = Account.create! \
+      family: @user.family,
+      name: "Ahead Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "mortgage",
+        interest_rate: 3.5,
+        term_months: 360,
+        rate_type: "fixed",
+        start_date: start_date
+      )
+    loan_account.entries.create!(
+      name: "Starting balance",
+      amount: 500000,
+      currency: "USD",
+      date: start_date,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan_account.update!(balance: 450000) # extra $50k paid toward principal
+
+    get account_url(loan_account, tab: "schedule")
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date")
+    assert_select "*", text: I18n.t("loans.tabs.schedule.interest_saved")
+  end
+
+  # Regression: the projection used to anchor on Date.current.next_month
+  # (today's day-of-month) instead of the loan's real payment anchor day.
+  # Covers the fix end-to-end through the controller/view, not just the
+  # model (see Loan::PayoffProjectionTest for the underlying calculation).
+  test "schedule tab's projected payoff date reflects the loan's real payment anchor, not today's day-of-month" do
+    # Pinned: if this ran on the 15th of any month, start_date's day-15
+    # anchor would coincide with Date.current.next_month, defeating the
+    # "real anchor mismatch" guard below and the point of the regression.
+    travel_to Date.new(2026, 3, 20) do
+      start_date = 2.years.ago.to_date.change(day: 15)
+      loan_account = Account.create! \
+        family: @user.family,
+        name: "Mid-Cycle Loan",
+        balance: 500000,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage",
+          interest_rate: 3.5,
+          term_months: 360,
+          rate_type: "fixed",
+          start_date: start_date
+        )
+      loan_account.entries.create!(
+        name: "Starting balance",
+        amount: 500000,
+        currency: "USD",
+        date: start_date,
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      loan_account.update!(balance: 450000) # extra paid toward principal
+      loan_account.loan.ensure_amortization_schedule_current!
+
+      next_scheduled_date = loan_account.loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
+      assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+      expected_payoff_date = loan_account.loan.payoff_projection.payoff_date
+
+      get account_url(loan_account, tab: "schedule")
+
+      assert_response :success
+      assert_select "*", text: I18n.l(expected_payoff_date, format: :long)
+    end
+  end
+
+  test "schedule tab omits the payoff projection when the current balance matches the original schedule" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule")
+    assert_response :success
+    assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
+  end
+
   test "schedule tab enqueues nothing once the persisted schedule is current" do
     loan_account = accounts(:loan)
     loan_account.loan.rebuild_amortization_schedule

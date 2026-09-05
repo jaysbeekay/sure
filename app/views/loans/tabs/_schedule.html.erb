@@ -4,6 +4,10 @@
 <% schedule = loan.amortization_schedule %>
 <% payments = schedule.display_rows %>
 <% today = Date.current %>
+<% projection = loan.payoff_projection %>
+<% show_comparison = projection.applicable? &&
+     (projection.months_saved.abs > 1 || projection.interest_saved.abs >= 1) %>
+<% show_projection = show_comparison %>
 
 <div class="space-y-4">
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -23,6 +27,32 @@
       <%= l schedule.payoff_date, format: :long %>
     <% end %>
   </div>
+
+  <% if show_projection %>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <%= summary_card title: t(".projected_payoff_date") do %>
+        <%= l projection.payoff_date, format: :long %>
+        <% if show_comparison && projection.months_saved.nonzero? %>
+          <p class="text-xs text-secondary mt-1">
+            <% if projection.months_saved.positive? %>
+              <%= t(".months_saved", count: projection.months_saved) %>
+            <% else %>
+              <%= t(".months_behind", count: projection.months_saved.abs) %>
+            <% end %>
+          </p>
+        <% end %>
+      <% end %>
+
+      <% if show_comparison %>
+        <%= summary_card title: projection.interest_saved.positive? ? t(".interest_saved") : t(".interest_added") do %>
+          <%= format_money Money.new(projection.interest_saved.abs, account.currency) %>
+        <% end %>
+      <% end %>
+    </div>
+  <% elsif loan.amortization_schedule.amortizable? && projection.current_balance.amount.positive? &&
+      projection.monthly_payment.present? && !projection.converged? %>
+    <p class="text-sm text-secondary"><%= t(".projection_not_converged") %></p>
+  <% end %>
 
   <% if schedule.stale? %>
     <p class="text-sm text-secondary" role="status">
