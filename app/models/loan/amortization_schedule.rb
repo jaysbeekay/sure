@@ -132,6 +132,44 @@ class Loan
       Money.new(payment, currency)
     end
 
+    # True when the persisted rows do not match the loan's current inputs.
+    def stale?
+      amortizable? && !loan.schedule_current?
+    end
+
+    # Rows for the schedule table, as LoanAmortization instances.
+    #
+    # When the persisted rows are current they ARE the display rows -- the
+    # cheap path, and the reason they are persisted at all.
+    #
+    # When they are stale, return UNSAVED instances computed from the same
+    # simulation the summary cards already use. The cards
+    # (#monthly_payment, #total_interest, #total_cost, #payoff_date) all
+    # compute in memory, so pairing them with stale persisted rows would put
+    # two different loans' numbers on one screen -- the inconsistent-figures
+    # outcome the design exists to prevent (risk R21).
+    #
+    # Nothing here writes. Regenerating the persisted rows is the background
+    # job's business, not a page view's (#39).
+    def display_rows
+      return [] unless amortizable?
+      return loan.amortizations.ordered.to_a unless stale?
+
+      payments.map do |row|
+        LoanAmortization.new(
+          loan_id: loan.id,
+          payment_number: row[:payment_number],
+          payment_date: row[:payment_date],
+          payment_amount: row[:payment_amount],
+          principal_payment: row[:principal_payment],
+          interest_payment: row[:interest_payment],
+          beginning_balance: row[:beginning_balance],
+          ending_balance: row[:ending_balance],
+          interest_rate: row[:interest_rate]
+        )
+      end
+    end
+
     # Get a specific payment by date, or nil if not found
     def payment_for(date)
       payment = payments.find { |p| p[:payment_date] == date }

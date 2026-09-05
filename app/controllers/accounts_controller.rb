@@ -440,10 +440,26 @@ class AccountsController < ApplicationController
       @tab == "schedule"
     end
 
+    # A GET must not write.
+    #
+    # This used to call Loan#ensure_amortization_schedule_current!, which takes
+    # a row lock and does delete_all + insert_all! inline. On any deploy that
+    # changes the schedule signature -- an ALGORITHM_VERSION bump invalidates
+    # every loan at once -- the first page view per loan paid a full rebuild
+    # inside the request, under a lock. Prebuilds belong in controlled batches
+    # (#10); page views do not own completion.
+    #
+    # Mirrors Api::V1::LoansController#amortization_schedule: report the
+    # persisted rows' status, enqueue a rebuild when they are not current, and
+    # render what is available. LoanAmortizationRebuildJob is locked
+    # :until_executed on the loan id, so repeated views coalesce into one job.
     def build_schedule_tab_data
-      return unless @account.loan
+      loan = @account.loan
+      return unless loan&.amortizable?
 
-      @account.loan.ensure_amortization_schedule_current!
+      return if loan.schedule_current?
+
+      LoanAmortizationRebuildJob.perform_later(loan.id)
     end
 
     # Builds sync stats maps for all provider types to avoid N+1 queries in views
