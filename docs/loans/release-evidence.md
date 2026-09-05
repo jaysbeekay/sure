@@ -49,6 +49,14 @@ Run rebuilds only as an explicit, bounded operation:
 Record queue depth, failures, stale schedules, convergence, and variance. A
 rebuild is idempotent and rate-limited; page views do not own completion.
 
+The task prints its **effective** options before it starts, and prints an
+explicit `WARNING: no rate limit` when the pause resolves to zero — so a
+rehearsal transcript records what actually ran rather than what was typed. Every
+option above is resolved from the positional rake argument, then the
+environment; `test/tasks/loans_task_test.rb` asserts that every variable named
+in the commands on this page is a declared argument of the task it is passed
+to.
+
 ## Rollback rehearsal
 
 Before deployment, run the previous-version rebuild path against a disposable

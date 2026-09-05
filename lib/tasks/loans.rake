@@ -1,4 +1,17 @@
 namespace :loans do
+  # Resolve a task parameter from its positional rake argument, then from the
+  # environment, then a default.
+  #
+  # Every loans:* parameter goes through this. It exists because they did not:
+  # `rebuild_schedules` read BATCH_SIZE from the environment but `sleep` from
+  # args only, so the rollout command documented in
+  # docs/loans/release-evidence.md -- `BATCH_SIZE=100 SLEEP=0.25` -- silently
+  # ran with no rate limiting at all (#38). The inconsistency was the defect;
+  # one resolver removes the class of bug rather than the instance.
+  loan_task_option = ->(args, name, default = nil) do
+    args[name].presence || ENV[name.to_s.upcase].presence || default
+  end
+
   desc "Verify every C1-C16 contract row maps to an existing test"
   task verify_contract_coverage: :environment do
     require "yaml"
@@ -37,14 +50,14 @@ namespace :loans do
   end
 
   desc "Benchmark production-shaped daily accrual and report p95/p99 latency"
-  task amortization_benchmark: :environment do
+  task :amortization_benchmark, [ :loan_count, :history_months, :offset_frequency_days, :max_p95_ms, :max_p99_ms ] => :environment do |_, args|
     require "benchmark"
 
-    loan_count = [ (ENV["LOAN_COUNT"].presence || "100").to_i, 1 ].max
-    history_months = [ (ENV["HISTORY_MONTHS"].presence || "360").to_i, 1 ].max
-    offset_frequency = [ (ENV["OFFSET_FREQUENCY_DAYS"].presence || "30").to_i, 1 ].max
-    max_p95_ms = (ENV["MAX_P95_MS"].presence || "100").to_f
-    max_p99_ms = (ENV["MAX_P99_MS"].presence || "150").to_f
+    loan_count = [ loan_task_option.call(args, :loan_count, "100").to_i, 1 ].max
+    history_months = [ loan_task_option.call(args, :history_months, "360").to_i, 1 ].max
+    offset_frequency = [ loan_task_option.call(args, :offset_frequency_days, "30").to_i, 1 ].max
+    max_p95_ms = loan_task_option.call(args, :max_p95_ms, "100").to_f
+    max_p99_ms = loan_task_option.call(args, :max_p99_ms, "150").to_f
     payment_dates = Array.new(history_months + 1) { |index| Date.new(2024, 1, 1) >> index }
     payment_amount = ->(rate:, balance:, remaining_payments:, **_) {
       monthly_rate = BigDecimal(rate.to_s) / 100 / 12
@@ -91,8 +104,8 @@ namespace :loans do
   task :amortization_variance, [ :limit, :output ] => :environment do |_, args|
     require "csv"
 
-    limit = [ (args[:limit].presence || ENV["LIMIT"].presence || "100").to_i, 1 ].max
-    output = args[:output].presence || ENV["OUTPUT"].presence
+    limit = [ loan_task_option.call(args, :limit, "100").to_i, 1 ].max
+    output = loan_task_option.call(args, :output)
     rows = []
     Loan.where.not(term_months: nil).order(:id).limit(limit).find_each do |loan|
       monthly = loan.amortization_schedule.simulation
@@ -113,16 +126,18 @@ namespace :loans do
 
   desc "Rebuild loan amortization schedules in bounded, rate-limited batches"
   task :rebuild_schedules, [ :batch_size, :limit, :sleep ] => :environment do |_, args|
-    raw_batch_size = args[:batch_size].presence || ENV["BATCH_SIZE"].presence || "100"
-    batch_size = [ raw_batch_size.to_i, 1 ].max
-    limit = args[:limit].presence&.to_i
-    pause = args[:sleep].presence&.to_f || 0.0
+    batch_size = [ loan_task_option.call(args, :batch_size, "100").to_i, 1 ].max
+    limit = loan_task_option.call(args, :limit)&.to_i
+    pause = loan_task_option.call(args, :sleep, "0").to_f
     rebuilt = 0
 
     scope = Loan.where.not(term_months: nil).order(:id)
     scope = scope.limit(limit) if limit&.positive?
 
+    # Print the EFFECTIVE options, not the requested ones, so a rehearsal
+    # transcript records what actually ran rather than what was typed.
     puts "Rebuilding loan schedules (batch_size=#{batch_size}, limit=#{limit || 'all'}, sleep=#{pause}s)"
+    puts "WARNING: no rate limit -- pass SLEEP or the third argument to throttle" unless pause.positive?
     scope.find_in_batches(batch_size: batch_size) do |loans|
       loans.each do |loan|
         loan.rebuild_amortization_schedule
