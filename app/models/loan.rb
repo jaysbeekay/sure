@@ -173,7 +173,7 @@ class Loan < ApplicationRecord
     clear_amortization_schedule_cache!
     signature = amortization_schedule_signature
     return if @amortization_schedule_ensured_signature == signature
-    return if schedule_current?(signature)
+    return if schedule_current_for_signature?(signature)
 
     with_lock do
       clear_amortization_schedule_cache!
@@ -185,7 +185,7 @@ class Loan < ApplicationRecord
         next
       end
 
-      rebuild_amortization_schedule_locked! unless schedule_current?(signature)
+      rebuild_amortization_schedule_locked! unless schedule_current_for_signature?(signature)
       @amortization_schedule_ensured_signature = signature
     end
   end
@@ -207,7 +207,7 @@ class Loan < ApplicationRecord
     # fast path above and, called again, as the authoritative check once
     # with_lock is held -- same logic either way, just a live query against
     # amortizations either time, never a cached read.
-    def schedule_current?(signature)
+    def schedule_current_for_signature?(signature)
       return !amortizations.exists? unless amortizable?
 
       schedule = amortization_schedule

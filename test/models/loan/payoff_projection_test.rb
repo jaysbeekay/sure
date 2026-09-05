@@ -32,7 +32,7 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
       entryable: Valuation.new(kind: "opening_anchor")
     )
 
-    account.loan
+    account.loan.tap(&:ensure_amortization_schedule_current!)
   end
 
   test "matches the original schedule (within a rounding-driven cleanup payment) when the current balance equals the original balance" do
@@ -84,16 +84,29 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     projection = loan.payoff_projection
 
     assert_not projection.applicable?
+    assert_not projection.converged?
     assert_nil projection.payoff_date
     assert_nil projection.months_saved
     assert_nil projection.interest_saved
     assert_equal [], projection.payments
   end
 
-  test "not applicable for variable rate loans" do
+  test "projects a variable rate loan using rates effective in each payment period" do
     loan = build_loan(balance: 500000, rate_type: "variable")
+    loan.ensure_amortization_schedule_current!
+    payment_dates = loan.amortizations.where("payment_date > ?", Date.current).ordered.pluck(:payment_date)
+    loan.update!(variable_rate_schedule: {
+      payment_dates[1].iso8601 => 4.5,
+      payment_dates[3].iso8601 => 5.5
+    })
+    loan.account.update!(balance: 450000)
 
-    assert_not loan.payoff_projection.applicable?
+    projection = loan.payoff_projection
+
+    assert projection.applicable?
+    assert_equal [ BigDecimal("3.5"), BigDecimal("4.5"), BigDecimal("4.5"), BigDecimal("5.5"), BigDecimal("5.5") ],
+      projection.payments.first(5).map { |payment| payment[:interest_rate] }
+    assert projection.payoff_date
   end
 
   test "not applicable when the fixed payment no longer covers interest at the current balance" do

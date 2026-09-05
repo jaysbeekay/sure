@@ -96,6 +96,7 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
       date: start_date,
       entryable: Valuation.new(kind: "opening_anchor")
     )
+    loan_account.accountable.ensure_amortization_schedule_current!
     loan_account.update!(balance: 450000)
 
     get api_v1_loan_amortization_schedule_path(loan_account.accountable), headers: api_headers
@@ -152,14 +153,15 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "omits the payoff projection for a variable rate loan" do
+  test "returns a payoff projection for a variable rate loan" do
     loan = @variable_loan_account.accountable
     get api_v1_loan_amortization_schedule_path(loan), headers: api_headers
     assert_response :success
 
     json = JSON.parse(response.body)
     assert json.key?("payoff_projection"), "payoff_projection should be present as an explicit null, not omitted"
-    assert_nil json["payoff_projection"]
+    assert json["payoff_projection"].present?
+    assert_equal "$500,000.00", json["payoff_projection"]["current_balance"]
   end
 
   test "returns paginated payments" do

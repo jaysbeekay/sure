@@ -11,8 +11,6 @@ class Loan
   # the payment to fit the remaining term; what we want is "same payment,
   # paid off sooner" -- the real-world effect of an extra/lump-sum payment.
   #
-  # Scoped to fixed-rate loans only for now -- see #3332.
-  #
   # Not persisted: computed live from loan.account.balance on every call, so
   # it's automatically current after every sync or manual balance update.
   #
@@ -26,14 +24,13 @@ class Loan
 
     def initialize(loan)
       @loan = loan
-      @loan.ensure_amortization_schedule_current!
     end
 
     def currency
       @currency ||= loan.account.currency
     end
 
-    # Only fixed-rate loans with a real payment amount and a positive
+    # Loans with a real payment amount and a positive
     # current balance are eligible -- and only when there's actually
     # something to project (the original schedule must be amortizable) AND
     # the simulation actually converges to zero within the iteration cap
@@ -42,7 +39,7 @@ class Loan
     # rather than silently reporting a truncated, non-payoff "payoff date").
     def applicable?
       loan.amortization_schedule.amortizable? &&
-        loan.amortization_schedule.fixed_rate? &&
+        loan.amortizations.exists? &&
         monthly_payment.present? && monthly_payment.amount.positive? &&
         current_balance.amount.positive? &&
         !unamortizable_payment? &&
@@ -65,6 +62,13 @@ class Loan
 
     def payment_count
       payments.length
+    end
+
+    # Reports whether the raw simulation reaches an exact zero balance within
+    # its bounded horizon, independently of whether the result is displayable.
+    def converged?
+      schedule = raw_schedule
+      schedule.present? && schedule.last[:ending_balance].zero?
     end
 
     def payoff_date
@@ -99,7 +103,8 @@ class Loan
     private
 
       def unamortizable_payment?
-        monthly_rate = (loan.interest_rate / 100.0) / 12.0
+        rate = Loan::RateResolver.for(loan).accrual_rate_for(first_projected_payment_date)
+        monthly_rate = (BigDecimal(rate.to_s) / BigDecimal("100")) / BigDecimal("12")
         return false if monthly_rate.zero?
 
         first_interest = current_balance.amount * monthly_rate
@@ -110,20 +115,16 @@ class Loan
         @original_remaining_payments ||= loan.amortizations.where("payment_date > ?", Date.current).ordered
       end
 
+      def first_projected_payment_date
+        original_remaining_payments.first&.payment_date || Date.current.next_month
+      end
+
       def original_remaining_payment_count
         original_remaining_payments.count
       end
 
       def original_remaining_interest
         original_remaining_payments.sum(:interest_payment)
-      end
-
-      # True only if the simulated schedule actually reaches a zero balance
-      # within the iteration cap -- distinguishes a real payoff from a loop
-      # that simply ran out of iterations while still owing money.
-      def converged?
-        schedule = raw_schedule
-        schedule.present? && schedule.last[:ending_balance].zero?
       end
 
       # The raw simulation, independent of #applicable? (which itself needs
@@ -134,52 +135,30 @@ class Loan
       end
 
       def generate_schedule
-        schedule = []
-        balance = current_balance.amount
-        payment = monthly_payment.amount
-        annual_rate = loan.interest_rate / 100.0
-        monthly_rate = annual_rate / 12.0
-        # Anchor on the loan's actual next scheduled payment date, not
-        # today's day-of-month -- Date.current.next_month would shift every
-        # projected date whenever today isn't the loan's payment anchor day
-        # (e.g. viewing a loan due on the 1st, on the 15th).
-        current_date = original_remaining_payments.first&.payment_date || Date.current.next_month
-        payment_num = 1
+        payment_dates = projected_payment_dates
+        rate_resolver = Loan::RateResolver.for(loan)
+
+        Loan::Simulator.new(
+          starting_balance: current_balance.amount,
+          starting_balance_as_of: Date.current,
+          accrual_start_date: Date.current,
+          payment_schedule: payment_dates,
+          accrual_rate_for: rate_resolver.method(:accrual_rate_for),
+          re_amortisation_events: rate_resolver.method(:re_amortisation_events),
+          payment_strategy: :hold,
+          payment_amount_for: ->(**_kwargs) { monthly_payment.amount },
+          currency_precision: currency_precision,
+          max_iterations: payment_dates.length,
+          settle_at_schedule_end: false
+        ).run.payments
+      end
+
+      def projected_payment_dates
+        first_date = first_projected_payment_date
         max_iterations = MAX_ITERATIONS_MULTIPLIER * loan.term_months
-
-        # Unlike AmortizationSchedule (which knows its final period in
-        # advance via term_months and force-clears the balance there), this
-        # simulation only knows a period is final once the level payment
-        # would fully cover the remaining balance. On an unchanged balance,
-        # that can trail the original schedule by one small "cleanup"
-        # payment after many periods of accumulated monthly rounding -- an
-        # expected artifact of two independently-terminated simulations,
-        # not a bug.
-        while balance > 0 && payment_num <= max_iterations
-          tentative_interest = (balance * monthly_rate).round(currency_precision)
-          final = (payment - tentative_interest) >= balance
-
-          step = AmortizationMath.step(
-            balance: balance,
-            payment: payment,
-            monthly_rate: monthly_rate,
-            currency_precision: currency_precision,
-            final: final
-          )
-
-          schedule << {
-            payment_number: payment_num,
-            payment_date: current_date,
-            interest_rate: loan.interest_rate,
-            **step
-          }
-
-          balance = step[:ending_balance]
-          current_date = current_date.next_month
-          payment_num += 1
+        Array.new(max_iterations) do |index|
+          first_date >> index
         end
-
-        schedule
       end
 
       def currency_precision

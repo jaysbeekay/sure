@@ -23,7 +23,8 @@ class Loan
       daily_accrual: false,
       max_iterations: nil,
       extra_for: nil,
-      offset_for: nil
+      offset_for: nil,
+      settle_at_schedule_end: true
     )
       @starting_balance = decimal(starting_balance)
       @starting_balance_as_of = starting_balance_as_of
@@ -39,6 +40,7 @@ class Loan
       @max_iterations = [ max_iterations || @payment_schedule.length, MAX_TERM_MONTHS ].min
       @extra_for = extra_for || ->(_from_date, _to_date) { [] }
       @offset_for = offset_for || ->(_from_date, _to_date) { [] }
+      @settle_at_schedule_end = settle_at_schedule_end
 
       validate_boundaries!
       raise ArgumentError, "unsupported payment strategy: #{payment_strategy.inspect}" unless %i[hold reamortize].include?(@payment_strategy)
@@ -100,7 +102,7 @@ class Loan
             payment: payment,
             monthly_rate: monthly_rate,
             currency_precision: @currency_precision,
-            final: payment_number == payment_schedule.length,
+            final: (@settle_at_schedule_end && payment_number == payment_schedule.length) || payment >= balance + interest,
             interest: interest
           )
 
