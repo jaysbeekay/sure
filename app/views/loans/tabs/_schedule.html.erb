@@ -2,7 +2,7 @@
 
 <% loan = account.loan %>
 <% schedule = loan.amortization_schedule %>
-<% payments = loan.amortizations.ordered %>
+<% payments = schedule.display_rows %>
 <% today = Date.current %>
 <% projection = loan.payoff_projection %>
 <% show_comparison = projection.applicable? &&
@@ -52,6 +52,12 @@
   <% elsif loan.amortization_schedule.amortizable? && projection.current_balance.amount.positive? &&
       projection.monthly_payment.present? && !projection.converged? %>
     <p class="text-sm text-secondary"><%= t(".projection_not_converged") %></p>
+  <% end %>
+
+  <% if schedule.stale? %>
+    <p class="text-sm text-secondary" role="status">
+      <%= t(".recalculating") %>
+    </p>
   <% end %>
 
   <% if loan.rate_type == "variable" %>

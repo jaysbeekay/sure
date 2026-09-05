@@ -35,6 +35,48 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     account.loan.tap(&:ensure_amortization_schedule_current!)
   end
 
+  # Regression for the #35 x #39 interaction.
+  #
+  # `applicable?` used to require `loan.amortizations.exists?` and compared
+  # against rows read straight from that association. That worked only because
+  # the Schedule tab rebuilt the schedule inside the request. Once the read path
+  # stopped writing (#39), a loan with no persisted rows silently lost its
+  # projection card -- no error, just a missing feature.
+  #
+  # The projection now reads AmortizationSchedule#display_rows, the same source
+  # as the table and the summary cards.
+  test "projects without persisted rows, and agrees with the persisted result once they exist" do
+    loan = build_loan(balance: 500_000)
+    loan.account.update!(balance: 450_000)
+
+    with_rows = loan.payoff_projection
+    assert with_rows.applicable?, "test setup must produce an applicable projection"
+    expected_date = with_rows.payoff_date
+    expected_saved = with_rows.interest_saved
+
+    loan.amortizations.delete_all
+    loan.reload
+
+    assert_empty loan.amortizations, "the persisted rows must be gone for this to prove anything"
+
+    without_rows = loan.payoff_projection
+    assert without_rows.applicable?,
+      "a projection is a display calculation and must not depend on a write having happened (#39)"
+    assert_equal expected_date, without_rows.payoff_date
+    assert_equal expected_saved, without_rows.interest_saved
+  end
+
+  test "projecting does not persist amortization rows" do
+    loan = build_loan(balance: 500_000)
+    loan.account.update!(balance: 450_000)
+    loan.amortizations.delete_all
+    loan.reload
+
+    assert_no_difference -> { LoanAmortization.count } do
+      loan.payoff_projection.payoff_date
+    end
+  end
+
   test "matches the original schedule (within a rounding-driven cleanup payment) when the current balance equals the original balance" do
     loan = build_loan(balance: 500000)
 

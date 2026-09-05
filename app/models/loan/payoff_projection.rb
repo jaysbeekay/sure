@@ -39,7 +39,7 @@ class Loan
     # rather than silently reporting a truncated, non-payoff "payoff date").
     def applicable?
       loan.amortization_schedule.amortizable? &&
-        loan.amortizations.exists? &&
+        original_schedule_rows.any? &&
         monthly_payment.present? && monthly_payment.amount.positive? &&
         current_balance.amount.positive? &&
         !unamortizable_payment? &&
@@ -111,8 +111,26 @@ class Loan
         monthly_payment.amount <= first_interest
       end
 
+      # The contracted schedule this projection is compared against.
+      #
+      # Read through AmortizationSchedule#display_rows rather than
+      # loan.amortizations directly, so the projection uses the same rows the
+      # table and the summary cards show. The persisted rows are used when they
+      # are current; when they are stale the schedule recomputes them in memory.
+      #
+      # This used to read loan.amortizations and required rows to exist, which
+      # silently disabled the projection whenever the persisted schedule was
+      # missing -- previously masked because the Schedule tab rebuilt it inside
+      # the request. It no longer does (#39), so a display calculation must not
+      # depend on a write having happened.
+      def original_schedule_rows
+        @original_schedule_rows ||= loan.amortization_schedule.display_rows
+      end
+
       def original_remaining_payments
-        @original_remaining_payments ||= loan.amortizations.where("payment_date > ?", Date.current).ordered
+        @original_remaining_payments ||= original_schedule_rows.select do |row|
+          row.payment_date > Date.current
+        end
       end
 
       def first_projected_payment_date
@@ -124,7 +142,7 @@ class Loan
       end
 
       def original_remaining_interest
-        original_remaining_payments.sum(:interest_payment)
+        original_remaining_payments.sum(BigDecimal("0")) { |row| row.interest_payment }
       end
 
       # The raw simulation, independent of #applicable? (which itself needs

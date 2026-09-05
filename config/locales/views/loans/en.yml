@@ -53,6 +53,7 @@ en:
           one: "%{count} month later"
           other: "%{count} months later"
         projection_not_converged: The projected payoff does not converge within the supported term.
+        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
         variable_rate_notice: "This loan has a variable interest rate. The schedule below reflects the current rate and any recorded rate changes; future rate changes will shift it."
         number: "#"
         date: Date
