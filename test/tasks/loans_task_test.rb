@@ -105,6 +105,74 @@ class LoansTaskTest < ActiveSupport::TestCase
     assert_predicate loan.amortizations.count, :positive?
   end
 
+  # --- #38: every documented parameter must actually be read ---------------
+
+  test "rebuild task honours SLEEP from the environment" do
+    output = capture_io_with_env("SLEEP" => "0.25", "LIMIT" => "1") do
+      Rake::Task["loans:rebuild_schedules"].invoke
+    end
+
+    assert_match(/sleep=0\.25s/, output,
+      "SLEEP was ignored -- the documented rollout command would run unthrottled (#38)")
+    assert_no_match(/WARNING: no rate limit/, output)
+  end
+
+  test "rebuild task warns when it is running with no rate limit" do
+    output = capture_io_with_env("LIMIT" => "1") { Rake::Task["loans:rebuild_schedules"].invoke }
+
+    assert_match(/sleep=0\.0s/, output)
+    assert_match(/WARNING: no rate limit/, output,
+      "an unthrottled production rebuild must be a visible choice, not a silent default")
+  end
+
+  test "rebuild task honours BATCH_SIZE and LIMIT from the environment" do
+    output = capture_io_with_env("BATCH_SIZE" => "7", "LIMIT" => "1") do
+      Rake::Task["loans:rebuild_schedules"].invoke
+    end
+
+    assert_match(/batch_size=7/, output)
+    assert_match(/limit=1/, output)
+  end
+
+  test "positional arguments still win over the environment" do
+    output = capture_io_with_env("BATCH_SIZE" => "7", "SLEEP" => "0.25") do
+      Rake::Task["loans:rebuild_schedules"].invoke("3", "1", "0.5")
+    end
+
+    assert_match(/batch_size=3/, output)
+    assert_match(/limit=1/, output)
+    assert_match(/sleep=0\.5s/, output)
+  end
+
+  # The SLEEP defect was a disagreement between a runbook and the code it
+  # documents. Assert they agree mechanically rather than by review.
+  #
+  # `loan_task_option` resolves ENV["FOO"] from the declared argument :foo, so
+  # a task's argument list IS its set of supported environment variables. That
+  # makes the check exact rather than a grep for the name.
+  test "every environment variable in the release runbook is a declared task argument" do
+    runbook = Rails.root.join("docs/loans/release-evidence.md").read
+
+    invocations = runbook.scan(/^\s*(.*?)bin\/rails\s+(loans:\w+)(.*)$/)
+    assert_operator invocations.length, :>, 0, "the runbook must document at least one loans:* command"
+
+    seen = 0
+    invocations.each do |before, task_name, after|
+      declared = Rake::Task[task_name].arg_names.map(&:to_s)
+
+      "#{before} #{after}".scan(/([A-Z][A-Z0-9_]*)=/).flatten.each do |var|
+        next if var == "RAILS_ENV"
+
+        seen += 1
+        assert_includes declared, var.downcase,
+          "#{task_name} is documented with #{var}, but declares no :#{var.downcase} argument, " \
+          "so loan_task_option will never read it"
+      end
+    end
+
+    assert_operator seen, :>, 0, "the runbook must pass at least one option to a loans:* command"
+  end
+
   private
 
     def capture_io_with_env(env)
