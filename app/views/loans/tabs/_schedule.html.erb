@@ -5,9 +5,9 @@
 <% payments = loan.amortizations.ordered %>
 <% today = Date.current %>
 <% projection = loan.payoff_projection %>
-<% show_projection = projection.applicable? %>
-<% show_comparison = show_projection &&
+<% show_comparison = projection.applicable? &&
      (projection.months_saved.abs > 1 || projection.interest_saved.abs >= 1) %>
+<% show_projection = show_comparison %>
 
 <div class="space-y-4">
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
