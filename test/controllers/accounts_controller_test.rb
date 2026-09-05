@@ -3,6 +3,7 @@ require "test_helper"
 class AccountsControllerTest < ActionDispatch::IntegrationTest
   include ActionView::RecordIdentifier
   include OnchainTestHelper
+  include EntriesTestHelper
 
   setup do
     sign_in @user = users(:family_admin)
@@ -137,6 +138,59 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       q.match?(/FROM "entries".*WHERE.*"parent_entry_id"/) && !q.include?(" IN (")
     }
     assert_equal 0, per_row_split, "N+1 per-row split-parent queries detected (#{per_row_split})"
+  end
+
+  test "show groups split transactions into a single split-group row when grouping is enabled" do
+    @user.update!(preferences: { "show_split_grouped" => true })
+    entry = create_transaction(name: "Grocery Store", amount: 100, account: @account)
+    entry.split!([
+      { name: "Food", amount: 60 },
+      { name: "Household", amount: 40 }
+    ])
+
+    get account_url(@account)
+
+    assert_response :success
+    assert_select ".split-group", count: 1
+    assert_select ".split-group" do
+      assert_select "p", text: "Food", count: 0
+    end
+  end
+
+  test "show renders split children as flat rows when grouping is disabled" do
+    @user.update!(preferences: { "show_split_grouped" => false })
+    entry = create_transaction(name: "Grocery Store", amount: 100, account: @account)
+    entry.split!([
+      { name: "Food", amount: 60 },
+      { name: "Household", amount: 40 }
+    ])
+
+    get account_url(@account)
+
+    assert_response :success
+    assert_select ".split-group", count: 0
+  end
+
+  test "show avoids N+1 queries when loading split parents for grouped display" do
+    @user.update!(preferences: { "show_split_grouped" => true })
+    3.times do |i|
+      entry = create_transaction(name: "Grocery Store #{i}", amount: 100, account: @account)
+      entry.split!([
+        { name: "Food", amount: 60 },
+        { name: "Household", amount: 40 }
+      ])
+    end
+
+    queries = capture_sql_queries { get account_url(@account) }
+    assert_response :success
+
+    # @split_parents loads all referenced split-parent entries in a single
+    # `WHERE "entries"."id" IN (...)` query — a per-row `"id" = $1` lookup
+    # would indicate the batching regressed into N+1.
+    per_row_split_parent = queries.count { |q|
+      q.match?(/FROM "entries".*WHERE.*"entries"\."id" = \$?\d+/) && !q.include?(" IN (")
+    }
+    assert_equal 0, per_row_split_parent, "N+1 per-row split-parent lookups detected (#{per_row_split_parent})"
   end
 
   test "show lazily loads statement tab data unless statements tab is active" do
@@ -642,6 +696,58 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     ActionController::Base.perform_caching = original_perform_caching
     ActionView::Base.logger = original_view_logger
     Rails.logger = original_rails_logger
+  end
+
+  test "schedule tab renders the full amortization schedule for an amortizable loan" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule")
+    assert_response :success
+    assert_select "button[data-id='schedule']"
+    assert_select "table tbody tr", count: loan_account.loan.term_months
+  end
+
+  # The schedule should remain unloaded until its tab is selected. Regression
+  # for moving schedule synchronization out of the view partial and behind a
+  # dedicated turbo-frame request.
+  test "schedule is lazy-loaded when a different tab is active" do
+    loan_account = accounts(:loan)
+    assert_equal 0, loan_account.loan.amortizations.count
+
+    get account_url(loan_account) # no tab param -- defaults to activity
+
+    assert_response :success
+    assert_equal 0, loan_account.loan.amortizations.count
+    assert_select "turbo-frame[src='#{account_path(loan_account, tab: 'schedule')}']"
+  end
+
+  test "schedule frame builds the schedule when requested" do
+    loan_account = accounts(:loan)
+
+    get account_url(loan_account, tab: "schedule"),
+        headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab) }
+
+    assert_response :success
+    assert_equal loan_account.loan.term_months, loan_account.loan.amortizations.count
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)}"
+  end
+
+  test "schedule tab is absent for a loan without an interest rate" do
+    loan_account = Account.create! \
+      family: @user.family,
+      name: "No Rate Loan",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(
+        subtype: "other",
+        interest_rate: nil,
+        term_months: 360,
+        rate_type: "fixed"
+      )
+
+    get account_url(loan_account)
+    assert_response :success
+    assert_select "button[data-id='schedule']", count: 0
   end
 end
 
