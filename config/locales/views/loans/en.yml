@@ -43,6 +43,7 @@ en:
         total_interest: Total Interest
         total_cost: Total Cost
         payoff_date: Payoff Date
+        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
         variable_rate_notice: "This loan has a variable interest rate. The schedule below reflects the current rate and any recorded rate changes; future rate changes will shift it."
         number: "#"
         date: Date
