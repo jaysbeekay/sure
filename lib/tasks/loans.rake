@@ -32,6 +32,20 @@ namespace :loans do
     abort "contract rows must cover C1-C16" unless contract_ids == expected_ids
     abort "contract manifest must cover C1-C16" unless manifest_ids == expected_ids
 
+    # The contract document's test-name column must agree with the manifest.
+    #
+    # This check is why C16 could name Loan::OffsetResolverTest -- a class that
+    # does not exist anywhere in the repository -- while this gate passed: the
+    # names parsed out of the contract were collected into `rows` and then used
+    # only to confirm the row IDs ran C1..C16. They were never compared to
+    # anything. G1 requires each row to name a test that exists.
+    rows.each do |id, documented_class|
+      manifest_class = manifest.fetch(id).fetch("class")
+      next if documented_class == manifest_class
+
+      abort "#{id}: contract names #{documented_class}, manifest names #{manifest_class}"
+    end
+
     manifest.each do |id, entry|
       file_path = Rails.root.join(entry.fetch("file"))
       abort "#{id}: missing #{file_path}" unless file_path.file?
