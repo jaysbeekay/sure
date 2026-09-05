@@ -721,15 +721,73 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame[src='#{account_path(loan_account, tab: 'schedule')}']"
   end
 
-  test "schedule frame builds the schedule when requested" do
+  # Rewritten for #39. This previously asserted the GET *built* the schedule --
+  # ensure_amortization_schedule_current! takes a row lock and does
+  # delete_all + insert_all! inline, so the first page view after any signature
+  # change paid a full rebuild inside the request. A read must not write.
+  test "schedule frame enqueues a rebuild instead of writing on a read" do
     loan_account = accounts(:loan)
+    assert_equal 0, loan_account.loan.amortizations.count
 
-    get account_url(loan_account, tab: "schedule"),
-        headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab) }
+    assert_no_difference -> { LoanAmortization.count } do
+      assert_enqueued_with job: LoanAmortizationRebuildJob, args: [ loan_account.loan.id ] do
+        get account_url(loan_account, tab: "schedule"),
+            headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab) }
+      end
+    end
 
     assert_response :success
-    assert_equal loan_account.loan.term_months, loan_account.loan.amortizations.count
     assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)}"
+  end
+
+  test "schedule tab enqueues nothing once the persisted schedule is current" do
+    loan_account = accounts(:loan)
+    loan_account.loan.rebuild_amortization_schedule
+    assert_predicate loan_account.loan.reload.amortizations.count, :positive?
+
+    assert_no_enqueued_jobs only: LoanAmortizationRebuildJob do
+      assert_no_difference -> { LoanAmortization.count } do
+        get account_url(loan_account, tab: "schedule")
+      end
+    end
+
+    assert_response :success
+    assert_select "p[role='status']", count: 0
+  end
+
+  # The summary cards compute in memory. If a stale persisted table were shown
+  # beside them the page would carry two different loans' numbers at once
+  # (risk R21), so a stale read recomputes the rows for display and says so.
+  test "a stale schedule renders recalculated rows with a translated notice" do
+    loan_account = accounts(:loan)
+    loan_account.loan.rebuild_amortization_schedule
+    original_rows = loan_account.loan.reload.amortizations.ordered.map(&:payment_amount)
+
+    # Change an input the signature covers, without touching persisted rows.
+    loan_account.loan.update!(interest_rate: loan_account.loan.interest_rate + 2)
+
+    assert_no_difference -> { LoanAmortization.count } do
+      get account_url(loan_account, tab: "schedule")
+    end
+
+    assert_response :success
+    assert_select "p[role='status']", text: I18n.t("loans.tabs.schedule.recalculating")
+
+    schedule = loan_account.loan.reload.amortization_schedule
+    assert schedule.stale?, "the persisted rows must still be stale -- the read must not have rebuilt them"
+    assert_equal original_rows, loan_account.loan.amortizations.ordered.map(&:payment_amount),
+      "the read must leave the persisted rows exactly as they were"
+    assert_not_equal original_rows, schedule.display_rows.map(&:payment_amount),
+      "display rows must be recomputed at the new rate, so they agree with the summary cards"
+  end
+
+  # perform_later is called on every stale view; sidekiq-unique-jobs is what
+  # stops that becoming one job per view. Pin the lock rather than the symptom.
+  test "the amortization rebuild job is deduplicated per loan" do
+    options = LoanAmortizationRebuildJob.get_sidekiq_options
+
+    assert_equal :until_executed, options["lock"]
+    assert_equal [ "abc" ], options["lock_args_method"].call([ "abc", "ignored" ])
   end
 
   test "schedule tab is absent for a loan without an interest rate" do

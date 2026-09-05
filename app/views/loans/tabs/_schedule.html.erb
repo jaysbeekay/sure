@@ -2,7 +2,7 @@
 
 <% loan = account.loan %>
 <% schedule = loan.amortization_schedule %>
-<% payments = loan.amortizations.ordered %>
+<% payments = schedule.display_rows %>
 <% today = Date.current %>
 
 <div class="space-y-4">
@@ -23,6 +23,12 @@
       <%= l schedule.payoff_date, format: :long %>
     <% end %>
   </div>
+
+  <% if schedule.stale? %>
+    <p class="text-sm text-secondary" role="status">
+      <%= t(".recalculating") %>
+    </p>
+  <% end %>
 
   <% if loan.rate_type == "variable" %>
     <p class="text-sm text-secondary">
