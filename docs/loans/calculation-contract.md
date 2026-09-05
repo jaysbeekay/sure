@@ -31,7 +31,7 @@ never become negative, and a converged schedule ends at exactly zero.
 | C13 | Daily interest segments are summed unrounded, then rounded once when monthly interest is charged. | `Loan::InterestAccrualTest` segment-equivalence and charge-point-rounding tests | Required against a lender statement |
 | C14 | The final payment uses the remaining balance as principal plus that period's interest and settles the ending balance exactly to zero. | `Loan::AmortizationScheduleTest` zero-interest 33/33/34 and final-row tests | Required against statement final-payment treatment |
 | C15 | Interest-bearing balance is `max(0, loan balance - offset)`. Offset cannot create negative interest or a negative balance. | `Loan::InterestAccrualTest` offset equal-to/greater-than-balance tests | Required against a lender offset case |
-| C16 | Forward offset is today's linked offset total held flat for future days. No averaging or smoothing is used; the assumption is disclosed in UI and methodology copy. | `Loan::OffsetResolverTest` forward-flat and one-day movement tests | Required against a lender offset case |
+| C16 | Forward offset is today's linked offset total held flat for future days. No averaging or smoothing is used; the assumption is disclosed in UI and methodology copy. | `Loan::InterestAccrualTest` range-start offset test (the interest-bearing-balance half). **The forward-flat half is uncovered until `Loan::OffsetResolver` exists (#13)** — this row previously named `Loan::OffsetResolverTest`, a class that does not exist. | Required against a lender offset case |
 
 ## Offset visibility policy
 
