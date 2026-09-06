@@ -170,7 +170,8 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert projection.applicable?
     assert_equal [ BigDecimal("3.5"), BigDecimal("4.5"), BigDecimal("4.5"), BigDecimal("5.5"), BigDecimal("5.5") ],
       projection.payments.first(5).map { |payment| payment[:interest_rate] }
-    assert projection.payments.first(5).all? { |payment| payment[:payment_amount] == projection.monthly_payment.amount },
+    expected_payment = loan.amortization_schedule.monthly_payment.amount + extra_payment.amount
+    assert projection.payments.first(5).all? { |payment| payment[:payment_amount] == expected_payment },
       "recorded rate changes must not replace the held repayment in the what-if projection"
   end
 
