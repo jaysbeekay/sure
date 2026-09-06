@@ -1,0 +1,1622 @@
+[
+  {
+    "statement_number": 1,
+    "period": "2 May 22 - 23 Sep 22",
+    "opening_balance": 0.0,
+    "closing_balance": -441904.04,
+    "total_debits": 446699.88,
+    "total_credits": 4795.84,
+    "transactions": [
+      {
+        "date": "02 MAY 22",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": 0.0
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "COMPLETE PACKAGE FEE",
+        "debit": 395.0,
+        "credit": null,
+        "balance": -395.0
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "DISBURSAL FROM LOAN ACCOUNT / FUNDS FOR COMPLETE PKG FEE",
+        "debit": null,
+        "credit": 395.0,
+        "balance": 0.0
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "LOAN DISBURSAL",
+        "debit": 444709.2,
+        "credit": null,
+        "balance": -444709.2
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "$395.00 PAID TO LOAN ACCOUNT FUNDS FOR PKG FEE",
+        "debit": null,
+        "credit": null,
+        "balance": -444709.2
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "$444,314.20 PAID AS PER INSTRUCTIONS (SETTLEMENT PLATFORM REF REDACTED)",
+        "debit": null,
+        "credit": null,
+        "balance": -444709.2
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "DLI CHECK TITLE SEARCH",
+        "debit": 13.6,
+        "credit": null,
+        "balance": -444722.8
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "DLI DIRECT LINK TITLE SEARCH",
+        "debit": 27.2,
+        "credit": null,
+        "balance": -444750.0
+      },
+      {
+        "date": "05 AUG 22",
+        "particulars": "HOME LOAN DISBURSAL FEE",
+        "debit": 250.0,
+        "credit": null,
+        "balance": -445000.0
+      },
+      {
+        "date": "22 AUG 22",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2100.0,
+        "balance": -442900.0
+      },
+      {
+        "date": "05 SEP 22",
+        "particulars": "DEBIT INTEREST INT AFTER M/SAVR OFFSET $1,304.88",
+        "debit": 134.6,
+        "credit": null,
+        "balance": -444204.88
+      },
+      {
+        "date": "05 SEP 22",
+        "particulars": "IB TRANSFER 690584188 FROM 999-821-5000062 6:20AM",
+        "debit": null,
+        "credit": 100.0,
+        "balance": -444104.88
+      },
+      {
+        "date": "23 SEP 22",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2100.0,
+        "balance": -442004.88
+      },
+      {
+        "date": "23 SEP 22",
+        "particulars": "IB TRANSFER 695235332 FROM 999-821-5000056 3:52PM",
+        "debit": null,
+        "credit": 100.84,
+        "balance": -441904.04
+      },
+      {
+        "date": "23 SEP 22",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -441904.04
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "01 AUG 22",
+        "owner_occupied_limit_balance": 445000.0,
+        "rate_pct_pa": 3.43
+      },
+      {
+        "effective_date": "12 AUG 22",
+        "owner_occupied_limit_balance": 445000.0,
+        "rate_pct_pa": 3.93
+      },
+      {
+        "effective_date": "16 SEP 22",
+        "owner_occupied_limit_balance": 444461.7,
+        "rate_pct_pa": 4.43
+      }
+    ]
+  },
+  {
+    "statement_number": 2,
+    "period": "24 Sep 22 - 23 Mar 23",
+    "opening_balance": -441904.04,
+    "closing_balance": -435463.56,
+    "total_debits": 9124.23,
+    "total_credits": 15564.71,
+    "transactions": [
+      {
+        "date": "24 SEP 22",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -441904.04
+      },
+      {
+        "date": "05 OCT 22",
+        "particulars": "DEBIT INTEREST INT AFTER M/SAVR OFFSET $1,399.02",
+        "debit": 147.88,
+        "credit": null,
+        "balance": -443303.06
+      },
+      {
+        "date": "21 OCT 22",
+        "particulars": "IB TRANSFER 702071255 FROM 999-821-5000010 9:43AM",
+        "debit": null,
+        "credit": 88.69,
+        "balance": -443214.37
+      },
+      {
+        "date": "24 OCT 22",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2106.58,
+        "balance": -441107.79
+      },
+      {
+        "date": "24 OCT 22",
+        "particulars": "IB TRANSFER 702783798 FROM 999-821-5000010 7:41PM",
+        "debit": null,
+        "credit": 107.79,
+        "balance": -441000.0
+      },
+      {
+        "date": "07 NOV 22",
+        "particulars": "DEBIT INTEREST INT AFTER M/SAVR OFFSET $1,673.83",
+        "debit": 170.39,
+        "credit": null,
+        "balance": -442673.83
+      },
+      {
+        "date": "23 NOV 22",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2236.56,
+        "balance": -440437.27
+      },
+      {
+        "date": "05 DEC 22",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,476.85",
+        "debit": 181.55,
+        "credit": null,
+        "balance": -441914.12
+      },
+      {
+        "date": "23 DEC 22",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2370.67,
+        "balance": -439543.45
+      },
+      {
+        "date": "05 JAN 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,617.68",
+        "debit": 288.83,
+        "credit": null,
+        "balance": -441161.13
+      },
+      {
+        "date": "23 JAN 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2370.67,
+        "balance": -438790.46
+      },
+      {
+        "date": "24 JAN 23",
+        "particulars": "IB TRANSFER 725485474 FROM 999-821-5000010 6:18PM",
+        "debit": null,
+        "credit": 362.81,
+        "balance": -438427.65
+      },
+      {
+        "date": "06 FEB 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,555.43",
+        "debit": 442.67,
+        "credit": null,
+        "balance": -439983.08
+      },
+      {
+        "date": "10 FEB 23",
+        "particulars": "IB TRANSFER 729647359 FROM 999-821-5000010 6:07AM",
+        "debit": null,
+        "credit": 483.08,
+        "balance": -439500.0
+      },
+      {
+        "date": "10 FEB 23",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -439500.0
+      },
+      {
+        "date": "10 FEB 23",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -439500.0
+      },
+      {
+        "date": "15 FEB 23",
+        "particulars": "IB TRANSFER 730998587 FROM 999-821-5000010 7:53PM",
+        "debit": null,
+        "credit": 500.0,
+        "balance": -439000.0
+      },
+      {
+        "date": "23 FEB 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2437.86,
+        "balance": -436562.14
+      },
+      {
+        "date": "27 FEB 23",
+        "particulars": "IB TRANSFER 733393355 FROM 999-821-5000010 0:09AM 25FEB",
+        "debit": null,
+        "credit": 62.14,
+        "balance": -436500.0
+      },
+      {
+        "date": "06 MAR 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,401.42",
+        "debit": 391.0,
+        "credit": null,
+        "balance": -437901.42
+      },
+      {
+        "date": "23 MAR 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2437.86,
+        "balance": -435463.56
+      },
+      {
+        "date": "23 MAR 23",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -435463.56
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "23 SEP 22",
+        "owner_occupied_limit_balance": 444461.7,
+        "rate_pct_pa": 4.43
+      },
+      {
+        "effective_date": "14 OCT 22",
+        "owner_occupied_limit_balance": 443906.5,
+        "rate_pct_pa": 4.68
+      },
+      {
+        "effective_date": "11 NOV 22",
+        "owner_occupied_limit_balance": 443520.8,
+        "rate_pct_pa": 4.93
+      },
+      {
+        "effective_date": "16 DEC 22",
+        "owner_occupied_limit_balance": 442883.2,
+        "rate_pct_pa": 5.18
+      },
+      {
+        "effective_date": "17 FEB 23",
+        "owner_occupied_limit_balance": 441999.0,
+        "rate_pct_pa": 5.43
+      },
+      {
+        "effective_date": "17 MAR 23",
+        "owner_occupied_limit_balance": 441368.9,
+        "rate_pct_pa": 5.68
+      }
+    ]
+  },
+  {
+    "statement_number": 3,
+    "period": "24 Mar 23 - 22 Sep 23",
+    "opening_balance": -435463.56,
+    "closing_balance": -432415.34,
+    "total_debits": 10406.06,
+    "total_credits": 13454.28,
+    "transactions": [
+      {
+        "date": "24 MAR 23",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -435463.56
+      },
+      {
+        "date": "05 APR 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,551.02",
+        "debit": 455.39,
+        "credit": null,
+        "balance": -437014.58
+      },
+      {
+        "date": "11 APR 23",
+        "particulars": "IB TRANSFER 744357745 FROM 999-821-5000010 0:23AM 10APR",
+        "debit": null,
+        "credit": 14.58,
+        "balance": -437000.0
+      },
+      {
+        "date": "24 APR 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2507.12,
+        "balance": -434492.88
+      },
+      {
+        "date": "26 APR 23",
+        "particulars": "IB TRANSFER 748109491 FROM 999-821-5000010 1:04AM 25APR",
+        "debit": null,
+        "credit": 103.75,
+        "balance": -434389.13
+      },
+      {
+        "date": "05 MAY 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,574.04",
+        "debit": 461.66,
+        "credit": null,
+        "balance": -435963.17
+      },
+      {
+        "date": "23 MAY 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2575.46,
+        "balance": -433387.71
+      },
+      {
+        "date": "05 JUN 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,690.59",
+        "debit": 478.77,
+        "credit": null,
+        "balance": -435078.3
+      },
+      {
+        "date": "23 JUN 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2644.96,
+        "balance": -432433.34
+      },
+      {
+        "date": "05 JUL 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,691.49",
+        "debit": 480.31,
+        "credit": null,
+        "balance": -434124.83
+      },
+      {
+        "date": "24 JUL 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2644.96,
+        "balance": -431479.87
+      },
+      {
+        "date": "07 AUG 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,872.73",
+        "debit": 546.63,
+        "credit": null,
+        "balance": -433352.6
+      },
+      {
+        "date": "07 AUG 23",
+        "particulars": "COMPLETE PACKAGE FEE",
+        "debit": 395.0,
+        "credit": null,
+        "balance": -433747.6
+      },
+      {
+        "date": "17 AUG 23",
+        "particulars": "IB TRANSFER 777146013 FROM 999-821-5000010 11:51AM",
+        "debit": null,
+        "credit": 247.6,
+        "balance": -433500.0
+      },
+      {
+        "date": "23 AUG 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2715.85,
+        "balance": -430784.15
+      },
+      {
+        "date": "23 AUG 23",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -430784.15
+      },
+      {
+        "date": "23 AUG 23",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -430784.15
+      },
+      {
+        "date": "05 SEP 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,631.19",
+        "debit": 491.8,
+        "credit": null,
+        "balance": -432415.34
+      },
+      {
+        "date": "22 SEP 23",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -432415.34
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "23 MAR 23",
+        "owner_occupied_limit_balance": 441368.9,
+        "rate_pct_pa": 5.68
+      },
+      {
+        "effective_date": "12 MAY 23",
+        "owner_occupied_limit_balance": 440371.9,
+        "rate_pct_pa": 5.93
+      },
+      {
+        "effective_date": "16 JUN 23",
+        "owner_occupied_limit_balance": 439993.2,
+        "rate_pct_pa": 6.18
+      }
+    ]
+  },
+  {
+    "statement_number": 4,
+    "period": "23 Sep 23 - 22 Mar 24",
+    "opening_balance": -432415.34,
+    "closing_balance": -423000.0,
+    "total_debits": 10885.45,
+    "total_credits": 20300.79,
+    "transactions": [
+      {
+        "date": "23 SEP 23",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -432415.34
+      },
+      {
+        "date": "25 SEP 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2715.85,
+        "balance": -429699.49
+      },
+      {
+        "date": "02 OCT 23",
+        "particulars": "IB TRANSFER 788383986 FROM 999-821-5000010 8:11PM 30SEP",
+        "debit": null,
+        "credit": 199.49,
+        "balance": -429500.0
+      },
+      {
+        "date": "02 OCT 23",
+        "particulars": "IB TRANSFER 788384020 FROM 999-821-5000010 8:11PM 30SEP",
+        "debit": null,
+        "credit": 500.0,
+        "balance": -429000.0
+      },
+      {
+        "date": "05 OCT 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,679.38",
+        "debit": 512.09,
+        "credit": null,
+        "balance": -430679.38
+      },
+      {
+        "date": "16 OCT 23",
+        "particulars": "IB TRANSFER 792055816 FROM 999-821-5000010 3:04PM 15OCT",
+        "debit": null,
+        "credit": 179.38,
+        "balance": -430500.0
+      },
+      {
+        "date": "23 OCT 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2715.85,
+        "balance": -427784.15
+      },
+      {
+        "date": "23 OCT 23",
+        "particulars": "IB TRANSFER 793667119 FROM 999-821-5000010 6:16PM 21OCT",
+        "debit": null,
+        "credit": 150.0,
+        "balance": -427634.15
+      },
+      {
+        "date": "23 OCT 23",
+        "particulars": "IB TRANSFER 793669958 FROM 999-821-5000010 6:38PM 21OCT",
+        "debit": null,
+        "credit": 350.0,
+        "balance": -427284.15
+      },
+      {
+        "date": "25 OCT 23",
+        "particulars": "IB TRANSFER 794533493 FROM 999-821-5000010 3:26PM",
+        "debit": null,
+        "credit": 197.15,
+        "balance": -427087.0
+      },
+      {
+        "date": "27 OCT 23",
+        "particulars": "IB TRANSFER 795219875 FROM 999-821-5000010 4:39PM",
+        "debit": null,
+        "credit": 87.0,
+        "balance": -427000.0
+      },
+      {
+        "date": "31 OCT 23",
+        "particulars": "IB TRANSFER 796034669 FROM 999-821-5000010 4:02PM",
+        "debit": null,
+        "credit": 181.42,
+        "balance": -426818.58
+      },
+      {
+        "date": "06 NOV 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,872.98",
+        "debit": 451.48,
+        "credit": null,
+        "balance": -428691.56
+      },
+      {
+        "date": "23 NOV 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2715.85,
+        "balance": -425975.71
+      },
+      {
+        "date": "23 NOV 23",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -425975.71
+      },
+      {
+        "date": "23 NOV 23",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -425975.71
+      },
+      {
+        "date": "24 NOV 23",
+        "particulars": "IB TRANSFER 802157555 FROM 999-821-5000010 6:00AM",
+        "debit": null,
+        "credit": 274.14,
+        "balance": -425701.57
+      },
+      {
+        "date": "29 NOV 23",
+        "particulars": "IB TRANSFER 803423646 FROM 999-821-5000010 3:08PM",
+        "debit": null,
+        "credit": 201.57,
+        "balance": -425500.0
+      },
+      {
+        "date": "01 DEC 23",
+        "particulars": "IB TRANSFER 804069676 FROM 999-821-5000010 1:41PM",
+        "debit": null,
+        "credit": 500.0,
+        "balance": -425000.0
+      },
+      {
+        "date": "05 DEC 23",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,747.02",
+        "debit": 403.92,
+        "credit": null,
+        "balance": -426747.02
+      },
+      {
+        "date": "19 DEC 23",
+        "particulars": "IB TRANSFER 808396119 FROM 999-821-5000010 0:54AM",
+        "debit": null,
+        "credit": 96.11,
+        "balance": -426650.91
+      },
+      {
+        "date": "27 DEC 23",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2715.85,
+        "balance": -423935.06
+      },
+      {
+        "date": "05 JAN 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,876.78",
+        "debit": 448.31,
+        "credit": null,
+        "balance": -425811.84
+      },
+      {
+        "date": "23 JAN 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -423024.34
+      },
+      {
+        "date": "29 JAN 24",
+        "particulars": "IB TRANSFER 817943980 FROM 999-821-5000010 3:34PM 28JAN",
+        "debit": null,
+        "credit": 24.34,
+        "balance": -423000.0
+      },
+      {
+        "date": "29 JAN 24",
+        "particulars": "IB TRANSFER 817944201 FROM 999-821-5000010 3:36PM 28JAN",
+        "debit": null,
+        "credit": 200.0,
+        "balance": -422800.0
+      },
+      {
+        "date": "31 JAN 24",
+        "particulars": "IB TRANSFER 818773469 FROM 999-821-5000070 7:31PM",
+        "debit": null,
+        "credit": 243.44,
+        "balance": -422556.56
+      },
+      {
+        "date": "05 FEB 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,917.18",
+        "debit": 395.01,
+        "credit": null,
+        "balance": -424473.74
+      },
+      {
+        "date": "16 FEB 24",
+        "particulars": "IB TRANSFER 822885742 FROM 999-821-5000010 3:21PM",
+        "debit": null,
+        "credit": 148.32,
+        "balance": -424325.42
+      },
+      {
+        "date": "23 FEB 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -421537.92
+      },
+      {
+        "date": "04 MAR 24",
+        "particulars": "IB TRANSFER 826586030 FROM 999-821-5000010 3:58PM 2MAR",
+        "debit": null,
+        "credit": 37.92,
+        "balance": -421500.0
+      },
+      {
+        "date": "05 MAR 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,792.11",
+        "debit": 364.63,
+        "credit": null,
+        "balance": -423292.11
+      },
+      {
+        "date": "11 MAR 24",
+        "particulars": "IB TRANSFER 828286268 FROM 999-821-5000010 6:07PM 9MAR",
+        "debit": null,
+        "credit": 292.11,
+        "balance": -423000.0
+      },
+      {
+        "date": "22 MAR 24",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -423000.0
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "22 SEP 23",
+        "owner_occupied_limit_balance": 438731.3,
+        "rate_pct_pa": 6.18
+      },
+      {
+        "effective_date": "17 NOV 23",
+        "owner_occupied_limit_balance": 437902.5,
+        "rate_pct_pa": 6.43
+      },
+      {
+        "effective_date": "14 MAR 24",
+        "owner_occupied_limit_balance": 436020.3,
+        "rate_pct_pa": 6.43
+      }
+    ]
+  },
+  {
+    "statement_number": 5,
+    "period": "23 Mar 24 - 23 Sep 24",
+    "opening_balance": -423000.0,
+    "closing_balance": -412762.18,
+    "total_debits": 11369.23,
+    "total_credits": 21607.05,
+    "transactions": [
+      {
+        "date": "23 MAR 24",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -423000.0
+      },
+      {
+        "date": "25 MAR 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -420212.5
+      },
+      {
+        "date": "02 APR 24",
+        "particulars": "IB TRANSFER 833335255 FROM 999-821-5000010 4:04AM 30MAR",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -420000.0
+      },
+      {
+        "date": "05 APR 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,852.40",
+        "debit": 446.13,
+        "credit": null,
+        "balance": -421852.4
+      },
+      {
+        "date": "05 APR 24",
+        "particulars": "IB TRANSFER 834928381 FROM 999-821-5000010 5:33PM",
+        "debit": null,
+        "credit": 852.4,
+        "balance": -421000.0
+      },
+      {
+        "date": "23 APR 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -418212.5
+      },
+      {
+        "date": "24 APR 24",
+        "particulars": "IB TRANSFER 839362267 FROM 999-821-5000010 1:32PM",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -418000.0
+      },
+      {
+        "date": "06 MAY 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,872.07",
+        "debit": 413.95,
+        "credit": null,
+        "balance": -419872.07
+      },
+      {
+        "date": "07 MAY 24",
+        "particulars": "IB TRANSFER 842468486 FROM 999-821-5000010 1:46PM",
+        "debit": null,
+        "credit": 372.07,
+        "balance": -419500.0
+      },
+      {
+        "date": "23 MAY 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -416712.5
+      },
+      {
+        "date": "24 MAY 24",
+        "particulars": "IB TRANSFER 846869906 FROM 999-821-5000010 3:27PM",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -416500.0
+      },
+      {
+        "date": "05 JUN 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,807.58",
+        "debit": 396.64,
+        "credit": null,
+        "balance": -418307.58
+      },
+      {
+        "date": "24 JUN 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -415520.08
+      },
+      {
+        "date": "28 JUN 24",
+        "particulars": "IB TRANSFER 855182799 FROM 999-821-5000010 5:13AM",
+        "debit": null,
+        "credit": 20.08,
+        "balance": -415500.0
+      },
+      {
+        "date": "28 JUN 24",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -415500.0
+      },
+      {
+        "date": "28 JUN 24",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -415500.0
+      },
+      {
+        "date": "05 JUL 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,786.47",
+        "debit": 412.8,
+        "credit": null,
+        "balance": -417286.47
+      },
+      {
+        "date": "23 JUL 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -414498.97
+      },
+      {
+        "date": "05 AUG 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,832.01",
+        "debit": 434.23,
+        "credit": null,
+        "balance": -416330.98
+      },
+      {
+        "date": "05 AUG 24",
+        "particulars": "COMPLETE PACKAGE FEE",
+        "debit": 395.0,
+        "credit": null,
+        "balance": -416725.98
+      },
+      {
+        "date": "23 AUG 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -413938.48
+      },
+      {
+        "date": "05 SEP 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,823.70",
+        "debit": 439.5,
+        "credit": null,
+        "balance": -415762.18
+      },
+      {
+        "date": "23 SEP 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -412974.68
+      },
+      {
+        "date": "23 SEP 24",
+        "particulars": "IB TRANSFER 876420275 FROM 999-821-5000010 0:40AM",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -412762.18
+      },
+      {
+        "date": "23 SEP 24",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -412762.18
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "22 MAR 24",
+        "owner_occupied_limit_balance": 436020.3,
+        "rate_pct_pa": 6.43
+      },
+      {
+        "effective_date": "05 SEP 24",
+        "owner_occupied_limit_balance": 433354.3,
+        "rate_pct_pa": 6.43
+      }
+    ]
+  },
+  {
+    "statement_number": 6,
+    "period": "24 Sep 24 - 21 Mar 25",
+    "opening_balance": -412762.18,
+    "closing_balance": -407719.04,
+    "total_debits": 10426.06,
+    "total_credits": 15469.2,
+    "transactions": [
+      {
+        "date": "24 SEP 24",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -412762.18
+      },
+      {
+        "date": "07 OCT 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,879.03",
+        "debit": 450.94,
+        "credit": null,
+        "balance": -414641.21
+      },
+      {
+        "date": "22 OCT 24",
+        "particulars": "IB TRANSFER 883685353 FROM 999-821-5000010 2:46PM",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -414428.71
+      },
+      {
+        "date": "23 OCT 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -411641.21
+      },
+      {
+        "date": "05 NOV 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,672.94",
+        "debit": 432.68,
+        "credit": null,
+        "balance": -413314.15
+      },
+      {
+        "date": "25 NOV 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -410526.65
+      },
+      {
+        "date": "25 NOV 24",
+        "particulars": "IB TRANSFER 891802566 FROM 999-821-5000010 3:53PM 23NOV",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -410314.15
+      },
+      {
+        "date": "05 DEC 24",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,710.73",
+        "debit": 462.37,
+        "credit": null,
+        "balance": -412024.88
+      },
+      {
+        "date": "23 DEC 24",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -409237.38
+      },
+      {
+        "date": "23 DEC 24",
+        "particulars": "IB TRANSFER 899114039 FROM 999-821-5000010 5:06PM 22DEC",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -409024.88
+      },
+      {
+        "date": "06 JAN 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,825.40",
+        "debit": 484.54,
+        "credit": null,
+        "balance": -410850.28
+      },
+      {
+        "date": "23 JAN 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -408062.78
+      },
+      {
+        "date": "24 JAN 25",
+        "particulars": "IB TRANSFER 906691592 FROM 999-821-5000010 1:49PM",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -407850.28
+      },
+      {
+        "date": "24 JAN 25",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -407850.28
+      },
+      {
+        "date": "24 JAN 25",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -407850.28
+      },
+      {
+        "date": "05 FEB 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,734.63",
+        "debit": 429.85,
+        "credit": null,
+        "balance": -409584.91
+      },
+      {
+        "date": "24 FEB 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2787.5,
+        "balance": -406797.41
+      },
+      {
+        "date": "24 FEB 25",
+        "particulars": "IB TRANSFER 913566021 FROM 999-821-5000010 1:05AM 22FEB",
+        "debit": null,
+        "credit": 212.5,
+        "balance": -406584.91
+      },
+      {
+        "date": "05 MAR 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,603.33",
+        "debit": 398.31,
+        "credit": null,
+        "balance": -408188.24
+      },
+      {
+        "date": "19 MAR 25",
+        "particulars": "IB TRANSFER 919679397 FROM 999-821-5000010 4:20PM",
+        "debit": null,
+        "credit": 188.24,
+        "balance": -408000.0
+      },
+      {
+        "date": "20 MAR 25",
+        "particulars": "IB TRANSFER 919979458 FROM 999-821-5000010 3:54PM",
+        "debit": null,
+        "credit": 280.96,
+        "balance": -407719.04
+      },
+      {
+        "date": "21 MAR 25",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -407719.04
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "23 SEP 24",
+        "owner_occupied_limit_balance": 433354.3,
+        "rate_pct_pa": 6.43
+      },
+      {
+        "effective_date": "28 FEB 25",
+        "owner_occupied_limit_balance": 431048.1,
+        "rate_pct_pa": 6.18
+      }
+    ]
+  },
+  {
+    "statement_number": 7,
+    "period": "22 Mar 25 - 23 Sep 25",
+    "opening_balance": -407719.04,
+    "closing_balance": -394906.25,
+    "total_debits": 9787.05,
+    "total_credits": 22599.84,
+    "transactions": [
+      {
+        "date": "22 MAR 25",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -407719.04
+      },
+      {
+        "date": "24 MAR 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2719.04,
+        "balance": -405000.0
+      },
+      {
+        "date": "01 APR 25",
+        "particulars": "IB TRANSFER 922570918 FROM 999-821-5000070 2:18AM",
+        "debit": null,
+        "credit": 1058.57,
+        "balance": -403941.43
+      },
+      {
+        "date": "07 APR 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,779.49",
+        "debit": 492.24,
+        "credit": null,
+        "balance": -405720.92
+      },
+      {
+        "date": "17 APR 25",
+        "particulars": "IB TRANSFER 926604996 FROM 999-821-5000010 1:35PM",
+        "debit": null,
+        "credit": 280.96,
+        "balance": -405439.96
+      },
+      {
+        "date": "23 APR 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2719.04,
+        "balance": -402720.92
+      },
+      {
+        "date": "05 MAY 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,482.87",
+        "debit": 434.2,
+        "credit": null,
+        "balance": -404203.79
+      },
+      {
+        "date": "05 MAY 25",
+        "particulars": "IB TRANSFER 930222367 FROM 999-821-5000070 2:57PM 3MAY",
+        "debit": null,
+        "credit": 341.67,
+        "balance": -403862.12
+      },
+      {
+        "date": "08 MAY 25",
+        "particulars": "IB TRANSFER 931152658 FROM 999-821-5000010 10:01PM 7MAY",
+        "debit": null,
+        "credit": 100.0,
+        "balance": -403762.12
+      },
+      {
+        "date": "21 MAY 25",
+        "particulars": "IB TRANSFER 934409887 FROM 999-821-5000010 4:47PM",
+        "debit": null,
+        "credit": 280.96,
+        "balance": -403481.16
+      },
+      {
+        "date": "23 MAY 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2719.04,
+        "balance": -400762.12
+      },
+      {
+        "date": "05 JUN 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,627.41",
+        "debit": 468.72,
+        "credit": null,
+        "balance": -402389.53
+      },
+      {
+        "date": "20 JUN 25",
+        "particulars": "IB TRANSFER 941548853 FROM 999-821-5000010 10:50AM",
+        "debit": null,
+        "credit": 348.93,
+        "balance": -402040.6
+      },
+      {
+        "date": "20 JUN 25",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -402040.6
+      },
+      {
+        "date": "20 JUN 25",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -402040.6
+      },
+      {
+        "date": "23 JUN 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2651.07,
+        "balance": -399389.53
+      },
+      {
+        "date": "04 JUL 25",
+        "particulars": "IB TRANSFER 944944136 FROM 999-821-5000070 3:30PM",
+        "debit": null,
+        "credit": 289.59,
+        "balance": -399099.94
+      },
+      {
+        "date": "07 JUL 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,591.03",
+        "debit": 493.82,
+        "credit": null,
+        "balance": -400690.97
+      },
+      {
+        "date": "23 JUL 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2651.07,
+        "balance": -398039.9
+      },
+      {
+        "date": "25 JUL 25",
+        "particulars": "IB TRANSFER 949868483 FROM 999-821-5000010 1:14PM",
+        "debit": null,
+        "credit": 71.45,
+        "balance": -397968.45
+      },
+      {
+        "date": "28 JUL 25",
+        "particulars": "IB TRANSFER 950443659 FROM 999-821-5000010 1:46PM",
+        "debit": null,
+        "credit": 268.45,
+        "balance": -397700.0
+      },
+      {
+        "date": "05 AUG 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,417.07",
+        "debit": 464.71,
+        "credit": null,
+        "balance": -399117.07
+      },
+      {
+        "date": "05 AUG 25",
+        "particulars": "COMPLETE PACKAGE FEE",
+        "debit": 395.0,
+        "credit": null,
+        "balance": -399512.07
+      },
+      {
+        "date": "25 AUG 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -396926.4
+      },
+      {
+        "date": "25 AUG 25",
+        "particulars": "IB TRANSFER 956941991 FROM 999-821-5000010 1:16PM 24AUG",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -396512.07
+      },
+      {
+        "date": "05 SEP 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,494.18",
+        "debit": 474.49,
+        "credit": null,
+        "balance": -398006.25
+      },
+      {
+        "date": "11 SEP 25",
+        "particulars": "IB TRANSFER 961379134 FROM 999-821-5000070 3:46PM",
+        "debit": null,
+        "credit": 100.0,
+        "balance": -397906.25
+      },
+      {
+        "date": "19 SEP 25",
+        "particulars": "IB TRANSFER 963327391 FROM 999-821-5000010 1:42PM",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -397491.92
+      },
+      {
+        "date": "23 SEP 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -394906.25
+      },
+      {
+        "date": "23 SEP 25",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -394906.25
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "21 MAR 25",
+        "owner_occupied_limit_balance": 430440.4,
+        "rate_pct_pa": 6.18
+      },
+      {
+        "effective_date": "17 APR 25",
+        "owner_occupied_limit_balance": 430126.4,
+        "rate_pct_pa": 6.18
+      },
+      {
+        "effective_date": "30 MAY 25",
+        "owner_occupied_limit_balance": 429446.5,
+        "rate_pct_pa": 5.93
+      },
+      {
+        "effective_date": "22 AUG 25",
+        "owner_occupied_limit_balance": 427979.6,
+        "rate_pct_pa": 5.68
+      },
+      {
+        "effective_date": "10 SEP 25",
+        "owner_occupied_limit_balance": 427508.4,
+        "rate_pct_pa": 5.68
+      }
+    ]
+  },
+  {
+    "statement_number": 8,
+    "period": "24 Sep 25 - 23 Mar 26",
+    "opening_balance": -394906.25,
+    "closing_balance": -380914.33,
+    "total_debits": 8753.26,
+    "total_credits": 22745.18,
+    "transactions": [
+      {
+        "date": "24 SEP 25",
+        "particulars": "OPENING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -394906.25
+      },
+      {
+        "date": "01 OCT 25",
+        "particulars": "IB TRANSFER 965938929 FROM 999-821-5000070 1:57AM",
+        "debit": null,
+        "credit": 500.0,
+        "balance": -394406.25
+      },
+      {
+        "date": "06 OCT 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,447.17",
+        "debit": 465.74,
+        "credit": null,
+        "balance": -395853.42
+      },
+      {
+        "date": "20 OCT 25",
+        "particulars": "IB TRANSFER 970636944 TO 999-821-5000010 2:04PM",
+        "debit": 414.33,
+        "credit": null,
+        "balance": -396267.75
+      },
+      {
+        "date": "20 OCT 25",
+        "particulars": "IB TRANSFER 970637021 FROM 999-821-5000010 2:04PM",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -395853.42
+      },
+      {
+        "date": "20 OCT 25",
+        "particulars": "IB TRANSFER 970637083 FROM 999-821-5000010 2:04PM",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -395439.09
+      },
+      {
+        "date": "23 OCT 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -392853.42
+      },
+      {
+        "date": "05 NOV 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,388.60",
+        "debit": 453.17,
+        "credit": null,
+        "balance": -394242.02
+      },
+      {
+        "date": "19 NOV 25",
+        "particulars": "IB TRANSFER 977954118 FROM 999-821-5000010 3:32PM",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -393827.69
+      },
+      {
+        "date": "21 NOV 25",
+        "particulars": "IB TRANSFER 978548302 FROM 999-821-5000070 11:23AM",
+        "debit": null,
+        "credit": 300.0,
+        "balance": -393527.69
+      },
+      {
+        "date": "24 NOV 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -390942.02
+      },
+      {
+        "date": "03 DEC 25",
+        "particulars": "IB TRANSFER 981469521 FROM 999-821-5000070 3:04PM",
+        "debit": null,
+        "credit": 1000.0,
+        "balance": -389942.02
+      },
+      {
+        "date": "05 DEC 25",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,382.06",
+        "debit": 452.03,
+        "credit": null,
+        "balance": -391324.08
+      },
+      {
+        "date": "05 DEC 25",
+        "particulars": "CARRIED FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -391324.08
+      },
+      {
+        "date": "05 DEC 25",
+        "particulars": "BROUGHT FORWARD",
+        "debit": null,
+        "credit": null,
+        "balance": -391324.08
+      },
+      {
+        "date": "23 DEC 25",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -388738.41
+      },
+      {
+        "date": "23 DEC 25",
+        "particulars": "IB TRANSFER 986407345 FROM 999-821-5000070 12:44PM",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -388324.08
+      },
+      {
+        "date": "24 DEC 25",
+        "particulars": "IB TRANSFER 986688788 FROM 999-821-5000070 11:50AM",
+        "debit": null,
+        "credit": 7.27,
+        "balance": -388316.81
+      },
+      {
+        "date": "05 JAN 26",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,408.31",
+        "debit": 473.4,
+        "credit": null,
+        "balance": -389725.12
+      },
+      {
+        "date": "06 JAN 26",
+        "particulars": "IB TRANSFER 989418228 FROM 999-821-5000070 2:05PM",
+        "debit": null,
+        "credit": 225.12,
+        "balance": -389500.0
+      },
+      {
+        "date": "23 JAN 26",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -386914.33
+      },
+      {
+        "date": "27 JAN 26",
+        "particulars": "IB TRANSFER 993617865 FROM 999-821-5000010 1:46AM 24JAN",
+        "debit": null,
+        "credit": 414.33,
+        "balance": -386500.0
+      },
+      {
+        "date": "30 JAN 26",
+        "particulars": "IB TRANSFER 995215709 FROM 999-821-5000070 7:49PM",
+        "debit": null,
+        "credit": 500.0,
+        "balance": -386000.0
+      },
+      {
+        "date": "05 FEB 26",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,400.21",
+        "debit": 472.53,
+        "credit": null,
+        "balance": -387400.21
+      },
+      {
+        "date": "23 FEB 26",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -384814.54
+      },
+      {
+        "date": "05 MAR 26",
+        "particulars": "DEBIT INTEREST AFTER OFFSET SAVING OF $1,312.58",
+        "debit": 424.29,
+        "credit": null,
+        "balance": -386127.12
+      },
+      {
+        "date": "19 MAR 26",
+        "particulars": "IB TRANSFER 1006703100 FROM 999-821-5000010 1:27PM",
+        "debit": null,
+        "credit": 127.12,
+        "balance": -386000.0
+      },
+      {
+        "date": "20 MAR 26",
+        "particulars": "IB TRANSFER 1007039300 FROM 999-821-5000010 4:19PM",
+        "debit": null,
+        "credit": 2500.0,
+        "balance": -383500.0
+      },
+      {
+        "date": "23 MAR 26",
+        "particulars": "CREDIT TRANSFER FROM ALEX JAMES SAMPLE",
+        "debit": null,
+        "credit": 2585.67,
+        "balance": -380914.33
+      },
+      {
+        "date": "23 MAR 26",
+        "particulars": "CLOSING BALANCE",
+        "debit": null,
+        "credit": null,
+        "balance": -380914.33
+      }
+    ],
+    "rate_changes": [
+      {
+        "effective_date": "23 SEP 25",
+        "owner_occupied_limit_balance": 427508.4,
+        "rate_pct_pa": 5.68
+      },
+      {
+        "effective_date": "03 DEC 25",
+        "owner_occupied_limit_balance": 426392.8,
+        "rate_pct_pa": 5.68
+      },
+      {
+        "effective_date": "28 JAN 26",
+        "owner_occupied_limit_balance": 425266.1,
+        "rate_pct_pa": 5.68
+      },
+      {
+        "effective_date": "13 FEB 26",
+        "owner_occupied_limit_balance": 424732.0,
+        "rate_pct_pa": 5.93
+      },
+      {
+        "effective_date": "06 MAR 26",
+        "owner_occupied_limit_balance": 424055.2,
+        "rate_pct_pa": 5.93
+      }
+    ]
+  }
+]
