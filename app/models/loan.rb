@@ -20,6 +20,9 @@ class Loan < ApplicationRecord
   VARIABLE_RATE_TYPES = %w[variable adjustable].freeze
   AMORTIZABLE_RATE_TYPES = ([ FIXED_RATE_TYPE ] + VARIABLE_RATE_TYPES).freeze
 
+  # An annual percentage, matching the bound the rate-change input declares.
+  MAX_INTEREST_RATE = 100
+
   validates :subtype, inclusion: { in: SUBTYPES.keys }, allow_blank: true
 
   # The contracted repayment, for a loan that has exactly one.
@@ -56,6 +59,7 @@ class Loan < ApplicationRecord
       AMORTIZABLE_RATE_TYPES.include?(rate_type) &&
       interest_rate.present? &&
       term_months.to_i.positive? &&
+      term_months.to_i <= Loan::Simulator::MAX_PERIODS &&
       original_balance.amount.positive?
   end
 
@@ -121,8 +125,17 @@ class Loan < ApplicationRecord
       begin
         raise ArgumentError, "incomplete" if date.blank? || rate.blank?
 
-        acc[Date.parse(date.to_s).iso8601] = BigDecimal(rate.to_s).to_s("F")
-      rescue ArgumentError, TypeError, Date::Error
+        # The form's own input already declares `min="0" max="100"`, so this is
+        # the same contract enforced where a crafted PATCH cannot skip it. A
+        # negative or absurd rate parses perfectly well and then produces a
+        # schedule nobody can act on, which is worse than a rejected row.
+        parsed_rate = BigDecimal(rate.to_s)
+        unless parsed_rate.finite? && parsed_rate >= 0 && parsed_rate <= MAX_INTEREST_RATE
+          raise ArgumentError, "rate out of range"
+        end
+
+        acc[Date.parse(date.to_s).iso8601] = parsed_rate.to_s("F")
+      rescue ArgumentError, TypeError, Date::Error, FloatDomainError
         invalid << { effective_date: date.to_s, rate: rate.to_s }
       end
     end

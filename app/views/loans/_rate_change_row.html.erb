@@ -1,7 +1,10 @@
 <%# locals: (effective_date:, rate:) %>
 
 <div class="flex items-end gap-2" data-rate-change-row>
-  <label class="sr-only" for="rate_change_effective_date"><%= t("loans.form.rate_change_effective_date") %></label>
+  <%# No <label for>: this partial is also the JS clone template, so any id it
+      carried would be duplicated across every row and `for` would resolve to
+      whichever came first. aria-label names each input without needing an id
+      to point at. %>
   <input type="date"
          name="account[accountable_attributes][rate_changes][][effective_date]"
          value="<%= effective_date %>"
@@ -9,7 +12,6 @@
          aria-label="<%= t("loans.form.rate_change_effective_date") %>"
          class="form-field__input">
 
-  <label class="sr-only" for="rate_change_rate"><%= t("loans.form.rate_change_rate") %></label>
   <input type="number" step="0.005" min="0" max="100"
          name="account[accountable_attributes][rate_changes][][rate]"
          value="<%= rate %>"

@@ -178,6 +178,50 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal BigDecimal("1000.12"), schedule.principal, "rounded to the currency at the door"
   end
 
+  # A term the simulator refuses to walk must not reach it. `Simulator` raises
+  # rather than truncating -- correct for the simulator -- but `amortizable?`
+  # let such a loan through, so building the schedule for one raised
+  # ArgumentError straight out of an account page render.
+  #
+  # Treated exactly as an unrecognised rate_type is: no schedule, no tab. The
+  # tolerant answer matters because term_months is also written by
+  # PlaidAccount::Liabilities::StudentLoanProcessor, from provider dates this
+  # app does not control.
+  test "a term longer than the simulator will walk is not amortizable, rather than raising" do
+    loan = build_loan(rate_type: "fixed", term_months: Loan::Simulator::MAX_PERIODS + 1)
+
+    assert_not loan.amortizable?
+    assert_nil loan.amortization_schedule
+
+    at_limit = build_loan(rate_type: "fixed", term_months: Loan::Simulator::MAX_PERIODS)
+    assert at_limit.amortizable?, "the limit itself is still a schedulable loan"
+    assert at_limit.amortization_schedule.payments.any?
+  end
+
+  # The rate input declares min="0" max="100"; a crafted PATCH does not have to
+  # honour it. A rate outside that range parses fine and then silently drives
+  # the projection.
+  test "a rate outside the range the form declares is rejected, not persisted" do
+    loan = build_loan(rate_type: "variable")
+
+    [ "-1", "101", "1e1000" ].each do |bad|
+      loan.rate_changes = [ { effective_date: "2027-01-01", rate: bad } ]
+
+      assert_empty loan.variable_rate_schedule, "#{bad.inspect} should not have been stored"
+      assert_equal [ { effective_date: "2027-01-01", rate: bad } ], loan.invalid_rate_changes
+      assert_not loan.valid?, "#{bad.inspect} should fail validation so the form can redisplay it"
+    end
+  end
+
+  test "the bounds themselves are accepted" do
+    loan = build_loan(rate_type: "variable")
+    loan.rate_changes = [ { effective_date: "2027-01-01", rate: "0" },
+                          { effective_date: "2028-01-01", rate: "100" } ]
+
+    assert_empty loan.invalid_rate_changes
+    assert_equal({ "2027-01-01" => "0.0", "2028-01-01" => "100.0" }, loan.variable_rate_schedule)
+  end
+
   private
     def build_loan(rate_type:, interest_rate: 6, term_months: 360, start_date: nil,
                    variable_rate_schedule: {})
