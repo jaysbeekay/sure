@@ -246,19 +246,57 @@ slice**: omitting it makes `loans:rebuild_schedules` process every eligible loan
 in one invocation, which is the opposite of the bounded rollout this section
 requires.
 
+The first slice starts from the beginning of the estate:
+
     RAILS_ENV=production bin/rails loans:rebuild_schedules BATCH_SIZE=100 LIMIT=500 SLEEP=0.25
 
-Check progress after each slice. This exits 0 only when every loan is at the
-current algorithm version, so it is also the answer to "is the prebuild done?":
+It finishes by printing the checkpoint to resume from:
+
+    Completed loan schedule rebuild: 500 loans
+    next_start_after_id=0f4c8a52-6b3d-4f19-9c07-1a2e5d8b9d31
+    More loans remain -- re-run with START_AFTER_ID=0f4c8a52-6b3d-4f19-9c07-1a2e5d8b9d31 to continue from here.
+
+Every later slice passes that value back, and keeps the same `LIMIT`:
+
+    RAILS_ENV=production bin/rails loans:rebuild_schedules BATCH_SIZE=100 LIMIT=500 SLEEP=0.25 START_AFTER_ID=0f4c8a52-6b3d-4f19-9c07-1a2e5d8b9d31
+
+Repeat until a slice prints `next_start_after_id=none`. Check progress after
+each slice. This exits 0 only when every **amortizable** loan is at the current
+algorithm version, so it — not the cursor — is the answer to "is the prebuild
+done?":
 
     RAILS_ENV=production bin/rails loans:schedule_version_status
 
-`LIMIT` selects by id order, so repeating the command re-selects the same head of
-the estate. That is safe rather than wasteful — the rebuild is idempotent, and
-already-current schedules are cheap — but it means a slice is not a cursor:
-raise `LIMIT` between slices (500, 2000, 10000, …) and watch the monitoring
-signals below settle after each, rather than expecting successive equal-sized
-slices to walk the estate.
+`START_AFTER_ID` is what makes this a resumable rollout. `LIMIT` alone counts
+from the first id every time, so equal-sized slices re-select the same head of
+the estate and the second makes no progress. This page previously told an
+operator to raise `LIMIT` between slices (500, 2000, 10000, …) instead — which
+reprocesses every loan already done, and eventually requires a single
+invocation as large as the whole estate. Pausing, resuming and recovering from
+a failed slice all depend on the cursor:
+`test/tasks/loans_task_test.rb` asserts two consecutive slices process disjoint
+populations, and that a malformed cursor stops the task before it writes
+anything.
+
+**`next_start_after_id=none` is not a completion signal, and the reason is
+worth understanding rather than trusting.** Loan ids are random uuids, so id
+order is not creation order: a loan created *during* the rollout can sort
+**before** the cursor you are resuming from, and will never be visited by the
+remaining slices. "No loans sort after this slice" is exactly that and nothing
+more.
+
+`loans:schedule_version_status` is the authority, because it asks a different
+question — is every amortizable loan at the current algorithm version — which
+does not depend on where the cursor got to. So:
+
+- if it exits 0, the prebuild is done;
+- if it still reports staleness after a slice printed `none`, **run another
+  pass from the head** (no `START_AFTER_ID`). Rebuilds are idempotent, so a
+  second pass over already-current loans is cheap; it is the loans that sorted
+  in behind you that it is there to catch.
+
+Freezing loan creation for the duration would also work and is not worth the
+outage. Re-running is.
 
 Record queue depth, failures, stale schedules, convergence, and variance after
 each slice. A rebuild is idempotent and rate-limited; page views do not own

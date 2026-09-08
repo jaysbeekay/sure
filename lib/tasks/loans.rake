@@ -22,6 +22,20 @@ namespace :loans do
   # the account and its opening valuation. The status task narrows it in Ruby.
   loan_rebuild_scope = -> { Loan.where.not(term_months: nil).order(:id) }
 
+  # A prebuild slice resumes from the id the previous slice stopped at, so
+  # successive equal-sized slices walk the estate instead of re-selecting its
+  # head. `LIMIT` alone is not a cursor: it always counts from the first id, so
+  # the runbook used to tell an operator to raise it between slices (500, 2000,
+  # 10000, ...), which reprocesses every earlier loan and eventually needs an
+  # invocation as large as the estate. That is not a resumable rollout, and it
+  # has no safe pause/resume or failure-recovery story.
+  #
+  # Format-checked rather than passed straight to the database: a mistyped
+  # cursor would otherwise reach Postgres as an invalid uuid literal and raise
+  # mid-slice, after some loans had been rebuilt. An operator resuming a
+  # production rollout should be told before anything is written.
+  loan_cursor_format = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
+
   desc "Verify every C1-C16 contract row maps to an existing test"
   task verify_contract_coverage: :environment do
     require "yaml"
@@ -330,28 +344,66 @@ namespace :loans do
   end
 
   desc "Rebuild loan amortization schedules in bounded, rate-limited batches"
-  task :rebuild_schedules, [ :batch_size, :limit, :sleep ] => :environment do |_, args|
+  task :rebuild_schedules, [ :batch_size, :limit, :sleep, :start_after_id ] => :environment do |_, args|
     batch_size = [ loan_task_option.call(args, :batch_size, "100").to_i, 1 ].max
     limit = loan_task_option.call(args, :limit)&.to_i
     pause = loan_task_option.call(args, :sleep, "0").to_f
+    start_after_id = loan_task_option.call(args, :start_after_id)
     rebuilt = 0
+    last_id = nil
+
+    if start_after_id && !start_after_id.match?(loan_cursor_format)
+      abort "START_AFTER_ID=#{start_after_id} is not a loan id. Pass the " \
+            "next_start_after_id printed by the previous slice."
+    end
 
     scope = loan_rebuild_scope.call
+    # Paired with the scope's `order(:id)`: everything at or before the cursor
+    # was rebuilt by an earlier slice, so this one starts strictly after it.
+    scope = scope.where("loans.id > ?", start_after_id) if start_after_id
     scope = scope.limit(limit) if limit&.positive?
 
     # Print the EFFECTIVE options, not the requested ones, so a rehearsal
     # transcript records what actually ran rather than what was typed.
-    puts "Rebuilding loan schedules (batch_size=#{batch_size}, limit=#{limit || 'all'}, sleep=#{pause}s)"
+    puts "Rebuilding loan schedules (batch_size=#{batch_size}, limit=#{limit || 'all'}, " \
+         "sleep=#{pause}s, start_after_id=#{start_after_id || 'none'})"
     puts "WARNING: no rate limit -- pass SLEEP or the third argument to throttle" unless pause.positive?
     scope.find_in_batches(batch_size: batch_size) do |loans|
       loans.each do |loan|
         loan.rebuild_amortization_schedule
         rebuilt += 1
+        last_id = loan.id
         puts "Rebuilt #{rebuilt}: #{loan.id}"
         sleep(pause) if pause.positive?
       end
     end
 
     puts "Completed loan schedule rebuild: #{rebuilt} loans"
+
+    # The checkpoint an operator needs to resume, printed rather than inferred
+    # from the last "Rebuilt" line.
+    #
+    # Probe one row past the slice rather than inferring from `rebuilt == limit`.
+    # A final slice that happens to contain exactly `limit` loans is
+    # indistinguishable from a full one by count alone, so inference would tell
+    # the operator to run again and the next run would rebuild nothing -- an
+    # end-of-population signal that only arrives after a wasted pass. One
+    # indexed existence check answers it exactly (cubic, #93).
+    #
+    # This is a resumption signal, NOT a completion signal. `schedule_version_status`
+    # remains the answer to "is the prebuild finished?" -- it exits 0 only when
+    # every amortizable loan is at the current algorithm version, which this
+    # cannot know. It matters here because loan ids are random uuids: a loan
+    # created during the rollout can sort BEFORE the cursor and never be
+    # visited, so "no rows past the cursor" is not "nothing left to build".
+    remaining = last_id ? loan_rebuild_scope.call.where("loans.id > ?", last_id).exists? : false
+
+    if remaining
+      puts "next_start_after_id=#{last_id}"
+      puts "More loans remain -- re-run with START_AFTER_ID=#{last_id} to continue from here."
+    else
+      puts "next_start_after_id=none"
+      puts "No loans sort after this slice. Completion is loans:schedule_version_status, not this line."
+    end
   end
 end
