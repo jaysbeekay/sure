@@ -11,14 +11,17 @@ class Loan < ApplicationRecord
     "other" => { short: "Other Loan", long: "Other Loan" }
   }.freeze
 
-  # The rate types this calculator understands. A loan whose rate_type is
-  # anything else -- including a value a provider supplied, since
-  # PlaidAccount::Liabilities::MortgageProcessor writes Plaid's raw
-  # `interest_rate.type` straight through -- is not amortizable, and gets the
-  # same treatment it got before schedules existed: no schedule, no tab.
+  # The rate types the form offers. They are not the only ones a loan can
+  # carry: PlaidAccount::Liabilities::MortgageProcessor writes Plaid's raw
+  # `interest_rate.type` straight through ("arm", among others), and a loan
+  # whose rate can move is variable whatever the provider's word for it.
+  # So the predicates below read the column as: "fixed" is fixed, any other
+  # non-blank value is variable, and blank says nothing -- such a loan is
+  # not amortizable and gets what it got before schedules existed: no
+  # schedule, no tab. VARIABLE_RATE_TYPES is the form's vocabulary only,
+  # for the rate-change editor to know which of its options to open for.
   FIXED_RATE_TYPE = "fixed".freeze
   VARIABLE_RATE_TYPES = %w[variable adjustable].freeze
-  AMORTIZABLE_RATE_TYPES = ([ FIXED_RATE_TYPE ] + VARIABLE_RATE_TYPES).freeze
 
   # An annual percentage, matching the bound the rate-change input declares.
   MAX_INTEREST_RATE = 100
@@ -56,7 +59,7 @@ class Loan < ApplicationRecord
     # widening the rate types removed the accident, so the requirement is
     # stated rather than relied upon.
     account.present? &&
-      AMORTIZABLE_RATE_TYPES.include?(rate_type) &&
+      rate_type.present? &&
       interest_rate.present? &&
       term_months.to_i.positive? &&
       term_months.to_i <= Loan::Simulator::MAX_PERIODS &&
@@ -73,9 +76,11 @@ class Loan < ApplicationRecord
   public
 
   # Whether this loan's rate can move over its life. The one place the answer
-  # is defined -- callers must not compare rate_type to a string.
+  # is defined -- callers must not compare rate_type to a string. Anything
+  # non-blank that is not "fixed" counts, so a provider's own vocabulary is
+  # variable rather than unknown (see the constants above).
   def variable_rate_type?
-    VARIABLE_RATE_TYPES.include?(rate_type)
+    rate_type.present? && rate_type != FIXED_RATE_TYPE
   end
 
   # Recorded rate changes as [effective date string, rate] pairs, oldest first.

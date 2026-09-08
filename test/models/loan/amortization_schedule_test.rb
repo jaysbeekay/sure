@@ -113,12 +113,20 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
     assert_not_nil Loan::AmortizationSchedule.for(loan)
   end
 
-  # What is still not buildable: a rate_type this calculator does not know.
-  # PlaidAccount::Liabilities::MortgageProcessor writes Plaid's raw
-  # `interest_rate.type` straight through, so this is reachable from a sync,
-  # not only from the form.
-  test "is not buildable for an unrecognised rate type" do
+  # A rate type outside the form's vocabulary is still a rate type (#100
+  # decision 8). PlaidAccount::Liabilities::MortgageProcessor writes Plaid's
+  # raw `interest_rate.type` straight through, so this is reachable from a
+  # sync, not only from the form, and such a loan is variable rather than
+  # unknown.
+  test "is buildable for a provider's own rate type" do
     loan = loan_account(interest_rate: 3.5, term_months: 360, rate_type: "teaser").loan
+
+    assert_not_nil Loan::AmortizationSchedule.for(loan)
+  end
+
+  # What is still not buildable: no rate type at all.
+  test "is not buildable for a blank rate type" do
+    loan = loan_account(interest_rate: 3.5, term_months: 360, rate_type: "").loan
 
     assert_nil Loan::AmortizationSchedule.for(loan)
   end
