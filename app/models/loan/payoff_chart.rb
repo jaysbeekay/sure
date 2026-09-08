@@ -160,14 +160,16 @@ class Loan
       # date, the schedule's balance, and the projection's. Built here so the
       # table and the chart cannot disagree about a single figure.
       def table_rows(series)
-        actual = series[:actual].map { |p| [ Date.iso8601(p[:date]), p[:balance] ] }
+        # Newest first, reversed once: each row below scans it for the latest
+        # recorded balance on or before its date.
+        actual = series[:actual].reverse.map { |p| [ Date.iso8601(p[:date]), p[:balance] ] }
         projected = series[:projected].to_h { |p| [ p[:date], p[:balance] ] }
 
         series[:scheduled].filter_map do |point|
           date = Date.iso8601(point[:date])
           next unless date.between?(domain_start, domain_end)
 
-          recorded = actual.reverse.find { |recorded_on, _| recorded_on <= date } if date <= as_of
+          recorded = actual.find { |recorded_on, _| recorded_on <= date } if date <= as_of
           {
             date: point[:date],
             actual: recorded&.last,

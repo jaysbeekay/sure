@@ -32,11 +32,21 @@ export default class extends Controller {
 
   connect() {
     this._draw = this._draw.bind(this);
-    window.addEventListener("resize", this._draw);
+    // A window resize also changes the element's box, so the resize listener
+    // and the ResizeObserver both fire for one event. Each draw rebuilds the
+    // whole SVG; coalesce them into one per animation frame.
+    this._scheduleDraw = () => {
+      if (this._frame) return;
+      this._frame = requestAnimationFrame(() => {
+        this._frame = null;
+        this._draw();
+      });
+    };
+    window.addEventListener("resize", this._scheduleDraw);
     // The container can be zero-width on first connect (a Turbo restore, a
     // hidden parent). Draw when the box settles.
     if (typeof ResizeObserver !== "undefined") {
-      this._observer = new ResizeObserver(this._draw);
+      this._observer = new ResizeObserver(this._scheduleDraw);
       this._observer.observe(this.element);
     } else {
       this._draw();
@@ -44,7 +54,7 @@ export default class extends Controller {
     // Colours are read at draw time, so a theme switch while this page is open
     // would otherwise leave the chart painted for the previous theme.
     if (typeof MutationObserver !== "undefined") {
-      this._themeObserver = new MutationObserver(this._draw);
+      this._themeObserver = new MutationObserver(this._scheduleDraw);
       this._themeObserver.observe(document.documentElement, {
         attributes: true,
         attributeFilter: ["data-theme", "class"],
@@ -53,7 +63,9 @@ export default class extends Controller {
   }
 
   disconnect() {
-    window.removeEventListener("resize", this._draw);
+    window.removeEventListener("resize", this._scheduleDraw);
+    if (this._frame) cancelAnimationFrame(this._frame);
+    this._frame = null;
     this._observer?.disconnect();
     this._themeObserver?.disconnect();
     this._tooltip?.remove();

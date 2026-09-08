@@ -47,6 +47,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
   test "a loan account with a chart payload mounts the loan balance chart and nothing else" do
     loan_account = accounts(:loan)
     payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
 
     render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, as_of: Date.current))
 
@@ -69,6 +70,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: nil))
 
     assert_no_selector "[data-controller='loan-payoff-chart']"
+    assert_selector "[data-controller='time-series-chart']", count: 1
   end
 
   # Degradation matrix (#100 brief 7.5): the legend promises only the lines
@@ -78,6 +80,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
   test "the legend lists only the series the payload marks visible" do
     loan_account = accounts(:loan)
     payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
     windowed = payload.merge(visible: %w[actual scheduled])
 
     render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: windowed, as_of: Date.current))
@@ -95,6 +98,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
   test "a projection with no payoff date shows the not-converged notice in place of the cards" do
     loan_account = accounts(:loan)
     payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
     assert payload[:projected].any?, "the fixture loan must project, or this asserts nothing"
     stalled = payload.merge(projected_payoff_date: nil, months_saved: 0, interest_saved: 0)
 

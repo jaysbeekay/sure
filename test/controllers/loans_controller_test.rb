@@ -225,13 +225,23 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # card's Turbo frame, on whichever tab is open. The Schedule tab keeps its
   # table and cards and no longer carries a chart of its own.
   test "the account page mounts the loan balance chart with its three series" do
-    get account_path(@account)
+    # All three lines need somewhere to be: a period that reaches past today
+    # for the forecasts, and a recorded history for the actual line. The
+    # earlier intersection assertion here passed with `visible` empty.
+    origination = Date.current.prev_year
+    @account.loan.update!(start_date: origination)
+    @account.balances.create!(date: origination, balance: 500_000, currency: "USD",
+                              start_cash_balance: 500_000, flows_factor: -1)
+    @account.balances.create!(date: Date.current, balance: 490_000, currency: "USD",
+                              start_cash_balance: 490_000, flows_factor: -1)
+
+    get account_path(@account, period: "all_time")
 
     assert_response :success
     payload = chart_payload
     assert payload["scheduled"].length > 1
     assert payload["projected"].length > 1
-    assert_equal %w[actual scheduled projected] & payload["visible"], payload["visible"]
+    assert_equal %w[actual projected scheduled], payload.fetch("visible").sort
     assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} [data-controller='loan-payoff-chart']", count: 1
     assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} table", count: 1
   end
@@ -279,12 +289,12 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     controller = AccountsController.new
     controller.params = ActionController::Parameters.new
 
-    first = controller.loan_payoff_chart(@account)
-    second = controller.loan_payoff_chart(other)
+    first = controller.send(:loan_payoff_chart, @account)
+    second = controller.send(:loan_payoff_chart, other)
 
     assert_not_equal first[:scheduled], second[:scheduled],
       "the second account was handed the first account's chart"
-    assert_equal first, controller.loan_payoff_chart(@account),
+    assert_equal first, controller.send(:loan_payoff_chart, @account),
       "and the first is still memoized rather than re-simulated"
   end
 end

@@ -39,6 +39,9 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       # The controller watches data-theme and redraws; the strokes must
       # resolve again from the dark palette, not stay stale.
       page.execute_script("document.documentElement.setAttribute('data-theme', 'dark')")
+      # The redraw runs from a MutationObserver, on the next animation frame;
+      # the paths exist before and after it, so wait on the stroke itself.
+      wait_until { stroke_of("actual") != strokes_in_light["actual"] }
       assert_series_painted
       assert_not_equal strokes_in_light["actual"], stroke_of("actual"),
         "the recorded line must repaint from the dark theme's token"
@@ -118,6 +121,13 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       page.evaluate_script(
         "getComputedStyle(document.querySelector(\"svg path[data-series='#{key}']\")).stroke"
       )
+    end
+
+    # Capybara retries its own matchers; a value read through evaluate_script
+    # gets no such patience, so give it the same budget.
+    def wait_until(timeout: Capybara.default_max_wait_time)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+      sleep 0.05 until yield || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
     end
 
     def all_time_period
