@@ -97,7 +97,10 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     get account_path(@account, tab: "schedule")
 
     assert_response :success
-    assert_select "table tbody tr", count: @account.loan.term_months
+    # The chart card above the tabs carries its own data table (#100), so the
+    # count is scoped to the schedule's table.
+    chart_table = ActionView::RecordIdentifier.dom_id(@account, :loan_chart_table)
+    assert_select "table:not(##{chart_table}) tbody tr", count: @account.loan.term_months
     assert_match "Total Interest", response.body
   end
 
@@ -201,22 +204,48 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     node && JSON.parse(node["data-loan-payoff-chart-data-value"])
   end
 
-  test "the schedule tab mounts the payoff chart with two series" do
-    get account_path(@account, tab: "schedule")
+  # #100: the chart lives at the top of the account page, inside the chart
+  # card's Turbo frame, on whichever tab is open. The Schedule tab keeps its
+  # table and cards and no longer carries a chart of its own.
+  test "the account page mounts the loan balance chart with its three series" do
+    get account_path(@account)
 
     assert_response :success
     payload = chart_payload
     assert payload["scheduled"].length > 1
     assert payload["projected"].length > 1
+    assert_equal %w[actual scheduled projected] & payload["visible"], payload["visible"]
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} [data-controller='loan-payoff-chart']", count: 1
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} table", count: 1
   end
 
-  test "a loan with no schedule renders the tab without a chart" do
-    @account.loan.update!(rate_type: "teaser")
-
+  test "the schedule tab renders its table without a chart of its own" do
     get account_path(@account, tab: "schedule")
 
     assert_response :success
+    assert_select "[data-controller='loan-payoff-chart']", { count: 1 }, "one chart on the page, in the chart card"
+    assert_select "table", { minimum: 2 }, "the schedule table and the chart's data table"
+  end
+
+  # A stray what-if parameter from an old link must change nothing: the
+  # feature is not in this tranche (#100 decision 10).
+  test "an extra-payment parameter is ignored" do
+    get account_path(@account)
+    baseline = chart_payload
+    get account_path(@account, extra_payment: { amount: "2000", frequency: "monthly" })
+
+    assert_response :success
+    assert_equal baseline, chart_payload
+  end
+
+  test "a loan with no schedule renders the page without a loan chart" do
+    @account.loan.update!(rate_type: "teaser")
+
+    get account_path(@account)
+
+    assert_response :success
     assert_nil chart_payload
+    assert_select "[data-controller='time-series-chart']", count: 1
   end
   # The helper takes an account and memoized into a single slot regardless of
   # it, so the second loan rendered in one request would have been handed the

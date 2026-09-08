@@ -1,22 +1,29 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
 
-// Two lines on one chart:
+// The loan balance chart: three series on one axis.
 //
-//   scheduled   the original contract, origination -> maturity
-//   projected   where today's balance is actually heading
+//   actual     the recorded balance, origination -> today. Solid: fact.
+//   scheduled  the original contract, origination -> maturity. Dashed.
+//   projected  where today's balance is heading on the contract's repayment.
+//              Dashed.
 //
 // Series are distinguished by DASH PATTERN as well as colour. Hue alone fails
 // in greyscale and under deuteranopia, and red/green would be the worst
-// possible pair to rely on.
+// possible pair to rely on. Solid-versus-dashed also keeps "recorded fact"
+// and "forecast" visually separable.
+//
+// The x-domain comes from the payload, not from the data: the period picker
+// governs it (#100, decision 4). Series are drawn through a clip so a line
+// that leaves the window is cut at its edge rather than stretching the axis.
 export default class extends Controller {
-  static values = { data: Object };
+  static values = { data: Object, tableId: String };
 
   connect() {
     this._draw = this._draw.bind(this);
     window.addEventListener("resize", this._draw);
-    // The chart mounts inside a tab panel, which can be zero-width on first
-    // connect (Turbo restoring a hidden tab). Draw when the box settles.
+    // The container can be zero-width on first connect (a Turbo restore, a
+    // hidden parent). Draw when the box settles.
     if (typeof ResizeObserver !== "undefined") {
       this._observer = new ResizeObserver(this._draw);
       this._observer.observe(this.element);
@@ -41,11 +48,8 @@ export default class extends Controller {
     this._tooltip?.remove();
   }
 
-  // Design tokens are CSS custom properties. `var(--x)` is NOT substituted in
-  // an SVG presentation attribute -- an unresolvable value leaves stroke at its
-  // initial `none` and the path renders invisibly, with correct geometry and no
-  // error. Resolve to a concrete colour first, and keep the token as the
-  // source rather than hardcoding hex.
+  // Design tokens are CSS custom properties. Resolved to a concrete colour at
+  // draw time and applied with .style(), keeping the token as the source.
   _token(name, fallback) {
     const value = getComputedStyle(document.documentElement)
       .getPropertyValue(name)
@@ -71,26 +75,63 @@ export default class extends Controller {
     };
     const toPoint = (p) => ({ date: parseDate(p.date), balance: p.balance });
 
-    const scheduled = (data.scheduled || []).map(toPoint);
-    const projected = (data.projected || []).map(toPoint);
-    if (scheduled.length < 2) return;
+    const domainStart = parseDate(data.domain_start);
+    const domainEnd = parseDate(data.domain_end);
+    const today = parseDate(data.today);
+    if (!domainStart || !domainEnd || domainEnd <= domainStart) return;
 
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    const axisColor = isDark ? "#cfcfcf" : "#737373";
+    const success = this._token("--color-success", "#15803d");
+    const destructive = this._token("--color-destructive", "#ef4444");
+    const muted = this._token("--color-gray-400", "#9ca3af");
+
+    // Drawing order: forecasts underneath, fact on top.
     const series = [
-      { points: scheduled, key: "scheduled", color: this._token("--color-red-500", "#ef4444"), dash: "6 4", width: 1.5 },
-      { points: projected, key: "projected", color: this._token("--color-green-600", "#16a34a"), dash: null, width: 2 },
+      {
+        key: "scheduled",
+        points: (data.scheduled || []).map(toPoint),
+        color: destructive,
+        dash: "6 4",
+        width: 1.5,
+      },
+      {
+        key: "projected",
+        points: (data.projected || []).map(toPoint),
+        color: success,
+        dash: "4 4",
+        width: 2,
+      },
+      {
+        key: "actual",
+        points: (data.actual || []).map(toPoint),
+        color: success,
+        dash: null,
+        width: 2,
+      },
     ].filter((s) => s.points.length > 1);
+    if (series.length === 0) return;
 
-    const allPoints = series.flatMap((s) => s.points);
+    const margin = { top: 12, right: 12, bottom: 24, left: 48 };
     const x = d3
       .scaleTime()
-      .domain(d3.extent(allPoints, (d) => d.date))
-      .range([44, width - 12]);
+      .domain([domainStart, domainEnd])
+      .range([margin.left, width - margin.right]);
+    // Scale the y-axis to what is inside the window plus each line's first
+    // point either side of it, so a line crossing the window fits without the
+    // window being sized for points it never shows.
+    const inWindow = (points) => {
+      const inside = points.filter(
+        (p) => p.date >= domainStart && p.date <= domainEnd,
+      );
+      const before = points.filter((p) => p.date < domainStart).at(-1);
+      const after = points.find((p) => p.date > domainEnd);
+      return [before, ...inside, after].filter(Boolean);
+    };
+    const scalePoints = series.flatMap((s) => inWindow(s.points));
+    const yMax = (d3.max(scalePoints, (d) => d.balance) || 1) * 1.05;
     const y = d3
       .scaleLinear()
-      .domain([0, (d3.max(allPoints, (d) => d.balance) || 1) * 1.05])
-      .range([height - 24, 8]);
+      .domain([0, yMax])
+      .range([height - margin.bottom, margin.top]);
 
     const svg = d3
       .select(root)
@@ -99,63 +140,146 @@ export default class extends Controller {
       .attr("height", height)
       .attr("role", "img")
       .attr("aria-label", data.aria_description || "");
+    if (this.hasTableIdValue && this.tableIdValue) {
+      svg.attr("aria-describedby", this.tableIdValue);
+    }
+
+    const id = `loan-chart-${Math.random().toString(36).slice(2, 8)}`;
+    const defs = svg.append("defs");
+    const plotClip = `${id}-plot`;
+    defs
+      .append("clipPath")
+      .attr("id", plotClip)
+      .append("rect")
+      .attr("x", margin.left)
+      .attr("y", margin.top)
+      .attr("width", Math.max(0, width - margin.left - margin.right))
+      .attr("height", Math.max(0, height - margin.top - margin.bottom));
+    // The hover split on the actual series: the recorded line stays coloured up
+    // to the cursor and greys past it. Two clips share one edge, moved on
+    // pointer events; at rest the edge sits at the window's end and the whole
+    // line is coloured. Forecasts have no "before the cursor" to speak of.
+    const splitAt = (px) => {
+      pastClip.attr("width", Math.max(0, px - margin.left));
+      futureClip
+        .attr("x", px)
+        .attr("width", Math.max(0, width - margin.right - px));
+    };
+    const pastClip = defs
+      .append("clipPath")
+      .attr("id", `${id}-past`)
+      .append("rect")
+      .attr("x", margin.left)
+      .attr("y", margin.top)
+      .attr("height", Math.max(0, height - margin.top - margin.bottom));
+    const futureClip = defs
+      .append("clipPath")
+      .attr("id", `${id}-future`)
+      .append("rect")
+      .attr("y", margin.top)
+      .attr("height", Math.max(0, height - margin.top - margin.bottom));
+    splitAt(width - margin.right);
 
     const line = d3
       .line()
       .x((d) => x(d.date))
       .y((d) => y(d.balance))
       .curve(d3.curveMonotoneX);
+    const area = d3
+      .area()
+      .x((d) => x(d.date))
+      .y0(height - margin.bottom)
+      .y1((d) => y(d.balance))
+      .curve(d3.curveMonotoneX);
 
-    // Axes first, so the series draw over them.
+    // Axes first, so the series draw over them. Text in currentColor: the
+    // container carries the text token, so the axis follows the theme.
     svg
       .append("g")
-      .attr("transform", `translate(0,${height - 24})`)
-      .call(d3.axisBottom(x).ticks(Math.max(2, Math.floor(width / 140))).tickSizeOuter(0))
-      .call((g) => g.selectAll("text").style("fill", axisColor).style("font-size", "11px"))
-      .call((g) => g.selectAll("line,path").style("stroke", axisColor).style("opacity", 0.3));
-
+      .attr("transform", `translate(0,${height - margin.bottom})`)
+      .call(
+        d3
+          .axisBottom(x)
+          .ticks(Math.max(2, Math.floor(width / 140)))
+          .tickSizeOuter(0),
+      )
+      .call((g) =>
+        g
+          .selectAll("text")
+          .style("fill", "currentColor")
+          .style("opacity", 0.7)
+          .style("font-size", "11px"),
+      )
+      .call((g) =>
+        g
+          .selectAll("line,path")
+          .style("stroke", "currentColor")
+          .style("opacity", 0.2),
+      );
     svg
       .append("g")
-      .attr("transform", "translate(44,0)")
-      .call(d3.axisLeft(y).ticks(4).tickFormat(d3.format("~s")).tickSizeOuter(0))
-      .call((g) => g.selectAll("text").style("fill", axisColor).style("font-size", "11px"))
-      .call((g) => g.selectAll("line,path").style("stroke", axisColor).style("opacity", 0.3));
+      .attr("transform", `translate(${margin.left},0)`)
+      .call(
+        d3.axisLeft(y).ticks(4).tickFormat(d3.format("~s")).tickSizeOuter(0),
+      )
+      .call((g) =>
+        g
+          .selectAll("text")
+          .style("fill", "currentColor")
+          .style("opacity", 0.7)
+          .style("font-size", "11px"),
+      )
+      .call((g) =>
+        g
+          .selectAll("line,path")
+          .style("stroke", "currentColor")
+          .style("opacity", 0.2),
+      );
 
-    const today = parseDate(data.today);
-    if (today) {
-      svg
-        .append("line")
-        .attr("x1", x(today))
-        .attr("x2", x(today))
-        .attr("y1", 8)
-        .attr("y2", height - 24)
-        .style("stroke", axisColor)
-        .style("stroke-dasharray", "2 3")
-        .style("opacity", 0.6);
-    }
-
-    series.forEach((s) => {
-      svg
-        .append("path")
-        .datum(s.points)
-        .attr("d", line)
-        // Names the line in the DOM. The series are otherwise distinguishable
-        // only by stroke colour, which is exactly what a rendering test must
-        // not have to parse to know which line it is looking at.
-        .attr("data-series", s.key)
+    const stroke = (path, s, color) =>
+      path
         .style("fill", "none")
-        // .style, not .attr: see _token above.
-        .style("stroke", s.color)
+        .style("stroke", color)
         .style("stroke-width", s.width)
         .style("stroke-linecap", "round")
         .style("stroke-linejoin", "round")
         .style("stroke-dasharray", s.dash || "none");
 
-      // Interval markers. Thinned to roughly one per 60px so a 360-payment
-      // schedule does not become a solid band of circles.
-      const step = Math.max(1, Math.ceil(s.points.length / Math.max(2, width / 60)));
+    for (const s of series) {
+      if (s.key === "actual") {
+        svg
+          .append("path")
+          .datum(s.points)
+          .attr("d", area)
+          .attr("clip-path", `url(#${plotClip})`)
+          .style("fill", s.color)
+          .style("opacity", 0.08);
+        // The greyed remainder sits underneath; the coloured line on top is
+        // the one that carries data-series, so a test asking for the actual
+        // line finds the line that is meant to be seen.
+        stroke(svg.append("path").datum(s.points).attr("d", line), s, muted)
+          .attr("clip-path", `url(#${id}-future)`)
+          .attr("data-series-shadow", s.key)
+          .style("opacity", 0.6);
+        stroke(svg.append("path").datum(s.points).attr("d", line), s, s.color)
+          .attr("clip-path", `url(#${id}-past)`)
+          .attr("data-series", s.key);
+      } else {
+        stroke(svg.append("path").datum(s.points).attr("d", line), s, s.color)
+          .attr("clip-path", `url(#${plotClip})`)
+          .attr("data-series", s.key);
+      }
+
+      // Interval markers, thinned to roughly one per 60px so a 360-payment
+      // schedule does not become a solid band of circles. Not the accessible
+      // signal: dash pattern is.
+      const step = Math.max(
+        1,
+        Math.ceil(s.points.length / Math.max(2, width / 60)),
+      );
       svg
         .append("g")
+        .attr("clip-path", `url(#${plotClip})`)
         .selectAll("circle")
         .data(s.points.filter((_, i) => i % step === 0))
         .join("circle")
@@ -163,17 +287,41 @@ export default class extends Controller {
         .attr("cy", (d) => y(d.balance))
         .attr("r", 2.5)
         .style("fill", s.color);
-    });
+    }
 
-    this._installTooltip(svg, { x, y, series, width, height, data });
+    if (today && today >= domainStart && today <= domainEnd) {
+      svg
+        .append("line")
+        .attr("x1", x(today))
+        .attr("x2", x(today))
+        .attr("y1", margin.top)
+        .attr("y2", height - margin.bottom)
+        .style("stroke", "currentColor")
+        .style("stroke-dasharray", "2 3")
+        .style("opacity", 0.4);
+    }
+
+    this._installInteraction(svg, {
+      x,
+      series,
+      width,
+      height,
+      margin,
+      data,
+      domainStart,
+      domainEnd,
+      splitAt,
+    });
   }
 
-  _installTooltip(svg, { x, y, series, width, height, data }) {
+  _installInteraction(
+    svg,
+    { x, series, width, height, margin, data, domainStart, domainEnd, splitAt },
+  ) {
     this._tooltip?.remove();
     const tooltip = document.createElement("div");
     tooltip.className =
       "absolute pointer-events-none hidden rounded-md bg-container shadow-border-xs px-2 py-1 text-xs text-primary";
-    tooltip.style.position = "absolute";
     this.element.style.position = "relative";
     this.element.appendChild(tooltip);
     this._tooltip = tooltip;
@@ -195,37 +343,110 @@ export default class extends Controller {
         maximumFractionDigits: 0,
       }).format(value);
 
+    const showAt = (date) => {
+      const px = x(date);
+      const rows = series
+        .map((s) => {
+          // A series says nothing about dates outside its own span.
+          if (date < s.points[0].date || date > s.points.at(-1).date)
+            return null;
+          const point = nearest(s.points, date);
+          return point
+            ? `${data.labels?.[s.key] || s.key}: ${money(point.balance)}`
+            : null;
+        })
+        .filter(Boolean);
+      if (!rows.length) return;
+
+      // Text nodes, never innerHTML.
+      tooltip.replaceChildren();
+      for (const text of [d3.timeFormat("%b %Y")(date), ...rows]) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        tooltip.appendChild(div);
+      }
+      tooltip.classList.remove("hidden");
+      tooltip.style.left = `${Math.min(px + 12, width - 150)}px`;
+      tooltip.style.top = `${margin.top}px`;
+      splitAt(Math.max(margin.left, Math.min(px, width - margin.right)));
+    };
+    const hide = () => {
+      tooltip.classList.add("hidden");
+      splitAt(width - margin.right);
+    };
+
+    // The live region announces only what the keyboard asks for. Under a
+    // pointer the tooltip rewrites on every movement, and a live region that
+    // announces every one of those is noise for anyone using a pointer with a
+    // screen reader (#57).
+    const announce = (on) => {
+      if (on) {
+        tooltip.setAttribute("role", "status");
+        tooltip.setAttribute("aria-live", "polite");
+      } else {
+        tooltip.removeAttribute("role");
+        tooltip.removeAttribute("aria-live");
+      }
+    };
+
     svg
       .append("rect")
-      .attr("x", 44)
-      .attr("y", 8)
-      .attr("width", Math.max(0, width - 56))
-      .attr("height", Math.max(0, height - 32))
+      .attr("x", margin.left)
+      .attr("y", margin.top)
+      .attr("width", Math.max(0, width - margin.left - margin.right))
+      .attr("height", Math.max(0, height - margin.top - margin.bottom))
       .style("fill", "transparent")
-      .on("mousemove", (event) => {
+      .style("cursor", "crosshair")
+      .on("pointermove", (event) => {
+        announce(false);
         const [px] = d3.pointer(event);
-        const date = x.invert(px);
-        const rows = series
-          .map((s) => {
-            const point = nearest(s.points, date);
-            return point ? `${data.labels?.[s.key] || s.key}: ${money(point.balance)}` : null;
-          })
-          .filter(Boolean);
-        if (!rows.length) return;
-
-        // Text nodes, never innerHTML. Nothing here is attacker-controlled
-        // today, but a tooltip that builds markup out of interpolated strings
-        // is one payload change away from being an injection point.
-        tooltip.replaceChildren();
-        for (const text of [d3.timeFormat("%b %Y")(date), ...rows]) {
-          const div = document.createElement("div");
-          div.textContent = text;
-          tooltip.appendChild(div);
-        }
-        tooltip.classList.remove("hidden");
-        tooltip.style.left = `${Math.min(px + 12, width - 150)}px`;
-        tooltip.style.top = "8px";
+        showAt(x.invert(px));
       })
-      .on("mouseleave", () => tooltip.classList.add("hidden"));
+      .on("pointerleave", hide);
+
+    // Keyboard traversal: the same nearest-point data a hover shows, stepped
+    // through each series' real dates inside the window rather than an
+    // arbitrary pixel. Arrow keys move, Home/End jump, Escape clears.
+    const stops = Array.from(
+      new Set(
+        series
+          .flatMap((s) => s.points)
+          .filter((p) => p.date >= domainStart && p.date <= domainEnd)
+          .map((p) => p.date.getTime()),
+      ),
+    )
+      .sort((a, b) => a - b)
+      .map((t) => new Date(t));
+    if (!stops.length) return;
+
+    svg.attr("tabindex", 0);
+    let focused = null;
+    svg.on("keydown", (event) => {
+      if (
+        !["ArrowLeft", "ArrowRight", "Home", "End", "Escape"].includes(
+          event.key,
+        )
+      )
+        return;
+      event.preventDefault();
+      if (event.key === "Escape") {
+        focused = null;
+        hide();
+        return;
+      }
+      if (focused === null)
+        focused = event.key === "ArrowLeft" ? stops.length - 1 : 0;
+      else if (event.key === "ArrowLeft") focused = Math.max(0, focused - 1);
+      else if (event.key === "ArrowRight")
+        focused = Math.min(stops.length - 1, focused + 1);
+      else if (event.key === "Home") focused = 0;
+      else focused = stops.length - 1;
+      announce(true);
+      showAt(stops[focused]);
+    });
+    svg.on("blur", () => {
+      focused = null;
+      hide();
+    });
   }
 }

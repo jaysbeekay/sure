@@ -1,10 +1,77 @@
 class UI::Account::Chart < ApplicationComponent
-  attr_reader :account
+  attr_reader :account, :loan_chart, :as_of
 
-  def initialize(account:, period: nil, view: nil)
+  # `loan_chart` is a Loan::PayoffChart payload, built by the controller for a
+  # loan account with a schedule and nil for everything else. When present the
+  # inner chart element becomes the loan balance chart -- recorded balance,
+  # original schedule and projection on one axis -- and the rest of this card
+  # (title, hero figure, trend, period picker, Turbo frame) is unchanged. Every
+  # other account type takes the branch it always took (#100, decision 7).
+  def initialize(account:, period: nil, view: nil, loan_chart: nil, as_of: Date.current)
     @account = account
     @period = period
     @view = view
+    @loan_chart = loan_chart
+    @as_of = as_of
+  end
+
+  def loan_chart?
+    loan_chart.present?
+  end
+
+  def loan_chart_id
+    dom_id(account, :loan_chart)
+  end
+
+  def loan_table_id
+    dom_id(account, :loan_chart_table)
+  end
+
+  # The series with a line inside the domain, in drawing order, each with the
+  # style the controller gives it. Style is carried by the legend as well as
+  # the line: solid is fact, dashed is forecast, and hue alone would fail in
+  # greyscale and under deuteranopia.
+  LOAN_SERIES_STYLES = {
+    "actual" => { token: "--color-success", dashed: false },
+    "scheduled" => { token: "--color-destructive", dashed: true },
+    "projected" => { token: "--color-success", dashed: true }
+  }.freeze
+
+  def loan_legend
+    LOAN_SERIES_STYLES.select { |key, _| loan_chart[:visible].map(&:to_s).include?(key) }
+  end
+
+  def loan_projected_payoff_date
+    loan_chart[:projected_payoff_date] && Date.iso8601(loan_chart[:projected_payoff_date])
+  end
+
+  # The projection ran but the contracted repayment never clears the balance:
+  # there is a line to draw and no payoff date to quote.
+  def loan_projection_not_converged?
+    loan_chart[:projected].any? && loan_projected_payoff_date.nil?
+  end
+
+  def loan_schedule_comparison
+    months = loan_chart[:months_saved].to_i
+    return I18n.t("UI.account.chart.loan.on_schedule") if months.zero?
+
+    key = months.positive? ? "months_saved" : "months_behind"
+    I18n.t("UI.account.chart.loan.#{key}", count: months.abs)
+  end
+
+  def loan_interest_saved_money
+    Money.new(loan_chart[:interest_saved].to_f.abs, loan_chart[:currency])
+  end
+
+  def loan_interest_saved_title
+    key = loan_chart[:interest_saved].to_f.negative? ? "interest_added" : "interest_saved"
+    I18n.t("UI.account.chart.loan.#{key}")
+  end
+
+  def loan_money(amount)
+    return nil if amount.nil?
+
+    Money.new(amount, loan_chart[:currency]).format
   end
 
   def period

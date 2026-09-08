@@ -1,12 +1,10 @@
-<%# locals: (account:) %>
+<%# locals: (account:, as_of: Date.current) %>
 
-<%# One `today` for the chart, the projection and the table. Read separately,
-    a render crossing midnight can show a chart projecting from one date beside
-    a table shaded against another. %>
-<% today = Date.current %>
+<%# `as_of` is the page's one reference date: the chart above the tabs and
+    this table shade "past" against the same day. %>
+<% today = as_of %>
 <% schedule = account.loan.amortization_schedule %>
 <% payments = schedule.payments %>
-<% chart = loan_payoff_chart(account, as_of: today) %>
 
 <div class="space-y-4">
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -32,30 +30,6 @@
   <p class="text-sm text-secondary">
     <%= t(".description", start_date: l(account.loan.origination_date, format: :long)) %>
   </p>
-
-  <% if chart %>
-    <%# privacy-sensitive: the axis, the lines and the tooltip are all balances,
-        and Privacy Mode blurs balances everywhere else on this page. %>
-    <div data-controller="loan-payoff-chart"
-         data-loan-payoff-chart-data-value="<%= chart.to_json %>"
-         class="h-64 w-full privacy-sensitive"></div>
-
-    <ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
-      <li class="flex items-center gap-1.5">
-        <span class="inline-block w-4 h-0 border-t-2 border-dashed" style="border-color: var(--color-red-500);" aria-hidden="true"></span>
-        <%= chart[:labels][:scheduled] %>
-      </li>
-      <li class="flex items-center gap-1.5">
-        <span class="inline-block w-4 h-0 border-t-2" style="border-color: var(--color-green-600);" aria-hidden="true"></span>
-        <%= chart[:labels][:projected] %>
-      </li>
-    </ul>
-
-    <%# The accessible alternative is real DOM text, not only an SVG aria-label:
-        gate G6 asks for figures a screen reader can reach the same way the
-        sighted summary cards above are reached. %>
-    <p class="sr-only"><%= chart[:aria_description] %></p>
-  <% end %>
 
   <% if account.loan.variable_rate_type? %>
     <p class="text-sm text-secondary"><%= t(".variable_rate_notice") %></p>

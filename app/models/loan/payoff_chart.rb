@@ -49,6 +49,12 @@ class Loan
         visible: SERIES.select { |key| visible?(series[key]) },
         scheduled_payoff_date: schedule.payoff_date&.iso8601,
         projected_payoff_date: projection.payoff_date&.iso8601,
+        # The figures the cards beside the chart quote. nil when the projection
+        # cannot run or never clears the balance, so a card is not shown for a
+        # comparison that does not exist.
+        months_saved: projection.converged? ? projection.months_saved : nil,
+        interest_saved: projection.converged? ? projection.interest_saved.amount.to_f : nil,
+        rows: table_rows(series),
         labels: labels,
         aria_description: aria_description
       }
@@ -147,6 +153,28 @@ class Loan
 
         inside = dates.count { |date| date.between?(domain_start, domain_end) }
         inside >= 2 || (dates.first < domain_start && dates.last > domain_end)
+      end
+
+      # The accessible data alternative (gate G6): one row per scheduled date
+      # inside the domain, carrying the recorded balance on or before that
+      # date, the schedule's balance, and the projection's. Built here so the
+      # table and the chart cannot disagree about a single figure.
+      def table_rows(series)
+        actual = series[:actual].map { |p| [ Date.iso8601(p[:date]), p[:balance] ] }
+        projected = series[:projected].to_h { |p| [ p[:date], p[:balance] ] }
+
+        series[:scheduled].filter_map do |point|
+          date = Date.iso8601(point[:date])
+          next unless date.between?(domain_start, domain_end)
+
+          recorded = actual.reverse.find { |recorded_on, _| recorded_on <= date } if date <= as_of
+          {
+            date: point[:date],
+            actual: recorded&.last,
+            scheduled: point[:balance],
+            projected: projected[point[:date]]
+          }
+        end
       end
 
       def labels

@@ -74,6 +74,12 @@ class AccountsController < ApplicationController
   def show
     @chart_view = params[:chart_view] || "balance"
     @tab = params[:tab]
+    # One reference date for everything on the page that is date-sensitive:
+    # the chart, its projection, the cards and the Schedule tab. Read
+    # separately, a render crossing midnight shows a chart projecting from one
+    # date beside a table shaded against another.
+    @as_of = Date.current
+    @loan_chart = loan_payoff_chart(@account, as_of: @as_of, period: @period)
     @accessible_account_ids = Current.user.accessible_accounts.pluck(:id).to_set
     @q = params.fetch(:q, {}).permit(:search, status: [])
     entries = @account.entries.excluding_split_parents.search(@q).reverse_chronological.includes(:entryable)
