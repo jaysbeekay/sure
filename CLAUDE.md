@@ -43,6 +43,13 @@ To watch the browser live, open `http://localhost:7900` or `http://localhost:444
 
 ## Issue and Pull Request Workflow
 
+**Scope: this fork (`jaysbeekay/sure`) only.** This section is local policy, not
+upstream convention. It cites this fork's issue and PR numbers, its CodeRabbit
+configuration, and its star count. When preparing a contribution for
+`we-promise/sure`, leave this section behind -- several issues here are labelled
+`upstream:candidate`, so a CLAUDE.md change can otherwise ride upstream by
+accident and be wrong there.
+
 Follow this sequence for any issue-driven change. Do not skip or reorder steps.
 
 1. **Re-read the issue first.** Fetch it fresh, including every comment. Work
@@ -103,9 +110,13 @@ is not. A view that shows several date-sensitive figures captures ONE date and
 passes it to all of them.
 
 This class of defect has recurred repeatedly on the loan epic (#79, #83, #86,
-#89): a date or an eligibility gate derived independently in several places,
-correct for the caller it was written for and silently wrong for the next one
-added.
+#89 -- all fork PR numbers): a date or an eligibility gate derived independently
+in several places, correct for the caller it was written for and silently wrong
+for the next one added.
+
+The loan amortisation work is fork-local, so this convention is too. It would
+still be worth proposing upstream on its own merits, but as a discussion rather
+than as a rule that arrived inside an unrelated change.
 
 ## Pre-Pull Request CI Workflow
 
