@@ -283,8 +283,10 @@ class Loan < ApplicationRecord
     VARIABLE_RATE_TYPES.include?(rate_type)
   end
 
-  # Whether a schedule can be built at all -- needs a rate type the calculator
-  # supports, a term, and a balance. False for, say, a line of credit.
+  # Whether a schedule can be built at all: an account, a positive original
+  # balance, a positive term, an interest rate, and a rate type the calculator
+  # supports. Subtype is NOT consulted -- a line of credit carrying all of those
+  # is amortizable as far as this is concerned.
   def amortizable?
     amortization_schedule.amortizable?
   end
@@ -711,8 +713,9 @@ class Loan < ApplicationRecord
       end
     end
 
-    # Loads the submitted accounts once, so validation and sync share one read
-    # and cannot disagree about which of them exist.
+    # Loads the submitted accounts. Called separately by validation and by the
+    # after-save sync -- two queries, not a shared snapshot -- so in principle
+    # they could see different rows if an account were deleted between them.
     def offset_account_ids_for_sync
       Account.where(id: normalized_offset_account_ids).to_a
     end

@@ -21,10 +21,12 @@ class UI::Loan::RateChangeTable < ApplicationComponent
   # columns. Both columns now sit on the same projection.
   attr_reader :loan, :as_of
 
-  # `as_of` is injectable so a caller can pin the reference date. The loan tabs
-  # capture one `Date.current` per card and pass it here, so the table, the
-  # quoted repayment and the rate caption cannot straddle midnight (CodeRabbit,
-  # #79).
+  # `as_of` is injectable so a caller CAN pin the reference date, but the
+  # schedule tab does not: it renders `RateChangeTable.new(loan: loan)`, so this
+  # component takes its own `Date.current`. The summary cards above it do share
+  # one captured date (CodeRabbit, #79); this table is not yet part of that
+  # guarantee, and a render crossing midnight on an effective date could show a
+  # change here that the card above already treats as current.
   def initialize(loan:, as_of: Date.current)
     @loan = loan
     @as_of = as_of
@@ -36,8 +38,11 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     rows.any?
   end
 
-  # One row per FORTHCOMING rate change: effective date, new rate, the balance
-  # it lands on, and the repayment before and after.
+  # A row for each FORTHCOMING rate change that the projection can price:
+  # effective date, new rate, the balance it lands on, and the repayment before
+  # and after. Changes with no projected payment on or after them, a
+  # non-positive balance, or no remaining payments are skipped rather than
+  # shown with blanks.
   def rows
     # A fixed-rate loan can still carry rate rows: #14 keeps a loan's rate
     # history when its type changes rather than silently discarding it. Those

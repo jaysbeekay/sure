@@ -287,13 +287,15 @@ class Loan
 
     private
 
-      # True when the repayment does not even cover the first period's interest,
-      # so the balance would grow forever.
+      # True when the MODELLED repayment is no greater than the first period's
+      # estimated interest, so the balance would never fall. `<=` rather than
+      # `<`: a repayment exactly equal to the interest leaves the balance flat,
+      # which never amortises either.
       #
-      # Asks about the CONTRACTED repayment, which is why two callers must skip
-      # it: :reamortize sizes its own repayment, and a scenario's extra
-      # repayments are not in this comparison. Both are handled in `applicable?`
-      # rather than here, so this stays a plain question about one number.
+      # "Modelled" includes a recurring `extra_payment` when one is set, but not
+      # a scenario's DATED repayments, and not a re-amortised repayment --
+      # which is why both of those bypass this in `applicable?` and defer to
+      # `converged?`, the only check that runs the full simulation.
       def unamortizable_payment?
         rate = Loan::RateResolver.for(loan).accrual_rate_for(first_projected_payment_date)
         monthly_rate = (BigDecimal(rate.to_s) / BigDecimal("100")) / BigDecimal("12")
