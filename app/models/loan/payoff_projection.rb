@@ -148,8 +148,11 @@ class Loan
         loan.account.balance.positive?
     end
 
-    # The account's currency, memoized. Every Money this class returns is built
+    # The account's currency, memoized. Every Money an INSTANCE returns is built
     # with it, so a projection cannot mix currencies with its own loan.
+    #
+    # The class method `monthly_equivalent` is outside that invariant: it has no
+    # loan to read and builds Money in the currency its caller supplies.
     def currency
       @currency ||= loan.account.currency
     end

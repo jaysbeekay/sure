@@ -124,7 +124,14 @@ class Loan < ApplicationRecord
   end
 
   # Drops both memoized calculators after an offset link changes. Offsets alter
-  # interest without touching any Loan column, so no signature would notice.
+  # interest without touching any Loan column, so `amortization_schedule_signature`
+  # -- which is built from Loan columns and the account balance -- cannot see the
+  # change, and the schedule has to be dropped by hand.
+  #
+  # `payoff_projection_signature` DOES cover offsets, via
+  # `offset_account_signature`, so the projection would turn itself over on the
+  # next read. It is cleared here anyway so both calculators rebuild from the
+  # same moment rather than one trailing the other by a request.
   def invalidate_offset_cache!
     clear_amortization_schedule_cache!
     @payoff_projection = nil

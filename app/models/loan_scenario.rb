@@ -104,7 +104,9 @@ class LoanScenario < ApplicationRecord
 
     # Inherits the loan's currency and stamps the engine version at creation.
     # Both are `||=` so an explicit value survives; the currency is then
-    # validated against the loan's on every save.
+    # validated against the loan's WHENEVER THE LOAN HAS AN ACCOUNT CURRENCY.
+    # That validation is conditional, so on a save before the loan has one the
+    # inherited value is left unchecked rather than rejected.
     def assign_defaults
       self.currency ||= loan&.account&.currency
       self.calculator_version ||= Loan::AmortizationSchedule::ALGORITHM_VERSION
