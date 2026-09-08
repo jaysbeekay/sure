@@ -245,4 +245,27 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_nil chart_payload
   end
+  # The helper takes an account and memoized into a single slot regardless of
+  # it, so the second loan rendered in one request would have been handed the
+  # first one's chart. Unreachable through the Schedule tab, which renders one
+  # account -- and a helper_method any view can call is not a place to leave a
+  # latent wrong-account bug.
+  test "the payoff chart memo is keyed by the account it was asked about" do
+    other = Account.create!(
+      family: @account.family, name: "Second Loan", balance: 120_000, currency: "USD",
+      accountable: Loan.new(subtype: "auto", interest_rate: 9, term_months: 60,
+                            rate_type: "fixed", start_date: Date.new(2026, 6, 1))
+    )
+
+    controller = AccountsController.new
+    controller.params = ActionController::Parameters.new
+
+    first = controller.loan_payoff_chart(@account)
+    second = controller.loan_payoff_chart(other)
+
+    assert_not_equal first[:scheduled], second[:scheduled],
+      "the second account was handed the first account's chart"
+    assert_equal first, controller.loan_payoff_chart(@account),
+      "and the first is still memoized rather than re-simulated"
+  end
 end

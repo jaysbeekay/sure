@@ -338,10 +338,19 @@ class AccountsController < ApplicationController
   # Built here rather than in the template: assembling a chart payload is
   # domain work, and a view that constructs it decides how many simulations run
   # per render with nothing to stop it happening twice.
+  # Keyed by what the answer depends on, not stored in a bare ivar. The
+  # arguments are the whole point of the memo: a single slot would hand the
+  # first account's chart to every later one in the same request, and `||=`
+  # would re-run the simulation on every call for a loan whose payload is
+  # legitimately nil.
   def loan_payoff_chart(account, as_of: Date.current)
     return nil unless account.accountable.is_a?(Loan)
 
-    @loan_payoff_chart ||= Loan::PayoffChart.new(
+    @loan_payoff_charts ||= {}
+    key = [ account.id, as_of ]
+    return @loan_payoff_charts[key] if @loan_payoff_charts.key?(key)
+
+    @loan_payoff_charts[key] = Loan::PayoffChart.new(
       account.loan, as_of: as_of, extra_payment: loan_extra_payment_params.presence
     ).payload
   end
