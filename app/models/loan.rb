@@ -74,7 +74,12 @@ class Loan < ApplicationRecord
   # column is assembled from them.
   attr_reader :rate_changes
 
-  before_save :validate_offset_accounts, if: :offset_account_ids_supplied?
+  # `validate`, NOT `before_save`. The method only calls `errors.add`, and
+  # errors added from a `before_save` do not stop the write -- only
+  # `throw :abort` does -- so under the old registration an unknown offset
+  # account id saved cleanly and `sync_offset_accounts` then dropped it,
+  # reporting success for a link that was never created (CodeRabbit, #86).
+  validate :validate_offset_accounts, if: :offset_account_ids_supplied?
   after_save :sync_offset_accounts, if: :offset_accounts_need_sync?
 
   validates :subtype, inclusion: { in: SUBTYPES.keys }, allow_blank: true
@@ -702,8 +707,9 @@ class Loan < ApplicationRecord
       end
     end
 
-    # Rejects unknown or ineligible offset accounts before save, so the form can
-    # show the reason rather than the database raising at the user.
+    # Rejects unknown or ineligible offset accounts, so the form can show the
+    # reason rather than the database raising at the user. Runs as a validation
+    # so `save` actually returns false -- see the registration note above.
     def validate_offset_accounts
       return unless variable_rate_type?
 
