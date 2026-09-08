@@ -303,6 +303,8 @@ class Loan
         RateResolver.for(loan).accrual_rate_for(date)
       end
 
+      # The first CONTRACTED payment date, one period after origination -- not
+      # the origination date itself. See the note below on why the two differ.
       def first_payment_date
         scheduled_payment_dates.first
       end

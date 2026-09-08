@@ -21,15 +21,28 @@ class UI::Loan::RateChangeTable < ApplicationComponent
   # columns. Both columns now sit on the same projection.
   attr_reader :loan, :as_of
 
+  # `as_of` is injectable so a caller CAN pin the reference date, but the
+  # schedule tab does not: it renders `RateChangeTable.new(loan: loan)`, so this
+  # component takes its own `Date.current`. The summary cards above it do share
+  # one captured date (CodeRabbit, #79); this table is not yet part of that
+  # guarantee, and a render crossing midnight on an effective date could show a
+  # change here that the card above already treats as current.
   def initialize(loan:, as_of: Date.current)
     @loan = loan
     @as_of = as_of
   end
 
+  # Nothing is emitted when there is nothing forthcoming -- a variable loan with
+  # no scheduled changes renders no empty table and no placeholder.
   def render?
     rows.any?
   end
 
+  # A row for each FORTHCOMING rate change that the projection can price:
+  # effective date, new rate, the balance it lands on, and the repayment before
+  # and after. Changes with no projected payment on or after them, a
+  # non-positive balance, or no remaining payments are skipped rather than
+  # shown with blanks.
   def rows
     # A fixed-rate loan can still carry rate rows: #14 keeps a loan's rate
     # history when its type changes rather than silently discarding it. Those
@@ -76,20 +89,29 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     end
   end
 
+  # Today's rate, as a BigDecimal so it can be compared with a row's new rate
+  # without float drift.
   def current_rate
     @current_rate ||= BigDecimal(loan.current_variable_rate(as_of).to_s)
   end
 
+  # The same figure the Overview and Schedule cards show. Read from the model
+  # rather than recomputed, so the three cannot disagree -- which is #15's
+  # headline acceptance criterion.
   def current_payment
     @current_payment ||= loan.current_minimum_payment(as_of: as_of)
   end
 
   private
 
+    # The CONTRACTED schedule, used only for its payment dates and remaining
+    # counts. Never for balances: those come from the projection, because the
+    # contracted schedule does not track what the borrower has actually paid.
     def schedule
       @schedule ||= loan.amortization_schedule
     end
 
+    # The loan's own currency; every Money in this table is built with it.
     def currency
       loan.account.currency
     end
@@ -152,6 +174,9 @@ class UI::Loan::RateChangeTable < ApplicationComponent
       @projection ||= Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
     end
 
+    # Empty rather than raising when the projection cannot be made -- a loan
+    # with no remaining payments has no future balances to quote, and the table
+    # then renders nothing at all.
     def projected_rows
       @projected_rows ||= projection.applicable? ? projection.payments : []
     end

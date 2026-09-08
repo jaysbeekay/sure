@@ -93,12 +93,20 @@ class LoanScenario < ApplicationRecord
     )
   end
 
+  # Attribution for display only. Never read as access control -- scenarios are
+  # shared household artifacts (F7), so anyone who can see the loan can edit
+  # anyone's scenario on it.
   def creator_name
     created_by_user&.display_name || created_by_user&.email
   end
 
   private
 
+    # Inherits the loan's currency and stamps the engine version at creation.
+    # Both are `||=` so an explicit value survives; the currency is then
+    # validated against the loan's WHENEVER THE LOAN HAS AN ACCOUNT CURRENCY.
+    # That validation is conditional, so on a save before the loan has one the
+    # inherited value is left unchecked rather than rejected.
     def assign_defaults
       self.currency ||= loan&.account&.currency
       self.calculator_version ||= Loan::AmortizationSchedule::ALGORITHM_VERSION

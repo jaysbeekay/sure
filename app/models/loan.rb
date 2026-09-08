@@ -105,6 +105,8 @@ class Loan < ApplicationRecord
     false
   end
 
+  # Companion to `renderable_effective_date?` for the rate column, with the
+  # same reason: a number input silently blanks what it cannot parse.
   def self.renderable_rate?(value)
     return true if value.blank?
 
@@ -113,10 +115,23 @@ class Loan < ApplicationRecord
     false
   end
 
+  # The CONTRACTED repayment, sized at origination. For what a lender would
+  # quote today on a variable loan, use `current_minimum_payment` instead --
+  # for a seasoned loan these are different numbers and the difference is the
+  # whole point of #15.
   def monthly_payment
     amortization_schedule.monthly_payment
   end
 
+  # Drops both memoized calculators after an offset link changes. Offsets alter
+  # interest without touching any Loan column, so `amortization_schedule_signature`
+  # -- which is built from Loan columns and the account balance -- cannot see the
+  # change, and the schedule has to be dropped by hand.
+  #
+  # `payoff_projection_signature` DOES cover offsets, via
+  # `offset_account_signature`, so the projection would turn itself over on the
+  # next read. It is cleared here anyway so both calculators rebuild from the
+  # same moment rather than one trailing the other by a request.
   def invalidate_offset_cache!
     clear_amortization_schedule_cache!
     @payoff_projection = nil
@@ -133,6 +148,8 @@ class Loan < ApplicationRecord
     @original_balance ||= Money.new(account.first_valuation_amount, account.currency)
   end
 
+  # The account's opening-anchor date, memoized alongside `original_balance` so
+  # one check-then-rebuild cycle reads Account's mutable state exactly once.
   def account_opening_anchor_date
     @account_opening_anchor_date ||= account.opening_anchor_date
   end
@@ -273,6 +290,10 @@ class Loan < ApplicationRecord
     VARIABLE_RATE_TYPES.include?(rate_type)
   end
 
+  # Whether a schedule can be built at all: an account, a positive original
+  # balance, a positive term, an interest rate, and a rate type the calculator
+  # supports. Subtype is NOT consulted -- a line of credit carrying all of those
+  # is amortizable as far as this is concerned.
   def amortizable?
     amortization_schedule.amortizable?
   end
@@ -395,6 +416,9 @@ class Loan < ApplicationRecord
     save!
   end
 
+  # The rate schedule in DATE ORDER, for calculation. Parses each key to sort,
+  # so it must only be called on validated data -- `rate_change_rows` is the
+  # form-safe reader that tolerates what the user just typed.
   def variable_rates
     (variable_rate_schedule || {}).sort_by { |date, _| Date.iso8601(date.to_s) }
   end
@@ -414,6 +438,11 @@ class Loan < ApplicationRecord
       .sort_by { |date, _| [ parseable_date(date) ? 0 : 1, date ] }
   end
 
+  # The rate in force on a date: the latest change at or before it, falling
+  # back to the loan's base rate when none has taken effect yet.
+  #
+  # `as_of_date` is injectable so a caller can pin one reference date across
+  # several reads rather than letting each take its own `Date.current`.
   def current_variable_rate(as_of_date = Date.current)
     rate = variable_rates.reverse.find do |date_str, _|
       Date.iso8601(date_str.to_s) <= as_of_date
@@ -565,6 +594,9 @@ class Loan < ApplicationRecord
     rescue ArgumentError, TypeError
       nil    end
 
+    # Rewrites the persisted schedule inside the caller's row lock. Deletes the
+    # rows outright when the loan is no longer amortizable, so a type change
+    # cannot leave a stale schedule behind that still renders.
     def rebuild_amortization_schedule_locked!
       clear_amortization_schedule_cache!
 
@@ -603,6 +635,9 @@ class Loan < ApplicationRecord
       reset_amortizations_association!
     end
 
+    # The Loan columns a schedule is computed from. Account-side inputs (the
+    # balance, the opening anchor) are deliberately absent: they do not fire
+    # Loan callbacks, and the signature covers them instead.
     def amortization_inputs_changed?
       saved_change_to_interest_rate? ||
         saved_change_to_term_months? ||
@@ -620,21 +655,31 @@ class Loan < ApplicationRecord
       LoanAmortizationRebuildJob.perform_later(id)
     end
 
+    # A Date, or nil for anything unparseable. Nil rather than an exception
+    # because the callers are a form reader and a key canonicaliser, both of
+    # which must survive whatever the user typed.
     def parseable_date(value)
       Date.iso8601(value.to_s)
     rescue ArgumentError, TypeError
       nil
     end
 
+    # Whether this save carried the offset attribute at all. `nil` means "not
+    # about offsets"; an empty array means "remove them all" -- conflating the
+    # two would silently unlink every offset on an unrelated edit.
     def offset_account_ids_supplied?
       !offset_account_ids.nil?
     end
 
 
+    # Also syncs on a rate-type change, because BECOMING fixed is what makes a
+    # loan's offset links meaningless -- `sync_offset_accounts` clears them for
+    # any non-variable type.
     def offset_accounts_need_sync?
       offset_account_ids_supplied? || saved_change_to_rate_type?
     end
 
+    # Reconciles the join rows to the submitted set.
     def sync_offset_accounts
       # An absent virtual attribute means "this save was not about offsets" --
       # a rate-type-only edit, say -- NOT "remove them all". Reading it as the
@@ -657,6 +702,8 @@ class Loan < ApplicationRecord
       end
     end
 
+    # Rejects unknown or ineligible offset accounts before save, so the form can
+    # show the reason rather than the database raising at the user.
     def validate_offset_accounts
       return unless variable_rate_type?
 
@@ -673,20 +720,31 @@ class Loan < ApplicationRecord
       end
     end
 
+    # Loads the submitted accounts. Called separately by validation and by the
+    # after-save sync -- two queries, not a shared snapshot -- so in principle
+    # they could see different rows if an account were deleted between them.
     def offset_account_ids_for_sync
       Account.where(id: normalized_offset_account_ids).to_a
     end
 
+    # Form input arrives with blanks and duplicates and as mixed types; this is
+    # the one place that is tidied, so every reader sees the same shape.
     def normalized_offset_account_ids
       Array(offset_account_ids).reject(&:blank?).map(&:to_s).uniq
     end
 
+    # Rates are money-adjacent, so they are compared and compounded as
+    # BigDecimal. Raises rather than coercing: a non-numeric rate here would
+    # otherwise become 0.0 and quietly produce an interest-free loan.
     def normalized_rate(rate)
       BigDecimal(rate.to_s)
     rescue ArgumentError, TypeError
       raise ArgumentError, "variable interest rates must be numeric"
     end
 
+    # Rounds stored rates to three decimals, matching the column's precision, so
+    # a value does not display differently from the one used in calculation.
+    # Unparseable values pass through untouched for validation to report.
     def quantize_variable_rate_schedule
       return unless variable_rate_schedule.is_a?(Hash)
 
@@ -699,6 +757,8 @@ class Loan < ApplicationRecord
       end
     end
 
+    # Drops every per-instance memo derived from the schedule's inputs. Kept in
+    # one place so a new memo cannot be added and forgotten here.
     def clear_amortization_schedule_cache!
       @amortization_schedule = nil
       @amortization_schedule_signature = nil
@@ -706,6 +766,8 @@ class Loan < ApplicationRecord
       @account_opening_anchor_date = nil
     end
 
+    # Forces the association to reload after a bulk insert or delete, which
+    # bypasses the association and would otherwise leave it holding stale rows.
     def reset_amortizations_association!
       association(:amortizations).reset
     end
@@ -718,6 +780,9 @@ class Loan < ApplicationRecord
       "#{amortization_schedule_signature}:#{account&.balance}:#{offset_account_signature}"
     end
 
+    # Offset BALANCES, not just which accounts are linked: an offset changes the
+    # interest charged, so a projection must be recreated when one moves even
+    # though nothing about the loan or its links has changed.
     def offset_account_signature
       LoanOffsetAccount.joins(:account)
         .where(loan_id: id)
@@ -725,6 +790,9 @@ class Loan < ApplicationRecord
         .pluck(:account_id, "accounts.balance")
     end
 
+    # Guards the jsonb column's shape at the model layer -- dates parseable,
+    # rates numeric and in range -- so the calculation can read it without
+    # defending against malformed entries on every access.
     def variable_rate_schedule_entries_are_valid
       return if variable_rate_schedule.blank?
 
@@ -754,14 +822,18 @@ class Loan < ApplicationRecord
     end
 
     class << self
+      # The Accountable presentation trio. Every accountable type answers these
+      # so the UI can render an account without knowing which type it is.
       def color
         "#D444F1"
       end
 
+      # Lucide icon name, resolved through the `icon` helper.
       def icon
         "hand-coins"
       end
 
+      # Loans are liabilities: they subtract from net worth rather than adding.
       def classification
         "liability"
       end
