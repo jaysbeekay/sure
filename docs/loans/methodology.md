@@ -1,5 +1,8 @@
 # Loan reconciliation methodology
 
+**Gate state lives in `docs/loans/release-gates.md`.** This page is the method:
+how the reconciliation was run, against what, and what it does not cover.
+
 Status: **G2a signed (non-offset scope). G2b — offset reconciliation — OPEN.**
 
 Never report this as "G2 signed" unqualified. That is the overstatement the

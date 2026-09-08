@@ -1,5 +1,9 @@
 # Loan amortisation release evidence
 
+**Gate state lives in `docs/loans/release-gates.md`.** This page is the runbook:
+what was rehearsed, how to run the release, and what to watch. Where the two
+disagree about whether a gate is met, the matrix is right.
+
 Status: G3 evidence below has been executed against production-shaped data, and
 **gate G2a is signed** -- the non-offset scope. **G2b, offset reconciliation,
 remains open**, and `docs/loans/methodology.md` carries the split, the owners and

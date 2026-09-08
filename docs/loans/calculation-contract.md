@@ -1,8 +1,8 @@
 # Loan amortisation calculation contract
 
-Status: draft for engineering and product sign-off. This document is the L0
-decision record for issue #6. It is normative for the calculator; implementation
-must not silently choose a different interpretation.
+Status: **approved** (gate G1, 2026-09-07 — see `docs/loans/release-gates.md`).
+This document is the L0 decision record for issue #6. It is normative for the
+calculator; implementation must not silently choose a different interpretation.
 
 ## Scope and invariants
 
@@ -110,6 +110,9 @@ to merge.
 
 ## Gate G1 and remaining approval
 
+*Gate state lives in `docs/loans/release-gates.md`. This section records what G1
+covers; the matrix records where it stands.*
+
 Per-row mutation evidence exists: `loans:verify_contract_mutations` breaks each
 row's behaviour in production code and requires that row's named tests to fail,
 with the transcript and findings in `docs/loans/contract-mutation-evidence.md`.
@@ -121,9 +124,15 @@ the specified behaviour is right for any lender — which is G2's job. Where a
 row spans two behaviours, the mutation exercises one of them; C16 is the
 standing example (see its row above).
 
-G1 is approved by the repository owner. **G2 is signed** — see
-`docs/loans/methodology.md`, which records the signature, the evidence behind it
-(#65) and, importantly, its carve-outs.
+G1 is approved by the repository owner. **G2a is signed — the non-offset scope
+only; G2b, offset reconciliation, is open.** See `docs/loans/methodology.md`,
+which records the signature, the evidence behind it (#65) and, importantly, its
+carve-outs, and `docs/loans/release-gates.md` for where both halves stand.
+
+This sentence read "**G2 is signed**" until 2026-09-08. That is the overstatement
+`methodology.md` and `release-evidence.md` both exist to forbid: unqualified, it
+claims offset accrual has been reconciled against a real lender statement, and it
+has not. C15 and C16 are specified and unit-tested, not lender-reconciled.
 
 Two of those carve-outs bear directly on rows in this document:
 
