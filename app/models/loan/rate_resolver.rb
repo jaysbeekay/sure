@@ -34,7 +34,8 @@ class Loan
     def accrual_rate_for(date)
       return loan.interest_rate unless loan.variable_rate_type?
 
-      loan.current_variable_rate(date)
+      rate = rate_changes.reverse_each.find { |effective_date, _| effective_date <= date }&.last
+      rate.nil? ? loan.interest_rate : BigDecimal(rate.to_s)
     end
 
     # Every recorded change falling inside [from_date, to_date], as the
@@ -43,8 +44,7 @@ class Loan
     def re_amortisation_events(from_date, to_date)
       return [] unless loan.variable_rate_type?
 
-      loan.variable_rates.filter_map do |date, rate|
-        effective_date = Date.iso8601(date.to_s)
+      rate_changes.filter_map do |effective_date, rate|
         next unless effective_date >= from_date && effective_date <= to_date
 
         { date: effective_date, rate: rate }
@@ -53,5 +53,13 @@ class Loan
 
     private
       attr_reader :loan
+
+      # The recorded changes as [Date, rate] pairs, oldest first, parsed once.
+      # The simulator asks for a rate up to three times a period over as many
+      # as 1,200 periods; reparsing and re-sorting the column each time is the
+      # kind of cost that only shows up on the longest loans.
+      def rate_changes
+        @rate_changes ||= loan.variable_rates.map { |date, rate| [ Date.iso8601(date.to_s), rate ] }
+      end
   end
 end
