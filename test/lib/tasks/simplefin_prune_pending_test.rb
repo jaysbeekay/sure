@@ -4,7 +4,16 @@ require "test_helper"
 
 class SimplefinPrunePendingTest < ActiveSupport::TestCase
   setup do
-    Rails.application.load_tasks unless Rake::Task.task_defined?("sure:simplefin:prune_pending")
+    # Load only this task's own rake file. `Rails.application.load_tasks` re-reads
+    # every file in lib/tasks, which APPENDS a second action to any task already
+    # defined elsewhere -- it silently made every loans:* task run its body twice
+    # in a full-suite run (#93). It also enhances the `environment` task, which
+    # reloads .env over the environment the run was started with.
+    load Rails.root.join("lib/tasks/simplefin_prune_pending.rake") unless Rake::Task.task_defined?("sure:simplefin:prune_pending")
+    # The environment is already loaded in a test process, and the `environment`
+    # task itself is only defined by `Rails.application.load_tasks` -- which is
+    # what this file no longer calls. Same pattern as test/tasks/loans_task_test.rb.
+    Rake::Task["sure:simplefin:prune_pending"].clear_prerequisites
     Rake::Task["sure:simplefin:prune_pending"].reenable
 
     @family = families(:dylan_family)

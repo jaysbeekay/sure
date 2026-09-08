@@ -381,18 +381,29 @@ namespace :loans do
     puts "Completed loan schedule rebuild: #{rebuilt} loans"
 
     # The checkpoint an operator needs to resume, printed rather than inferred
-    # from the last "Rebuilt" line. A slice that filled its limit may have left
-    # loans behind; one that did not reached the end of the population.
+    # from the last "Rebuilt" line.
+    #
+    # Probe one row past the slice rather than inferring from `rebuilt == limit`.
+    # A final slice that happens to contain exactly `limit` loans is
+    # indistinguishable from a full one by count alone, so inference would tell
+    # the operator to run again and the next run would rebuild nothing -- an
+    # end-of-population signal that only arrives after a wasted pass. One
+    # indexed existence check answers it exactly (cubic, #93).
     #
     # This is a resumption signal, NOT a completion signal. `schedule_version_status`
     # remains the answer to "is the prebuild finished?" -- it exits 0 only when
-    # every loan is at the current algorithm version, which this cannot know.
-    if limit&.positive? && rebuilt == limit
+    # every amortizable loan is at the current algorithm version, which this
+    # cannot know. It matters here because loan ids are random uuids: a loan
+    # created during the rollout can sort BEFORE the cursor and never be
+    # visited, so "no rows past the cursor" is not "nothing left to build".
+    remaining = last_id ? loan_rebuild_scope.call.where("loans.id > ?", last_id).exists? : false
+
+    if remaining
       puts "next_start_after_id=#{last_id}"
-      puts "More loans may remain -- re-run with START_AFTER_ID=#{last_id} to continue from here."
+      puts "More loans remain -- re-run with START_AFTER_ID=#{last_id} to continue from here."
     else
       puts "next_start_after_id=none"
-      puts "This slice reached the end of the population. Confirm with loans:schedule_version_status."
+      puts "No loans sort after this slice. Completion is loans:schedule_version_status, not this line."
     end
   end
 end

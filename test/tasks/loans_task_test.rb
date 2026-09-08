@@ -1,7 +1,17 @@
 require "test_helper"
 require "benchmark"
 
-load Rails.root.join("lib/tasks/loans.rake")
+# `load`ing a rake file whose tasks already exist does not replace them -- Rake
+# APPENDS another action, and `invoke` then runs the body once per action. So
+# this load is guarded, and the two other rake test files load their own single
+# rake file rather than calling `Rails.application.load_tasks`, which re-reads
+# all of lib/tasks and doubled every loans:* task in a full-suite run.
+#
+# It went unseen because these tasks are idempotent and every assertion here
+# matched an output pattern: a second rebuild of the same loans, or a second
+# "Verified 16 contract rows", changes nothing any of them looked at. The slice
+# test below counts what was walked, so it saw it on the first CI run.
+load Rails.root.join("lib/tasks/loans.rake") unless Rake::Task.task_defined?("loans:rebuild_schedules")
 
 # Every task in lib/tasks/loans.rake is invoked here at least once.
 #
@@ -10,17 +20,32 @@ load Rails.root.join("lib/tasks/loans.rake")
 # branch, and raised NoMethodError with nothing to catch it (#37). A rake task
 # with no test is a script nobody has run.
 class LoansTaskTest < ActiveSupport::TestCase
+  LOANS_TASKS = %w[
+    loans:verify_contract_coverage
+    loans:amortization_benchmark
+    loans:amortization_variance
+    loans:rebuild_schedules
+    loans:schedule_version_status
+  ].freeze
+
   setup do
-    %w[
-      loans:verify_contract_coverage
-      loans:amortization_benchmark
-      loans:amortization_variance
-      loans:rebuild_schedules
-      loans:schedule_version_status
-    ].each do |name|
+    LOANS_TASKS.each do |name|
       Rake::Task[name].clear_prerequisites
       Rake::Task[name].reenable
     end
+  end
+
+  # The invariant the header comment depends on, asserted rather than assumed.
+  # A task with two actions runs its body twice on one invoke -- silently, since
+  # these tasks are idempotent -- and every count-based assertion in this file
+  # becomes meaningless.
+  test "every loans task carries exactly one action" do
+    doubled = LOANS_TASKS.select { |name| Rake::Task[name].actions.length != 1 }
+
+    assert_empty doubled,
+      "these tasks have been defined more than once, so invoking them runs their " \
+      "body more than once: #{doubled.join(', ')}. Something re-read lib/tasks " \
+      "after this file loaded it."
   end
 
   test "contract coverage task verifies every C1-C16 row against an existing test" do
@@ -390,6 +415,24 @@ class LoansTaskTest < ActiveSupport::TestCase
       "an unbounded run has nothing left to resume from, and must not hand the operator a cursor")
     assert_match(/schedule_version_status/, output,
       "the completion decision belongs to the status task, not to this one")
+  end
+
+  # A bounded slice whose limit happens to equal the loans remaining is
+  # indistinguishable from a full one by count alone. Inferring from
+  # `rebuilt == limit` would hand the operator a cursor, and the run they made
+  # with it would rebuild nothing -- so the end of the population would only be
+  # reported after a wasted pass. Found by cubic on #93.
+  test "a full slice that exhausts the population still reports no next cursor" do
+    total = Loan.where.not(term_months: nil).count
+
+    output = capture_io_with_env("LIMIT" => total.to_s, "SLEEP" => "0") do
+      Rake::Task["loans:rebuild_schedules"].invoke
+    end
+
+    assert_equal total, output.scan(/^Rebuilt \d+: /).length,
+      "this test proves nothing unless the slice filled its limit exactly"
+    assert_match(/^next_start_after_id=none$/, output,
+      "a slice that filled its limit AND emptied the population has nothing to resume from")
   end
 
   # A mistyped cursor reaches Postgres as an invalid uuid literal. Catching it
