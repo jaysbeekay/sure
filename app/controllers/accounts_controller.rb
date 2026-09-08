@@ -308,6 +308,33 @@ class AccountsController < ApplicationController
     end
   end
 
+  helper_method :loan_extra_payment_params
+
+  # A transient "what if I paid an extra X per week/month?" hypothesis. Never
+  # persisted, and validated HERE rather than in the view or the model, so a
+  # hostile or fat-fingered query string cannot reach the simulator.
+  #
+  # Anything invalid degrades to {} -- the baseline projection, no hypothesis --
+  # rather than raising. A malformed chart parameter should not 500 an account
+  # page.
+  MAX_EXTRA_PAYMENT = 1_000_000
+
+  def loan_extra_payment_params
+    raw = params[:extra_payment]
+    return {} unless raw.is_a?(ActionController::Parameters) || raw.is_a?(Hash)
+
+    permitted = params.fetch(:extra_payment, {}).permit(:amount, :frequency).to_h.compact_blank
+    return {} unless permitted["amount"].present? && permitted["frequency"].present?
+    return {} unless Loan::RepaymentPlan::FREQUENCIES.include?(permitted["frequency"])
+
+    amount = BigDecimal(permitted["amount"].to_s)
+    return {} unless amount.finite? && amount.positive? && amount <= MAX_EXTRA_PAYMENT
+
+    { amount: amount, frequency: permitted["frequency"] }
+  rescue ArgumentError, TypeError
+    {}
+  end
+
   private
     def family
       Current.family

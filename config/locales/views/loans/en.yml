@@ -42,6 +42,21 @@ en:
         description: Projected from the original balance, rate and term, starting %{start_date}. Extra payments are not reflected.
         variable_rate_notice: This loan's rate changes over time. The schedule re-amortises at each recorded change, keeping the original payoff date and resizing the repayment; a change that has not been recorded yet will shift these figures.
         opening_payment: Opening Payment
+        chart:
+          scheduled: Original schedule
+          projected: Projected from today
+          accelerated: With extra payments
+          today: Today
+          no_payoff: not on the current repayment
+          aria_description: Loan payoff chart. Current balance %{current_balance}. Original scheduled payoff %{scheduled_payoff_date}. Projected payoff from today's balance %{projected_payoff_date}.
+        extra_payment:
+          amount_label: Extra payment
+          amount_placeholder: '500'
+          frequency_label: Frequency
+          weekly: Per week
+          monthly: Per month
+          apply: Apply
+          clear: Clear
         interest: Interest
         monthly_payment: Monthly Payment
         number: "#"

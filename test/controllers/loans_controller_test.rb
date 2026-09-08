@@ -191,4 +191,58 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     assert_empty @account.loan.reload.variable_rate_schedule
   end
+
+  # Reads the payload off the mounted controller's own data attribute rather
+  # than parsing rendered SVG paths, which would be a brittle way to assert on
+  # data that already has model-level coverage. This test's job is to prove the
+  # right payload reaches the browser and mounts the controller.
+  def chart_payload
+    node = css_select("[data-controller='loan-payoff-chart']").first
+    node && JSON.parse(node["data-loan-payoff-chart-data-value"])
+  end
+
+  test "the schedule tab mounts the payoff chart with two series and no hypothesis" do
+    get account_path(@account, tab: "schedule")
+
+    assert_response :success
+    payload = chart_payload
+    assert payload["scheduled"].length > 1
+    assert payload["projected"].length > 1
+    assert_empty payload["accelerated"]
+  end
+
+  test "modelling an extra payment adds the third series without removing the second" do
+    get account_path(@account, tab: "schedule",
+                     extra_payment: { amount: "2000", frequency: "monthly" })
+
+    assert_response :success
+    payload = chart_payload
+    assert payload["scheduled"].length > 1
+    assert payload["projected"].length > 1, "the baseline projection must survive the hypothesis"
+    assert payload["accelerated"].length > 1
+  end
+
+  # A malformed chart parameter must not 500 an account page, and must not
+  # reach the simulator.
+  test "invalid extra-payment parameters degrade to the baseline projection" do
+    [ { amount: "-500", frequency: "monthly" },
+      { amount: "banana", frequency: "monthly" },
+      { amount: "500", frequency: "hourly" },
+      { amount: "99999999999", frequency: "monthly" },
+      "not-a-hash" ].each do |bad|
+      get account_path(@account, tab: "schedule", extra_payment: bad)
+
+      assert_response :success, "#{bad.inspect} should render, not raise"
+      assert_empty chart_payload["accelerated"], "#{bad.inspect} should draw no third line"
+    end
+  end
+
+  test "a loan with no schedule renders the tab without a chart" do
+    @account.loan.update!(rate_type: "teaser")
+
+    get account_path(@account, tab: "schedule")
+
+    assert_response :success
+    assert_nil chart_payload
+  end
 end
