@@ -21,12 +21,16 @@ class UI::Loan::RateChangeTable < ApplicationComponent
   # columns. Both columns now sit on the same projection.
   attr_reader :loan, :as_of
 
-  # `as_of` is injectable so a caller CAN pin the reference date, but the
-  # schedule tab does not: it renders `RateChangeTable.new(loan: loan)`, so this
-  # component takes its own `Date.current`. The summary cards above it do share
-  # one captured date (CodeRabbit, #79); this table is not yet part of that
-  # guarantee, and a render crossing midnight on an effective date could show a
-  # change here that the card above already treats as current.
+  # `as_of` is injectable so a caller can pin the reference date, and the
+  # schedule tab does: it captures one `today` at the top of the template and
+  # passes it here as well as to the summary cards, so the whole tab sits on a
+  # single date. Without that, a render crossing midnight on an effective date
+  # could show a change in this table that the card above already treats as
+  # current -- the same defect CodeRabbit found for the cards on #79.
+  #
+  # The default is kept so the component stays usable on its own (Lookbook,
+  # tests, any future caller with no date to pin); a caller that renders it
+  # alongside other date-sensitive output should pass one.
   def initialize(loan:, as_of: Date.current)
     @loan = loan
     @as_of = as_of
@@ -171,7 +175,11 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     #      borrower opens it for. On a ~$400k loan at 6.18% the cliff was a
     #      rise to about 7.5%.
     def projection
-      @projection ||= Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
+      # `as_of` matters as much as the strategy. Without it the projection
+      # anchors to its own `Date.current`, so a render crossing midnight could
+      # classify a change as forthcoming against one date while quoting a
+      # balance and repayment computed from the next (CodeRabbit, #89).
+      @projection ||= Loan::PayoffProjection.new(loan, payment_strategy: :reamortize, as_of: as_of)
     end
 
     # Empty rather than raising when the projection cannot be made -- a loan

@@ -1,6 +1,35 @@
 require "test_helper"
 
 class Loan::PayoffProjectionTest < ActiveSupport::TestCase
+  # CodeRabbit, #89: the projection used to read `Date.current` directly for its
+  # simulation start, its accrual start and the cutoff for which contracted rows
+  # still count as remaining. A caller that had pinned a date for everything
+  # else -- the rate-change table does -- still got a projection anchored to
+  # whatever "now" was when it ran, so a render crossing midnight could quote a
+  # balance from one date beside a classification made on another.
+  #
+  # Asserts the injected date is load-bearing rather than decorative: a year of
+  # difference must move the count of remaining contracted payments.
+  test "the injected as_of anchors the projection" do
+    account = families(:dylan_family).accounts.create!(
+      name: "As-Of Anchor Loan", balance: 400_762.12, currency: "USD",
+      accountable: Loan.new(
+        rate_type: "fixed", interest_rate: 6.18, term_months: 360,
+        initial_balance: 400_762.12, start_date: Date.current - 83.months
+      )
+    )
+    loan = account.loan
+
+    today = Loan::PayoffProjection.new(loan, as_of: Date.current)
+    next_year = Loan::PayoffProjection.new(loan.reload, as_of: Date.current + 1.year)
+
+    assert_operator next_year.send(:original_remaining_payment_count), :<,
+      today.send(:original_remaining_payment_count),
+      "a later as_of must leave fewer contracted payments ahead of it"
+
+    assert_equal Date.current, today.as_of
+    assert_equal Date.current + 1.year, next_year.as_of
+  end
   setup do
     @family = families(:dylan_family)
   end

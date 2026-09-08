@@ -31,8 +31,12 @@
     <%# The same method the Overview card uses: the acceptance criterion for
         #15 is that the two tabs never show different figures for one loan. %>
     <%= summary_card title: t(".monthly_payment") do %>
-      <%# One as_of for both calls -- see the note on the Overview card. %>
-      <% as_of = Date.current %>
+      <%# The tab's single `today`, NOT a fresh Date.current: this card, the
+          rate caption under it and the rate-change table further down must all
+          sit on one date. Read separately, a render that crosses midnight can
+          show a change in that table which this card already treats as
+          current (cubic, #86). %>
+      <% as_of = today %>
       <% current_payment = loan.current_minimum_payment(as_of: as_of) %>
       <%# Falling back to the contracted payment here would break the very
           agreement this card exists to keep: past maturity there is no
@@ -175,7 +179,7 @@
 
   <%# FR-405. Renders nothing when there are no FUTURE changes -- a change
       already in effect is the current rate, not news. %>
-  <%= render UI::Loan::RateChangeTable.new(loan: loan) %>
+  <%= render UI::Loan::RateChangeTable.new(loan: loan, as_of: today) %>
 
   <% if loan.offset_accounts.any? %>
     <p class="text-sm text-secondary">
