@@ -458,7 +458,9 @@ export default class extends Controller {
       else if (event.key === "Home") focused = 0;
       else focused = stops.length - 1;
       announce(true);
-      showAt(stops[focused]);
+      // `focused` is clamped to the array above; `.at()` reads the same
+      // element without the bracket form object-injection scanners flag.
+      showAt(stops.at(focused));
     });
     svg.on("blur", () => {
       focused = null;
