@@ -28,10 +28,13 @@ class LoanExtraRepayment < ApplicationRecord
   validate :columns_match_kind
   validate :end_date_follows_start
 
+  # A single dated lump sum. Carries `occurs_on` and no cadence columns.
   def one_off?
     kind == "one_off"
   end
 
+  # A cadence that materialises to real dates (C6), never to a monthly
+  # equivalent -- $500 weekly is 52 reductions a year, not 12 of $2,166.67.
   def recurring?
     kind == "recurring"
   end
@@ -56,6 +59,9 @@ class LoanExtraRepayment < ApplicationRecord
       end
     end
 
+    # Mirrors the DB date-order constraint. Reversed bounds are not merely
+    # invalid, they are invisible: `RepaymentPlan` would silently drop every
+    # occurrence rather than report anything.
     def end_date_follows_start
       return if starts_on.blank? || ends_on.blank?
 

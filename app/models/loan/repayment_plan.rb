@@ -35,6 +35,11 @@ class Loan
       @closes_on = closes_on
     end
 
+    # Builds a plan from a scenario's saved repayments.
+    #
+    # Tolerates a nil scenario so a caller can hand one straight through without
+    # branching -- the baseline projection and a scenario projection then differ
+    # only in whether this returns an empty plan.
     def self.for(scenario, closes_on: nil)
       new(scenario&.extra_repayments.to_a, closes_on: closes_on)
     end
@@ -80,6 +85,10 @@ class Loan
 
     private
 
+      # The dates one repayment fires on inside a single window.
+      #
+      # `closes_inclusively` is decided by the caller, not here, because only
+      # the caller knows whether this is the plan's final window.
       def dates_for(repayment, from_date, to_date, closes_inclusively)
         upper = closes_inclusively ? to_date : to_date - 1
 
@@ -93,6 +102,11 @@ class Loan
         end
       end
 
+      # Materialises a cadence into real dates within the window.
+      #
+      # Returns nothing for a frequency outside FREQUENCY_RULES rather than
+      # raising: an unrecognised cadence is a data problem, and silently
+      # charging the borrower on guessed dates would be worse than showing none.
       def recurring_dates(repayment, from_date, upper)
         rule = FREQUENCY_RULES[repayment.frequency]
         return [] if rule.nil?
@@ -139,6 +153,11 @@ class Loan
         @schedules[repayment] ||= build_schedule(repayment, rule, anchor)
       end
 
+      # Translates one repayment into the shared recurrence engine's vocabulary.
+      #
+      # Fortnightly and quarterly are intervals on weekly and monthly rather
+      # than frequencies of their own, which is why the engine needs no new
+      # cadence to support them.
       def build_schedule(repayment, rule, anchor)
         RecurringTransaction::Schedule.new(
           expected_day_of_month: anchor.day,

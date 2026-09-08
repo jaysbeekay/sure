@@ -148,6 +148,8 @@ class Loan
         loan.account.balance.positive?
     end
 
+    # The account's currency, memoized. Every Money this class returns is built
+    # with it, so a projection cannot mix currencies with its own loan.
     def currency
       @currency ||= loan.account.currency
     end
@@ -179,6 +181,9 @@ class Loan
         converged?
     end
 
+    # Today's ACTUAL balance, which is what separates this class from the
+    # contracted schedule. Read live on every call, so the projection is current
+    # after a sync or a manual balance edit without any cache to invalidate.
     def current_balance
       Money.new(loan.account.balance, currency)
     end
@@ -197,6 +202,8 @@ class Loan
       raw_schedule
     end
 
+    # How many payments remain under this projection. Zero when the projection
+    # is not applicable, which callers read as "nothing to show".
     def payment_count
       payments.length
     end
@@ -208,11 +215,18 @@ class Loan
       schedule.present? && schedule.last[:ending_balance].zero?
     end
 
+    # When the loan clears under this projection. Under :hold this is the
+    # answer being DISCOVERED -- extra payments move it earlier, an
+    # under-serviced loan later. Under :reamortize it is fixed at the original
+    # maturity by construction.
     def payoff_date
       return nil if payments.empty?
       payments.last[:payment_date]
     end
 
+    # Interest still to be paid from today onward -- not over the loan's whole
+    # life. Compared against `original_remaining_interest` to show what a
+    # scenario or extra payment saves.
     def total_interest
       return Money.new(0, currency) if payments.empty?
       Money.new(payments.sum { |p| p[:interest_payment] }, currency)
@@ -273,6 +287,13 @@ class Loan
 
     private
 
+      # True when the repayment does not even cover the first period's interest,
+      # so the balance would grow forever.
+      #
+      # Asks about the CONTRACTED repayment, which is why two callers must skip
+      # it: :reamortize sizes its own repayment, and a scenario's extra
+      # repayments are not in this comparison. Both are handled in `applicable?`
+      # rather than here, so this stays a plain question about one number.
       def unamortizable_payment?
         rate = Loan::RateResolver.for(loan).accrual_rate_for(first_projected_payment_date)
         monthly_rate = (BigDecimal(rate.to_s) / BigDecimal("100")) / BigDecimal("12")
@@ -313,20 +334,28 @@ class Loan
           .method(:change_points)
       end
 
+      # The contracted schedule's rows still ahead of today. The baseline this
+      # projection is compared against, for months and interest saved.
       def original_remaining_payments
         @original_remaining_payments ||= original_schedule_rows.select do |row|
           row.payment_date > Date.current
         end
       end
 
+      # Where the simulation starts paying. Falls back to a month out for a loan
+      # whose contracted rows are all in the past, so a matured loan still gets a
+      # well-formed (if inapplicable) projection rather than a nil date.
       def first_projected_payment_date
         original_remaining_payments.first&.payment_date || Date.current.next_month
       end
 
+      # Contracted payments still to come, for the "months saved" comparison.
       def original_remaining_payment_count
         original_remaining_payments.count
       end
 
+      # Interest the borrower would still pay on the CONTRACTED schedule. The
+      # figure `total_interest` is subtracted from to show what was saved.
       def original_remaining_interest
         original_remaining_payments.sum(BigDecimal("0")) { |row| row.interest_payment }
       end
@@ -372,10 +401,14 @@ class Loan
         [ BigDecimal(balance.to_s) - offset_total, BigDecimal("0") ].max
       end
 
+      # Today's linked-offset total, summed once per projection and held flat
+      # for its life -- the assumption the rate-change table's caption states.
       def offset_total
         @offset_total ||= BigDecimal(loan.offset_accounts.sum(:balance).to_s)
       end
 
+      # Runs the simulation. Everything above decides WHAT to feed the simulator;
+      # this assembles those inputs and hands them over.
       def generate_schedule
         payment_dates = projected_payment_dates
         rate_resolver = scenario_rate_resolver || Loan::RateResolver.for(loan)
@@ -455,6 +488,11 @@ class Loan
       # table states the offset assumption. An assumed balance replaces the
       # linked accounts rather than adding to them: the question a scenario asks
       # is "what if my offset held $X", not "$X on top of what I have".
+      # Supplies the simulator's offset clock.
+      #
+      # A scenario's assumed balance REPLACES the linked accounts rather than
+      # adding to them: the question is "what if my offset held $X", not "$X on
+      # top of what I have" (CodeRabbit, #83).
       def offset_resolver
         assumed = assumed_offset_balance
         return Loan::OffsetResolver.new(loan).method(:change_points) if assumed.nil?
@@ -465,6 +503,8 @@ class Loan
         }
       end
 
+      # The scenario's assumed offset as a BigDecimal, or nil when unset. Blank
+      # normalises to nil so callers can branch on presence alone.
       def assumed_offset_balance
         value = @scenario&.assumed_offset_balance
         value.blank? ? nil : BigDecimal(value.to_s)
@@ -472,12 +512,20 @@ class Loan
 
       # Supplies the Simulator's rate interface for a pinned rate.
       class FlatRateResolver
+        # `rate` is the scenario's `rate_override`, an annual percentage.
         def initialize(rate)
           @rate = rate
         end
 
+
+        # A pinned rate applies on every date, and therefore never changes and
+        # never triggers a re-amortisation. Returning the loan's real change
+        # points here would model a rate that is both overridden and moving.
         def accrual_rate_for(_date) = @rate
+        # Both empty by construction -- see the note above `accrual_rate_for`.
         def accrual_rate_changes(_from_date, _to_date) = []
+
+        # A pinned rate never triggers a re-amortisation event.
         def re_amortisation_events(_from_date, _to_date) = []
       end
 
@@ -535,6 +583,8 @@ class Loan
         @payment_strategy == :reamortize && !remaining_payments_to_original_maturity.positive?
       end
 
+      # Decimal places for this currency, so every rounding in the simulation
+      # lands on a real cent (or its equivalent) rather than a fraction of one.
       def currency_precision
         Money::Currency.new(currency).default_precision
       end
