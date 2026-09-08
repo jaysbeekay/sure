@@ -60,6 +60,13 @@ en:
           start_principal: The principal balance at the beginning of this day
           start_value: The asset value at the beginning of this day
       chart:
+        loan:
+          actual: Recorded balance
+          scheduled: Original schedule
+          projected: Projected from today
+          today: Today
+          no_payoff: not on the current repayment
+          aria_description: Loan balance chart. Recorded balance %{current_balance}. Original scheduled payoff %{scheduled_payoff_date}. Projected payoff from today's balance %{projected_payoff_date}.
         no_data_available: "No data available"
         title:
           balance: Balance

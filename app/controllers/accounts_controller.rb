@@ -318,14 +318,14 @@ class AccountsController < ApplicationController
   # first account's chart to every later one in the same request, and `||=`
   # would re-run the simulation on every call for a loan whose payload is
   # legitimately nil.
-  def loan_payoff_chart(account, as_of: Date.current)
+  def loan_payoff_chart(account, as_of: Date.current, period: nil)
     return nil unless account.accountable.is_a?(Loan)
 
     @loan_payoff_charts ||= {}
-    key = [ account.id, as_of ]
+    key = [ account.id, as_of, period&.start_date, period&.end_date, period&.key ]
     return @loan_payoff_charts[key] if @loan_payoff_charts.key?(key)
 
-    @loan_payoff_charts[key] = Loan::PayoffChart.new(account.loan, as_of: as_of).payload
+    @loan_payoff_charts[key] = Loan::PayoffChart.new(account.loan, as_of: as_of, period: period).payload
   end
 
   private
