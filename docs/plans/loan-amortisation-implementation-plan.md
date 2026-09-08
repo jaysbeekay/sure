@@ -2,8 +2,10 @@
 
 > **RETIRED — superseded, kept as a record.** This was the first-generation analysis,
 > written before the design blueprint and the delivery breakdown existed. Nothing
-> references it and nothing should: its baseline predates `Loan::Simulator`, daily
-> accrual, offsets, per-loan day-count basis and scenarios.
+> should build on it: its baseline predates `Loan::Simulator`, daily accrual,
+> offsets, per-loan day-count basis and scenarios. The only thing that references
+> it is the retirement inventory in `docs/loans/release-gates.md`, which is what
+> keeps it findable rather than merely orphaned.
 >
 > Current documents: **`loan-amortisation-modelling.md`** (design),
 > **`loan-amortisation-delivery-breakdown.md`** (plan as filed),

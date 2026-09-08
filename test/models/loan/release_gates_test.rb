@@ -21,7 +21,17 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
   MET_STATES = /\*\*(Approved|Signed)\b/
 
   setup do
-    @rows = MATRIX.readlines.select { |line| line.match?(/^\| \*\*G\d/) }
+    lines = MATRIX.readlines
+    @rows = lines.select { |line| line.match?(/^\| \*\*G\d/) }
+
+    # Read the Evidence column's position from the header rather than hardcoding
+    # it. A hardcoded index silently reads the wrong column the first time
+    # someone inserts one, and the assertion it feeds -- "no gate is recorded as
+    # met without evidence" -- would then pass on whatever happened to sit there
+    # (Codacy, #95).
+    header = lines.find { |line| line.include?("| Gate |") }
+    @evidence_column = header.split("|").index { |cell| cell.strip == "Evidence" }
+    assert @evidence_column, "the matrix must have an Evidence column for this file to check anything"
   end
 
   test "the matrix names every gate exactly once" do
@@ -33,7 +43,15 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
   end
 
   test "every path the matrix cites exists" do
-    cited = MATRIX.read.scan(/`((?:docs|test|app|config|lib)\/[\w\/.-]+)`/).flatten.uniq
+    # Backticks are a formatting choice, not the thing being checked. Every path
+    # in the matrix today happens to be backticked -- Codacy's report that some
+    # were not is wrong on the specifics -- but the check should not depend on
+    # that: an evidence path written as plain prose would escape it entirely,
+    # and the file would look guarded while its weakest citation was not.
+    #
+    # The trailing `[\w]` drops sentence punctuation, and the lookbehind stops a
+    # match starting mid-path.
+    cited = MATRIX.read.scan(%r{(?<![\w/])((?:docs|test|app|config|lib)/[\w/.-]*[\w])}).flatten.uniq
     assert_operator cited.length, :>, 5, "the matrix must cite its evidence by path, not by description"
 
     missing = cited.reject { |path| Rails.root.join(path).exist? }
@@ -49,7 +67,7 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
 
     met.each do |row|
       gate = row[/^\| \*\*(G\d[ab]?)\*\*/, 1]
-      evidence = row.split("|")[4].to_s.strip
+      evidence = row.split("|")[@evidence_column].to_s.strip
 
       assert_not_equal "none", evidence.downcase,
         "#{gate} is recorded as met with no evidence"
@@ -77,7 +95,7 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
       "the exclusion is the whole distinction between G2a and G2b")
 
     assert_match(/\*\*Open\*\*/, open_half, "G2b is not signed and must not read as though it were")
-    assert_equal "none", open_half.split("|")[4].to_s.strip.downcase,
+    assert_equal "none", open_half.split("|")[@evidence_column].to_s.strip.downcase,
       "G2b has no evidence, and an empty evidence column would let it drift into looking evidenced"
   end
 end

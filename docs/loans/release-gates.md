@@ -38,7 +38,7 @@ without evidence.
 | **G5** — scenario authorisation and slot-cap concurrency tested | **Partly evidenced** | *unassigned* | `test/models/loan_scenario_concurrency_test.rb` — the slot cap is structural, a unique `(loan_id, slot)` index with bounded retry (#83) | Authorisation is untestable until the scenario UI exists; there is no controller to authorise against | #16 PR 7b, then sign |
 | **G6** — payoff chart keyboard-operable with an accessible data alternative | **Not started** | *unassigned* | none | — | #57. Needs a person with a screen reader, a real transcript and a keyboard walkthrough — not a task |
 | **G7** — API/CSV caching, sharing and versioning approved | **Not started** | *unassigned* | none | — | #23 |
-| **G8** — scope, issue count, PR count and milestone exit criteria agree | **Not assessable** | *unassigned* | §17.7 traceability table: 42 rows, 42 distinct FR ids, no FR twice (FR-306–308 collapsed into the `FR-305–308` row) | Cannot be assessed while the epic body and the delivery breakdown disagree with the running code | Reassess once #24's body is rewritten against this file |
+| **G8** — scope, issue count, PR count and milestone exit criteria agree | **Not assessable** | *unassigned* | §17.7 traceability table: 42 rows covering all 45 distinct FR ids, no FR twice (FR-305–308 share one row) | Cannot be assessed while the epic body and the delivery breakdown disagree with the running code | Reassess once #24's body is rewritten against this file |
 
 ---
 
@@ -77,7 +77,7 @@ reported as covered because the tests that exist are green.
 | `docs/loans/contract-mutation-evidence.md` | the per-row mutation transcript for G1 | Authoritative for the transcript; gate state here |
 | `docs/plans/loan-amortisation-delivery-breakdown.md` | the delivery plan **as written on 2026-09-04** | Historical. Its gate checklist is inside a fenced block reproducing the epic's as-filed body and is **not maintained** |
 | `docs/plans/loan-amortisation-modelling.md` | the design blueprint | Historical for status, current for design and the §17.7 traceability table |
-| `docs/plans/loan-amortisation-implementation-plan.md` | superseded | **Retired.** Referenced by nothing; kept only as a record of an earlier plan |
+| `docs/plans/loan-amortisation-implementation-plan.md` | superseded | **Retired.** Referenced only by this row and by its own retirement note; kept as a record of an earlier plan |
 
 ---
 
