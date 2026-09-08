@@ -1,27 +1,32 @@
 require "test_helper"
 require "benchmark"
 
-# `load`ing a rake file whose tasks already exist does not replace them -- Rake
-# APPENDS another action, and `invoke` then runs the body once per action. So
-# this load is guarded, and the two other rake test files load their own single
-# rake file rather than calling `Rails.application.load_tasks`, which re-reads
-# all of lib/tasks and doubled every loans:* task in a full-suite run.
-#
-# It went unseen because these tasks are idempotent and every assertion here
-# matched an output pattern: a second rebuild of the same loans, or a second
-# "Verified 16 contract rows", changes nothing any of them looked at. The slice
-# test below counts what was walked, so it saw it on the first CI run.
-load Rails.root.join("lib/tasks/loans.rake") unless Rake::Task.task_defined?("loans:rebuild_schedules")
+RakeTaskTestHelper.load_task("loans:rebuild_schedules", "loans")
 
-# Every task in lib/tasks/loans.rake is invoked here at least once.
+# Every task in lib/tasks/loans.rake is invoked here at least once, WITH ONE
+# EXCEPTION named below.
 #
-# This file exists because it did not: `loans:amortization_variance` shipped
-# calling `Loan::AmortizationSchedule#simulation`, a method that was not on the
-# branch, and raised NoMethodError with nothing to catch it (#37). A rake task
-# with no test is a script nobody has run.
+# This file exists because that was not true: `loans:amortization_variance`
+# shipped calling `Loan::AmortizationSchedule#simulation`, a method that was not
+# on the branch, and raised NoMethodError with nothing to catch it (#37). A rake
+# task with no test is a script nobody has run.
+#
+# The exception is `loans:verify_contract_mutations`, which is in LOANS_TASKS --
+# so the one-action invariant covers it -- but is never invoked. It breaks
+# production code in place and shells out to a full `bin/rails test` run per
+# contract row, sixteen times; invoking that from inside a test would be slow,
+# and it would race the parallel workers it mutates files underneath. Its
+# manifest is covered by test/models/loan/contract_mutation_manifest_test.rb and
+# its transcript is in docs/loans/contract-mutation-evidence.md, but the task
+# body itself runs in neither CI nor any test.
+#
+# Recording that plainly rather than leaving the sentence above quietly false,
+# which is what it was until CodeRabbit asked why the task was missing from the
+# list (#93).
 class LoansTaskTest < ActiveSupport::TestCase
   LOANS_TASKS = %w[
     loans:verify_contract_coverage
+    loans:verify_contract_mutations
     loans:amortization_benchmark
     loans:amortization_variance
     loans:rebuild_schedules
@@ -29,10 +34,7 @@ class LoansTaskTest < ActiveSupport::TestCase
   ].freeze
 
   setup do
-    LOANS_TASKS.each do |name|
-      Rake::Task[name].clear_prerequisites
-      Rake::Task[name].reenable
-    end
+    RakeTaskTestHelper.prepare(LOANS_TASKS)
   end
 
   # The invariant the header comment depends on, asserted rather than assumed.

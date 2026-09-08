@@ -12,17 +12,8 @@ class SecurityBackfillTest < ActiveSupport::TestCase
   #   bin/rails test test/lib/tasks/security_backfill_test.rb
   setup do
     skip "Encryption not configured" unless LunchflowAccount.encryption_ready?
-    # Load only this task's own rake file. `Rails.application.load_tasks` re-reads
-    # every file in lib/tasks, which APPENDS a second action to any task already
-    # defined elsewhere -- it silently made every loans:* task run its body twice
-    # in a full-suite run (#93). It also enhances the `environment` task, which
-    # reloads .env over the environment the run was started with.
-    load Rails.root.join("lib/tasks/security_backfill.rake") unless Rake::Task.task_defined?("security:backfill_encryption")
-    # The environment is already loaded in a test process, and the `environment`
-    # task itself is only defined by `Rails.application.load_tasks` -- which is
-    # what this file no longer calls. Same pattern as test/tasks/loans_task_test.rb.
-    Rake::Task["security:backfill_encryption"].clear_prerequisites
-    Rake::Task["security:backfill_encryption"].reenable
+    RakeTaskTestHelper.load_task("security:backfill_encryption", "security_backfill")
+    RakeTaskTestHelper.prepare("security:backfill_encryption")
   end
 
   # Lunchflow is a representative provider model, chosen arbitrarily: the bug
