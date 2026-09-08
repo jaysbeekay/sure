@@ -49,6 +49,8 @@ class Loan
       currency_precision:,
       re_amortisation_events: nil,
       payment_strategy: :reamortize,
+      payment_amount: nil,
+      extra_for: nil,
       settle_at_schedule_end: true
     )
       @starting_balance = BigDecimal(starting_balance.to_s)
@@ -60,6 +62,12 @@ class Loan
       )
       @currency_precision = currency_precision
       @payment_strategy = payment_strategy.to_sym
+      # A caller-supplied repayment. A projection holds the CONTRACTED payment
+      # against a balance that is no longer the contracted one -- which is the
+      # whole question it exists to answer -- so it cannot let the simulator
+      # size a payment from the balance in front of it.
+      @payment_amount = payment_amount.nil? ? nil : BigDecimal(payment_amount.to_s)
+      @extra_for = callable!(extra_for || ->(_from, _to) { [] }, :extra_for)
       @settle_at_schedule_end = settle_at_schedule_end
 
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
@@ -82,6 +90,14 @@ class Loan
         payment_date = @payment_schedule[index]
         period_start = index.zero? ? @accrual_start_date : @payment_schedule[index - 1]
 
+        # Extra repayments land on their own dates and reduce the balance from
+        # there, so the interest charged for the period is charged on what was
+        # actually outstanding. Applied before accrual for exactly that reason:
+        # crediting them at the period boundary instead would quietly hand back
+        # the interest saving the borrower paid for.
+        balance = apply_extra_repayments(balance, period_start, payment_date)
+        break if balance <= 0
+
         # See the class comment: opening rate charges the period, closing rate
         # sizes the payment.
         accrual_rate = monthly_rate(@accrual_rate_for.call(period_start))
@@ -91,7 +107,9 @@ class Loan
         # period would be arithmetically identical while the rate holds, but it
         # would also silently absorb a payment the borrower is contracted to,
         # which is what `:hold` exists to refuse.
-        if payment.nil? || (@payment_strategy == :reamortize && sizing_rate != previous_sizing_rate)
+        if @payment_amount
+          payment = @payment_amount
+        elsif payment.nil? || (@payment_strategy == :reamortize && sizing_rate != previous_sizing_rate)
           payment = AmortizationMath.level_payment(
             balance: balance,
             monthly_rate: sizing_rate,
@@ -124,10 +142,30 @@ class Loan
         balance = step[:ending_balance]
       end
 
-      SimulationResult.new(payments: payments, currency_precision: @currency_precision)
+      SimulationResult.new(
+        payments: payments,
+        converged: balance.zero?,
+        balloon_amount: balance,
+        currency_precision: @currency_precision
+      )
     end
 
     private
+      # Extra repayments falling in [from_date, to_date), summed. The window is
+      # half-open at the top: a repayment dated on a payment date belongs to
+      # that payment's own period, not to the one after it.
+      def apply_extra_repayments(balance, from_date, to_date)
+        extras = Array(@extra_for.call(from_date, to_date)).sum(BigDecimal("0")) do |change|
+          date = change.fetch(:date)
+          next BigDecimal("0") unless date >= from_date && date <= to_date
+
+          BigDecimal(change.fetch(:amount).to_s)
+        end
+        return balance if extras.zero?
+
+        [ balance - extras, BigDecimal("0") ].max
+      end
+
       # The contracted rate on a given payment date: a re-amortisation event
       # effective that day, otherwise whatever the rate curve says.
       def rate_on(date)
