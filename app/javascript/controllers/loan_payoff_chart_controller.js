@@ -228,6 +228,7 @@ export default class extends Controller {
         .attr("stroke-linecap", "round")
         .attr("stroke-dasharray", "3 4")
         .attr("opacity", 0.7)
+        .attr("clip-path", plotClip)
         .attr("d", line);
     }
 
@@ -240,6 +241,7 @@ export default class extends Controller {
         .attr("stroke-width", 2)
         .attr("stroke-linecap", "round")
         .attr("stroke-dasharray", "4 4")
+        .attr("clip-path", plotClip)
         .attr("d", line);
     }
 
