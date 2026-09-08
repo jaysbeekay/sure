@@ -715,6 +715,96 @@ class LoanTest < ActiveSupport::TestCase
       "a fixed-rate loan has no offset, so the links must go"
   end
 
+  # CodeRabbit, #86: `validate_offset_accounts` was registered with
+  # `before_save`, where `errors.add` does not stop the write -- only
+  # `throw :abort` does. An unknown id therefore saved cleanly, and
+  # `sync_offset_accounts` then persisted only the accounts it could load, so
+  # the user was told the edit succeeded while the link silently did not exist.
+  test "an unknown offset account id fails the save instead of being dropped" do
+    family = families(:dylan_family)
+    loan = family.accounts.create!(
+      name: "Unknown Offset Loan", balance: 250_000, currency: "USD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 5, term_months: 240)
+    ).loan
+
+    assert_no_difference "LoanOffsetAccount.count" do
+      refute loan.update(offset_account_ids: [ SecureRandom.uuid ]),
+        "an unknown offset account id must make the save fail, not succeed silently"
+    end
+
+    assert_includes loan.errors[:offset_account_ids], "contains an unknown account"
+    assert_empty Loan.find(loan.id).offset_accounts
+  end
+
+  # An account that EXISTS but is ineligible already failed the save before this
+  # change -- measured, not assumed: under `before_save` this same case returned
+  # false and created no link, because the after-save sync cannot persist a link
+  # LoanOffsetAccount refuses. Only a genuinely unknown id slipped through, which
+  # is why the test above is the one that goes red without the fix. Kept as a
+  # characterisation test so moving the callback does not quietly regress it.
+  test "an ineligible offset account fails the save instead of being dropped" do
+    family = families(:dylan_family)
+    loan = family.accounts.create!(
+      name: "Ineligible Offset Loan", balance: 250_000, currency: "USD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 5, term_months: 240)
+    ).loan
+    wrong_currency = family.accounts.create!(
+      name: "Ineligible Offset", balance: 10_000, currency: "EUR", accountable: Depository.new
+    )
+
+    assert_no_difference "LoanOffsetAccount.count" do
+      refute loan.update(offset_account_ids: [ wrong_currency.id ]),
+        "an offset account in another currency must make the save fail"
+    end
+
+    assert_predicate loan.errors[:offset_account_ids], :any?
+    assert_empty Loan.find(loan.id).offset_accounts
+  end
+
+  # CodeRabbit, #87: the first draft of this fix broke every ordinary edit of a
+  # variable loan that already had an offset. `validate_offset_accounts` built a
+  # fresh `LoanOffsetAccount` for each submitted account, and a NEW record
+  # cannot exclude itself from the account_id-unique-within-loan_id rule, so the
+  # link being KEPT collided with its own existing row. Harmless while this ran
+  # on `before_save` and the error was ignored; fatal once it became a real
+  # validation, because the form pre-populates the existing ids.
+  test "re-submitting an offset account the loan already has does not fail the save" do
+    family = families(:dylan_family)
+    loan = family.accounts.create!(
+      name: "Retained Offset Loan", balance: 250_000, currency: "USD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 5, term_months: 240)
+    ).loan
+    offset = family.accounts.create!(
+      name: "Retained Offset", balance: 10_000, currency: "USD", accountable: Depository.new
+    )
+    loan.update!(offset_account_ids: [ offset.id ])
+
+    fresh = Loan.find(loan.id)
+    assert fresh.update(offset_account_ids: [ offset.id ], interest_rate: 6),
+      "keeping an existing offset must not collide with its own join row"
+
+    reloaded = Loan.find(loan.id)
+    assert_equal [ offset.id ], reloaded.offset_accounts.pluck(:id)
+    assert_equal 6, reloaded.interest_rate.to_i,
+      "the unrelated edit in the same save must not be rolled back"
+  end
+
+  # Guards the other direction: making this a validation must not stop a
+  # legitimate offset edit from going through.
+  test "a valid offset account still saves and links" do
+    family = families(:dylan_family)
+    loan = family.accounts.create!(
+      name: "Valid Offset Loan", balance: 250_000, currency: "USD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 5, term_months: 240)
+    ).loan
+    offset = family.accounts.create!(
+      name: "Valid Offset", balance: 10_000, currency: "USD", accountable: Depository.new
+    )
+
+    assert loan.update(offset_account_ids: [ offset.id ])
+    assert_equal [ offset.id ], Loan.find(loan.id).offset_accounts.pluck(:id)
+  end
+
   private
     def build_chart_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
       account = Account.create! \
