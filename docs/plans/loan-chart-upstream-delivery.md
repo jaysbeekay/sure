@@ -45,7 +45,7 @@ Three units of work, in this order:
 | Unit | Where it lands | Closes | Contents |
 | --- | --- | --- | --- |
 | **PR-1** | upstream, `Fixes we-promise/sure#3295` | fork #103, #104 | the candidate's first commit: `Loan::Simulator`, `AmortizationMath`, `RateResolver`, `SimulationResult`, `AmortizationSchedule` re-implemented behind #2984's API, `variable_rate_schedule` + `start_date` migration, the rate-change form, plus decision 8 |
-| **PR-2** | upstream, stacked on PR-1, `Fixes we-promise/sure#3332` | fork #105, #106, #100 (upstream half) | the candidate's second commit **re-targeted from the Schedule tab to the account page** plus the #100 delta (§7): recorded-balance series, `UI::Account::Chart` loan branch, the two projection cards beside the chart, table alternative and keyboard access, period-governed domain, `:scheduled` payment strategy. **Without** the extra-payment what-if, which is removed from the branch (decision 10) |
+| **PR-2** | upstream, **opened after PR-1 merges** (or combined with it at the maintainers' request), `Fixes we-promise/sure#3332` | fork #105, #106, #100 (upstream half) | the candidate's second commit **re-targeted from the Schedule tab to the account page** plus the #100 delta (§7): recorded-balance series, `UI::Account::Chart` loan branch, the two projection cards beside the chart, table alternative and keyboard access, period-governed domain, `:scheduled` payment strategy. **Without** the extra-payment what-if, which is removed from the branch (decision 10) |
 | **Fork PR-B** | fork `main`, after upstream merges and the fork syncs | fork #100 (fork half) | retire the fork's own Schedule-tab chart, apply decision 9 to `current_minimum_payment` and `UI::Loan::RateChangeTable`, delete `:reamortize` on the fork's projection and `Loan#interest_bearing_balance` |
 
 PR-2 depends on PR-1 because the projection needs a simulator that runs from an arbitrary
@@ -106,7 +106,7 @@ git diff --binary origin/feat/loan-amortisation-engine origin/feat/mvp-payoff-ch
 git commit -m "feat(loans): payoff projection and the loan balance chart
 
 Fixes we-promise/sure#3332"
-bin/rails test test/models/loan test/controllers/loans_controller_test.rb test/controllers/accounts_controller_test.rb test/components/UI/account
+bin/rails test test/models/loan test/models/loan_test.rb test/models/plaid_account/liabilities/mortgage_processor_test.rb test/controllers/loans_controller_test.rb test/controllers/accounts_controller_test.rb test/components/UI/account
 DISABLE_PARALLELIZATION=true bin/rails test test/system/loan_payoff_chart_test.rb
 bin/rubocop && bundle exec erb_lint ./app/**/*.erb && npm run lint && bin/brakeman --no-pager
 git push --force-with-lease origin mvp/upstream-candidate
@@ -178,7 +178,7 @@ schedule has no payments, otherwise:
 | `currency` | ISO code | `loan.account.currency` | the actual series is queried in this currency, so no FX applies |
 | `domain_start` | ISO date | `period.key == "all_time"` → `loan.origination_date`, else `period.start_date` | |
 | `domain_end` | ISO date | `all_time` → the later of the scheduled and projected payoff dates, `as_of` fallback; else `period.end_date` | absorbs #102 without touching `Period` |
-| `actual` | `[{date, balance}]` | `loan.account.balance_series(period: Period.custom(start_date: domain_start, end_date: as_of)).values`, mapped to `value.amount.to_f`, **dropping points dated before `origination_date`** | **new**; solid green. Never queried past `as_of`, so the LOCF flat line measured on #102 cannot occur |
+| `actual` | `[{date, balance}]` | `loan.account.balance_series(period: Period.custom(start_date: domain_start, end_date: actual_end)).values` where `actual_end = [period.end_date, as_of].min`, mapped to `value.amount.to_f`, **dropping points dated before `origination_date`** | **new**; solid green. Never queried past `as_of`, so the LOCF flat line measured on #102 cannot occur; never past `period.end_date`, so a period that ended before today (Last Month) stays inside its domain. The today marker and the projection are drawn only when `as_of` is inside `[domain_start, domain_end]` |
 | `scheduled` | `[{date, balance}]` | existing: origination point + `schedule.payments` | red dashed, full term |
 | `projected` | `[{date, balance}]` | existing: `(as_of, current balance)` + `projection.payments` | green dashed; drawn whenever `applicable?`, **including when it overlaps `scheduled`** (on-track is a valid picture). Starts from the recorded balance, so extra payments already made are in it |
 | `scheduled_payoff_date`, `projected_payoff_date` | ISO or null | existing; `accelerated_payoff_date` removed | |
@@ -214,7 +214,7 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 | --- | --- | --- |
 | 1 | `test/components/UI/account/chart_test.rb` | a loan account with a schedule renders `data-controller="loan-payoff-chart"` and no `time-series-chart`; a depository renders `time-series-chart` and no loan controller |
 | 2 | `test/models/loan/payoff_chart_test.rb` | `scheduled.first == (origination_date, principal)`; every `scheduled` balance equals `schedule.payments` for that date; last date is `schedule.payoff_date` |
-| 3 | same | `actual.last.date == as_of`; no `actual` date after `as_of` or before `origination_date`; `currency == account.currency` |
+| 3 | same | `actual.last.date == [period.end_date, as_of].min` (asserted for `all_time` and for `last_month`); no `actual` date after that or before `origination_date`; `currency == account.currency` |
 | 4 | same | `projected` present with no divergence; absent when `applicable?` is false; the payload has no `accelerated` key; `visible` matches |
 | 5 | `test/models/loan/payoff_projection_test.rb` | (a) variable loan, recorded rate rise, balance **ahead**: every projected `payment_amount` equals the schedule's for that date and `payoff_date < schedule.payoff_date`; (b) a **future** recorded change moves the projected repayment on its first sized payment by the schedule's amount; (c) fixed loan: payments byte-identical to the `:hold` result; (d) fixed loan whose recorded balance is below the scheduled balance for `as_of` (extra payments already made): `payoff_date < schedule.payoff_date` and `months_saved > 0`, with no extra-payment input anywhere |
 | 6 | `test/models/loan/simulator_test.rb` | `:scheduled` calls the callable once per period with the running balance; `:hold` and `:reamortize` unchanged |
@@ -273,7 +273,7 @@ git fetch upstream main
 git rebase --onto upstream/main a0a4627a mvp/upstream-candidate   # drops the vendored #2984, now on main
 # PR-1
 git push -u origin mvp/upstream-candidate~1:refs/heads/upstream/loan-amortisation-engine
-# PR-2 (stacked)
+# PR-2 branch (pushed now, PR opened after PR-1 merges)
 git push -u origin mvp/upstream-candidate:refs/heads/upstream/loan-balance-chart
 ```
 
@@ -296,8 +296,14 @@ Without that agreement, Path B is not available: wait for Path A.
 implementation over #2984 (the #107 runbook's Path D): the candidate still contains #2984's
 files, and shipping them needs oliveiraigorm's sign-off or an independent rewrite.
 
-Open both against `we-promise:main` from the fork, PR-2 noting it stacks on PR-1. Tick **Allow
-edits from maintainers**. Close we-promise/sure#3296 with a comment linking PR-1 and PR-2 and
+**PR-2 cannot be stacked upstream.** A pull request into `we-promise/sure` must use a base
+branch of that repository, and `upstream/loan-amortisation-engine` exists only on the fork, so a
+PR-2 opened while PR-1 is unmerged would carry PR-1's whole diff and review as one change.
+Therefore: open **PR-1 only** against `we-promise:main`; push the PR-2 branch so the work is
+visible, but open PR-2 only after PR-1 merges (then rebase it onto `upstream/main` first). If a
+maintainer prefers a single pull request, open PR-2's branch as the one PR and say it closes
+both #3295 and #3332; the commits are already cut so either shape is one push. Tick **Allow
+edits from maintainers** on whichever PR is open. Close we-promise/sure#3296 with a comment linking PR-1 and PR-2 and
 answering jjmata's 2026-09-01 request: every finding on #3296 was against 8,913 lines that no
 longer exist; the two regressions it fixed are carried as tests in PR-1.
 
