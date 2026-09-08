@@ -39,7 +39,19 @@ class Loan
     # was never asked for, and loses the remaining balance without saying so.
     MAX_PERIODS = 1200
 
-    PAYMENT_STRATEGIES = %i[reamortize hold].freeze
+    # How the repayment behaves from one period to the next:
+    #
+    #   :reamortize  sized from the balance in front of it, and re-sized
+    #                whenever the sizing rate moves -- what a lender does to a
+    #                contracted schedule
+    #   :hold        one figure, seeded or sized on the first period, held to
+    #                the end whatever the rate does
+    #   :scheduled   asked for every period from a callable, regardless of the
+    #                balance -- what a projection uses to pay the CONTRACT's
+    #                repayment against a balance that is no longer the
+    #                contracted one, so a borrower who is ahead finishes early
+    #                instead of being re-sized back onto the original maturity
+    PAYMENT_STRATEGIES = %i[reamortize hold scheduled].freeze
 
     def initialize(
       starting_balance:,
@@ -61,11 +73,14 @@ class Loan
       )
       @currency_precision = currency_precision
       @payment_strategy = payment_strategy.to_sym
-      # A caller-supplied repayment. A projection holds the CONTRACTED payment
-      # against a balance that is no longer the contracted one -- which is the
-      # whole question it exists to answer -- so it cannot let the simulator
-      # size a payment from the balance in front of it.
-      @payment_amount = payment_amount.nil? ? nil : BigDecimal(payment_amount.to_s)
+      # A caller-supplied repayment. Under :hold and :reamortize a number that
+      # seeds the run; under :scheduled a callable, asked every period for the
+      # amount the contract requires then -- see #run.
+      @payment_amount =
+        if payment_amount.respond_to?(:call) then payment_amount
+        elsif payment_amount.nil? then nil
+        else BigDecimal(payment_amount.to_s)
+        end
       @settle_at_schedule_end = settle_at_schedule_end
 
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
@@ -74,6 +89,9 @@ class Loan
       end
       unless PAYMENT_STRATEGIES.include?(@payment_strategy)
         raise ArgumentError, "unsupported payment strategy: #{@payment_strategy.inspect}"
+      end
+      if (@payment_strategy == :scheduled) != @payment_amount.respond_to?(:call)
+        raise ArgumentError, ":scheduled takes a callable payment_amount; the other strategies take a number"
       end
     end
 
@@ -94,28 +112,41 @@ class Loan
         accrual_rate = monthly_rate(@accrual_rate_for.call(period_start))
         sizing_rate = monthly_rate(rate_on(payment_date))
 
-        # Resize only when the sizing rate actually moves. Recomputing every
-        # period would be arithmetically identical while the rate holds, but it
-        # would also silently absorb a payment the borrower is contracted to,
-        # which is what `:hold` exists to refuse.
-        if payment.nil?
-          # A supplied amount seeds the run -- a projection opens on the
-          # repayment the borrower is contracted to, not one re-derived from
-          # today's balance, which would make every loan look on track.
-          payment = @payment_amount
-        end
-        # `previous_sizing_rate.nil?` guards the first period: there is no
-        # earlier rate to have moved away from, so the opening rate is not a
-        # rate CHANGE. Without it, a seeded repayment is overwritten on the
-        # very first period it was supposed to govern.
-        rate_moved = !previous_sizing_rate.nil? && sizing_rate != previous_sizing_rate
-        if payment.nil? || (@payment_strategy == :reamortize && rate_moved)
-          payment = AmortizationMath.level_payment(
+        if @payment_strategy == :scheduled
+          # The contract's repayment for THIS period, whatever balance is in
+          # front of it. Sizing from the balance would shrink a borrower who is
+          # ahead back onto the original maturity; paying what the contract
+          # asks is how they finish sooner.
+          payment = BigDecimal(@payment_amount.call(
+            index: index,
             balance: balance,
-            monthly_rate: sizing_rate,
-            remaining_payments: @payment_schedule.length - index,
-            currency_precision: @currency_precision
-          )
+            sizing_rate: sizing_rate,
+            remaining_payments: @payment_schedule.length - index
+          ).to_s)
+        else
+          # Resize only when the sizing rate actually moves. Recomputing every
+          # period would be arithmetically identical while the rate holds, but
+          # it would also silently absorb a payment the borrower is contracted
+          # to, which is what `:hold` exists to refuse.
+          if payment.nil?
+            # A supplied amount seeds the run -- a projection opens on the
+            # repayment the borrower is contracted to, not one re-derived from
+            # today's balance, which would make every loan look on track.
+            payment = @payment_amount
+          end
+          # `previous_sizing_rate.nil?` guards the first period: there is no
+          # earlier rate to have moved away from, so the opening rate is not a
+          # rate CHANGE. Without it, a seeded repayment is overwritten on the
+          # very first period it was supposed to govern.
+          rate_moved = !previous_sizing_rate.nil? && sizing_rate != previous_sizing_rate
+          if payment.nil? || (@payment_strategy == :reamortize && rate_moved)
+            payment = AmortizationMath.level_payment(
+              balance: balance,
+              monthly_rate: sizing_rate,
+              remaining_payments: @payment_schedule.length - index,
+              currency_precision: @currency_precision
+            )
+          end
         end
         previous_sizing_rate = sizing_rate
 

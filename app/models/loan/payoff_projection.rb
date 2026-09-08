@@ -7,10 +7,16 @@ class Loan
   # borrower who has overpaid is ahead of the schedule, one whose balance has
   # grown is behind, and neither is visible from the contract alone.
   #
-  # It holds the CONTRACTED repayment against a balance that is no longer the
-  # contracted one. That is deliberate -- re-sizing the repayment to today's
-  # balance would answer a different and much less useful question, and would
-  # make every loan look exactly on track by construction.
+  # It pays the repayment the CONTRACT requires in each period -- the
+  # schedule's own row, re-amortised wherever the schedule re-amortises --
+  # against a balance that is no longer the contracted one. That is deliberate:
+  # re-sizing the repayment to today's balance would answer a different and much
+  # less useful question, and would land every borrower who is ahead back on
+  # the original maturity. Paying what the contract asks against a smaller
+  # balance is how they finish sooner (#100, decision 1).
+  #
+  # Extra payments the borrower has already made are in here without being
+  # named: they are why today's balance is what it is.
   class PayoffProjection
     attr_reader :loan, :as_of
 
@@ -78,27 +84,39 @@ class Loan
         @schedule ||= loan.amortization_schedule
       end
 
+      # The contract's rows still ahead, in order. The projection walks exactly
+      # these dates, so position `index` in its run is position `index` here.
+      def remaining_scheduled_payments
+        @remaining_scheduled_payments ||= (schedule&.payments || [])
+          .select { |payment| payment.date > as_of }
+      end
+
       # The payment dates still ahead. A projection runs to the ORIGINAL
       # maturity and no further: extending it would invent a term the borrower
       # never agreed to.
       def remaining_payment_dates
-        @remaining_payment_dates ||= (schedule&.payments || [])
-          .select { |payment| payment.date > as_of }
-          .map(&:date)
+        @remaining_payment_dates ||= remaining_scheduled_payments.map(&:date)
       end
 
       # The repayment in force: the next scheduled payment's amount. For a
       # re-amortising loan that is the figure the current rate produced, which
       # is what the borrower is actually paying.
       def contracted_payment
-        @contracted_payment ||= (schedule&.payments || [])
-          .find { |payment| payment.date > as_of }&.payment&.amount
+        @contracted_payment ||= remaining_scheduled_payments.first&.payment&.amount
+      end
+
+      # What the contract asks for in the projection's period `index`: the
+      # schedule's row for the same date. The two walks share their dates, so a
+      # recorded rate change re-sizes this exactly where the schedule re-sizes
+      # its own repayment. Past the last row -- unreachable today, since the
+      # projection stops at the original maturity -- the last amount holds.
+      def scheduled_payment_for(index:, **)
+        row = remaining_scheduled_payments[index] || remaining_scheduled_payments.last
+        row.payment.amount
       end
 
       def remaining_contracted_interest
-        (schedule&.payments || [])
-          .select { |payment| payment.date > as_of }
-          .sum(BigDecimal("0")) { |payment| payment.interest.amount }
+        remaining_scheduled_payments.sum(BigDecimal("0")) { |payment| payment.interest.amount }
       end
 
       def simulation
@@ -110,14 +128,16 @@ class Loan
           payment_schedule: remaining_payment_dates,
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
           re_amortisation_events: rate_resolver.method(:re_amortisation_events),
-          payment_amount: contracted_payment,
-          # Seeded with the contracted repayment, but still re-amortising at
-          # each recorded rate change -- because that is what the contract
-          # itself does on a variable loan. Holding one figure to maturity
-          # would project a repayment the lender will never ask for. On a fixed
-          # loan there are no changes, so it holds, which is the whole basis of
-          # the ahead/behind comparison.
-          payment_strategy: :reamortize,
+          # The contract's own repayment, period by period. Not :reamortize:
+          # that re-sizes off the balance in front of it, and for a borrower
+          # who is ahead that shrinks the repayment until the loan lands back
+          # on the original maturity -- the opposite of what paying the
+          # contracted amount against a smaller balance actually does. On a
+          # fixed loan every row carries the same figure, so this is the held
+          # contracted payment; on a variable loan it moves exactly where the
+          # schedule's does.
+          payment_amount: method(:scheduled_payment_for),
+          payment_strategy: :scheduled,
           currency_precision: currency_precision,
           # A projection that cannot clear the balance must SAY so. Settling the
           # final payment regardless would manufacture a payoff date for a loan

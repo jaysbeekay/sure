@@ -19,7 +19,10 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_equal 0, projection.months_saved
   end
 
-  test "an overpaid loan finishes early and pays less interest" do
+  # Extra payments already made need no input of their own: they are why the
+  # recorded balance sits below the scheduled one, and the projection starts
+  # from that balance (#100, decision 10).
+  test "an overpaid loan finishes early and pays less interest, with no extra-payment input" do
     loan = build_loan(term_months: 24)
     loan.account.update!(balance: scheduled_balance_at(loan, @today) - 50_000)
 
@@ -29,6 +32,75 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_operator projection.months_saved, :>, 0
     assert_operator projection.interest_saved.amount, :>, 0
     assert_operator projection.payoff_date, :<, loan.amortization_schedule.payoff_date
+  end
+
+  # Decision 1 on #100. A variable loan that is ahead keeps paying what the
+  # contract currently asks and therefore finishes early. Re-amortising the
+  # smaller balance would shrink the repayment and land it back on the
+  # original maturity, which is what this test exists to refuse.
+  test "a variable loan ahead of schedule pays the contract's repayment and finishes early" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    loan.update!(variable_rate_schedule: { Date.new(2026, 7, 1).iso8601 => "12.0" })
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 30_000)
+    loan.reload
+
+    projection = loan.payoff_projection(as_of: @today)
+    schedule_by_date = loan.amortization_schedule.payments.index_by(&:date)
+
+    projection.payments[0..-2].each do |payment|
+      assert_equal schedule_by_date.fetch(payment[:payment_date]).payment.amount, payment[:payment_amount],
+        "on #{payment[:payment_date]} the projection must pay what the contract asks, not a re-sized figure"
+    end
+    assert_operator projection.payoff_date, :<, loan.amortization_schedule.payoff_date
+    assert_operator projection.months_saved, :>, 0
+  end
+
+  # A variable loan's CONTRACT resizes the repayment at each rate change, and
+  # the projection follows the schedule's own resized figure -- not one
+  # re-derived from the balance in front of it.
+  test "a future recorded rate change moves the projected repayment by the schedule's amount" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    change_date = @today >> 3
+    loan.update!(variable_rate_schedule: { change_date.iso8601 => "18.0" })
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 20_000)
+    loan.reload
+
+    projection = loan.payoff_projection(as_of: @today)
+    schedule_by_date = loan.amortization_schedule.payments.index_by(&:date)
+    first_resized = projection.payments.find { |p| p[:payment_date] >= change_date }
+
+    assert_operator first_resized[:payment_amount], :>, projection.payments.first[:payment_amount],
+      "the repayment must resize when the recorded rate rises"
+    assert_equal schedule_by_date.fetch(first_resized[:payment_date]).payment.amount, first_resized[:payment_amount],
+      "and it resizes to the schedule's figure, not to one sized from the smaller balance"
+  end
+
+  # On a fixed loan every scheduled row carries the same repayment, so paying
+  # the schedule's rows is the held contracted payment. Byte-identical to a
+  # :hold run seeded with that payment, which pins that decision 1 changed
+  # nothing for fixed loans.
+  test "a fixed loan's projection is identical to holding the contracted payment" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 10_000)
+    loan.reload
+    projection = loan.payoff_projection(as_of: @today)
+    schedule = loan.amortization_schedule
+    remaining = schedule.payments.select { |p| p.date > @today }
+    resolver = Loan::RateResolver.for(loan)
+
+    held = Loan::Simulator.new(
+      starting_balance: loan.account.balance,
+      accrual_start_date: @today,
+      payment_schedule: remaining.map(&:date),
+      accrual_rate_for: resolver.method(:accrual_rate_for),
+      re_amortisation_events: resolver.method(:re_amortisation_events),
+      payment_amount: remaining.first.payment.amount,
+      payment_strategy: :hold,
+      currency_precision: 2,
+      settle_at_schedule_end: false
+    ).run
+
+    assert_equal held.payments, projection.payments
   end
 
   # The case that was unreachable in #103, and the reason convergence came back
