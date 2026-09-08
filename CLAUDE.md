@@ -41,6 +41,90 @@ To watch the browser live, open `http://localhost:7900` or `http://localhost:444
 ### Setup
 - `bin/setup` - Initial project setup (installs dependencies, prepares database)
 
+## Issue and Pull Request Workflow
+
+**Scope: this fork (`jaysbeekay/sure`) only.** This section is local policy, not
+upstream convention. It cites this fork's issue and PR numbers, its CodeRabbit
+configuration, and its star count. When preparing a contribution for
+`we-promise/sure`, leave this section behind -- several issues here are labelled
+`upstream:candidate`, so a CLAUDE.md change can otherwise ride upstream by
+accident and be wrong there.
+
+Follow this sequence for any issue-driven change. Do not skip or reorder steps.
+
+1. **Re-read the issue first.** Fetch it fresh, including every comment. Work
+   started from a stale view of an issue wastes the whole cycle -- requirements
+   and decisions are frequently added in comments after the body was written.
+2. **Post a triage plan as a comment on the issue** before writing code. It must
+   state four things explicitly:
+   - **What the issue actually is** -- the defect or requirement in terms of
+     observed behaviour, not a restatement of the title.
+   - **What the proposed fix is**, and what it deliberately leaves out.
+   - **The blast radius** -- who else hits this line, and what do they pass?
+     See the section below; stating it here is what makes it happen before the
+     code is written rather than after review finds what it missed.
+   - **How the fix will be conclusively tested** -- name the assertion that
+     would fail if the fix were absent. "Tests pass" is not a test plan.
+3. **Open the change as a DRAFT pull request** following that plan, and watch it
+   for feedback. Do not mark it ready while any review or check is outstanding.
+4. **Mark it ready for review** only once every CI check is green and all
+   feedback received so far has been addressed.
+5. **Wait for CodeRabbit's review and address it.** Its review must always be
+   asked for: automatic review is off on this repository (fewer than 10 stars)
+   and does not run on drafts either way (`reviews.auto_review.drafts: false`).
+   An explicit `@coderabbitai review` comment DOES work on a draft -- that is
+   how #87 and #89 were reviewed -- so a review can and should be requested at
+   step 3 rather than held until the PR is marked ready.
+   `@coderabbitai full review` forces a fresh pass when an incremental one
+   returns nothing; three plain `review` requests produced nothing on #86
+   before it did.
+6. **Merge only after the repository owner has given approval in their own
+   words.** A green PR is not an approved one.
+
+### Before writing any fix: state the blast radius
+
+Write one sentence before changing code:
+
+> **Who else hits this line, and what do they pass?**
+
+This is not optional and it is not a formality. Two defects on this repository
+came from checking a fix against *the bug as described* rather than against the
+boundary of the code it touched:
+
+- A callback was moved from `before_save` to `validate` so it would actually
+  block a save. Correct for the reported case; it then rejected every ordinary
+  edit of a loan that already had an offset account, because the form
+  resubmits the ids it already holds. The blast-radius sentence contains that
+  bug outright.
+- A reference date was pinned at the view layer. The component it was passed to
+  then handed the work to `Loan::PayoffProjection`, which derived its own date,
+  so the defect moved down a level instead of closing.
+
+Two corollaries:
+
+- **Follow the value one hop further than feels necessary.** If a fix is "pass
+  X in", check whether the callee also derives X for itself.
+- **Prove the test before trusting it.** Break the fix deliberately and watch
+  the new test fail. A test written after a fix tends to assert the author's
+  mental model, which is the thing that was wrong.
+
+### Reference dates are injected, never derived
+
+Anything under `app/models/loan/` and its view components takes its "today" as
+an argument. Defaulting to `Date.current` in the signature is fine; reading
+`Date.current` in the body of a method that already has a caller-supplied date
+is not. A view that shows several date-sensitive figures captures ONE date and
+passes it to all of them.
+
+This class of defect has recurred repeatedly on the loan epic (#79, #83, #86,
+#89 -- all fork PR numbers): a date or an eligibility gate derived independently
+in several places, correct for the caller it was written for and silently wrong
+for the next one added.
+
+The loan amortisation work is fork-local, so this convention is too. It would
+still be worth proposing upstream on its own merits, but as a discussion rather
+than as a rule that arrived inside an unrelated change.
+
 ## Pre-Pull Request CI Workflow
 
 ALWAYS run these commands before opening a pull request:
