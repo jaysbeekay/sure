@@ -247,16 +247,41 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 
 ## 8. Opening upstream
 
-Wait for one of: #2984 merges, or jjmata rules on ordering. Then, from a rebuilt candidate (§5):
+Both PRs depend on #2984's `Loan::AmortizationSchedule` API, which `upstream/main` does not
+have until #2984 merges. Which path applies is decided by **whether #2984 has merged**, not by
+whether jjmata has ruled; a ruling that #2984 goes first still leaves the dependency unmerged
+until it lands.
+
+**Path A — #2984 has merged.** From a rebuilt candidate (§5), drop the vendored merge and
+open against `we-promise:main`:
 
 ```bash
 git fetch upstream main
-git rebase --onto upstream/main a0a4627a mvp/upstream-candidate   # drops the vendored #2984
+git rebase --onto upstream/main a0a4627a mvp/upstream-candidate   # drops the vendored #2984, now on main
 # PR-1
 git push -u origin mvp/upstream-candidate~1:refs/heads/upstream/loan-amortisation-engine
 # PR-2 (stacked)
 git push -u origin mvp/upstream-candidate:refs/heads/upstream/loan-balance-chart
 ```
+
+**Path B — #2984 is still open but jjmata has said our work proceeds on top of it.** Do **not**
+rebase. A pull request to `we-promise/sure` can only target a branch of that repository, and
+#2984's head lives on oliveiraigorm's fork, so the only way to open PR-1 against `we-promise:main`
+is with the vendored merge `a0a4627a` still in the history:
+
+```bash
+git push -u origin mvp/upstream-candidate~1:refs/heads/upstream/loan-amortisation-engine
+git push -u origin mvp/upstream-candidate:refs/heads/upstream/loan-balance-chart
+```
+
+That PR then carries oliveiraigorm's ~430 lines unchanged. Two conditions before pushing it:
+oliveiraigorm has agreed in writing on #2984, and the PR body says the merge commit is scaffolding
+that drops out when #2984 lands (re-run Path A's rebase at that point and force-push with lease).
+Without that agreement, Path B is not available: wait for Path A.
+
+**Neither path is available** while jjmata has not ruled, or if the ruling prefers our
+implementation over #2984 (the #107 runbook's Path D): the candidate still contains #2984's
+files, and shipping them needs oliveiraigorm's sign-off or an independent rewrite.
 
 Open both against `we-promise:main` from the fork, PR-2 noting it stacks on PR-1. Tick **Allow
 edits from maintainers**. Close we-promise/sure#3296 with a comment linking PR-1 and PR-2 and
@@ -270,10 +295,6 @@ change if maintainers prefer. Say it before they ask.
 Upstream gates not visible from the fork: Pipelock `security-scan`, upstream CodeRabbit, the DS
 drift check, maintainer review. Upstream's `CONTRIBUTING.md` asks contributors to read
 `AGENTS.md` and `docs/llm-guides/architecture.md`; do so before opening.
-
-If #2984 is **not** merged when the ruling comes and jjmata prefers our implementation (the #107
-runbook's Path D): the candidate contains oliveiraigorm's files via the vendored merge. Do not
-open without their sign-off or an independent rewrite of those ~430 lines.
 
 ## 9. Fork follow-up (PR-B, on fork `main`)
 
