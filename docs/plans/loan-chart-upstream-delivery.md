@@ -45,11 +45,12 @@ Three units of work, in this order:
 | Unit | Where it lands | Closes | Contents |
 | --- | --- | --- | --- |
 | **PR-1** | upstream, `Fixes we-promise/sure#3295` | fork #103, #104 | the candidate's first commit: `Loan::Simulator`, `AmortizationMath`, `RateResolver`, `SimulationResult`, `AmortizationSchedule` re-implemented behind #2984's API, `variable_rate_schedule` + `start_date` migration, the rate-change form, plus decision 8 |
-| **PR-2** | upstream, stacked on PR-1, `Fixes we-promise/sure#3332` | fork #105, #106, #100 (upstream half) | the candidate's second commit **re-targeted from the Schedule tab to the account page** plus the #100 delta (§7): recorded-balance series, `UI::Account::Chart` loan branch, form and cards beside the chart, table alternative and keyboard access, period-governed domain, `:scheduled` payment strategy |
+| **PR-2** | upstream, stacked on PR-1, `Fixes we-promise/sure#3332` | fork #105, #106, #100 (upstream half) | the candidate's second commit **re-targeted from the Schedule tab to the account page** plus the #100 delta (§7): recorded-balance series, `UI::Account::Chart` loan branch, the two projection cards beside the chart, table alternative and keyboard access, period-governed domain, `:scheduled` payment strategy. **Without** the extra-payment what-if, which is removed from the branch (decision 10) |
 | **Fork PR-B** | fork `main`, after upstream merges and the fork syncs | fork #100 (fork half) | retire the fork's own Schedule-tab chart, apply decision 9 to `current_minimum_payment` and `UI::Loan::RateChangeTable`, delete `:reamortize` on the fork's projection and `Loan#interest_bearing_balance` |
 
-PR-2 depends on PR-1 because the projection needs the simulator's extra-repayment hook
-(`extra_for:`) and a held or scheduled payment; #2984's annuity loop cannot do either. If a
+PR-2 depends on PR-1 because the projection needs a simulator that runs from an arbitrary
+starting balance, holds or follows a payment, and applies recorded rate changes; #2984's annuity
+loop cannot do any of that. If a
 maintainer wants #3332 without #3295, the answer is "the engine half of PR-1 without the
 variable-rate half", which is a re-cut of commit 1, not a rewrite.
 
@@ -63,15 +64,16 @@ The nine decisions on #100, restated in the candidate's vocabulary, with the PR 
 
 | # | Decision (short) | Lands in | On the candidate this means |
 | --- | --- | --- | --- |
-| 1 | The projection pays the schedule's repayment against the actual balance; a loan ahead of schedule pays off earlier | PR-2 | `Loan::Simulator` gains `payment_strategy: :scheduled`, whose per-period amount comes from a callable. `Loan::PayoffProjection` passes a lambda returning `schedule.payments[first_remaining_index + index].payment.amount`, falling back to the last scheduled amount past maturity, plus nothing (extras go through `extra_for:`, not the payment). Replaces the candidate's `payment_amount: contracted_payment, payment_strategy: :reamortize`, which re-sizes off the *actual* balance at a rate move. Fixed loans: byte-identical, asserted |
+| 1 | The projection pays the schedule's repayment against the actual balance; a loan ahead of schedule pays off earlier | PR-2 | `Loan::Simulator` gains `payment_strategy: :scheduled`, whose per-period amount comes from a callable. `Loan::PayoffProjection` passes a lambda returning `schedule.payments[first_remaining_index + index].payment.amount`, falling back to the last scheduled amount past maturity. Replaces the candidate's `payment_amount: contracted_payment, payment_strategy: :reamortize`, which re-sizes off the *actual* balance at a rate move. Fixed loans: byte-identical, asserted |
 | 2 | Two PRs | fork only | Upstream never had a Schedule-tab chart to retire, so there is no PR-B upstream. Fork PR-B is §9 |
 | 3 | G6 accessibility is an acceptance criterion | PR-2 | keyboard traversal + `<details>` table + pointer-silent live region in the controller and component |
 | 4 | Period governs the x-domain; `Period` untouched | PR-2 | `Loan::PayoffChart` takes `period:`; payload gains `domain_start` / `domain_end`; the actual series is queried `period.start_date → as_of` only and clipped to `>= origination_date`. **More important upstream than on the fork:** upstream has no loan-scoped "All" (#17 is fork-only), so without the clip the actual series carries a flat-zero lead-in from the family's oldest entry |
-| 5 | Projected Payoff / Interest Saved cards sit beside the form in the chart card | PR-2 | rendered by `UI::Account::Chart`, inside the `chart_details` Turbo frame |
+| 5 | Projected Payoff / Interest Saved cards sit beside the chart in the chart card | PR-2 | rendered by `UI::Account::Chart`, inside the `chart_details` Turbo frame; they compare the projection from the recorded balance with the schedule. No what-if form in this tranche (decision 10) |
 | 6 | One reference date | PR-2 | `AccountsController#show` sets `@as_of = Date.current`; `loan_payoff_chart(account, as_of: @as_of, period: @period)`; the Schedule tab's `today` becomes `@as_of` |
 | 7 | Evolve, do not fork | PR-2 | the candidate's `loan_payoff_chart_controller.js` and `Loan::PayoffChart` are extended in place; **no rename** (that instruction was for the fork's file and is void here) |
 | 8 | Unrecognised non-blank provider `rate_type` is treated as variable | PR-1 | `Loan::AMORTIZABLE_RATE_TYPES` / `#variable_rate_type?` / `#amortizable?` in `app/models/loan.rb`; regression through `PlaidAccount::Liabilities::MortgageProcessor` |
 | 9 | "Current Monthly Payment" card and rate-change table read the schedule's repayment | fork only | the candidate has neither `current_minimum_payment` nor `UI::Loan::RateChangeTable`; nothing to align upstream. §9 |
+| 10 | Extra-payment what-if descoped from this tranche (owner, 2026-09-08) | PR-2 removes it; fork keeps its own | Remove from the PR-2 branch: `Loan::RepaymentPlan`, the `accelerated` series and `accelerated_payoff_date`, the simulator's `extra_for:` hook, `AccountsController#loan_extra_payment_params` and `MAX_EXTRA_PAYMENT`, the form, its locale keys and its tests. **The projection still reflects extra payments already made**, because it starts from the recorded balance; only *future* hypothetical extras are out. The fork's Schedule-tab what-if form and cards stay on the fork until a later tranche ships it upstream |
 
 ## 4. Where to develop
 
@@ -152,12 +154,22 @@ The candidate's commit 1 as reviewed on #109, plus decision 8. Nothing else. Do 
 ### 7.1 Content
 
 The candidate's commit 2 (#111) **moved from the Schedule tab to the account page** plus the #100
-delta. The Schedule tab keeps only what #2984 and PR-1 put there; the chart, form, legend,
-description and projection cards all live in the account chart card.
+delta, **minus the extra-payment what-if** (decision 10). The Schedule tab keeps only what
+#2984 and PR-1 put there; the chart, legend, description and the two projection cards live in the
+account chart card.
+
+Remove the what-if from the branch rather than leaving it dormant, so PR-2 reviews as what it
+ships: `Loan::RepaymentPlan`, `PayoffProjection#repayment_plan` and its `extra_payment:` keyword,
+`Simulator`'s `extra_for:` hook and `extra_repayments_in`, `PayoffChart#accelerated`,
+`AccountsController#loan_extra_payment_params` / `MAX_EXTRA_PAYMENT`, the form partial, the
+`extra_payment.*` and `accelerated` locale keys, and the tests that cover them in
+`test/models/loan/payoff_projection_test.rb`, `test/models/loan/payoff_chart_test.rb`,
+`test/controllers/loans_controller_test.rb` and `test/system/loan_payoff_chart_test.rb`. Keep the
+removal as one commit on the branch (`git revert`-able) so the next tranche starts from it.
 
 ### 7.2 Payload contract — `Loan::PayoffChart`
 
-`Loan::PayoffChart.new(loan, as_of:, period:, extra_payment: nil).payload` returns `nil` when the
+`Loan::PayoffChart.new(loan, as_of:, period:).payload` returns `nil` when the
 schedule has no payments, otherwise:
 
 | Key | Type | Source | Notes |
@@ -165,12 +177,11 @@ schedule has no payments, otherwise:
 | `today` | ISO date | `as_of` | |
 | `currency` | ISO code | `loan.account.currency` | the actual series is queried in this currency, so no FX applies |
 | `domain_start` | ISO date | `period.key == "all_time"` → `loan.origination_date`, else `period.start_date` | |
-| `domain_end` | ISO date | `all_time` → latest of scheduled / projected / accelerated payoff dates, `as_of` fallback; else `period.end_date` | absorbs #102 without touching `Period` |
+| `domain_end` | ISO date | `all_time` → the later of the scheduled and projected payoff dates, `as_of` fallback; else `period.end_date` | absorbs #102 without touching `Period` |
 | `actual` | `[{date, balance}]` | `loan.account.balance_series(period: Period.custom(start_date: domain_start, end_date: as_of)).values`, mapped to `value.amount.to_f`, **dropping points dated before `origination_date`** | **new**; solid green. Never queried past `as_of`, so the LOCF flat line measured on #102 cannot occur |
 | `scheduled` | `[{date, balance}]` | existing: origination point + `schedule.payments` | red dashed, full term |
-| `projected` | `[{date, balance}]` | existing: `(as_of, current balance)` + `projection.payments` | green dashed; drawn whenever `applicable?`, **including when it overlaps `scheduled`** (on-track is a valid picture) |
-| `accelerated` | `[{date, balance}]` | existing; `[]` unless a valid extra payment changed count or interest | blue dashed |
-| `scheduled_payoff_date`, `projected_payoff_date`, `accelerated_payoff_date` | ISO or null | existing | |
+| `projected` | `[{date, balance}]` | existing: `(as_of, current balance)` + `projection.payments` | green dashed; drawn whenever `applicable?`, **including when it overlaps `scheduled`** (on-track is a valid picture). Starts from the recorded balance, so extra payments already made are in it |
+| `scheduled_payoff_date`, `projected_payoff_date` | ISO or null | existing; `accelerated_payoff_date` removed | |
 | `labels`, `aria_description` | strings | existing, keys moved to `UI.account.chart.loan.*` | `aria_description` names every present payoff date (existing) |
 
 Period semantics (decision 4): under any period other than `all_time` the forward series are
@@ -182,16 +193,17 @@ at least one point inside `[domain_start, domain_end]`, which the payload report
 
 | File (candidate) | Change | Serves |
 | --- | --- | --- |
-| `app/models/loan/simulator.rb` | `PAYMENT_STRATEGIES` gains `:scheduled`; `payment_amount:` accepts a callable `(index:, balance:, sizing_rate:, remaining_payments:) -> BigDecimal` called every period under `:scheduled`; scalar behaviour unchanged for `:hold` / `:reamortize` | D1 |
-| `app/models/loan/payoff_projection.rb` | `simulation` uses `payment_strategy: :scheduled` with the lambda in §3 row 1; `contracted_payment` stays for `applicable?` | D1 |
-| `app/models/loan/payoff_chart.rb` | `period:` keyword; `actual`, `domain_start`, `domain_end`, `visible`; labels re-keyed | D4 |
-| `app/controllers/accounts_controller.rb` | `@as_of = Date.current` in `show`; `loan_payoff_chart(account, as_of:, period:)` memoised per request; `loan_extra_payment_params` unchanged | D6 |
-| `app/components/UI/account_page.rb` / `.html.erb` | accept and pass `loan_chart:` and `extra_payment:` to `UI::Account::Chart` | D5 |
-| `app/components/UI/account/chart.rb` | `loan_chart`, `extra_payment` attrs; `loan?` predicate; `period_picker_extra_params` merges `extra_payment[amount]` / `[frequency]` into the existing `chart_view` params | D4, D5 |
-| `app/components/UI/account/chart.html.erb` | inside `chart_details`: `if loan_chart` → form (hidden `period` and `tab` fields, explicit submit, Clear link, approximation and variable-rate notices), the two projection cards, the `loan-payoff-chart` div (`privacy-sensitive`), conditional legend, `<details>` table, `sr-only` description; `else` → the existing `time-series-chart` block **unchanged** | D3, D5 |
+| `app/models/loan/simulator.rb` | `PAYMENT_STRATEGIES` gains `:scheduled`; `payment_amount:` accepts a callable `(index:, balance:, sizing_rate:, remaining_payments:) -> BigDecimal` called every period under `:scheduled`; scalar behaviour unchanged for `:hold` / `:reamortize`; remove `extra_for:` and `extra_repayments_in` (added by #111) | D1, D10 |
+| `app/models/loan/payoff_projection.rb` | `simulation` uses `payment_strategy: :scheduled` with the lambda in §3 row 1; `contracted_payment` stays for `applicable?`; remove `extra_payment:` and `repayment_plan` | D1, D10 |
+| `app/models/loan/payoff_chart.rb` | `period:` keyword; `actual`, `domain_start`, `domain_end`, `visible`; labels re-keyed; remove `extra_payment:`, `accelerated`, `accelerated_payoff_date` and the `aria_accelerated` sentence | D4, D10 |
+| `app/models/loan/repayment_plan.rb` | delete | D10 |
+| `app/controllers/accounts_controller.rb` | `@as_of = Date.current` in `show`; `loan_payoff_chart(account, as_of:, period:)` memoised per request; remove `loan_extra_payment_params` and `MAX_EXTRA_PAYMENT` | D6, D10 |
+| `app/components/UI/account_page.rb` / `.html.erb` | accept and pass `loan_chart:` to `UI::Account::Chart` | D5 |
+| `app/components/UI/account/chart.rb` | `loan_chart` attr; `loan?` predicate; the period picker's `extra_params` are unchanged (no what-if state to carry) | D5 |
+| `app/components/UI/account/chart.html.erb` | inside `chart_details`: `if loan_chart` → the two projection cards (Projected Payoff with months sooner/later; Interest Saved or Additional Interest, both comparing `projection` with `schedule`), the variable-rate notice, the `loan-payoff-chart` div (`privacy-sensitive`), conditional legend, `<details>` table, `sr-only` description; `else` → the existing `time-series-chart` block **unchanged** | D3, D5 |
 | `app/javascript/controllers/loan_payoff_chart_controller.js` | `actual` series (solid, area fill, hover split on this series only); x-domain from `domain_start` / `domain_end` instead of data extent; functional tokens `--color-success` / `--color-destructive` / `--color-info` / `--color-primary` / `--color-secondary` in `_token` calls instead of raw palette names; interval markers; keyboard traversal (`tabindex`, Arrow / Home / End / Escape) ported from this fork's `main` controller; `aria-live` on the tooltip set only while keyboard traversal is active; `aria-describedby` → the `<details>` table id | D3, D4 |
 | `app/views/loans/tabs/_schedule.html.erb` | remove the chart div, form, legend and `sr-only` description that #111 added; keep #2984/PR-1 content | D5 |
-| `config/locales/views/loans/en.yml`, `config/locales/components/en.yml` (or wherever `UI.account.chart.*` lives on the candidate) | move `loans.tabs.schedule.chart.*` and `extra_payment.*` under `UI.account.chart.loan.*`; add `view_as_table`, `notice_not_converged` | i18n |
+| `config/locales/views/loans/en.yml`, `config/locales/components/en.yml` (or wherever `UI.account.chart.*` lives on the candidate) | move `loans.tabs.schedule.chart.*` under `UI.account.chart.loan.*`; delete `extra_payment.*`, `accelerated` and `aria_accelerated`; add `view_as_table`, `notice_not_converged` | i18n, D10 |
 
 Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 `Balance::ChartSeriesBuilder`, `shared/_trend_change`, `shared/_sparkline`.
@@ -203,14 +215,14 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 | 1 | `test/components/UI/account/chart_test.rb` | a loan account with a schedule renders `data-controller="loan-payoff-chart"` and no `time-series-chart`; a depository renders `time-series-chart` and no loan controller |
 | 2 | `test/models/loan/payoff_chart_test.rb` | `scheduled.first == (origination_date, principal)`; every `scheduled` balance equals `schedule.payments` for that date; last date is `schedule.payoff_date` |
 | 3 | same | `actual.last.date == as_of`; no `actual` date after `as_of` or before `origination_date`; `currency == account.currency` |
-| 4 | same | `projected` present with no extra and no divergence; absent when `applicable?` is false; `accelerated` only with a valid extra; `visible` matches |
-| 5 | `test/models/loan/payoff_projection_test.rb` | (a) variable loan, recorded rate rise, balance **ahead**: every projected `payment_amount` equals the schedule's for that date and `payoff_date < schedule.payoff_date`; (b) a **future** recorded change moves the projected repayment on its first sized payment by the schedule's amount; (c) fixed loan: payments byte-identical to the `:hold` result |
+| 4 | same | `projected` present with no divergence; absent when `applicable?` is false; the payload has no `accelerated` key; `visible` matches |
+| 5 | `test/models/loan/payoff_projection_test.rb` | (a) variable loan, recorded rate rise, balance **ahead**: every projected `payment_amount` equals the schedule's for that date and `payoff_date < schedule.payoff_date`; (b) a **future** recorded change moves the projected repayment on its first sized payment by the schedule's amount; (c) fixed loan: payments byte-identical to the `:hold` result; (d) fixed loan whose recorded balance is below the scheduled balance for `as_of` (extra payments already made): `payoff_date < schedule.payoff_date` and `months_saved > 0`, with no extra-payment input anywhere |
 | 6 | `test/models/loan/simulator_test.rb` | `:scheduled` calls the callable once per period with the running balance; `:hold` and `:reamortize` unchanged |
 | 7 | `test/models/loan/payoff_chart_test.rb` | `domain_end` is the later payoff under `all_time`, `period.end_date` under `last_30_days`; `domain_start` is origination under `all_time` |
-| 8 | `test/controllers/accounts_controller_test.rb` | `GET show` with `extra_payment[...]` and header `Turbo-Frame: <dom_id(account, :chart_details)>` renders the accelerated series and both cards inside that frame; period-picker hrefs carry the extra-payment params; the form has hidden `period` and `tab` inputs |
-| 9 | `test/system/loan_payoff_chart_test.rb` (exists on #111 head; retarget) | `visit account_path(account)` (no tab); four `path[data-series]` with resolved stroke in light and dark; `<details>` table row count equals the payload; ArrowRight moves the focused point and updates the tooltip; pointer movement does not change the live region |
+| 8 | `test/controllers/accounts_controller_test.rb` | `GET show` with header `Turbo-Frame: <dom_id(account, :chart_details)>` renders the chart mount and both cards inside that frame; `GET show` with a stray `extra_payment[...]` parameter renders identically (nothing reads it) |
+| 9 | `test/system/loan_payoff_chart_test.rb` (exists on #111 head; retarget) | `visit account_path(account)` (no tab); three `path[data-series]` (`actual`, `scheduled`, `projected`) with resolved stroke in light and dark; `<details>` table row count equals the payload; ArrowRight moves the focused point and updates the tooltip; pointer movement does not change the live region |
 | 10 | `test/models/plaid_account/liabilities/mortgage_processor_test.rb` (PR-1) | see §6.2 |
-| 11 | Observed to fail first (§17.5.2), captured in the PR body: drop the origination point (2); remove `extra_params` from the picker (8); revert `:scheduled` to `:reamortize` (5a fails on the payoff date); revert decision 8 (10) |
+| 11 | Observed to fail first (§17.5.2), captured in the PR body: drop the origination point (2); remove the cards from the frame (8); revert `:scheduled` to `:reamortize` (5a fails on the payoff date); revert decision 8 (10) |
 
 ### 7.5 Degradation matrix (assert each in 4 or 9)
 
@@ -218,7 +230,7 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 | --- | --- |
 | Not schedulable (no rate, no term, blank rate type) | the existing single-series chart, unchanged |
 | Provider rate type outside the known set, non-blank | full chart (PR-1) |
-| Balance zero | actual + scheduled; no form, no forward lines |
+| Balance zero | actual + scheduled; no forward line |
 | Scheduled repayment does not cover interest / not converged | actual + scheduled; `notice_not_converged` beside the chart |
 | No divergence | all series; projected overlaps scheduled |
 | Originated today, or no balance rows yet | valid render, no exception |
@@ -227,19 +239,20 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 ### 7.6 Exit criteria
 
 - [ ] #111's review findings verified on the head against the 2026-09-08 15:57 review comment:
-      variable projection no longer freezes one repayment (superseded by `:scheduled`); extras
-      accrue on the period's opening balance; `total_cost` includes extras; origination point;
-      equal-count suppression removed; accelerated payoff in `aria_description`;
-      `privacy-sensitive`; theme redraw; payload built in the controller; browser test present
-- [ ] The one declined finding (payoff recorded on the payment date when an extra clears the
-      balance) stated in the PR body as a monthly-accrual property
+      variable projection no longer freezes one repayment (superseded by `:scheduled`);
+      origination point; `privacy-sensitive`; theme redraw; payload built in the controller;
+      browser test present. The findings about extras (accrual timing, `total_cost`,
+      equal-count suppression, the accelerated `aria_description`, the declined extra-clears-
+      balance date) are moot once the what-if is removed; verify none of that code remains
+- [ ] `git grep -n 'extra_payment\|RepaymentPlan\|accelerated\|extra_for'` on the branch returns
+      nothing outside this brief
 - [ ] Codacy's two critical / three high findings read in the Codacy UI, dispositioned, gate green
 - [ ] G6 evidence in the PR body: screen-reader transcript (tool and version named), keyboard-only
       walkthrough, greyscale and deuteranopia screenshots
 - [ ] Non-loan account chart render asserted unchanged (test 1)
-- [ ] Performance: added server time on `show` for a 360-month schedule with an extra payment
-      measured and recorded; proposed budget under 150 ms p95. Upstream has no persisted cache,
-      so every loan page load runs the schedule and two projections; if the budget fails, memoise
+- [ ] Performance: added server time on `show` for a 360-month schedule measured and recorded;
+      proposed budget under 150 ms p95. Upstream has no persisted cache, so every loan page load
+      runs the schedule and one projection; if the budget fails, memoise
       `Loan#amortization_schedule` per request (already) and add `Rails.cache` keyed on
       `loan.updated_at` + `account.balance` before opening
 - [ ] `@coderabbitai full review` on the final head addressed
@@ -303,8 +316,10 @@ After PR-1 and PR-2 merge upstream and the fork syncs `upstream/main` (expect co
 and the loan locales between the fork's engine and the ported one; that reconciliation is its
 own PR and its own cost):
 
-- Remove the fork's Schedule-tab chart block, form, legend, `sr-only` description and the two
-  projection cards from `_schedule.html.erb`; delete `Loan#payoff_chart_payload`,
+- Remove the fork's Schedule-tab chart block, legend and `sr-only` description from
+  `_schedule.html.erb`. **Keep** the fork's extra-payment form and its two projection cards on
+  the Schedule tab until the extra-payment tranche ships upstream (decision 10); they drive
+  figures, not the retired chart. Delete `Loan#payoff_chart_payload`,
   `loans.tabs.schedule.chart.*` keys in all locales, `test/system/loan_payoff_chart_test.rb`'s
   fork version and the 13 `payoff_chart_payload` cases in `test/models/loan_test.rb`
 - Decision 9: `Loan#current_minimum_payment(as_of:)` returns
@@ -319,9 +334,9 @@ own PR and its own cost):
 
 ## Appendix A — replacement body for we-promise/sure#3332
 
-The issue as filed says future extra payments and variable rates are out of scope and names the
-Schedule tab. PR-2 delivers all three lines on the account page, so the issue must say so
-**before** the PR opens. The tooling in this session could not edit the upstream repository;
+The issue as filed says variable rates are out of scope and names the Schedule tab. PR-2
+delivers three lines on the account page with variable rates via #3295, so the issue must say so
+**before** the PR opens. Future extra payments stay out of scope in this tranche, as filed. The tooling in this session could not edit the upstream repository;
 paste the following as the new body (you are its author).
 
 ```markdown
@@ -342,18 +357,17 @@ leaving every other account type untouched, carrying:
 | Actual | recorded balances, origination → today | solid |
 | Projected | from today's actual balance, paying the schedule's current repayment | dashed |
 | Scheduled | the amortisation schedule, origination → contracted payoff | dashed |
-| With extra payments | the projection under a user-entered weekly or monthly extra repayment; only when one is entered | dashed |
 
 Line style carries fact-versus-forecast; colour is secondary, so the chart reads in greyscale
 and under colour-vision deficiency.
 
 - A loan ahead of schedule projects an **earlier** payoff; the projection keeps paying the
   schedule's repayment rather than re-amortising the lower balance to maturity
-- Extra repayments are applied on real dates (`RecurringTransaction::Schedule`), not as a
-  monthly equivalent
+- Extra payments already made are reflected because the projection starts from the recorded
+  balance; modelling *future* extra payments is a later change
 - The period picker governs the x-axis; forward series appear under "All", which for a loan runs
   origination → later payoff date. `Period` is not changed
-- Projected Payoff and Interest Saved cards sit beside the extra-payment form in the chart card
+- Projected Payoff and Interest Saved cards sit beside the chart, comparing the projection with the schedule
 - Keyboard traversal, a "view as table" alternative associated to the SVG, and a live region
   that is silent under pointer movement
 - Degrades to today's chart for a loan with no schedule
@@ -361,13 +375,14 @@ and under colour-vision deficiency.
 ## Dependencies
 
 Built on #2984's `Loan::AmortizationSchedule` API. Depends on #3295 for the simulator that
-applies extra repayments and holds or follows a payment; the variable-rate half of #3295 is
-what makes "the schedule's current repayment" differ from the contracted one.
+runs from an arbitrary balance and holds or follows a payment across recorded rate changes; the
+variable-rate half of #3295 is what makes "the schedule's current repayment" differ from the
+contracted one.
 
 ## Out of scope
 
-Offset accounts, saved scenarios, daily accrual, a persisted schedule cache, and the interest-
-versus-principal composition chart.
+Modelling future extra payments (a later tranche), offset accounts, saved scenarios, daily
+accrual, a persisted schedule cache, and the interest-versus-principal composition chart.
 ```
 
 ## Appendix B — vocabulary: fork `main` → delivery branch
@@ -378,12 +393,12 @@ versus-principal composition chart.
 | `loan.amortizations`, the read guard, `LoanAmortizationRebuildJob`, "enqueue on show" | do not exist; nothing to enqueue |
 | `Loan#payoff_chart_payload` → rename to `balance_chart_payload` | `Loan::PayoffChart#payload`; keep the name |
 | `loan_payoff_chart_controller.js` → rename to `loan_balance_chart_controller.js` | keep the name; extend in place |
-| `Loan#payoff_projection` (memoised, signature-keyed) | `Loan#payoff_projection(as_of:, extra_payment:)`, unmemoised |
-| `Loan#payoff_projection_with_extra(amount:, frequency:)` + monthly equivalent | `extra_payment: { amount:, frequency: }` → `Loan::RepaymentPlan`, real dates, weekly and monthly only (no yearly) |
+| `Loan#payoff_projection` (memoised, signature-keyed) | `Loan#payoff_projection(as_of:)`, unmemoised (`extra_payment:` removed in PR-2) |
+| `Loan#payoff_projection_with_extra(amount:, frequency:)` + monthly equivalent | not in this tranche (decision 10). The fork's form stays on the fork's Schedule tab; `Loan::RepaymentPlan` (real dates) is the shape to reuse when the what-if ships upstream |
 | `PayoffProjection` `:hold` / `:reamortize` with `payment_amount_for` lambda | `Simulator` `payment_amount:` scalar seed + `:reamortize` / `:hold`; PR-2 adds `:scheduled` with a callable |
 | `Loan#start_date || account_opening_anchor_date` | `Loan#origination_date` (`start_date` → `first_valuation.date` → opening anchor) |
 | `Loan#current_minimum_payment`, `Loan#interest_bearing_balance`, `UI::Loan::RateChangeTable` | do not exist (fork PR-B only) |
-| `AccountsController#extra_payment_params` (yearly allowed) | `#loan_extra_payment_params` (weekly, monthly; capped at 1,000,000) |
+| `AccountsController#extra_payment_params` (yearly allowed) | removed in PR-2 (decision 10) |
 | `Account::Chartable#chart_period` loan-scoped All (#17) | does not exist; the payload's `domain_start` and the origination clip do the job |
 | `loans.tabs.schedule.chart.*` keys | move to `UI.account.chart.loan.*` |
 | `test/system/loan_payoff_chart_test.rb` (reads the data attribute) | the #111 version asserts painted SVG paths by `data-series`; keep that shape |
