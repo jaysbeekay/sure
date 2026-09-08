@@ -33,7 +33,10 @@ class Loan
   # takes effect from the following period. That is a property of monthly
   # accrual, not an approximation to be corrected here.
   class Simulator
-    # Guards a runaway schedule: a hundred years of monthly payments.
+    # Guards a runaway schedule: a hundred years of monthly payments. Refused
+    # outright rather than truncated -- silently walking the first 1,200 of a
+    # longer schedule returns totals and a payoff date describing a loan that
+    # was never asked for, and loses the remaining balance without saying so.
     MAX_PERIODS = 1200
 
     PAYMENT_STRATEGIES = %i[reamortize hold].freeze
@@ -60,6 +63,9 @@ class Loan
       @settle_at_schedule_end = settle_at_schedule_end
 
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
+      if @payment_schedule.length > MAX_PERIODS
+        raise ArgumentError, "payment schedule exceeds #{MAX_PERIODS} periods"
+      end
       unless PAYMENT_STRATEGIES.include?(@payment_strategy)
         raise ArgumentError, "unsupported payment strategy: #{@payment_strategy.inspect}"
       end
@@ -70,9 +76,7 @@ class Loan
       payments = []
       payment = nil
       previous_sizing_rate = nil
-      periods = [ @payment_schedule.length, MAX_PERIODS ].min
-
-      (0...periods).each do |index|
+      (0...@payment_schedule.length).each do |index|
         break if balance <= 0
 
         payment_date = @payment_schedule[index]

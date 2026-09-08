@@ -123,7 +123,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
           rate_changes: [
             { effective_date: "2026-04-01", rate: "7.25" },
             { effective_date: "2026-10-01", rate: "6.5" },
-            { effective_date: "", rate: "9" }
+            { effective_date: "", rate: "" }
           ]
         }
       }
@@ -131,7 +131,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     @account.loan.reload
     assert_equal({ "2026-04-01" => "7.25", "2026-10-01" => "6.5" }, @account.loan.variable_rate_schedule,
-      "the blank row must be dropped rather than persisted or raising")
+      "the wholly blank sentinel row must be dropped rather than persisted or raising")
     assert_equal Date.new(2024, 3, 15), @account.loan.start_date
     assert_equal Date.new(2024, 3, 15), @account.loan.origination_date
   end
@@ -153,5 +153,42 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_match "re-amortises at each recorded change", response.body
     assert_match I18n.t("loans.tabs.schedule.opening_payment"), response.body,
       "a re-amortising schedule must not label its first payment as THE monthly payment"
+  end
+
+  # A row with one half filled in is a typo, not a blank. Dropping it silently
+  # loses what the user typed between submit and redisplay and never tells them
+  # which row went.
+  test "a half-filled rate change is rejected rather than silently dropped" do
+    @account.loan.update!(rate_type: "variable")
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: {
+        id: @account.loan.id, rate_type: "variable",
+        rate_changes: [ { effective_date: "", rate: "9" } ]
+      } }
+    }
+
+    assert_empty @account.loan.reload.variable_rate_schedule
+    loan = @account.loan
+    loan.rate_changes = [ { effective_date: "", rate: "9" } ]
+    assert_not loan.valid?
+    assert_equal [ { effective_date: "", rate: "9" } ], loan.invalid_rate_changes
+    assert_includes loan.rate_change_rows, { effective_date: "", rate: "9" },
+      "the typed row comes back so the form can redisplay it"
+  end
+
+  # Removing every row must clear the schedule. Without the form's blank
+  # sentinel the PATCH carries no rate_changes key at all, nested assignment
+  # never calls the writer, and the removed rows stay persisted.
+  test "submitting only the blank sentinel clears the schedule" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: {
+        id: @account.loan.id, rate_type: "variable", rate_changes: [ { effective_date: "", rate: "" } ]
+      } }
+    }
+
+    assert_empty @account.loan.reload.variable_rate_schedule
   end
 end

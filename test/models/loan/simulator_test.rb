@@ -130,6 +130,21 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
     end
   end
 
+
+  # Truncating a longer schedule would return totals and a payoff date for a
+  # loan nobody asked for, and drop the remaining balance without saying so.
+  test "refuses a schedule longer than it will walk rather than truncating it" do
+    over = (1..(Loan::Simulator::MAX_PERIODS + 1)).map { |n| Date.new(2026, 1, 1) >> n }
+
+    error = assert_raises(ArgumentError) do
+      Loan::Simulator.new(
+        starting_balance: 100_000, accrual_start_date: Date.new(2026, 1, 1),
+        payment_schedule: over, accrual_rate_for: ->(_d) { 5 }, currency_precision: 2
+      )
+    end
+    assert_match(/exceeds/, error.message)
+  end
+
   private
     def run_simulation(starting_balance:, rate:, **overrides)
       Loan::Simulator.new(

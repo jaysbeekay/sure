@@ -124,13 +124,58 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal({ "2026-05-01" => "7.5" }, loan.variable_rate_schedule)
   end
 
+  # The earlier version of this test never created a valuation, so
+  # `first_valuation` was nil and the first assertion compared the opening
+  # anchor with itself -- it passed without exercising the branch it named.
   test "origination prefers a recorded start date over the account's first valuation" do
     loan = build_loan(rate_type: "fixed")
-    assert_equal loan.account.first_valuation&.date || loan.account.opening_anchor_date,
-      loan.origination_date
+    loan.account.entries.create!(
+      name: "Opening balance", amount: 500_000, currency: "USD",
+      date: Date.new(2022, 6, 1), entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan.account.reload
+
+    assert_equal Date.new(2022, 6, 1), loan.reload.origination_date,
+      "with no start_date, origination is the account's first valuation"
 
     loan.update!(start_date: Date.new(2020, 3, 15))
-    assert_equal Date.new(2020, 3, 15), loan.origination_date
+    assert_equal Date.new(2020, 3, 15), loan.origination_date,
+      "a recorded start_date outranks the first valuation"
+  end
+
+
+  # `periodic_payment` used to re-derive the annuity from the loan's base rate.
+  # A change effective ON the first payment date already sizes that payment, so
+  # the card quoted a rate for a payment the borrower will never make.
+  test "the opening payment reflects a rate change effective on the first payment date" do
+    start_date = Date.new(2026, 1, 1)
+    first_payment = start_date >> 1
+
+    base = build_loan(rate_type: "variable", term_months: 24, start_date: start_date)
+    changed = build_loan(rate_type: "variable", term_months: 24, start_date: start_date,
+                         variable_rate_schedule: { first_payment.iso8601 => "18.0" })
+
+    assert_equal changed.amortization_schedule.payments.first.payment,
+      changed.amortization_schedule.periodic_payment,
+      "the quoted opening payment must be the payment actually scheduled"
+    assert_operator changed.amortization_schedule.periodic_payment.amount, :>,
+      base.amortization_schedule.periodic_payment.amount
+  end
+
+
+  # `first_valuation_amount` is decimal(19,4) against two-decimal USD, so an
+  # opening balance can carry sub-unit precision the schedule cannot represent.
+  # Left unrounded it vanished in the first period and the principal portions
+  # summed to less than the loan.
+  test "an opening balance with sub-unit precision is still repaid exactly" do
+    schedule = Loan::AmortizationSchedule.new(
+      principal: BigDecimal("1000.1234"), annual_rate: 0, term_months: 4,
+      start_date: Date.new(2026, 1, 1), currency: "USD"
+    )
+    repaid = schedule.payments.sum(BigDecimal("0")) { |p| p.principal.amount }
+
+    assert_equal schedule.principal, repaid
+    assert_equal BigDecimal("1000.12"), schedule.principal, "rounded to the currency at the door"
   end
 
   private

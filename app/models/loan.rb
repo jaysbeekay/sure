@@ -59,6 +59,15 @@ class Loan < ApplicationRecord
       original_balance.amount.positive?
   end
 
+  private def rate_changes_must_be_parseable
+    Array(invalid_rate_changes).each do |row|
+      errors.add(:base, I18n.t("activerecord.errors.models.loan.invalid_rate_change",
+                               default: "Rate change rows need both an effective date and a rate."))
+      break
+    end
+  end
+  public
+
   # Whether this loan's rate can move over its life. The one place the answer
   # is defined -- callers must not compare rate_type to a string.
   def variable_rate_type?
@@ -79,27 +88,62 @@ class Loan < ApplicationRecord
     rate.nil? ? interest_rate : BigDecimal(rate.to_s)
   end
 
+  # Rows the form submitted that could not be parsed. Kept so the save can be
+  # rejected and the form re-rendered with what the user actually typed --
+  # dropping them silently loses a typo'd row between submit and redisplay,
+  # and the user is never told which one went.
+  attr_reader :invalid_rate_changes
+
+  validate :rate_changes_must_be_parseable
+
   # Assembles variable_rate_schedule from the form's rows.
   #
   # Keyed by effective date, so re-entering a date replaces that row rather
   # than adding a second one for the same day -- two rates in force on one date
   # is not a state the schedule can represent, and silently keeping both would
   # make which one wins depend on hash ordering.
+  #
+  # A submission always carries at least the form's blank sentinel row, so
+  # receiving only blanks means "the user removed them all" and correctly
+  # clears the schedule. Absent the sentinel, removing the last row would send
+  # no `rate_changes` key at all and nested assignment would never call this,
+  # leaving the removed rows persisted.
   def rate_changes=(rows)
-    self.variable_rate_schedule = Array(rows).each_with_object({}) do |row, acc|
+    invalid = []
+
+    parsed = Array(rows).each_with_object({}) do |row, acc|
+      next unless row.respond_to?(:[]) && !row.is_a?(String)
+
       date = row[:effective_date].presence || row["effective_date"].presence
       rate = row[:rate].presence || row["rate"].presence
-      next if date.blank? || rate.blank?
+      next if date.blank? && rate.blank?
 
-      acc[Date.parse(date.to_s).iso8601] = BigDecimal(rate.to_s).to_s("F")
-    rescue ArgumentError, Date::Error
-      next
+      begin
+        raise ArgumentError, "incomplete" if date.blank? || rate.blank?
+
+        acc[Date.parse(date.to_s).iso8601] = BigDecimal(rate.to_s).to_s("F")
+      rescue ArgumentError, TypeError, Date::Error
+        invalid << { effective_date: date.to_s, rate: rate.to_s }
+      end
     end
+
+    @invalid_rate_changes = invalid
+    self.variable_rate_schedule = parsed
   end
 
   # Form rows, in a shape the form can render without parsing anything.
+  #
+  # Empty for a loan that is not variable: switching a loan to fixed leaves its
+  # recorded changes in the column, and `current_variable_rate` ignores them,
+  # so showing them would offer the user rows that do nothing. They are
+  # retained rather than deleted so switching back does not lose them.
+  #
+  # Invalid rows come back too, so a rejected save redisplays what was typed.
   def rate_change_rows
-    variable_rates.map { |date, rate| { effective_date: date.to_s, rate: rate.to_s } }
+    return [] unless variable_rate_type?
+
+    variable_rates.map { |date, rate| { effective_date: date.to_s, rate: rate.to_s } } +
+      Array(invalid_rate_changes)
   end
 
   def amortization_schedule

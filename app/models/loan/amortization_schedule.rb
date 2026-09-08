@@ -38,11 +38,17 @@ class Loan::AmortizationSchedule
   # simulator. Omitted, the schedule runs at one rate for its whole life, which
   # is what a fixed loan does.
   def initialize(principal:, annual_rate:, term_months:, start_date:, currency:, rate_resolver: nil)
-    @principal = BigDecimal(principal.to_s)
+    @currency = currency
+    # Rounded to the currency at the door. A balance carrying more fractional
+    # units than the currency has -- `first_valuation_amount` is decimal(19,4)
+    # against two-decimal USD -- otherwise loses its residue in the first
+    # period's rounding, and the principal portions then sum to less than the
+    # loan. A schedule is denominated in its currency; sub-unit precision in
+    # the opening balance is not a thing it can represent.
+    @principal = BigDecimal(principal.to_s).round(currency_precision)
     @annual_rate = BigDecimal(annual_rate.to_s)
     @term_months = term_months.to_i
     @start_date = start_date
-    @currency = currency
     @rate_resolver = rate_resolver
   end
 
@@ -76,16 +82,12 @@ class Loan::AmortizationSchedule
   # differs too -- read them off #payments when the exact figures matter, and
   # see #re_amortising? before presenting this as "the" monthly payment.
   def periodic_payment
-    return money(0) unless schedulable?
-
-    money(
-      Loan::AmortizationMath.level_payment(
-        balance: principal,
-        monthly_rate: monthly_rate,
-        remaining_payments: term_months,
-        currency_precision: currency_precision
-      )
-    )
+    # Read off the first simulated payment rather than re-deriving it from the
+    # base rate. A rate change effective ON the first payment date already
+    # sizes that payment, and re-deriving would quote the rate the loan was
+    # written at for a payment the borrower will never make. For a fixed loan
+    # the two are the same number.
+    payments.first&.payment || money(0)
   end
 
   # What the loan costs in interest over its whole life. Sits slightly above
