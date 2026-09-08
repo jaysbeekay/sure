@@ -20,6 +20,10 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
   # would be made from, so these are the rows that must carry evidence.
   MET_STATES = /\*\*(Approved|Signed)\b/
 
+  # What "cite the artefact" means mechanically: a repository path, an issue or
+  # PR number, or a link.
+  ARTEFACT_REFERENCE = %r{(?:docs|test|app|config|lib)/[\w/.-]*[\w]|\#\d+|https?://}
+
   setup do
     lines = MATRIX.readlines
     @rows = lines.select { |line| line.match?(/^\| \*\*G\d/) }
@@ -74,6 +78,13 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
       assert_operator evidence.length, :>, 20,
         "#{gate} is recorded as met but its evidence column says only #{evidence.inspect} -- " \
         "cite the artefact (process rule 3)"
+      # Length was a proxy for "cites something", and a bad one: twenty-one
+      # characters of confident prose passed it. Process rule 3 asks for the
+      # artefact, so ask for the artefact -- a path, an issue or PR number, or a
+      # link (CodeRabbit, #95).
+      assert_match ARTEFACT_REFERENCE, evidence,
+        "#{gate} is recorded as met, but its evidence names no artefact: #{evidence.inspect}. " \
+        "Cite a path, an issue or a link, not a description of one"
     end
   end
 
@@ -95,6 +106,12 @@ class Loan::ReleaseGatesTest < ActiveSupport::TestCase
       "the exclusion is the whole distinction between G2a and G2b")
 
     assert_match(/\*\*Open\*\*/, open_half, "G2b is not signed and must not read as though it were")
+    # Pinning only "open, no evidence" would let a rename quietly move G2b onto
+    # some other scope while the test stayed green -- and the flattening this
+    # test exists to prevent would have happened in the row it was watching
+    # (CodeRabbit, #95).
+    assert_match(/reconciliation.*offset/i, open_half,
+      "G2b must remain the OFFSET reconciliation half -- that is the whole distinction from G2a")
     assert_equal "none", open_half.split("|")[@evidence_column].to_s.strip.downcase,
       "G2b has no evidence, and an empty evidence column would let it drift into looking evidenced"
   end
