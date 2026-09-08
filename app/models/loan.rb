@@ -663,8 +663,9 @@ class Loan < ApplicationRecord
     end
 
 
-    # Also syncs on a rate-type change, because leaving a fixed loan is what
-    # makes its offset links meaningless and worth clearing.
+    # Also syncs on a rate-type change, because BECOMING fixed is what makes a
+    # loan's offset links meaningless -- `sync_offset_accounts` clears them for
+    # any non-variable type.
     def offset_accounts_need_sync?
       offset_account_ids_supplied? || saved_change_to_rate_type?
     end

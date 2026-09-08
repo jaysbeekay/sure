@@ -484,11 +484,8 @@ class Loan
         FlatRateResolver.new(override)
       end
 
-      # Held flat for the life of the projection, matching how the rate-change
-      # table states the offset assumption. An assumed balance replaces the
-      # linked accounts rather than adding to them: the question a scenario asks
-      # is "what if my offset held $X", not "$X on top of what I have".
-      # Supplies the simulator's offset clock.
+      # Supplies the simulator's offset clock, held flat for the life of the
+      # projection -- the assumption the rate-change table's caption states.
       #
       # A scenario's assumed balance REPLACES the linked accounts rather than
       # adding to them: the question is "what if my offset held $X", not "$X on
