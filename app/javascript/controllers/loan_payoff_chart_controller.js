@@ -25,6 +25,8 @@ const parseDate = (s) => {
   return new Date(y, m - 1, d);
 };
 
+let clipSerial = 0;
+
 export default class extends Controller {
   static values = { data: Object, tableId: String };
 
@@ -146,7 +148,10 @@ export default class extends Controller {
       svg.attr("aria-describedby", this.tableIdValue);
     }
 
-    const id = `loan-chart-${Math.random().toString(36).slice(2, 8)}`;
+    // Clip-path ids must be unique in the document. The mount carries the
+    // account's own dom_id, which already is; a counter covers a mount without
+    // one. Nothing random: the ids are read by url(#...) only.
+    const id = `${root.id || `loan-chart-${++clipSerial}`}-clip`;
     const defs = svg.append("defs");
     const plotClip = `${id}-plot`;
     defs
