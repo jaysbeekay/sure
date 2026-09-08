@@ -37,6 +37,12 @@
   <% if chart %>
     <%= form_with url: account_path(account, tab: "schedule"), method: :get,
                   data: { controller: "auto-submit-form" } do |f| %>
+      <%# A GET form submits ONLY its fields: the browser discards the action
+          URL's query string, so `tab: "schedule"` in the url above never
+          reaches the server. Without this hidden field, applying an extra
+          payment renders the default tab and the chart the form drives
+          vanishes from the page. %>
+      <%= f.hidden_field :tab, value: "schedule", id: nil %>
       <div class="flex flex-wrap items-end gap-2">
         <div class="form-field">
           <%= f.label :extra_payment_amount, t(".extra_payment.amount_label"), class: "text-xs text-secondary" %>

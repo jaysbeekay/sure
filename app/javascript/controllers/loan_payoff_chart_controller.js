@@ -146,6 +146,10 @@ export default class extends Controller {
         .append("path")
         .datum(s.points)
         .attr("d", line)
+        // Names the line in the DOM. The series are otherwise distinguishable
+        // only by stroke colour, which is exactly what a rendering test must
+        // not have to parse to know which line it is looking at.
+        .attr("data-series", s.key)
         .style("fill", "none")
         // .style, not .attr: see _token above.
         .style("stroke", s.color)
