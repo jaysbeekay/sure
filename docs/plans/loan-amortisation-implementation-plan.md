@@ -1,6 +1,21 @@
 # Loan amortisation modelling: implementation plan
 
+> **RETIRED — superseded, kept as a record.** This was the first-generation analysis,
+> written before the design blueprint and the delivery breakdown existed. Nothing
+> references it and nothing should: its baseline predates `Loan::Simulator`, daily
+> accrual, offsets, per-loan day-count basis and scenarios.
+>
+> Current documents: **`loan-amortisation-modelling.md`** (design),
+> **`loan-amortisation-delivery-breakdown.md`** (plan as filed),
+> **`docs/loans/calculation-contract.md`** (financial decisions) and
+> **`docs/loans/release-gates.md`** (gate state).
+>
+> It was flagged for retirement on #24 as "a third plan document on `main` that
+> nothing references". Deleting it would erase the reasoning behind decisions the
+> later documents inherited, so it is marked instead.
+
 Status: analysis only; no production code changes are included in this plan.
+**Superseded — see the note above.**
 
 ## Current baseline
 

@@ -110,6 +110,9 @@ to merge.
 
 ## Gate G1 and remaining approval
 
+*Gate state lives in `docs/loans/release-gates.md`. This section records what G1
+covers; the matrix records where it stands.*
+
 Per-row mutation evidence exists: `loans:verify_contract_mutations` breaks each
 row's behaviour in production code and requires that row's named tests to fail,
 with the transcript and findings in `docs/loans/contract-mutation-evidence.md`.

@@ -88,4 +88,13 @@ test that never exercises it.
   row. Letting a row name tests in more than one class is the follow-up that
   would close it. Surviving mutants outside this set certainly exist.
 - **Not approval.** G1 also requires engineering and product sign-off on the
-  contract document. That remains outstanding on #6 and nothing here grants it.
+  contract document, and nothing in this transcript grants it. That sign-off was
+  given separately, by the repository owner on 2026-09-07, and is recorded on #6
+  and in `docs/loans/release-gates.md`.
+
+  *This bullet read "That remains outstanding on #6" until 2026-09-08 — true when
+  written and false a few hours later, when the approval was given. It was still
+  saying so a day after the contract document itself said the opposite, which is
+  how an outside reviewer found it rather than us. Gate state now lives in one
+  file, `docs/loans/release-gates.md`, so a page like this one carries its
+  evidence and stops carrying a status it has no way to keep current.*

@@ -11,6 +11,16 @@ Companion to [`loan-amortisation-modelling.md`](./loan-amortisation-modelling.md
 That document is the **design blueprint**. This one is the **work management plan**: how the
 blueprint becomes GitHub issues, sprints, and pull requests.
 
+> **This document is the plan as written on 2026-09-04, and is not maintained as a
+> status record.** The issue and PR bodies below are the text the epic and its issues
+> were *filed* with — including their unticked gate checklists. They are a record of
+> what was planned, not of what is true now.
+>
+> For current gate state, read **`docs/loans/release-gates.md`**. For what is
+> delivered, read the issues themselves. In particular this document defines G2 as
+> reconciliation "including rate-change and offset cases"; what was actually signed is
+> the non-offset half, **G2a**, with **G2b** open.
+
 ---
 
 ## 0. Repository setup — done
