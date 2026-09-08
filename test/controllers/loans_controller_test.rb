@@ -239,7 +239,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "a loan with no schedule renders the page without a loan chart" do
-    @account.loan.update!(rate_type: "teaser")
+    @account.loan.update!(rate_type: "")
 
     get account_path(@account)
 

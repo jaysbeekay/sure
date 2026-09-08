@@ -121,7 +121,7 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
   end
 
   test "is not applicable to a loan with no schedule or nothing left to owe" do
-    unamortizable = build_loan(term_months: 24, rate_type: "teaser")
+    unamortizable = build_loan(term_months: 24, rate_type: "")
     assert_not unamortizable.payoff_projection(as_of: @today).applicable?
 
     cleared = build_loan(term_months: 24)

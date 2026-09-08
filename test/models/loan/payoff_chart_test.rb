@@ -132,7 +132,7 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
   end
 
   test "no payload at all for a loan with no schedule" do
-    loan = build_loan(rate_type: "teaser")
+    loan = build_loan(rate_type: "")
 
     assert_nil Loan::PayoffChart.new(loan, as_of: @today).payload
   end
