@@ -26,6 +26,27 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert_not component.render?
   end
 
+  # cubic, #86: the schedule tab used to render this component without `as_of`,
+  # so it took its own `Date.current` while the summary cards above it shared a
+  # captured one. A render crossing midnight on an effective date could then
+  # show a change here that the card above already treated as current.
+  #
+  # This asserts the injected date is actually load-bearing rather than
+  # decorative -- the same change is forthcoming on one date and already in
+  # effect on the next, so a component that ignored `as_of` would fail here.
+  test "an injected as_of decides what counts as forthcoming" do
+    effective_on = Date.current + 2.months
+    @loan.add_variable_rate_change(effective_on, 5.93)
+
+    day_before = UI::Loan::RateChangeTable.new(loan: @loan, as_of: effective_on - 1.day)
+    assert_equal 1, day_before.rows.length,
+      "a change effective tomorrow is still forthcoming"
+
+    on_the_day = UI::Loan::RateChangeTable.new(loan: @loan.reload, as_of: effective_on)
+    assert_empty on_the_day.rows,
+      "once the effective date arrives the change IS the current rate, not news"
+  end
+
   test "a variable loan with no scheduled changes renders nothing at all" do
     assert_not UI::Loan::RateChangeTable.new(loan: @loan).render?
 
