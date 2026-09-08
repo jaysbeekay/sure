@@ -1,13 +1,17 @@
-# Builds a constant-payment ("French") amortization schedule for a fixed-rate loan.
+# Builds a constant-payment ("French") amortisation schedule for a loan.
 #
 # Each period charges interest on the outstanding principal and applies the
-# remainder of the fixed payment to principal, so the principal/interest split
+# remainder of the level payment to principal, so the principal/interest split
 # shifts over the life of the loan. This is the standard system for European
 # mortgages and for most US fixed-rate loans.
 #
 # All arithmetic runs in BigDecimal and every payment is rounded to the
 # currency's precision, exactly as a lender's own table does. The final payment
 # absorbs whatever rounding residue is left so the balance lands on zero.
+#
+# The period-by-period walk itself lives in Loan::Simulator. This class owns
+# what a *schedule* is -- the dates, the term, and the presentation of a run as
+# Payment records -- and nothing about how interest accrues.
 class Loan::AmortizationSchedule
   Payment = Data.define(:number, :date, :payment, :principal, :interest, :ending_balance)
 
@@ -15,7 +19,7 @@ class Loan::AmortizationSchedule
 
   class << self
     # Returns a schedule for the loan, or nil when the loan isn't amortizable
-    # (variable rate, or missing rate/term/principal).
+    # (missing rate/term/principal).
     def for(loan)
       return nil unless loan.amortizable?
 
@@ -38,32 +42,48 @@ class Loan::AmortizationSchedule
   end
 
   # Every scheduled payment, oldest first. Empty when there is nothing to
-  # amortize; shorter than the term when rounding clears the balance early.
+  # amortise; shorter than the term when rounding clears the balance early.
   def payments
-    @payments ||= build_payments
+    @payments ||= simulation.payments.map do |row|
+      Payment.new(
+        number: row[:payment_number],
+        date: row[:payment_date],
+        payment: money(row[:payment_amount]),
+        principal: money(row[:principal_payment]),
+        interest: money(row[:interest_payment]),
+        ending_balance: money(row[:ending_balance])
+      )
+    end
   end
 
   # The level payment charged every period. The last payment can differ by a
-  # few cents — read it off #payments when the exact figure matters.
+  # few cents -- read it off #payments when the exact figure matters.
   def periodic_payment
     return money(0) unless schedulable?
 
-    money(raw_periodic_payment)
+    money(
+      Loan::AmortizationMath.level_payment(
+        balance: principal,
+        monthly_rate: monthly_rate,
+        remaining_payments: term_months,
+        currency_precision: currency_precision
+      )
+    )
   end
 
   # What the loan costs in interest over its whole life. Sits slightly above
   # the naive periodic_payment * term figure because interest is rounded to
   # the currency's precision every period.
   def total_interest
-    money(payments.sum(BigDecimal(0)) { |payment| payment.interest.amount })
+    money(simulation.total_interest)
   end
 
-  # Principal plus total_interest — everything the borrower pays.
+  # Principal plus total_interest -- everything the borrower pays.
   def total_paid
-    money(payments.sum(BigDecimal(0)) { |payment| payment.payment.amount })
+    money(payments.sum(BigDecimal("0")) { |payment| payment.payment.amount })
   end
 
-  # The date of the final payment, or nil when there's nothing to amortize.
+  # The date of the final payment, or nil when there's nothing to amortise.
   def payoff_date
     payments.last&.date
   end
@@ -75,65 +95,35 @@ class Loan::AmortizationSchedule
   end
 
   private
+    # One payment per month of the term, stepping from origination. `>>` gives
+    # the calendar-correct answer at month ends: 31 January plus one month is
+    # 28 February, not 3 March.
+    def payment_schedule
+      @payment_schedule ||= (1..term_months).map { |number| start_date >> number }
+    end
+
+    # The simulator refuses an empty schedule rather than inventing a
+    # degenerate run, so a loan with nothing to amortise is answered here.
+    def simulation
+      @simulation ||= if schedulable?
+        Loan::Simulator.new(
+          starting_balance: principal,
+          accrual_start_date: start_date,
+          payment_schedule: payment_schedule,
+          accrual_rate_for: ->(_date) { annual_rate },
+          currency_precision: currency_precision
+        ).run
+      else
+        Loan::SimulationResult.new(payments: [], currency_precision: currency_precision)
+      end
+    end
+
     def monthly_rate
       @monthly_rate ||= annual_rate / 100 / 12
     end
 
-    # P·i·(1+i)^n / ((1+i)^n − 1), degrading to straight-line for a 0% loan.
-    def raw_periodic_payment
-      @raw_periodic_payment ||= begin
-        if monthly_rate.zero?
-          round_to_currency(principal / term_months)
-        else
-          growth = (1 + monthly_rate)**term_months
-          round_to_currency(principal * monthly_rate * growth / (growth - 1))
-        end
-      end
-    end
-
-    def build_payments
-      return [] unless schedulable?
-
-      balance = principal
-      level_payment = raw_periodic_payment
-      built = []
-
-      (1..term_months).each do |number|
-        # Rounding can make the level payment slightly over-cover the loan, so
-        # the balance can reach zero before the nominal term is up. Stop, and
-        # keep the periods built so far.
-        break if balance <= 0
-
-        interest = round_to_currency(balance * monthly_rate)
-        principal_portion = level_payment - interest
-
-        # Final period, or a payment large enough to clear the balance: settle
-        # the remaining principal exactly rather than leaving rounding dust.
-        if number == term_months || principal_portion >= balance
-          principal_portion = balance
-        end
-
-        balance -= principal_portion
-
-        built << Payment.new(
-          number: number,
-          date: start_date >> number,
-          payment: money(principal_portion + interest),
-          principal: money(principal_portion),
-          interest: money(interest),
-          ending_balance: money(balance)
-        )
-      end
-
-      built
-    end
-
     def schedulable?
       term_months.positive? && principal.positive?
-    end
-
-    def round_to_currency(value)
-      value.round(currency_precision)
     end
 
     def currency_precision
