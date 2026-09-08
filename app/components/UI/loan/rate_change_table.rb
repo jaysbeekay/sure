@@ -175,7 +175,11 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     #      borrower opens it for. On a ~$400k loan at 6.18% the cliff was a
     #      rise to about 7.5%.
     def projection
-      @projection ||= Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
+      # `as_of` matters as much as the strategy. Without it the projection
+      # anchors to its own `Date.current`, so a render crossing midnight could
+      # classify a change as forthcoming against one date while quoting a
+      # balance and repayment computed from the next (CodeRabbit, #89).
+      @projection ||= Loan::PayoffProjection.new(loan, payment_strategy: :reamortize, as_of: as_of)
     end
 
     # Empty rather than raising when the projection cannot be made -- a loan

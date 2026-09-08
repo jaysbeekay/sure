@@ -22,7 +22,7 @@ class Loan
     PAYMENT_STRATEGIES = %i[hold reamortize].freeze
     EXTRA_PAYMENT_FREQUENCIES = %w[weekly monthly yearly].freeze
 
-    attr_reader :loan, :extra_payment
+    attr_reader :loan, :extra_payment, :as_of
 
     # extra_payment: an optional hypothetical monthly-equivalent Money
     # amount added on top of the original schedule's payment -- used to
@@ -58,10 +58,19 @@ class Loan
     # converge -- the held repayment no longer covers the interest -- so
     # `applicable?` goes false and the table renders NOTHING, exactly when a
     # borrower most needs to see what their repayment becomes (CodeRabbit, #79).
-    def initialize(loan, extra_payment: nil, scenario: nil, payment_strategy: :hold)
+    # `as_of` is the projection's "today": where the simulation starts, which
+    # contracted rows still count as remaining, and the date the starting
+    # balance is anchored to. Injectable so a caller rendering several
+    # date-sensitive figures together can pin one date across all of them --
+    # without it a render crossing midnight can classify a rate change against
+    # one date while pricing it from a projection anchored to the next
+    # (CodeRabbit, #89). Defaults to today so every existing caller is
+    # unaffected.
+    def initialize(loan, extra_payment: nil, scenario: nil, payment_strategy: :hold, as_of: Date.current)
       @loan = loan
       @extra_payment = extra_payment
       @scenario = scenario
+      @as_of = as_of
       # `.to_s` first: `nil.to_sym` and `1.to_sym` raise NoMethodError, which
       # would bypass the ArgumentError contract documented right below for
       # exactly the sloppy inputs it exists to catch (CodeRabbit, #79).
@@ -343,7 +352,7 @@ class Loan
       # projection is compared against, for months and interest saved.
       def original_remaining_payments
         @original_remaining_payments ||= original_schedule_rows.select do |row|
-          row.payment_date > Date.current
+          row.payment_date > as_of
         end
       end
 
@@ -351,7 +360,7 @@ class Loan
       # whose contracted rows are all in the past, so a matured loan still gets a
       # well-formed (if inapplicable) projection rather than a nil date.
       def first_projected_payment_date
-        original_remaining_payments.first&.payment_date || Date.current.next_month
+        original_remaining_payments.first&.payment_date || as_of.next_month
       end
 
       # Contracted payments still to come, for the "months saved" comparison.
@@ -420,8 +429,8 @@ class Loan
 
         Loan::Simulator.new(
           starting_balance: current_balance.amount,
-          starting_balance_as_of: Date.current,
-          accrual_start_date: Date.current,
+          starting_balance_as_of: as_of,
+          accrual_start_date: as_of,
           payment_schedule: payment_dates,
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
           # The ACCRUAL clock's change points, which segment a daily accrual
