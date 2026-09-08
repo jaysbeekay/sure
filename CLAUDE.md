@@ -56,21 +56,28 @@ Follow this sequence for any issue-driven change. Do not skip or reorder steps.
    started from a stale view of an issue wastes the whole cycle -- requirements
    and decisions are frequently added in comments after the body was written.
 2. **Post a triage plan as a comment on the issue** before writing code. It must
-   state three things explicitly:
+   state four things explicitly:
    - **What the issue actually is** -- the defect or requirement in terms of
      observed behaviour, not a restatement of the title.
    - **What the proposed fix is**, and what it deliberately leaves out.
+   - **The blast radius** -- who else hits this line, and what do they pass?
+     See the section below; stating it here is what makes it happen before the
+     code is written rather than after review finds what it missed.
    - **How the fix will be conclusively tested** -- name the assertion that
      would fail if the fix were absent. "Tests pass" is not a test plan.
 3. **Open the change as a DRAFT pull request** following that plan, and watch it
    for feedback. Do not mark it ready while any review or check is outstanding.
 4. **Mark it ready for review** only once every CI check is green and all
    feedback received so far has been addressed.
-5. **Wait for CodeRabbit's review and address it.** Auto-review is off on this
-   repository (fewer than 10 stars) and CodeRabbit does not review drafts, so
-   its review must be requested explicitly with an `@coderabbitai review`
-   comment. `@coderabbitai full review` forces a fresh pass when an incremental
-   one returns nothing.
+5. **Wait for CodeRabbit's review and address it.** Its review must always be
+   asked for: automatic review is off on this repository (fewer than 10 stars)
+   and does not run on drafts either way (`reviews.auto_review.drafts: false`).
+   An explicit `@coderabbitai review` comment DOES work on a draft -- that is
+   how #87 and #89 were reviewed -- so a review can and should be requested at
+   step 3 rather than held until the PR is marked ready.
+   `@coderabbitai full review` forces a fresh pass when an incremental one
+   returns nothing; three plain `review` requests produced nothing on #86
+   before it did.
 6. **Merge only after the repository owner has given approval in their own
    words.** A green PR is not an approved one.
 
