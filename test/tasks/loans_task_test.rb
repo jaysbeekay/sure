@@ -344,6 +344,71 @@ class LoansTaskTest < ActiveSupport::TestCase
       "an unthrottled production rebuild must be a visible choice, not a silent default")
   end
 
+  # --- the prebuild has to be resumable ------------------------------------
+  #
+  # `LIMIT` counts from the first id every time, so two equal-sized slices
+  # rebuild the same head of the estate and the second makes no progress. The
+  # runbook's answer was to raise LIMIT between slices (500, 2000, 10000, ...),
+  # which reprocesses everything already done and ends up needing one
+  # invocation as large as the whole estate -- so a production rollout had no
+  # safe pause, resume or failure recovery.
+  #
+  # This is the test that pins it: remove the `where("loans.id > ?", ...)` line
+  # from the task and the two slices below overlap, which is the defect.
+  test "two consecutive slices process disjoint populations" do
+    walked = Loan.where.not(term_months: nil).order(:id).pluck(:id)
+    assert_operator walked.length, :>=, 3,
+      "this test needs at least three eligible loans to show a slice boundary"
+
+    first = capture_io_with_env("LIMIT" => "2", "SLEEP" => "0") do
+      Rake::Task["loans:rebuild_schedules"].invoke
+    end
+    first_ids = first.scan(/^Rebuilt \d+: (\S+)$/).flatten
+    assert_equal walked.first(2), first_ids, "the first slice must walk the head of the population in id order"
+
+    cursor = first[/^next_start_after_id=(\S+)$/, 1]
+    assert_equal walked[1], cursor,
+      "the slice must print the id it stopped at, so the operator has a checkpoint to resume from"
+
+    Rake::Task["loans:rebuild_schedules"].reenable
+    second = capture_io_with_env("LIMIT" => "2", "SLEEP" => "0", "START_AFTER_ID" => cursor) do
+      Rake::Task["loans:rebuild_schedules"].invoke
+    end
+    second_ids = second.scan(/^Rebuilt \d+: (\S+)$/).flatten
+
+    assert_empty (first_ids & second_ids),
+      "a resumed slice must not reprocess loans an earlier slice already rebuilt"
+    assert_equal walked[2, 2], second_ids, "the second slice must continue from the cursor, in id order"
+  end
+
+  test "a slice that reaches the end of the population reports no next cursor" do
+    output = capture_io_with_env("SLEEP" => "0") do
+      Rake::Task["loans:rebuild_schedules"].invoke
+    end
+
+    assert_match(/^next_start_after_id=none$/, output,
+      "an unbounded run has nothing left to resume from, and must not hand the operator a cursor")
+    assert_match(/schedule_version_status/, output,
+      "the completion decision belongs to the status task, not to this one")
+  end
+
+  # A mistyped cursor reaches Postgres as an invalid uuid literal. Catching it
+  # in the task means an operator resuming a production rollout is told before
+  # any loan is written, rather than part-way through a slice.
+  test "rebuild task refuses a malformed cursor before rebuilding anything" do
+    loans(:characterization_fixed).amortizations.delete_all
+
+    output, exit_error, stderr = with_env("START_AFTER_ID" => "not-a-loan-id") do
+      capture_output_and_exit { Rake::Task["loans:rebuild_schedules"].invoke }
+    end
+
+    assert_failed_exit exit_error, "a malformed cursor must stop the task"
+    assert_match(/not a loan id/, stderr)
+    assert_no_match(/^Rebuilt /, output, "nothing may be rebuilt before the cursor is validated")
+    assert_empty loans(:characterization_fixed).reload.amortizations,
+      "the task must abort before it writes, not part-way through a slice"
+  end
+
   test "rebuild task honours BATCH_SIZE and LIMIT from the environment" do
     output = capture_io_with_env("BATCH_SIZE" => "7", "LIMIT" => "1") do
       Rake::Task["loans:rebuild_schedules"].invoke
@@ -433,12 +498,18 @@ class LoansTaskTest < ActiveSupport::TestCase
         "#{message} -- it exited, but with a success status, which no caller would treat as a failure"
     end
 
-    def capture_io_with_env(env)
+    # Split from capture_io_with_env because a task that aborts needs both
+    # helpers, and `capture_output_and_exit` cannot be nested inside
+    # `capture_io` -- the inner redirect would swallow the outer one's streams.
+    def with_env(env)
       original = env.keys.index_with { |key| ENV[key] }
       env.each { |key, value| ENV[key] = value }
-      captured, = capture_io { yield }
-      captured
+      yield
     ensure
       original.each { |key, value| value.nil? ? ENV.delete(key) : ENV[key] = value }
+    end
+
+    def capture_io_with_env(env, &block)
+      with_env(env) { capture_io(&block).first }
     end
 end
