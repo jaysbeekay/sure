@@ -17,10 +17,10 @@ zh-TW:
       title: 輸入貸款詳情
     tabs:
       overview:
-        interest_rate: 利率
-        monthly_payment: 每月還款額
+        current_interest_rate: 利率
+        current_monthly_payment: 每月還款額
         not_applicable: 不適用
-        original_principal: 原始本金
+        original_loan_balance: 原始本金
         remaining_principal: 剩餘本金
         term: 貸款期限
         type: 類型

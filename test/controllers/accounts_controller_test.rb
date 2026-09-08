@@ -1110,7 +1110,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
   # the first card silently asserted against whichever happened to come first
   # in document order -- and passed while the card under test was wrong.
   def monthly_payment_card_texts
-    title = I18n.t("loans.tabs.schedule.monthly_payment")
+    title = I18n.t("loans.tabs.schedule.current_monthly_payment")
 
     css_select("h4").select { |node| node.text.strip == title }.map do |heading|
       heading.parent.css("p").first&.text.to_s.strip

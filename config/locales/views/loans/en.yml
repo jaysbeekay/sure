@@ -34,11 +34,11 @@ en:
       title: Enter loan details
     tabs:
       overview:
-        interest_rate: Interest Rate
-        monthly_payment: Monthly Payment
+        current_interest_rate: Current Interest Rate
+        current_monthly_payment: Current Monthly Payment
         minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
         not_applicable: N/A
-        original_principal: Original Principal
+        original_loan_balance: Original Loan Balance
         remaining_principal: Remaining loan balance
         original_payoff_date: Original payoff date
         term: Term
@@ -47,7 +47,7 @@ en:
         edit_loan_details: "Edit loan details"
         variable_with_offset: Variable + offset
       schedule:
-        monthly_payment: Monthly Payment
+        current_monthly_payment: Current Monthly Payment
         total_interest: Total Interest
         total_cost: Total Cost
         payoff_date: Payoff Date
