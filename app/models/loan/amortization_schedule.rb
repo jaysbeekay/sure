@@ -28,17 +28,32 @@ class Loan::AmortizationSchedule
         annual_rate: loan.interest_rate,
         term_months: loan.term_months,
         start_date: loan.origination_date,
-        currency: loan.account.currency
+        currency: loan.account.currency,
+        rate_resolver: (Loan::RateResolver.for(loan) if loan.variable_rate_type?)
       )
     end
   end
 
-  def initialize(principal:, annual_rate:, term_months:, start_date:, currency:)
+  # `rate_resolver` is how a variable loan's recorded rate changes reach the
+  # simulator. Omitted, the schedule runs at one rate for its whole life, which
+  # is what a fixed loan does.
+  def initialize(principal:, annual_rate:, term_months:, start_date:, currency:, rate_resolver: nil)
     @principal = BigDecimal(principal.to_s)
     @annual_rate = BigDecimal(annual_rate.to_s)
     @term_months = term_months.to_i
     @start_date = start_date
     @currency = currency
+    @rate_resolver = rate_resolver
+  end
+
+  # True when this schedule re-amortises part-way through, i.e. the loan has
+  # recorded rate changes falling inside its term. Views use it to decide
+  # whether "the monthly payment" is a meaningful thing to say.
+  def re_amortising?
+    return false unless @rate_resolver
+    return false unless schedulable?
+
+    @rate_resolver.re_amortisation_events(payment_schedule.first, payment_schedule.last).any?
   end
 
   # Every scheduled payment, oldest first. Empty when there is nothing to
@@ -56,8 +71,10 @@ class Loan::AmortizationSchedule
     end
   end
 
-  # The level payment charged every period. The last payment can differ by a
-  # few cents -- read it off #payments when the exact figure matters.
+  # The level payment the schedule opens with. The last payment can differ by
+  # a few cents, and on a re-amortising loan every payment after a rate change
+  # differs too -- read them off #payments when the exact figures matter, and
+  # see #re_amortising? before presenting this as "the" monthly payment.
   def periodic_payment
     return money(0) unless schedulable?
 
@@ -110,7 +127,8 @@ class Loan::AmortizationSchedule
           starting_balance: principal,
           accrual_start_date: start_date,
           payment_schedule: payment_schedule,
-          accrual_rate_for: ->(_date) { annual_rate },
+          accrual_rate_for: @rate_resolver ? @rate_resolver.method(:accrual_rate_for) : ->(_date) { annual_rate },
+          re_amortisation_events: @rate_resolver&.method(:re_amortisation_events),
           currency_precision: currency_precision
         ).run
       else

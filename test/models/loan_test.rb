@@ -41,9 +41,24 @@ class LoanTest < ActiveSupport::TestCase
     assert_not loan_account.loan.amortizable?
   end
 
-  test "variable rate loans have no payment or schedule" do
-    loan = Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "variable")
+  # Reversed in part by #104: a variable loan now has a schedule. It still has
+  # no single monthly payment, because it does not have one -- quoting the
+  # payment it opened with would present a stale figure as a current one.
+  test "variable rate loans have a schedule but no single monthly payment" do
+    account = Account.create! \
+      family: families(:dylan_family),
+      name: "Variable Mortgage",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "variable")
 
-    assert_not loan.amortizable?
+    assert account.loan.amortizable?
+    assert_not_nil account.loan.amortization_schedule
+    assert_nil account.loan.monthly_payment
+  end
+
+  test "a loan with no account is not amortizable rather than raising" do
+    assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "variable").amortizable?
+    assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "fixed").amortizable?
   end
 end

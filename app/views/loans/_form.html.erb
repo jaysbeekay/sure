@@ -24,9 +24,46 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <%= loan_form.date_field :start_date,
+                                 label: t("loans.form.start_date"),
+                                 max: Date.current %>
+      </div>
+      <p class="text-xs text-secondary"><%= t("loans.form.start_date_hint") %></p>
+
+      <div class="flex items-center gap-2">
         <%= loan_form.number_field :term_months,
                                  label: t("loans.form.term_months"),
                                  placeholder: t("loans.form.term_months_placeholder") %>
+      </div>
+
+      <%# Rate changes only mean something for a loan whose rate can move. The
+          section is rendered for every rate type and hidden for fixed rather
+          than swapped in by JavaScript, so switching the select back and forth
+          cannot lose rows the user has already typed. %>
+      <div class="space-y-2" data-controller="loan-rate-changes">
+        <h3 class="text-sm font-medium text-primary"><%= t("loans.form.rate_changes") %></h3>
+        <p class="text-xs text-secondary"><%= t("loans.form.rate_changes_hint") %></p>
+
+        <div data-loan-rate-changes-target="rows" class="space-y-2">
+          <% account.loan.rate_change_rows.each do |row| %>
+            <%= render "loans/rate_change_row",
+                       effective_date: row[:effective_date], rate: row[:rate] %>
+          <% end %>
+        </div>
+
+        <p data-loan-rate-changes-target="empty" class="text-xs text-subdued"
+           <%= "hidden" if account.loan.rate_change_rows.any? %>>
+          <%= t("loans.form.rate_changes_empty") %>
+        </p>
+
+        <template data-loan-rate-changes-target="template">
+          <%= render "loans/rate_change_row", effective_date: nil, rate: nil %>
+        </template>
+
+        <button type="button" class="text-sm text-primary underline"
+                data-action="loan-rate-changes#add">
+          <%= t("loans.form.rate_change_add") %>
+        </button>
       </div>
 
       <div>

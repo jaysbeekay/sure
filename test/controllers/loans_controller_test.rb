@@ -101,12 +101,57 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_match "Total Interest", response.body
   end
 
+  # A variable loan IS amortizable since #104, so the unamortizable case is now
+  # a rate type the calculator does not recognise -- which a provider sync can
+  # supply, since Plaid's raw `interest_rate.type` is written straight through.
   test "hides the schedule tab when the loan cannot be amortized" do
-    @account.loan.update!(rate_type: "variable")
+    @account.loan.update!(rate_type: "teaser")
 
     get account_path(@account, tab: "schedule")
 
     assert_response :success
     assert_select "table tbody tr", count: 0
+  end
+
+  test "records rate changes and an origination date submitted through the form" do
+    patch loan_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: @account.loan.id,
+          rate_type: "variable",
+          start_date: "2024-03-15",
+          rate_changes: [
+            { effective_date: "2026-04-01", rate: "7.25" },
+            { effective_date: "2026-10-01", rate: "6.5" },
+            { effective_date: "", rate: "9" }
+          ]
+        }
+      }
+    }
+
+    @account.loan.reload
+    assert_equal({ "2026-04-01" => "7.25", "2026-10-01" => "6.5" }, @account.loan.variable_rate_schedule,
+      "the blank row must be dropped rather than persisted or raising")
+    assert_equal Date.new(2024, 3, 15), @account.loan.start_date
+    assert_equal Date.new(2024, 3, 15), @account.loan.origination_date
+  end
+
+  test "the schedule tab reflects a recorded rate change" do
+    @account.loan.update!(rate_type: "variable", interest_rate: 6, term_months: 24)
+
+    get account_path(@account, tab: "schedule")
+    flat_body = response.body
+
+    @account.loan.update!(variable_rate_schedule: { "2027-01-01" => "18.0" })
+    get account_path(@account, tab: "schedule")
+
+    assert_response :success
+    assert_not_equal flat_body, response.body,
+      "recording a rate change must change what the schedule tab renders"
+    # A substring free of characters ERB escapes -- the full string contains an
+    # apostrophe and renders as &#39;.
+    assert_match "re-amortises at each recorded change", response.body
+    assert_match I18n.t("loans.tabs.schedule.opening_payment"), response.body,
+      "a re-amortising schedule must not label its first payment as THE monthly payment"
   end
 end
