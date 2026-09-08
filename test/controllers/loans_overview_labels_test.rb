@@ -65,8 +65,7 @@ class LoansOverviewLabelsTest < ActionDispatch::IntegrationTest
       "the origination rate must not appear once a later change is in force")
   end
 
-  # The safety property: current_variable_rate returns the column unchanged for
-  # a fixed loan, so nothing moves for the loans this card already served.
+  # The safety property: nothing moves for the loans this card already served.
   test "a fixed loan's displayed rate is unchanged" do
     @account.loan.update!(rate_type: "fixed", interest_rate: 3.5)
 
@@ -74,6 +73,30 @@ class LoansOverviewLabelsTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_match "3.500%", response.body
+  end
+
+  # `variable_rate_schedule` is RETAINED when a loan is switched to fixed, so
+  # switching back does not lose the rows. A fixed loan can therefore hold a
+  # schedule that no longer applies -- and this card must show its fixed rate,
+  # not the last variable one recorded. Every other caller of
+  # current_variable_rate guarded on rate type externally, so nothing had ever
+  # reached this path before.
+  test "a fixed loan with a retained rate schedule still shows its fixed rate" do
+    @account.loan.update!(rate_type: "variable", interest_rate: 3.5,
+                          variable_rate_schedule: { 2.months.ago.to_date.iso8601 => "11.25" })
+    @account.loan.update!(rate_type: "fixed")
+
+    retained = @account.loan.reload.variable_rate_schedule
+    assert_equal [ 2.months.ago.to_date.iso8601 ], retained.keys,
+      "premise: the schedule is retained, not cleared, on the switch to fixed"
+    assert_equal BigDecimal("11.25"), BigDecimal(retained.values.first.to_s)
+
+    get account_path(@account, tab: "overview")
+
+    assert_response :success
+    assert_match "3.500%", response.body
+    assert_no_match(/11\.250%/, response.body,
+      "a fixed loan must not display a variable rate it no longer runs on")
   end
 
   # interest_rate is nullable and current_variable_rate falls back to it, so the

@@ -21,7 +21,7 @@ fr:
         current_interest_rate: Taux d'intérêt
         current_monthly_payment: Paiement mensuel
         not_applicable: N/D
-        original_loan_balance: Capital d'origine
+        original_loan_balance: Solde initial du prêt
         remaining_principal: Capital restant
         term: Durée
         type: Type

@@ -20,7 +20,7 @@ vi:
         current_interest_rate: Lãi suất
         current_monthly_payment: Thanh toán hàng tháng
         not_applicable: N/A
-        original_loan_balance: Vốn gốc ban đầu
+        original_loan_balance: Số dư khoản vay ban đầu
         remaining_principal: Vốn gốc còn lại
         term: Kỳ hạn
         type: Loại

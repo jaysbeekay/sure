@@ -19,7 +19,7 @@ uk:
         current_interest_rate: Процентна ставка
         current_monthly_payment: Щомісячний платіж
         not_applicable: Н/Д
-        original_loan_balance: Початкова сума позики
+        original_loan_balance: Початковий баланс позики
         remaining_principal: Залишок основної суми
         term: Термін
         type: Тип

@@ -23,7 +23,7 @@ pt-PT:
         current_interest_rate: Taxa de juro
         current_monthly_payment: Pagamento mensal
         not_applicable: n/d
-        original_loan_balance: Capital inicial
+        original_loan_balance: Saldo inicial do empréstimo
         remaining_principal: Capital remanescente
         term: Prazo
         type: Tipo

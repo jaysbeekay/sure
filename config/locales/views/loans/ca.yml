@@ -21,7 +21,7 @@ ca:
         current_interest_rate: Tipus d'interès
         current_monthly_payment: Quota mensual
         not_applicable: No aplicable
-        original_loan_balance: Principal original
+        original_loan_balance: Saldo inicial del préstec
         remaining_principal: Principal pendent
         term: Termini
         type: Tipus

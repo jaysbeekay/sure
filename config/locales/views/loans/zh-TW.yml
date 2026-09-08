@@ -20,7 +20,7 @@ zh-TW:
         current_interest_rate: 利率
         current_monthly_payment: 每月還款額
         not_applicable: 不適用
-        original_loan_balance: 原始本金
+        original_loan_balance: 原始貸款餘額
         remaining_principal: 剩餘本金
         term: 貸款期限
         type: 類型

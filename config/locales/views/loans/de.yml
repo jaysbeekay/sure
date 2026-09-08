@@ -31,7 +31,7 @@ de:
         current_interest_rate: Zinssatz
         current_monthly_payment: Monatsrate
         not_applicable: "–"
-        original_loan_balance: Ursprüngliche Kreditsumme
+        original_loan_balance: Ursprünglicher Kreditbetrag
         remaining_principal: Restschuld
         term: Laufzeit
         type: Art

@@ -21,7 +21,7 @@ tr:
         current_interest_rate: Faiz Oranı
         current_monthly_payment: Aylık Ödeme
         not_applicable: Yok
-        original_loan_balance: Orijinal Anapara
+        original_loan_balance: Orijinal kredi bakiyesi
         remaining_principal: Kalan Anapara
         term: Vade
         type: Tür
