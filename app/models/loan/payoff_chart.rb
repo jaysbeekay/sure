@@ -26,7 +26,7 @@ class Loan
       {
         today: as_of.iso8601,
         currency: currency,
-        scheduled: series(schedule.payments) { |p| [ p.date, p.ending_balance.amount ] },
+        scheduled: scheduled_series,
         projected: projection_series(projection),
         accelerated: accelerated ? projection_series(accelerated) : [],
         scheduled_payoff_date: schedule.payoff_date&.iso8601,
@@ -54,10 +54,19 @@ class Loan
         @accelerated ||= begin
           candidate = loan.payoff_projection(as_of: as_of, extra_payment: extra_payment)
           # Nothing to draw when the hypothesis changed nothing -- an invalid
-          # cadence or amount degrades to the baseline, and plotting a third
-          # line identical to the second would assert a difference that is not
-          # there.
-          candidate if candidate.applicable? && candidate.payments.length != projection.payments.length
+          # cadence or amount degrades to the baseline, and a third line
+          # identical to the second asserts a difference that is not there.
+          #
+          # Compared on interest as well as period count: a small extra
+          # repayment can change every balance along the way, and the interest
+          # with them, while still finishing in the same number of periods.
+          # Counting periods alone would hide exactly the case a borrower is
+          # asking about.
+          changed = candidate.applicable? && (
+            candidate.payments.length != projection.payments.length ||
+            candidate.total_interest != projection.total_interest
+          )
+          candidate if changed
         end
       end
 
@@ -91,13 +100,35 @@ class Loan
         }
       end
 
+      # Every series the chart draws is named here. A screen-reader user can
+      # otherwise identify the extra-payment line from the legend but never
+      # learn the one figure it exists to convey.
       def aria_description
-        I18n.t(
+        base = I18n.t(
           "loans.tabs.schedule.chart.aria_description",
           current_balance: projection.current_balance.format,
-          scheduled_payoff_date: schedule.payoff_date ? I18n.l(schedule.payoff_date, format: :long) : I18n.t("loans.tabs.overview.unknown"),
-          projected_payoff_date: projection.payoff_date ? I18n.l(projection.payoff_date, format: :long) : I18n.t("loans.tabs.schedule.chart.no_payoff")
+          scheduled_payoff_date: long_date(schedule.payoff_date, I18n.t("loans.tabs.overview.unknown")),
+          projected_payoff_date: long_date(projection.payoff_date, I18n.t("loans.tabs.schedule.chart.no_payoff"))
         )
+        return base unless accelerated
+
+        "#{base} #{I18n.t('loans.tabs.schedule.chart.aria_accelerated',
+                          accelerated_payoff_date: long_date(accelerated.payoff_date, I18n.t('loans.tabs.schedule.chart.no_payoff')))}"
+      end
+
+      def long_date(date, fallback)
+        date ? I18n.l(date, format: :long) : fallback
+      end
+
+      # Opens at origination with the full principal. Starting at the first
+      # payment omits the amount borrowed entirely, and leaves a one-payment
+      # loan with a single point and therefore no line at all.
+      def scheduled_series
+        rows = schedule.payments
+        return [] if rows.empty?
+
+        opening = { date: loan.origination_date.iso8601, balance: schedule.principal.to_f }
+        [ opening ] + series(rows) { |p| [ p.date, p.ending_balance.amount ] }
       end
   end
 end

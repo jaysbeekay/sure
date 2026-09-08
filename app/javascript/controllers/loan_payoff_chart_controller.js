@@ -28,11 +28,21 @@ export default class extends Controller {
     } else {
       this._draw();
     }
+    // Colours are read at draw time, so a theme switch while this page is open
+    // would otherwise leave the chart painted for the previous theme.
+    if (typeof MutationObserver !== "undefined") {
+      this._themeObserver = new MutationObserver(this._draw);
+      this._themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "class"],
+      });
+    }
   }
 
   disconnect() {
     window.removeEventListener("resize", this._draw);
     this._observer?.disconnect();
+    this._themeObserver?.disconnect();
     this._tooltip?.remove();
   }
 
@@ -206,9 +216,15 @@ export default class extends Controller {
           .filter(Boolean);
         if (!rows.length) return;
 
-        tooltip.innerHTML = `<div>${d3.timeFormat("%b %Y")(date)}</div>${rows
-          .map((r) => `<div>${r}</div>`)
-          .join("")}`;
+        // Text nodes, never innerHTML. Nothing here is attacker-controlled
+        // today, but a tooltip that builds markup out of interpolated strings
+        // is one payload change away from being an injection point.
+        tooltip.replaceChildren();
+        for (const text of [d3.timeFormat("%b %Y")(date), ...rows]) {
+          const div = document.createElement("div");
+          div.textContent = text;
+          tooltip.appendChild(div);
+        }
         tooltip.classList.remove("hidden");
         tooltip.style.left = `${Math.min(px + 12, width - 150)}px`;
         tooltip.style.top = "8px";

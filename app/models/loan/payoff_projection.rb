@@ -130,7 +130,13 @@ class Loan
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
           re_amortisation_events: rate_resolver.method(:re_amortisation_events),
           payment_amount: contracted_payment,
-          payment_strategy: :hold,
+          # Seeded with the contracted repayment, but still re-amortising at
+          # each recorded rate change -- because that is what the contract
+          # itself does on a variable loan. Holding one figure to maturity
+          # would project a repayment the lender will never ask for. On a fixed
+          # loan there are no changes, so it holds, which is the whole basis of
+          # the ahead/behind comparison.
+          payment_strategy: :reamortize,
           extra_for: repayment_plan ? repayment_plan.method(:change_points) : nil,
           currency_precision: currency_precision,
           # A projection that cannot clear the balance must SAY so. Settling the

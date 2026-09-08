@@ -90,13 +90,6 @@ class Loan
         payment_date = @payment_schedule[index]
         period_start = index.zero? ? @accrual_start_date : @payment_schedule[index - 1]
 
-        # Extra repayments land on their own dates and reduce the balance from
-        # there, so the interest charged for the period is charged on what was
-        # actually outstanding. Applied before accrual for exactly that reason:
-        # crediting them at the period boundary instead would quietly hand back
-        # the interest saving the borrower paid for.
-        balance = apply_extra_repayments(balance, period_start, payment_date)
-        break if balance <= 0
 
         # See the class comment: opening rate charges the period, closing rate
         # sizes the payment.
@@ -107,9 +100,18 @@ class Loan
         # period would be arithmetically identical while the rate holds, but it
         # would also silently absorb a payment the borrower is contracted to,
         # which is what `:hold` exists to refuse.
-        if @payment_amount
+        if payment.nil?
+          # A supplied amount seeds the run -- a projection opens on the
+          # repayment the borrower is contracted to, not one re-derived from
+          # today's balance, which would make every loan look on track.
           payment = @payment_amount
-        elsif payment.nil? || (@payment_strategy == :reamortize && sizing_rate != previous_sizing_rate)
+        end
+        # `previous_sizing_rate.nil?` guards the first period: there is no
+        # earlier rate to have moved away from, so the opening rate is not a
+        # rate CHANGE. Without it, a seeded repayment is overwritten on the
+        # very first period it was supposed to govern.
+        rate_moved = !previous_sizing_rate.nil? && sizing_rate != previous_sizing_rate
+        if payment.nil? || (@payment_strategy == :reamortize && rate_moved)
           payment = AmortizationMath.level_payment(
             balance: balance,
             monthly_rate: sizing_rate,
@@ -119,7 +121,26 @@ class Loan
         end
         previous_sizing_rate = sizing_rate
 
+        # Interest first, on the balance the period OPENED with.
+        #
+        # Under monthly accrual there is ONE charge per period. An extra
+        # repayment landing part-way through cannot reduce it: the days before
+        # it arrived accrued on the full balance, and crediting the whole month
+        # at the reduced balance would hand the borrower interest they did not
+        # save. It reduces principal from this period forward, which is the
+        # honest answer a monthly-accrual engine can give. Apportioning within
+        # the period is what daily accrual is for.
         interest = (balance * accrual_rate).round(@currency_precision)
+
+        extra = extra_repayments_in(period_start, payment_date)
+        balance = [ balance - extra, BigDecimal("0") ].max
+
+        # When extras clear the balance outright the loan is recorded as paid
+        # off on this PAYMENT date, not on the day the extra landed. Monthly
+        # accrual has no finer granularity to offer: the period is the unit.
+        # Naming the earlier date would imply a precision the engine does not
+        # have, and would disagree with the interest it just charged.
+
         final = (@settle_at_schedule_end && index == @payment_schedule.length - 1) ||
           payment >= balance + interest
 
@@ -136,6 +157,11 @@ class Loan
           payment_number: index + 1,
           payment_date: payment_date,
           interest_rate: BigDecimal(rate_on(payment_date).to_s),
+          # Carried on the row so the result can count what the borrower
+          # actually paid. An extra reduces the balance without appearing in
+          # payment_amount, so a total built from payments alone understates
+          # the cost by exactly the extras.
+          extra_payment: extra,
           **step
         }
 
@@ -151,19 +177,17 @@ class Loan
     end
 
     private
-      # Extra repayments falling in [from_date, to_date), summed. The window is
-      # half-open at the top: a repayment dated on a payment date belongs to
-      # that payment's own period, not to the one after it.
-      def apply_extra_repayments(balance, from_date, to_date)
-        extras = Array(@extra_for.call(from_date, to_date)).sum(BigDecimal("0")) do |change|
-          date = change.fetch(:date)
-          next BigDecimal("0") unless date >= from_date && date <= to_date
-
-          BigDecimal(change.fetch(:amount).to_s)
-        end
-        return balance if extras.zero?
-
-        [ balance - extras, BigDecimal("0") ].max
+      # Whatever the resolver says belongs to this window, summed.
+      #
+      # Deliberately NOT re-filtered by date here. The resolver is asked for one
+      # window and owns which boundary each date falls on -- and it has to,
+      # because the answer differs for the final window, which has no successor
+      # to open on the last payment date. Re-checking inclusively at both ends
+      # would hand a repayment dated on a payment date to the period that closes
+      # on it AND the one that opens on it, and apply it twice.
+      def extra_repayments_in(from_date, to_date)
+        Array(@extra_for.call(from_date, to_date))
+          .sum(BigDecimal("0")) { |change| BigDecimal(change.fetch(:amount).to_s) }
       end
 
       # The contracted rate on a given payment date: a re-amortisation event

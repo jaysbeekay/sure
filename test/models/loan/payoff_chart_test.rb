@@ -62,11 +62,39 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_nil Loan::PayoffChart.new(loan, as_of: @today).payload
   end
 
-  test "the accessible description names a balance and both payoff dates" do
-    payload = Loan::PayoffChart.new(on_contract_loan, as_of: @today).payload
+  test "the accessible description names the balance and each payoff date separately" do
+    loan = on_contract_loan
+    payload = Loan::PayoffChart.new(loan, as_of: @today).payload
+    schedule = loan.amortization_schedule
+    projection = loan.payoff_projection(as_of: @today)
 
-    assert_match(/\$/, payload[:aria_description])
-    assert_match(/2028/, payload[:aria_description])
+    assert_includes payload[:aria_description], projection.current_balance.format
+    assert_includes payload[:aria_description], I18n.l(schedule.payoff_date, format: :long)
+    assert_includes payload[:aria_description], I18n.l(projection.payoff_date, format: :long)
+  end
+
+  # A screen-reader user can identify the extra-payment line from the legend but
+  # never learn the one figure it exists to convey.
+  test "the accessible description names the accelerated payoff when one is drawn" do
+    loan = on_contract_loan
+    payload = Loan::PayoffChart.new(
+      loan, as_of: @today, extra_payment: { amount: 2_000, frequency: "monthly" }
+    ).payload
+    accelerated = loan.payoff_projection(
+      as_of: @today, extra_payment: { amount: 2_000, frequency: "monthly" }
+    )
+
+    assert payload[:accelerated].any?
+    assert_includes payload[:aria_description], I18n.l(accelerated.payoff_date, format: :long)
+  end
+
+  # The amount borrowed is the first thing a payoff chart should show.
+  test "the scheduled series opens at origination with the full principal" do
+    loan = on_contract_loan
+    payload = Loan::PayoffChart.new(loan, as_of: @today).payload
+
+    assert_equal loan.origination_date.iso8601, payload[:scheduled].first[:date]
+    assert_equal loan.amortization_schedule.principal.to_f, payload[:scheduled].first[:balance]
   end
 
   # A borrower too far behind has no payoff date. The description must say so

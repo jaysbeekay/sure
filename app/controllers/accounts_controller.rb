@@ -308,7 +308,7 @@ class AccountsController < ApplicationController
     end
   end
 
-  helper_method :loan_extra_payment_params
+  helper_method :loan_extra_payment_params, :loan_payoff_chart
 
   # A transient "what if I paid an extra X per week/month?" hypothesis. Never
   # persisted, and validated HERE rather than in the view or the model, so a
@@ -333,6 +333,17 @@ class AccountsController < ApplicationController
     { amount: amount, frequency: permitted["frequency"] }
   rescue ArgumentError, TypeError
     {}
+  end
+
+  # Built here rather than in the template: assembling a chart payload is
+  # domain work, and a view that constructs it decides how many simulations run
+  # per render with nothing to stop it happening twice.
+  def loan_payoff_chart(account, as_of: Date.current)
+    return nil unless account.accountable.is_a?(Loan)
+
+    @loan_payoff_chart ||= Loan::PayoffChart.new(
+      account.loan, as_of: as_of, extra_payment: loan_extra_payment_params.presence
+    ).payload
   end
 
   private

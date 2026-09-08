@@ -7,7 +7,7 @@
 <% schedule = account.loan.amortization_schedule %>
 <% payments = schedule.payments %>
 <% extra_payment = loan_extra_payment_params.presence %>
-<% chart = Loan::PayoffChart.new(account.loan, as_of: today, extra_payment: extra_payment).payload %>
+<% chart = loan_payoff_chart(account, as_of: today) %>
 
 <div class="space-y-4">
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -64,9 +64,11 @@
       </div>
     <% end %>
 
+    <%# privacy-sensitive: the axis, the lines and the tooltip are all balances,
+        and Privacy Mode blurs balances everywhere else on this page. %>
     <div data-controller="loan-payoff-chart"
          data-loan-payoff-chart-data-value="<%= chart.to_json %>"
-         class="h-64 w-full"></div>
+         class="h-64 w-full privacy-sensitive"></div>
 
     <ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
       <li class="flex items-center gap-1.5">

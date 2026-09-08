@@ -157,6 +157,62 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_not matured.payoff_projection(as_of: Date.new(2040, 1, 1)).applicable?
   end
 
+
+  # A variable loan's CONTRACT resizes the repayment at each rate change.
+  # Holding one figure to maturity projects a repayment the lender will never
+  # ask for, and the further out the change, the more wrong the payoff date.
+  test "a variable projection re-amortises at a recorded rate change" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    loan.update!(variable_rate_schedule: { (@today >> 3).iso8601 => "18.0" })
+    loan.account.update!(balance: scheduled_balance_at(loan, @today))
+    projection = loan.reload.payoff_projection(as_of: @today)
+
+    before = projection.payments.first[:payment_amount]
+    after = projection.payments.find { |p| p[:payment_date] >= (@today >> 3) }[:payment_amount]
+
+    assert_operator after, :>, before,
+      "the repayment must resize when the recorded rate rises"
+  end
+
+  # Under monthly accrual there is one interest charge per period. An extra
+  # landing part-way through cannot reduce it -- the days before it arrived
+  # accrued on the full balance.
+  test "an extra repayment does not reduce the interest of the period it lands in" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: scheduled_balance_at(loan, @today))
+
+    baseline = loan.payoff_projection(as_of: @today)
+    accelerated = loan.reload.payoff_projection(
+      as_of: @today, extra_payment: { amount: 5_000, frequency: "monthly" }
+    )
+
+    assert_equal baseline.payments.first[:interest_payment],
+      accelerated.payments.first[:interest_payment],
+      "the first period's interest accrued before any extra arrived"
+    assert_operator accelerated.payments.second[:interest_payment], :<,
+      baseline.payments.second[:interest_payment],
+      "but the period after it is charged on the reduced balance"
+  end
+
+  # Extras never appear in payment_amount -- the simulator applies them to the
+  # balance. A cost built from the payment rows alone understates what was paid
+  # by exactly the amount that made the loan finish early.
+  test "total cost counts the extra repayments that were actually made" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: scheduled_balance_at(loan, @today))
+    projection = loan.payoff_projection(
+      as_of: @today, extra_payment: { amount: 1_000, frequency: "monthly" }
+    )
+
+    rows = projection.payments
+    scheduled_total = rows.sum(BigDecimal("0")) { |p| p[:payment_amount] }
+    extras = rows.sum(BigDecimal("0")) { |p| p[:extra_payment] }
+
+    assert_operator extras, :>, 0
+    assert_equal scheduled_total + extras,
+      rows.sum(BigDecimal("0")) { |p| p[:payment_amount] + p[:extra_payment] }
+  end
+
   private
     def build_loan(term_months:, rate_type: "fixed", interest_rate: 6)
       Account.create!(
