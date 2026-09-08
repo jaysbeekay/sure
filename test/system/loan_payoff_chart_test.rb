@@ -8,9 +8,11 @@ require "application_system_test_case"
 # (#101: a projected payoff line that renders with correct geometry and no
 # error, because its stroke never resolved to a colour).
 #
-# So these assertions are deliberately about the rendered SVG and nothing else:
-# that each series exists as a path, that it has real geometry, and that its
-# stroke resolved to something that will actually mark the screen. A test that
+# So these assertions are deliberately about the rendered SVG and the DOM
+# around it: that each series exists as a path with real geometry and a
+# stroke that will mark the screen, in both themes; that the data table and
+# the keyboard give a screen-reader or keyboard user the same figures (gate
+# G6); and that the live region stays quiet under a pointer. A test that
 # re-checked payoff dates here would be re-running Loan::PayoffChartTest
 # through a browser, slowly.
 class LoanPayoffChartTest < ApplicationSystemTestCase
@@ -18,77 +20,143 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
   # series are the same run to run. The loan opens 2026-01-01 over 24 months,
   # so this sits mid-term with real history behind it and real term ahead.
   TODAY = Date.new(2027, 1, 15)
+  SERIES = %w[actual scheduled projected].freeze
 
   setup do
     sign_in @user = users(:family_admin)
   end
 
-  test "the chart paints the scheduled and projected lines" do
+  test "the chart paints all three lines, in the light theme and the dark" do
     travel_to TODAY do
       account = on_contract_loan_account
 
-      visit account_path(account, tab: "schedule")
-
+      visit account_path(account, period: "all_time")
       assert_selector "[data-controller='loan-payoff-chart'] svg"
 
-      %w[scheduled projected].each do |key|
-        path = find("[data-controller='loan-payoff-chart'] svg path[data-series='#{key}']")
+      assert_series_painted
+      strokes_in_light = SERIES.to_h { |key| [ key, stroke_of(key) ] }
 
-        assert path["d"].to_s.start_with?("M"),
-          "the #{key} line has no geometry"
-        assert_not_equal "none", stroke_of(path),
-          "the #{key} line has geometry but no resolved stroke, so it does not mark the screen -- #101 exactly"
-      end
+      # The controller watches data-theme and redraws; the strokes must
+      # resolve again from the dark palette, not stay stale.
+      page.execute_script("document.documentElement.setAttribute('data-theme', 'dark')")
+      assert_series_painted
+      assert_not_equal strokes_in_light["actual"], stroke_of("actual"),
+        "the recorded line must repaint from the dark theme's token"
     end
   end
 
-  # Gate G6 asks for figures a screen reader can reach the same way the sighted
-  # summary cards are reached, so the alternative is real DOM text and not only
-  # the SVG's aria-label.
-  test "the accessible description is real text in the document" do
+  # Gate G6: the table the SVG describes itself with carries the same rows the
+  # lines are drawn from, and it is real DOM the page exposes rather than a
+  # screen-reader-only summary.
+  test "the SVG is described by a data table with one row per plotted date" do
     travel_to TODAY do
       account = on_contract_loan_account
-      description = Loan::PayoffChart.new(account.loan, as_of: TODAY).payload[:aria_description]
+      payload = Loan::PayoffChart.new(account.loan, as_of: TODAY, period: all_time_period).payload
 
-      visit account_path(account, tab: "schedule")
+      visit account_path(account, period: "all_time")
+      assert_selector "[data-controller='loan-payoff-chart'] svg"
 
-      assert_selector "p.sr-only", text: description, visible: :all
-      # Built as an attribute comparison rather than a CSS attribute selector:
-      # the description carries apostrophes, which no amount of quoting makes
-      # into a legal selector.
-      assert_equal description,
+      table_id = find("[data-controller='loan-payoff-chart'] svg")["aria-describedby"]
+      assert_equal ActionView::RecordIdentifier.dom_id(account, :loan_chart_table), table_id
+
+      find("details summary", text: I18n.t("UI.account.chart.loan.view_as_table")).click
+      assert_selector "table##{table_id} tbody tr", count: payload[:rows].length
+      assert_selector "p.sr-only", text: payload[:aria_description], visible: :all
+      assert_equal payload[:aria_description],
         find("[data-controller='loan-payoff-chart'] svg")["aria-label"]
     end
   end
 
+  # Gate G6: every plotted date is reachable from the keyboard, and only the
+  # keyboard talks to the live region -- a pointer sweeping the chart would
+  # otherwise announce on every movement (#57).
+  test "arrow keys step the tooltip through the plotted dates and only they announce" do
+    travel_to TODAY do
+      account = on_contract_loan_account
+
+      visit account_path(account, period: "all_time")
+      svg = find("[data-controller='loan-payoff-chart'] svg")
+      assert_equal "0", svg["tabindex"], "the chart must be focusable"
+
+      svg.send_keys(:arrow_right)
+      tooltip = find("[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all)
+      first = tooltip.text(:all)
+      assert_match I18n.t("UI.account.chart.loan.scheduled"), first
+
+      svg.send_keys(:arrow_right)
+      assert_not_equal first, tooltip.text(:all), "the second press moves to the next date"
+
+      svg.send_keys(:escape)
+      assert_no_selector "[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all
+
+      # A pointer sweep shows the tooltip but never turns it into a live region.
+      page.execute_script(<<~JS)
+        const rect = document.querySelector("[data-controller='loan-payoff-chart'] svg rect[style*='cursor']");
+        const box = rect.getBoundingClientRect();
+        rect.dispatchEvent(new PointerEvent("pointermove", { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true }));
+      JS
+      assert_selector "[data-controller='loan-payoff-chart'] div:not(.hidden)", text: I18n.t("UI.account.chart.loan.scheduled")
+      assert_no_selector "[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all
+    end
+  end
+
   private
+    def assert_series_painted
+      SERIES.each do |key|
+        path = find("[data-controller='loan-payoff-chart'] svg path[data-series='#{key}']")
+
+        assert path["d"].to_s.start_with?("M"), "the #{key} line has no geometry"
+        assert_not_equal "none", stroke_of(key),
+          "the #{key} line has geometry but no resolved stroke, so it does not mark the screen -- #101 exactly"
+      end
+    end
+
     # `stroke: none` is the initial value, and it is what an unresolvable
     # colour leaves behind -- the whole point of reading the computed style
     # rather than the attribute we wrote.
-    def stroke_of(path)
+    def stroke_of(key)
       page.evaluate_script(
-        "getComputedStyle(document.querySelector(\"svg path[data-series='#{path['data-series']}']\")).stroke"
+        "getComputedStyle(document.querySelector(\"svg path[data-series='#{key}']\")).stroke"
       )
     end
 
+    def all_time_period
+      Period.new(key: "all_time", start_date: Date.new(2020, 1, 1), end_date: TODAY)
+    end
+
+    # Built the way the account form builds one: with an opening valuation
+    # for the amount borrowed. Without it Loan#original_balance falls back to
+    # the current balance, and a loan part-way through its term would appear
+    # to have borrowed only what it still owes.
     def loan_account
-      Account.create!(
+      account = Account.create!(
         family: @user.family, name: "Payoff Chart Loan",
         balance: 500_000, currency: "USD",
         accountable: Loan.new(subtype: "mortgage", interest_rate: 6, term_months: 24,
                               rate_type: "fixed", start_date: Date.new(2026, 1, 1))
       )
+      account.entries.create!(
+        date: Date.new(2026, 1, 1), name: "Opening balance", amount: 500_000, currency: "USD",
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account
     end
 
-    # A borrower exactly on contract. The projection then has somewhere to go;
-    # a loan whose balance has run away has no payoff date at all, which is a
+    # A borrower exactly on contract, with the balance history the chart's
+    # recorded line is drawn from. The projection then has somewhere to go; a
+    # loan whose balance has run away has no payoff date at all, which is a
     # different test.
     def on_contract_loan_account
       account = loan_account
-      scheduled = account.loan.amortization_schedule.payments
-        .select { |p| p.date <= TODAY }.last.ending_balance.amount
-      account.update!(balance: scheduled)
+      rows = account.loan.amortization_schedule.payments.select { |p| p.date <= TODAY }
+      account.update!(balance: rows.last.ending_balance.amount)
+      account.balances.delete_all
+      account.balances.create!(date: Date.new(2026, 1, 1), balance: 500_000, currency: "USD",
+                               start_cash_balance: 500_000, flows_factor: -1)
+      rows.each do |row|
+        account.balances.create!(date: row.date, balance: row.ending_balance.amount, currency: "USD",
+                                 start_cash_balance: row.ending_balance.amount, flows_factor: -1)
+      end
       account.reload
-      account
     end
 end

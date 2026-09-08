@@ -16,6 +16,15 @@ import * as d3 from "d3";
 // The x-domain comes from the payload, not from the data: the period picker
 // governs it (#100, decision 4). Series are drawn through a clip so a line
 // that leaves the window is cut at its edge rather than stretching the axis.
+
+// Date-only strings parse as UTC midnight in `new Date`, shifting the day
+// back for anyone west of Greenwich. Parse the components instead.
+const parseDate = (s) => {
+  if (!s) return null;
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+
 export default class extends Controller {
   static values = { data: Object, tableId: String };
 
@@ -66,13 +75,6 @@ export default class extends Controller {
     root.innerHTML = "";
     const data = this.dataValue || {};
 
-    // Date-only strings parse as UTC midnight in `new Date`, shifting the day
-    // back for anyone west of Greenwich. Parse the components instead.
-    const parseDate = (s) => {
-      if (!s) return null;
-      const [y, m, d] = s.split("-").map(Number);
-      return new Date(y, m - 1, d);
-    };
     const toPoint = (p) => ({ date: parseDate(p.date), balance: p.balance });
 
     const domainStart = parseDate(data.domain_start);
@@ -370,11 +372,6 @@ export default class extends Controller {
       tooltip.style.top = `${margin.top}px`;
       splitAt(Math.max(margin.left, Math.min(px, width - margin.right)));
     };
-    const hide = () => {
-      tooltip.classList.add("hidden");
-      splitAt(width - margin.right);
-    };
-
     // The live region announces only what the keyboard asks for. Under a
     // pointer the tooltip rewrites on every movement, and a live region that
     // announces every one of those is noise for anyone using a pointer with a
@@ -387,6 +384,12 @@ export default class extends Controller {
         tooltip.removeAttribute("role");
         tooltip.removeAttribute("aria-live");
       }
+    };
+
+    const hide = () => {
+      tooltip.classList.add("hidden");
+      announce(false);
+      splitAt(width - margin.right);
     };
 
     svg
@@ -405,14 +408,22 @@ export default class extends Controller {
       .on("pointerleave", hide);
 
     // Keyboard traversal: the same nearest-point data a hover shows, stepped
-    // through each series' real dates inside the window rather than an
-    // arbitrary pixel. Arrow keys move, Home/End jump, Escape clears.
+    // through the dates the data table lists -- one per scheduled payment in
+    // the window -- so the keyboard and the table give the same figures (G6).
+    // The recorded line's own points are weekly and would otherwise repeat
+    // the same month several times over. Arrow keys move, Home/End jump,
+    // Escape clears.
+    const rowDates = (data.rows || [])
+      .map((row) => parseDate(row.date))
+      .filter((date) => date && date >= domainStart && date <= domainEnd);
     const stops = Array.from(
       new Set(
-        series
-          .flatMap((s) => s.points)
-          .filter((p) => p.date >= domainStart && p.date <= domainEnd)
-          .map((p) => p.date.getTime()),
+        (rowDates.length
+          ? rowDates
+          : series.flatMap((s) => s.points).map((p) => p.date)
+        )
+          .filter((date) => date >= domainStart && date <= domainEnd)
+          .map((date) => date.getTime()),
       ),
     )
       .sort((a, b) => a - b)

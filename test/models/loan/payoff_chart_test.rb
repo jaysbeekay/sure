@@ -111,6 +111,26 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_not_includes paid_off[:visible].map(&:to_s), "projected"
   end
 
+  # A loan drawn down today has one recorded point at most and no history to
+  # compare against; the page must still render.
+  test "a loan originated today renders a valid payload with no exception" do
+    account = Account.create!(
+      family: @family, name: "New Loan", balance: 500_000, currency: "USD",
+      accountable: Loan.new(subtype: "mortgage", interest_rate: 6, term_months: 24,
+                            rate_type: "fixed", start_date: @today)
+    )
+    account.balances.create!(date: @today, balance: 500_000, currency: "USD",
+                             start_cash_balance: 500_000, flows_factor: -1)
+
+    payload = Loan::PayoffChart.new(account.loan, as_of: @today, period: @all_time).payload
+
+    assert_equal @today.iso8601, payload[:scheduled].first[:date]
+    assert_equal @today.iso8601, payload[:domain_start]
+    assert_operator payload[:actual].length, :<=, 1
+    assert_not_includes payload[:visible].map(&:to_s), "actual", "one point is not a line"
+    assert_includes payload[:visible].map(&:to_s), "projected"
+  end
+
   test "no payload at all for a loan with no schedule" do
     loan = build_loan(rate_type: "teaser")
 
@@ -157,6 +177,13 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
         balance: 500_000, currency: "USD",
         accountable: Loan.new(subtype: "mortgage", interest_rate: 6, term_months: 24,
                               rate_type: rate_type, start_date: Date.new(2026, 1, 1))
+      )
+      # The opening valuation the account form records: Loan#original_balance
+      # reads it, and without it the principal would follow whatever the
+      # current balance is later set to.
+      account.entries.create!(
+        date: Date.new(2026, 1, 1), name: "Opening balance", amount: 500_000, currency: "USD",
+        entryable: Valuation.new(kind: "opening_anchor")
       )
       record_balances(account)
       account.loan

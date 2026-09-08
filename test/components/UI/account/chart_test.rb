@@ -71,6 +71,42 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert_no_selector "[data-controller='loan-payoff-chart']"
   end
 
+  # Degradation matrix (#100 brief 7.5): the legend promises only the lines
+  # the payload says are drawn. Under a period that ends today the forward
+  # lines have no room, and a legend entry for a line that is not there is a
+  # chart lying about itself.
+  test "the legend lists only the series the payload marks visible" do
+    loan_account = accounts(:loan)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    windowed = payload.merge(visible: %w[actual scheduled])
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: windowed, as_of: Date.current))
+
+    legend = "ul[aria-label='#{I18n.t("UI.account.chart.loan.legend")}'] li"
+    assert_selector legend, count: 2
+    assert_selector legend, text: payload[:labels][:actual]
+    assert_selector legend, text: payload[:labels][:scheduled]
+    assert_no_selector legend, text: payload[:labels][:projected]
+  end
+
+  # A projection that ran but never clears the balance has a line and no
+  # payoff date. The cards would quote a date that does not exist; the notice
+  # says why there is none instead.
+  test "a projection with no payoff date shows the not-converged notice in place of the cards" do
+    loan_account = accounts(:loan)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert payload[:projected].any?, "the fixture loan must project, or this asserts nothing"
+    stalled = payload.merge(projected_payoff_date: nil, months_saved: 0, interest_saved: 0)
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: stalled, as_of: Date.current))
+
+    assert_text I18n.t("UI.account.chart.loan.not_converged")
+    # The card title; the accessible description also says "projected payoff",
+    # and must, so the text alone would not tell the two apart.
+    assert_no_selector "h4", text: I18n.t("UI.account.chart.loan.projected_payoff")
+    assert_selector "[data-controller='loan-payoff-chart']"
+  end
+
   private
     # 10 shares at $100 market price; gain = 1000 - cost_basis * 10
     def create_holding(cost_basis:)
