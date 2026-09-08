@@ -203,6 +203,7 @@ export default class extends Controller {
         .append("path")
         .datum(historySeries)
         .attr("fill", `url(#payoff-history-fill-${this._id()})`)
+        .attr("data-series", "history-fill")
         .attr("clip-path", plotClip)
         .attr("d", area);
 
@@ -214,6 +215,7 @@ export default class extends Controller {
         .attr("stroke-width", 2)
         .attr("stroke-linejoin", "round")
         .attr("stroke-linecap", "round")
+        .attr("data-series", "history")
         .attr("clip-path", plotClip)
         .attr("d", line);
     }
@@ -228,6 +230,7 @@ export default class extends Controller {
         .attr("stroke-linecap", "round")
         .attr("stroke-dasharray", "3 4")
         .attr("opacity", 0.7)
+        .attr("data-series", "original")
         .attr("clip-path", plotClip)
         .attr("d", line);
     }
@@ -241,6 +244,7 @@ export default class extends Controller {
         .attr("stroke-width", 2)
         .attr("stroke-linecap", "round")
         .attr("stroke-dasharray", "4 4")
+        .attr("data-series", "accelerated")
         .attr("clip-path", plotClip)
         .attr("d", line);
     }
