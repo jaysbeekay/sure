@@ -17,10 +17,10 @@ zh-CN:
       title: 请输入贷款详情
     tabs:
       overview:
-        interest_rate: 利率
-        monthly_payment: 月供
+        current_interest_rate: 利率
+        current_monthly_payment: 月供
         not_applicable: 不适用
-        original_principal: 原始本金
+        original_loan_balance: 原始贷款余额
         remaining_principal: 剩余本金
         term: 期限
         type: 类型

@@ -28,16 +28,16 @@ de:
       overview:
         edit_loan_details: Kreditdaten bearbeiten
         variable_with_offset: Variabel + Verrechnungskonto
-        interest_rate: Zinssatz
-        monthly_payment: Monatsrate
+        current_interest_rate: Zinssatz
+        current_monthly_payment: Monatsrate
         not_applicable: "–"
-        original_principal: Ursprüngliche Kreditsumme
+        original_loan_balance: Ursprünglicher Kreditbetrag
         remaining_principal: Restschuld
         term: Laufzeit
         type: Art
         unknown: Unbekannt
       schedule:
-        monthly_payment: Monatsrate
+        current_monthly_payment: Monatsrate
         total_interest: Zinsen gesamt
         total_cost: Gesamtkosten
         payoff_date: Tilgungsdatum

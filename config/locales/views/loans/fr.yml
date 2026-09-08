@@ -18,10 +18,10 @@ fr:
     tabs:
       overview:
         edit_loan_details: Modifier les détails du prêt
-        interest_rate: Taux d'intérêt
-        monthly_payment: Paiement mensuel
+        current_interest_rate: Taux d'intérêt
+        current_monthly_payment: Paiement mensuel
         not_applicable: N/D
-        original_principal: Capital d'origine
+        original_loan_balance: Solde initial du prêt
         remaining_principal: Capital restant
         term: Durée
         type: Type

@@ -20,10 +20,10 @@ pt-PT:
       title: Introduzir dados do empréstimo
     tabs:
       overview:
-        interest_rate: Taxa de juro
-        monthly_payment: Pagamento mensal
+        current_interest_rate: Taxa de juro
+        current_monthly_payment: Pagamento mensal
         not_applicable: n/d
-        original_principal: Capital inicial
+        original_loan_balance: Saldo inicial do empréstimo
         remaining_principal: Capital remanescente
         term: Prazo
         type: Tipo

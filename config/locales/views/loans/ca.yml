@@ -18,10 +18,10 @@ ca:
     tabs:
       overview:
         edit_loan_details: Edita els detalls del préstec
-        interest_rate: Tipus d'interès
-        monthly_payment: Quota mensual
+        current_interest_rate: Tipus d'interès
+        current_monthly_payment: Quota mensual
         not_applicable: No aplicable
-        original_principal: Principal original
+        original_loan_balance: Saldo inicial del préstec
         remaining_principal: Principal pendent
         term: Termini
         type: Tipus

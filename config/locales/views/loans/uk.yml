@@ -16,10 +16,10 @@ uk:
       title: Введіть деталі позики
     tabs:
       overview:
-        interest_rate: Процентна ставка
-        monthly_payment: Щомісячний платіж
+        current_interest_rate: Процентна ставка
+        current_monthly_payment: Щомісячний платіж
         not_applicable: Н/Д
-        original_principal: Початкова сума позики
+        original_loan_balance: Початковий баланс позики
         remaining_principal: Залишок основної суми
         term: Термін
         type: Тип

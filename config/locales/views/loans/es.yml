@@ -17,10 +17,10 @@ es:
       title: Introduce los detalles del préstamo
     tabs:
       overview:
-        interest_rate: Tipo de interés
-        monthly_payment: Cuota mensual
+        current_interest_rate: Tipo de interés
+        current_monthly_payment: Cuota mensual
         not_applicable: N/D
-        original_principal: Capital inicial
+        original_loan_balance: Saldo original del préstamo
         remaining_principal: Capital pendiente
         term: Plazo
         type: Tipo

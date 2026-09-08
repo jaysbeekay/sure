@@ -449,6 +449,16 @@ class Loan < ApplicationRecord
   # `as_of_date` is injectable so a caller can pin one reference date across
   # several reads rather than letting each take its own `Date.current`.
   def current_variable_rate(as_of_date = Date.current)
+    # A fixed loan's rate is its rate, whatever is sitting in the column.
+    #
+    # `variable_rate_schedule` is RETAINED when a loan is switched to fixed, so
+    # that switching back does not lose the rows -- which means a fixed loan can
+    # hold a schedule that no longer applies to it. Every caller happened to
+    # guard on rate type externally, so this was unreachable until the Overview
+    # card started calling it; stating it here makes the method honest on its
+    # own terms rather than correct only by the grace of its callers.
+    return interest_rate unless variable_rate_type?
+
     rate = variable_rates.reverse.find do |date_str, _|
       Date.iso8601(date_str.to_s) <= as_of_date
     end&.last

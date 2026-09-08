@@ -18,10 +18,10 @@ ru:
     tabs:
       overview:
         edit_loan_details: Редактировать детали кредита
-        interest_rate: Процентная ставка
-        monthly_payment: Ежемесячный платёж
+        current_interest_rate: Процентная ставка
+        current_monthly_payment: Ежемесячный платёж
         not_applicable: Н/Д
-        original_principal: Первоначальная сумма
+        original_loan_balance: Первоначальная сумма кредита
         remaining_principal: Остаток по кредиту
         term: Срок
         type: Тип

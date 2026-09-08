@@ -30,7 +30,7 @@
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
     <%# The same method the Overview card uses: the acceptance criterion for
         #15 is that the two tabs never show different figures for one loan. %>
-    <%= summary_card title: t(".monthly_payment") do %>
+    <%= summary_card title: t(".current_monthly_payment") do %>
       <%# The tab's single `today`, NOT a fresh Date.current: this card, the
           rate caption under it and the rate-change table further down must all
           sit on one date. Read separately, a render that crosses midnight can

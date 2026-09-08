@@ -7,8 +7,15 @@
     projection card -- see Loan::PayoffProjection#original_schedule_rows. %>
 <% payoff_date = account.loan.amortization_schedule.payoff_date %>
 
+<%# ONE reference date for every figure on this tab. It used to be declared
+    inside the Monthly Payment card, which renders after the Interest Rate card,
+    so the two could not share a date even in principle. A render crossing
+    midnight on a rate-change date would then quote yesterday's rate beside
+    today's repayment. %>
+<% as_of = Date.current %>
+
 <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-  <%= summary_card title: t(".original_principal") do %>
+  <%= summary_card title: t(".original_loan_balance") do %>
     <%= format_money account.loan.original_balance %>
   <% end %>
 
@@ -16,9 +23,19 @@
     <%= format_money account.balance_money %>
   <% end %>
 
-  <%= summary_card title: t(".interest_rate") do %>
-    <% if account.loan.interest_rate.present? %>
-      <%= number_to_percentage(account.loan.interest_rate, precision: 3) %>
+  <%# The rate in force TODAY, not the one the loan was written at.
+      `loans.interest_rate` is the origination rate; on a variable loan with any
+      recorded change this card was the only surface still quoting it, while the
+      caption on the card beside it and the Schedule tab's rate-change table both
+      showed the current one. Three surfaces, two answers.
+
+      `current_variable_rate` returns the column unchanged for a fixed loan, so
+      those are unaffected -- and it falls back to the column when no change
+      applies, which keeps the nullable case rendering "Unknown". %>
+  <%= summary_card title: t(".current_interest_rate") do %>
+    <% current_rate = account.loan.current_variable_rate(as_of) %>
+    <% if current_rate.present? %>
+      <%= number_to_percentage(current_rate, precision: 3) %>
     <% else %>
       <%= t(".unknown") %>
     <% end %>
@@ -30,11 +47,7 @@
       re-amortises today's balance at today's rate over the payments left to
       the original maturity -- the figure a lender quotes. The Schedule tab
       shows the same value from the same method, so the two cannot disagree. %>
-  <%= summary_card title: t(".monthly_payment") do %>
-    <%# One as_of for both calls. Read separately, a render that crosses
-        midnight on a rate-change date can size the repayment at yesterday's
-        rate while the caption below it names today's. %>
-    <% as_of = Date.current %>
+  <%= summary_card title: t(".current_monthly_payment") do %>
     <% current_payment = account.loan.current_minimum_payment(as_of: as_of) %>
     <% if current_payment.present? %>
       <%= format_money(current_payment) %>
