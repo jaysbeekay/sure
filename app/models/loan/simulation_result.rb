@@ -12,7 +12,7 @@ class Loan
   # enough. That leaves a balloon, and #payoff_date refuses to give a date for
   # a loan that was never paid off.
   class SimulationResult
-    attr_reader :payments, :balloon_amount, :total_interest, :total_cost, :total_extra_payments
+    attr_reader :payments, :balloon_amount, :total_interest, :total_cost
 
     def initialize(payments:, currency_precision:, converged: true, balloon_amount: BigDecimal("0"))
       @converged = converged
@@ -20,14 +20,8 @@ class Loan
       @payments = deep_freeze(payments)
       @total_interest = @payments.sum(BigDecimal("0")) { |p| p[:interest_payment] }
         .round(currency_precision).freeze
-      # Extras are a real outflow that never appears in payment_amount -- the
-      # simulator applies them straight to the balance. A total built from the
-      # payment rows alone understates what the borrower paid by exactly the
-      # amount that made the loan finish early, which is the opposite of useful.
-      @total_extra_payments = @payments.sum(BigDecimal("0")) { |p| p[:extra_payment] || 0 }
-        .round(currency_precision).freeze
       @total_cost = (@payments.sum(BigDecimal("0")) { |p| p[:payment_amount] } +
-        @total_extra_payments + @balloon_amount).round(currency_precision).freeze
+        @balloon_amount).round(currency_precision).freeze
       freeze
     end
 

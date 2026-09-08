@@ -39,32 +39,6 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
         assert_not_equal "none", stroke_of(path),
           "the #{key} line has geometry but no resolved stroke, so it does not mark the screen -- #101 exactly"
       end
-
-      # Nothing has been modelled, so there is nothing for a third line to say.
-      assert_no_selector "[data-controller='loan-payoff-chart'] svg path[data-series='accelerated']"
-    end
-  end
-
-  # The comparison the chart exists for: "where am I heading, and where would I
-  # head if I paid more?". An earlier design had the hypothesis REPLACE the
-  # projection, answering half the question by deleting the other half. This
-  # asserts all three coexist in the DOM, not just in the payload.
-  test "modelling an extra payment adds a third line without removing the second" do
-    travel_to TODAY do
-      account = on_contract_loan_account
-
-      visit account_path(account, tab: "schedule")
-      assert_selector "[data-controller='loan-payoff-chart'] svg path[data-series='projected']"
-
-      fill_in "extra_payment_amount", with: "2000"
-      click_on I18n.t("loans.tabs.schedule.extra_payment.apply")
-
-      %w[scheduled projected accelerated].each do |key|
-        path = find("[data-controller='loan-payoff-chart'] svg path[data-series='#{key}']")
-
-        assert path["d"].to_s.start_with?("M"), "the #{key} line has no geometry"
-        assert_not_equal "none", stroke_of(path), "the #{key} line does not mark the screen"
-      end
     end
   end
 
@@ -106,9 +80,9 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       )
     end
 
-    # A borrower exactly on contract. The projection then has somewhere to go
-    # and the accelerated line has something to beat; a loan whose balance has
-    # run away has no payoff date at all, which is a different test.
+    # A borrower exactly on contract. The projection then has somewhere to go;
+    # a loan whose balance has run away has no payoff date at all, which is a
+    # different test.
     def on_contract_loan_account
       account = loan_account
       scheduled = account.loan.amortization_schedule.payments

@@ -12,14 +12,11 @@ class Loan
   # balance would answer a different and much less useful question, and would
   # make every loan look exactly on track by construction.
   class PayoffProjection
-    attr_reader :loan, :as_of, :extra_payment
+    attr_reader :loan, :as_of
 
-    # `extra_payment` is a transient {amount:, frequency:} hypothesis, never
-    # persisted: "what if I paid an extra $500 a month from today?".
-    def initialize(loan, as_of: Date.current, extra_payment: nil)
+    def initialize(loan, as_of: Date.current)
       @loan = loan
       @as_of = as_of
-      @extra_payment = extra_payment
     end
 
     # False when there is nothing to project: no schedule, nothing left to owe,
@@ -104,22 +101,6 @@ class Loan
           .sum(BigDecimal("0")) { |payment| payment.interest.amount }
       end
 
-      def repayment_plan
-        return nil if extra_payment.blank?
-
-        @repayment_plan ||= begin
-          plan = RepaymentPlan.new(
-            amount: extra_payment[:amount],
-            frequency: extra_payment[:frequency],
-            starts_on: as_of,
-            closes_on: remaining_payment_dates.last
-          )
-          plan.valid? ? plan : nil
-        rescue ArgumentError, TypeError
-          nil
-        end
-      end
-
       def simulation
         return nil unless applicable?
 
@@ -137,7 +118,6 @@ class Loan
           # loan there are no changes, so it holds, which is the whole basis of
           # the ahead/behind comparison.
           payment_strategy: :reamortize,
-          extra_for: repayment_plan ? repayment_plan.method(:change_points) : nil,
           currency_precision: currency_precision,
           # A projection that cannot clear the balance must SAY so. Settling the
           # final payment regardless would manufacture a payoff date for a loan

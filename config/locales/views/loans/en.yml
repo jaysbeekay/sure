@@ -45,19 +45,9 @@ en:
         chart:
           scheduled: Original schedule
           projected: Projected from today
-          accelerated: With extra payments
           today: Today
           no_payoff: not on the current repayment
-          aria_accelerated: With the modelled extra payments, projected payoff %{accelerated_payoff_date}.
           aria_description: Loan payoff chart. Current balance %{current_balance}. Original scheduled payoff %{scheduled_payoff_date}. Projected payoff from today's balance %{projected_payoff_date}.
-        extra_payment:
-          amount_label: Extra payment
-          amount_placeholder: '500'
-          frequency_label: Frequency
-          weekly: Per week
-          monthly: Per month
-          apply: Apply
-          clear: Clear
         interest: Interest
         monthly_payment: Monthly Payment
         number: "#"

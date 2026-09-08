@@ -1,21 +1,15 @@
 class Loan
-  # The three series the payoff chart draws, and the figures its accessible
+  # The series the payoff chart draws, and the figures its accessible
   # description quotes.
   #
   #   1. the original schedule, origination -> maturity
   #   2. the projection from today's balance, which reflects whatever the
-  #      borrower has actually paid so far
-  #   3. the same projection under a hypothetical regular extra repayment
-  #
-  # All three coexist. An earlier design had the hypothesis REPLACE the
-  # projection, which is exactly the comparison a borrower is trying to make --
-  # "where am I heading, and where would I head if I paid more?" -- and answers
-  # it by removing one of the two.
+  #      borrower has actually paid so far -- extra payments included, because
+  #      it starts from the balance those payments produced
   class PayoffChart
-    def initialize(loan, as_of: Date.current, extra_payment: nil)
+    def initialize(loan, as_of: Date.current)
       @loan = loan
       @as_of = as_of
-      @extra_payment = extra_payment
     end
 
     # nil when there is nothing to draw. The tab renders its table regardless,
@@ -28,17 +22,15 @@ class Loan
         currency: currency,
         scheduled: scheduled_series,
         projected: projection_series(projection),
-        accelerated: accelerated ? projection_series(accelerated) : [],
         scheduled_payoff_date: schedule.payoff_date&.iso8601,
         projected_payoff_date: projection.payoff_date&.iso8601,
-        accelerated_payoff_date: accelerated&.payoff_date&.iso8601,
         labels: labels,
         aria_description: aria_description
       }
     end
 
     private
-      attr_reader :loan, :as_of, :extra_payment
+      attr_reader :loan, :as_of
 
       def schedule
         @schedule ||= loan.amortization_schedule
@@ -46,28 +38,6 @@ class Loan
 
       def projection
         @projection ||= loan.payoff_projection(as_of: as_of)
-      end
-
-      def accelerated
-        return nil if extra_payment.blank?
-
-        @accelerated ||= begin
-          candidate = loan.payoff_projection(as_of: as_of, extra_payment: extra_payment)
-          # Nothing to draw when the hypothesis changed nothing -- an invalid
-          # cadence or amount degrades to the baseline, and a third line
-          # identical to the second asserts a difference that is not there.
-          #
-          # Compared on interest as well as period count: a small extra
-          # repayment can change every balance along the way, and the interest
-          # with them, while still finishing in the same number of periods.
-          # Counting periods alone would hide exactly the case a borrower is
-          # asking about.
-          changed = candidate.applicable? && (
-            candidate.payments.length != projection.payments.length ||
-            candidate.total_interest != projection.total_interest
-          )
-          candidate if changed
-        end
       end
 
       def currency
@@ -95,25 +65,18 @@ class Loan
         {
           scheduled: I18n.t("loans.tabs.schedule.chart.scheduled"),
           projected: I18n.t("loans.tabs.schedule.chart.projected"),
-          accelerated: I18n.t("loans.tabs.schedule.chart.accelerated"),
           today: I18n.t("loans.tabs.schedule.chart.today")
         }
       end
 
-      # Every series the chart draws is named here. A screen-reader user can
-      # otherwise identify the extra-payment line from the legend but never
-      # learn the one figure it exists to convey.
+      # Every series the chart draws is named here, with its payoff date.
       def aria_description
-        base = I18n.t(
+        I18n.t(
           "loans.tabs.schedule.chart.aria_description",
           current_balance: projection.current_balance.format,
           scheduled_payoff_date: long_date(schedule.payoff_date, I18n.t("loans.tabs.overview.unknown")),
           projected_payoff_date: long_date(projection.payoff_date, I18n.t("loans.tabs.schedule.chart.no_payoff"))
         )
-        return base unless accelerated
-
-        "#{base} #{I18n.t('loans.tabs.schedule.chart.aria_accelerated',
-                          accelerated_payoff_date: long_date(accelerated.payoff_date, I18n.t('loans.tabs.schedule.chart.no_payoff')))}"
       end
 
       def long_date(date, fallback)

@@ -50,7 +50,6 @@ class Loan
       re_amortisation_events: nil,
       payment_strategy: :reamortize,
       payment_amount: nil,
-      extra_for: nil,
       settle_at_schedule_end: true
     )
       @starting_balance = BigDecimal(starting_balance.to_s)
@@ -67,7 +66,6 @@ class Loan
       # whole question it exists to answer -- so it cannot let the simulator
       # size a payment from the balance in front of it.
       @payment_amount = payment_amount.nil? ? nil : BigDecimal(payment_amount.to_s)
-      @extra_for = callable!(extra_for || ->(_from, _to) { [] }, :extra_for)
       @settle_at_schedule_end = settle_at_schedule_end
 
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
@@ -121,25 +119,9 @@ class Loan
         end
         previous_sizing_rate = sizing_rate
 
-        # Interest first, on the balance the period OPENED with.
-        #
-        # Under monthly accrual there is ONE charge per period. An extra
-        # repayment landing part-way through cannot reduce it: the days before
-        # it arrived accrued on the full balance, and crediting the whole month
-        # at the reduced balance would hand the borrower interest they did not
-        # save. It reduces principal from this period forward, which is the
-        # honest answer a monthly-accrual engine can give. Apportioning within
-        # the period is what daily accrual is for.
+        # Interest first, on the balance the period OPENED with: one charge per
+        # period under monthly accrual.
         interest = (balance * accrual_rate).round(@currency_precision)
-
-        extra = extra_repayments_in(period_start, payment_date)
-        balance = [ balance - extra, BigDecimal("0") ].max
-
-        # When extras clear the balance outright the loan is recorded as paid
-        # off on this PAYMENT date, not on the day the extra landed. Monthly
-        # accrual has no finer granularity to offer: the period is the unit.
-        # Naming the earlier date would imply a precision the engine does not
-        # have, and would disagree with the interest it just charged.
 
         final = (@settle_at_schedule_end && index == @payment_schedule.length - 1) ||
           payment >= balance + interest
@@ -157,11 +139,6 @@ class Loan
           payment_number: index + 1,
           payment_date: payment_date,
           interest_rate: BigDecimal(rate_on(payment_date).to_s),
-          # Carried on the row so the result can count what the borrower
-          # actually paid. An extra reduces the balance without appearing in
-          # payment_amount, so a total built from payments alone understates
-          # the cost by exactly the extras.
-          extra_payment: extra,
           **step
         }
 
@@ -177,19 +154,6 @@ class Loan
     end
 
     private
-      # Whatever the resolver says belongs to this window, summed.
-      #
-      # Deliberately NOT re-filtered by date here. The resolver is asked for one
-      # window and owns which boundary each date falls on -- and it has to,
-      # because the answer differs for the final window, which has no successor
-      # to open on the last payment date. Re-checking inclusively at both ends
-      # would hand a repayment dated on a payment date to the period that closes
-      # on it AND the one that opens on it, and apply it twice.
-      def extra_repayments_in(from_date, to_date)
-        Array(@extra_for.call(from_date, to_date))
-          .sum(BigDecimal("0")) { |change| BigDecimal(change.fetch(:amount).to_s) }
-      end
-
       # The contracted rate on a given payment date: a re-amortisation event
       # effective that day, otherwise whatever the rate curve says.
       def rate_on(date)

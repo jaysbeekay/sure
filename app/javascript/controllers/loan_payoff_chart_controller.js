@@ -1,15 +1,10 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
 
-// Three lines on one chart:
+// Two lines on one chart:
 //
 //   scheduled   the original contract, origination -> maturity
 //   projected   where today's balance is actually heading
-//   accelerated the same, under a hypothetical regular extra repayment
-//
-// The last is absent until someone models one. All three coexist when it is
-// present, because "where am I heading, and where would I head if I paid more?"
-// is a comparison, and it needs both halves on screen.
 //
 // Series are distinguished by DASH PATTERN as well as colour. Hue alone fails
 // in greyscale and under deuteranopia, and red/green would be the worst
@@ -78,7 +73,6 @@ export default class extends Controller {
 
     const scheduled = (data.scheduled || []).map(toPoint);
     const projected = (data.projected || []).map(toPoint);
-    const accelerated = (data.accelerated || []).map(toPoint);
     if (scheduled.length < 2) return;
 
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
@@ -86,7 +80,6 @@ export default class extends Controller {
     const series = [
       { points: scheduled, key: "scheduled", color: this._token("--color-red-500", "#ef4444"), dash: "6 4", width: 1.5 },
       { points: projected, key: "projected", color: this._token("--color-green-600", "#16a34a"), dash: null, width: 2 },
-      { points: accelerated, key: "accelerated", color: this._token("--color-blue-600", "#2563eb"), dash: "2 3", width: 2 },
     ].filter((s) => s.points.length > 1);
 
     const allPoints = series.flatMap((s) => s.points);

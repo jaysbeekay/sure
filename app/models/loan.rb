@@ -163,11 +163,10 @@ class Loan < ApplicationRecord
     @amortization_schedule ||= AmortizationSchedule.for(self)
   end
 
-  # Where the loan is heading from today's balance, optionally under a
-  # hypothetical extra repayment. Not memoised: `extra_payment` makes each call
-  # a different question.
-  def payoff_projection(as_of: Date.current, extra_payment: nil)
-    PayoffProjection.new(self, as_of: as_of, extra_payment: extra_payment)
+  # Where the loan is heading from today's balance. Not memoised: `as_of`
+  # makes each call a different question.
+  def payoff_projection(as_of: Date.current)
+    PayoffProjection.new(self, as_of: as_of)
   end
 
   # The date the loan was drawn down. Recorded explicitly when the borrower
