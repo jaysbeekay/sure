@@ -13,7 +13,11 @@ import { Controller } from "@hotwired/stimulus";
 // fixed and back does not lose them.
 export default class extends Controller {
   static targets = ["rows", "template", "empty", "section", "rateType"];
-  static values = { variableTypes: Array };
+  // The one rate type that cannot move. Anything else non-blank is variable,
+  // the same reading as Loan#variable_rate_type?, so a provider-written value
+  // such as "arm" keeps its editor rather than being hidden by a list the
+  // form never offered it in.
+  static values = { fixedType: String };
 
   connect() {
     this.toggle();
@@ -34,9 +38,12 @@ export default class extends Controller {
   }
 
   toggle() {
-    const applies = this.variableTypesValue.includes(this.rateTypeTarget?.value);
+    const rateType = this.rateTypeTarget?.value ?? "";
+    const applies = rateType !== "" && rateType !== this.fixedTypeValue;
     this.sectionTarget.hidden = !applies;
-    for (const el of this.sectionTarget.querySelectorAll("input, select, button")) {
+    for (const el of this.sectionTarget.querySelectorAll(
+      "input, select, button",
+    )) {
       el.disabled = !applies;
     }
     this.#sync();

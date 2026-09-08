@@ -138,10 +138,6 @@ class Loan::AmortizationSchedule
       end
     end
 
-    def monthly_rate
-      @monthly_rate ||= annual_rate / 100 / 12
-    end
-
     def schedulable?
       term_months.positive? && principal.positive?
     end

@@ -158,11 +158,27 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
       "a re-amortising schedule must not label its first payment as THE monthly payment"
   end
 
+  # #100 decision 8: a provider writes rate types the form never offers. The
+  # select must still carry the loan's own value, or the browser submits the
+  # first option and saving any other field turns an "arm" loan into a fixed
+  # one without anyone choosing that.
+  test "the edit form keeps a provider-written rate type as the selected option" do
+    @account.loan.update!(rate_type: "arm")
+
+    get edit_loan_path(@account)
+
+    assert_response :success
+    assert_select "select[name='account[accountable_attributes][rate_type]'] option[value='arm'][selected]", { count: 1 },
+      "the provider's rate type must be the selected option"
+    assert_select "select[name='account[accountable_attributes][rate_type]'] option[value='fixed']", count: 1
+    assert_select "[data-loan-rate-changes-fixed-type-value='fixed']", count: 1
+  end
+
   # A row with one half filled in is a typo, not a blank. Dropping it silently
   # loses what the user typed between submit and redisplay and never tells them
   # which row went.
   test "a half-filled rate change is rejected rather than silently dropped" do
-    @account.loan.update!(rate_type: "variable")
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     patch loan_path(@account), params: {
       account: { accountable_attributes: {
@@ -171,7 +187,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
       } }
     }
 
-    assert_empty @account.loan.reload.variable_rate_schedule
+    assert_equal({ "2026-04-01" => "7.25" }, @account.loan.reload.variable_rate_schedule,
+      "a rejected submission must not alter the persisted schedule")
     loan = @account.loan
     loan.rate_changes = [ { effective_date: "", rate: "9" } ]
     assert_not loan.valid?
