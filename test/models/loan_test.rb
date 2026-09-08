@@ -761,6 +761,34 @@ class LoanTest < ActiveSupport::TestCase
     assert_empty Loan.find(loan.id).offset_accounts
   end
 
+  # CodeRabbit, #87: the first draft of this fix broke every ordinary edit of a
+  # variable loan that already had an offset. `validate_offset_accounts` built a
+  # fresh `LoanOffsetAccount` for each submitted account, and a NEW record
+  # cannot exclude itself from the account_id-unique-within-loan_id rule, so the
+  # link being KEPT collided with its own existing row. Harmless while this ran
+  # on `before_save` and the error was ignored; fatal once it became a real
+  # validation, because the form pre-populates the existing ids.
+  test "re-submitting an offset account the loan already has does not fail the save" do
+    family = families(:dylan_family)
+    loan = family.accounts.create!(
+      name: "Retained Offset Loan", balance: 250_000, currency: "USD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 5, term_months: 240)
+    ).loan
+    offset = family.accounts.create!(
+      name: "Retained Offset", balance: 10_000, currency: "USD", accountable: Depository.new
+    )
+    loan.update!(offset_account_ids: [ offset.id ])
+
+    fresh = Loan.find(loan.id)
+    assert fresh.update(offset_account_ids: [ offset.id ], interest_rate: 6),
+      "keeping an existing offset must not collide with its own join row"
+
+    reloaded = Loan.find(loan.id)
+    assert_equal [ offset.id ], reloaded.offset_accounts.pluck(:id)
+    assert_equal 6, reloaded.interest_rate.to_i,
+      "the unrelated edit in the same save must not be rolled back"
+  end
+
   # Guards the other direction: making this a validation must not stop a
   # legitimate offset edit from going through.
   test "a valid offset account still saves and links" do

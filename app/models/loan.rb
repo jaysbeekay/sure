@@ -719,7 +719,20 @@ class Loan < ApplicationRecord
       errors.add(:offset_account_ids, "contains an unknown account") if missing_ids.any?
 
       accounts.each do |account|
-        link = LoanOffsetAccount.new(loan: self, account:)
+        # Reuse the EXISTING join row when there is one, rather than building a
+        # fresh unsaved link. `LoanOffsetAccount` validates account_id unique
+        # within loan_id, and a new record cannot see that the row it collides
+        # with is the very link being kept -- so re-submitting an offset the
+        # loan already has failed its own uniqueness rule. A persisted record
+        # excludes itself from that check.
+        #
+        # Harmless while this ran on `before_save`, where the error was
+        # recorded and ignored. Once it became a real validation it rejected
+        # every ordinary edit of a variable loan that has offsets, because
+        # `LoansController#set_offset_accounts` pre-populates the form with the
+        # existing ids (CodeRabbit, #87).
+        link = loan_offset_accounts.find_by(account_id: account.id) ||
+          LoanOffsetAccount.new(loan: self, account:)
         next if link.valid?
 
         errors.add(:offset_account_ids, link.errors.full_messages.to_sentence)
