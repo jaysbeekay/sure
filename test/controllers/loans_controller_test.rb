@@ -104,11 +104,11 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_match "Total Interest", response.body
   end
 
-  # A variable loan IS amortizable since #104, so the unamortizable case is now
-  # a rate type the calculator does not recognise -- which a provider sync can
-  # supply, since Plaid's raw `interest_rate.type` is written straight through.
+  # A variable loan IS amortizable since #104, and a provider's own rate type
+  # reads as variable since #100 decision 8, so the unamortizable case is now
+  # a loan with no rate type at all.
   test "hides the schedule tab when the loan cannot be amortized" do
-    @account.loan.update!(rate_type: "teaser")
+    @account.loan.update!(rate_type: "")
 
     get account_path(@account, tab: "schedule")
 
