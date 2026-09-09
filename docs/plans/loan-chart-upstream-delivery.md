@@ -3,7 +3,13 @@
 **Tracker:** [#100](https://github.com/jaysbeekay/sure/issues/100) (the single open issue on this fork)
 · **Delivery vehicle:** [#107](https://github.com/jaysbeekay/sure/issues/107)
 · **Upstream issues:** we-promise/sure#3295 (engine + variable rates), we-promise/sure#3332 (projection + chart)
-· **Written:** 2026-09-08
+· **Written:** 2026-09-08 · **Updated:** 2026-09-09 (opened upstream; heads below are current)
+
+> **Status 2026-09-09.** we-promise/sure#2984 merged (`6c1c8eeec`), so Path A of §8 applied and was
+> executed: PR-1 is **we-promise/sure#3473** (ready for review; first review round addressed at
+> `0724c935`), PR-2 is **we-promise/sure#3474** (draft, stacked on #3473's commit), and
+> we-promise/sure#3296 is closed with the comment §8 specifies. #3332's body is Appendix A.
+> The candidate is rebuilt on upstream `main` directly; §5's `a0a4627a` base is superseded.
 
 This is the document an application developer executes. #100's body records *what* the chart
 does and the nine owner decisions behind it; this brief says *where* each piece is built, in
@@ -22,10 +28,15 @@ which pull request, against which branch, with which file, and what "done" means
 
 | Branch (on `jaysbeekay/sure`) | What it is | Head at time of writing |
 | --- | --- | --- |
-| `base/upstream-2984` | current `upstream/main` with we-promise/sure#2984 merged in | `45263aaf` |
-| `feat/loan-amortisation-engine` | PR #109 — engine port + variable rates (`Fixes #3295`) | `05785d7d` |
-| `feat/mvp-payoff-chart` | PR #111 — projection + chart, stacked on #109 (`Fixes #3332`) | `100c7deb` |
-| `mvp/upstream-candidate` | `upstream/main` (`51830f05`) + #2984 vendored (`a0a4627a`) + the two commits above squashed (`96114bb4`, `1c6c90be`) | **stale**: one commit behind each PR head (§5) |
+| `base/upstream-2984` | `upstream/main` of 2026-09-04 with we-promise/sure#2984 vendored; the diff base for PR #109's squash. Not a rebase target any more: upstream `main` carries #2984 itself since 2026-09-09 | `45263aaf` |
+| `feat/loan-amortisation-engine` | PR #109 — engine port + variable rates (`Fixes #3295`); the reviewed source of PR-1 | `50f94cb8` |
+| `feat/mvp-payoff-chart` | PR #111 — projection + chart, stacked on #109 (`Fixes #3332`); the reviewed source of PR-2 | `6eabe6f8` |
+| `upstream/loan-amortisation-engine` | **PR-1's branch, open as we-promise/sure#3473**: #109 squashed to one commit onto upstream `main` `1ab36dad` | `0724c935` |
+| `upstream/loan-balance-chart` | **PR-2's branch, open as we-promise/sure#3474 (draft)**: #111 squashed to one commit on top of PR-1's | `92210149` |
+| `mvp/upstream-candidate` | the same two commits; identical to `upstream/loan-balance-chart` | `92210149` |
+
+The two `upstream/*` refs are force-pushed with lease on every rebuild (§5); each revision of a
+PR replaces its single commit rather than appending, and the PR thread says so.
 
 `upstream` is **not** configured as a remote in a fresh clone of this fork. Add it:
 
@@ -54,9 +65,12 @@ loop cannot do any of that. If a
 maintainer wants #3332 without #3295, the answer is "the engine half of PR-1 without the
 variable-rate half", which is a re-cut of commit 1, not a rewrite.
 
-**External blocker.** we-promise/sure#2984 is open and `REVIEW_REQUIRED`; jjmata has not ruled on
-ordering between it and #3296. Building is unblocked; *opening* PR-1 waits for that ruling or
-for #2984 to merge (§8). Do not force-push #3296.
+**External blocker, resolved 2026-09-09.** we-promise/sure#2984 merged as `6c1c8eeec`; the merged
+loan files are byte-identical to the vendored copy. PR-1 opened as we-promise/sure#3473 and PR-2 as
+we-promise/sure#3474 (draft); we-promise/sure#3296 is closed. The one conflict between the PR-2
+branch and upstream `main` is `app/components/UI/account/chart.html.erb`, where upstream #2733
+added `data-time-series-chart-selectable-value="true"` to the block PR-2 moves into its `else`
+branch; the rebuild carries the attribute into that branch.
 
 ## 3. Decision map
 
@@ -89,33 +103,37 @@ the last push; automatic review does not run on drafts or on non-default base br
 
 ## 5. Step 0: rebuild the candidate from the PR heads
 
-The candidate is behind both PR heads: it predates #109's schema fix (`05785d7d`) and #111's
-browser test, hidden `tab` field and `data-series` attributes (`100c7deb`). Never push a
-candidate that was not rebuilt from the reviewed heads.
+Never push a candidate that was not rebuilt from the reviewed heads. Since 2026-09-09 the base
+is upstream `main` itself (#2984 is on it), so the vendored merge `a0a4627a` is gone from the
+recipe; `origin/base/upstream-2984` survives only as the diff base for PR-1's squash. This is
+the sequence that produced `0724c935` / `92210149`:
 
 ```bash
 git fetch origin && git fetch upstream main
-git checkout -B mvp/upstream-candidate a0a4627a          # upstream/main + #2984 vendored
-# commit 1: PR-1, squashed
+git checkout -B mvp/upstream-candidate upstream/main
+# commit 1: PR-1, squashed; applies cleanly
 git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index
 git commit -m "feat(loans): amortisation engine and variable-rate loans
 
 Fixes we-promise/sure#3295"
-# commit 2: PR-2, squashed
-git diff --binary origin/feat/loan-amortisation-engine origin/feat/mvp-payoff-chart | git apply --index
-git commit -m "feat(loans): payoff projection and the loan balance chart
+# commit 2: PR-2, squashed; one hunk in chart.html.erb is rejected (upstream #2733)
+git diff --binary origin/feat/loan-amortisation-engine origin/feat/mvp-payoff-chart | git apply --index --reject
+git show origin/feat/mvp-payoff-chart:app/components/UI/account/chart.html.erb > app/components/UI/account/chart.html.erb
+# then add `data-time-series-chart-selectable-value="true"` to the fallback <div> in the else branch, and:
+git add -A && git commit -m "feat(loans): payoff projection and the loan balance chart
 
 Fixes we-promise/sure#3332"
-bin/rails test test/models/loan test/models/loan_test.rb test/models/plaid_account/liabilities/mortgage_processor_test.rb test/controllers/loans_controller_test.rb test/controllers/accounts_controller_test.rb test/components/UI/account
+bin/rails test test/models/loan test/models/loan_test.rb test/models/plaid_account/liabilities/mortgage_processor_test.rb test/controllers/loans_controller_test.rb test/controllers/accounts_controller_test.rb test/components/UI/account test/i18n_test.rb
 DISABLE_PARALLELIZATION=true bin/rails test test/system/loan_payoff_chart_test.rb
 bin/rubocop && bundle exec erb_lint ./app/**/*.erb && npm run lint && bin/brakeman --no-pager
 git push --force-with-lease origin mvp/upstream-candidate
+git push --force-with-lease origin HEAD~1:refs/heads/upstream/loan-amortisation-engine   # #3473
+git push --force-with-lease origin HEAD:refs/heads/upstream/loan-balance-chart           # #3474
 ```
 
-If `a0a4627a` no longer merges cleanly onto a newer `upstream/main`, recreate it: check out
-`upstream/main`, `git merge --no-ff` the `pr-2984` ref (fetch it with
-`git fetch upstream pull/2984/head:pr-2984`), and use the new merge commit in place of `a0a4627a`
-everywhere in this brief.
+Fixes for upstream review findings go to the fork PR branches first (#109, then merged into
+#111), with their observed-to-fail tests, and reach upstream through this rebuild; the reply on
+the upstream thread names both commits.
 
 ## 6. PR-1 — `Fixes we-promise/sure#3295`
 
@@ -259,6 +277,12 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 - [ ] `bin/rails test`, system test, `bin/rubocop`, `erb_lint`, `npm run lint`, `bin/brakeman` clean
 
 ## 8. Opening upstream
+
+> **Executed 2026-09-09 via Path A.** #2984 had merged, so the candidate was rebuilt on upstream
+> `main` (§5) and PR-1 opened as we-promise/sure#3473 from `upstream/loan-amortisation-engine`;
+> PR-2 opened as a draft, we-promise/sure#3474, from `upstream/loan-balance-chart`, with its
+> body stating that its diff includes PR-1's commit until #3473 merges. #3296 closed with the
+> comment below. The text that follows is kept as the rationale.
 
 Both PRs depend on #2984's `Loan::AmortizationSchedule` API, which `upstream/main` does not
 have until #2984 merges. Which path applies is decided by **whether #2984 has merged**, not by
