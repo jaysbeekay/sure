@@ -445,4 +445,22 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame##{frame_id} h4", text: I18n.t("UI.account.chart.loan.projected_payoff"), count: 1
     assert_select "turbo-frame##{frame_id} h4", text: I18n.t("UI.account.chart.loan.interest_saved"), count: 1
   end
+
+  # The activity feed paginates through its own `entries` frame. That request
+  # renders the whole page and keeps one frame, so building the chart payload
+  # for it ran a full simulation per page turn for nothing.
+  test "a frame request outside the chart card does not build the chart payload" do
+    Loan::PayoffChart.any_instance.expects(:payload).never
+
+    get account_path(@account, page: 2), headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(@account, "entries") }
+
+    assert_response :success
+  end
+
+  test "the account's container frame request still builds the chart payload" do
+    get account_path(@account, period: "all_time"), headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(@account, :container) }
+
+    assert_response :success
+    assert_select "[data-controller='loan-payoff-chart']", count: 1
+  end
 end

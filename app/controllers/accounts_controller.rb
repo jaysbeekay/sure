@@ -87,10 +87,12 @@ class AccountsController < ApplicationController
       return render_statement_tab_frame if statement_tab_frame_request?
     end
 
-    # After the statements-frame return: that frame carries no chart, and the
-    # payload runs the schedule and the projection, so building it there is a
-    # full simulation per poll for nothing.
-    @loan_chart = loan_payoff_chart(@account, as_of: @as_of, period: @period)
+    # Only for a response that will actually show the chart card. The payload
+    # runs the schedule and the projection; a Turbo frame request for the
+    # activity feed's `entries` frame (its pagination) renders the whole page
+    # and keeps one frame, so building it there was a full simulation per page
+    # turn for nothing. Same reasoning as the statements-frame return above.
+    @loan_chart = loan_payoff_chart(@account, as_of: @as_of, period: @period) if chart_card_requested?
 
     per_page = safe_per_page(stored_per_page_default)
     store_per_page!(per_page) if params[:per_page].present?
@@ -350,6 +352,18 @@ class AccountsController < ApplicationController
       Rails.logger.error("Loan payoff chart failed for account #{account.id}: #{e.class} - #{e.message}")
       Sentry.capture_exception(e) { |scope| scope.set_tags(record_type: "Account", record_id: account.id) } if defined?(Sentry)
       nil
+    end
+
+    # A plain visit, or a frame request for one of the two frames the chart
+    # card sits inside: the account's container frame and the chart card's own
+    # chart_details frame. Any other frame is rendered and then discarded.
+    def chart_card_requested?
+      return true unless turbo_frame_request?
+
+      request.headers["Turbo-Frame"].in?([
+        helpers.dom_id(@account, :container),
+        helpers.dom_id(@account, :chart_details)
+      ])
     end
 
     def family
