@@ -1,6 +1,8 @@
 require "test_helper"
 
 class InvestmentStatementTest < ActiveSupport::TestCase
+  include PortfolioFlowTestHelper
+
   setup do
     @family = families(:empty)
     # families(:empty) defaults to currency "USD"
@@ -632,7 +634,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     aggregate_queries = queries.grep(/SUM\(CASE WHEN trades\.qty > 0/)
     assert_equal 1, aggregate_queries.size
-    assert_includes aggregate_queries.first, "FROM entries JOIN trades"
+    assert_includes aggregate_queries.first, "FROM entries LEFT JOIN trades"
     assert_includes aggregate_queries.first, "entries.entryable_type = 'Trade'"
     assert_includes aggregate_queries.first, "entries.account_id IN"
     assert_includes aggregate_queries.first, "entries.excluded = false"
@@ -781,6 +783,125 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     account_queries = queries.grep(/FROM "accounts"/)
     assert_equal 1, account_queries.size,
       "the investment_accounts lookup backing current_holdings should only run once, even for the empty case"
+  end
+
+  test "contributions exclude a fee the entry amount already includes" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    # Trade::CreateForm shape: amount = qty * price + fee = 1005
+    create_portfolio_trade(account: account, qty: 10, price: 100, fee: 5, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(1000, "USD"), totals.contributions
+    assert_equal Money.new(5, "USD"), totals.fees
+  end
+
+  test "contributions are not reduced by a fee the entry amount excludes" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    # Kraken / Binance-spot shape: amount = qty * price = 1000, fee reported separately
+    create_portfolio_trade(account: account, qty: 10, price: 100, fee: 5, date: period.start_date, fee_in_amount: false)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(1000, "USD"), totals.contributions
+    assert_equal Money.new(5, "USD"), totals.fees
+  end
+
+  test "withdrawals are the sale proceeds after the reported fee" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    # amount = -1000 + 5 = -995 (fee inside the amount)
+    create_portfolio_trade(account: account, qty: -10, price: 100, fee: 5, date: period.start_date)
+    # amount = -1000, fee 5 reported separately
+    create_portfolio_trade(account: account, qty: -10, price: 100, fee: 5, date: period.start_date, fee_in_amount: false)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(1990, "USD"), totals.withdrawals
+    assert_equal Money.new(10, "USD"), totals.fees
+    assert_equal Money.new(0, "USD"), totals.contributions
+  end
+
+  test "fees sum Fee-labelled entries and transfer fee legs alongside trades.fee" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    checking = @family.accounts.create!(name: "Checking", balance: 5000, currency: "USD", accountable: Depository.new)
+
+    create_portfolio_trade(account: account, qty: 1, price: 100, fee: 2, date: period.start_date)
+    # IBKR / Questrade commission: a Fee-labelled Transaction
+    create_labelled_transaction(account: account, label: "Fee", amount: 1.5, date: period.start_date)
+    # A Fee-labelled trade counts its amount, not its (zero) fee column
+    create_portfolio_trade(account: account, qty: 0, price: 0, label: "Fee", date: period.start_date).update!(amount: 9.95)
+    # The fee leg of a transfer into the account, which lands in the source account (not counted here)
+    create_linked_transfer(family: @family, from: checking, to: account, amount: 300, date: period.start_date, source_fee_amount: 4)
+    # An unrelated deposit and buy-labelled cash movement contribute nothing to fees
+    create_labelled_transaction(account: account, label: "Contribution", amount: -300, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(13.45, "USD"), totals.fees
+    assert_equal Money.new(100, "USD"), totals.contributions
+    assert_equal 2, totals.trades_count
+    assert_equal 13.45, @statement.total_fees
+  end
+
+  test "dividends and interest count the transaction shapes providers write" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 50, date: period.start_date)
+    create_income_transaction(account: account, label: "Dividend", amount: 12.5, date: period.start_date, extra_shape: :flat)
+    create_income_transaction(account: account, label: "Interest", amount: 4, date: period.start_date, extra_shape: :none)
+    create_plaid_dividend_trade(account: account, date: period.start_date)
+    # Pending income is not counted until it posts
+    create_labelled_transaction(account: account, label: "Dividend", amount: -99, date: period.start_date, extra: { "plaid" => { "pending" => true } })
+    # A labelled transaction outside the period is not counted
+    create_income_transaction(account: account, label: "Dividend", amount: 999, date: period.start_date - 1.day, extra_shape: :flat)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(62.5, "USD"), totals.dividends
+    assert_equal Money.new(4, "USD"), totals.interest
+    assert_equal Money.new(66.5, "USD"), totals.total_income
+    assert_equal Money.new(0, "USD"), totals.contributions
+  end
+
+  test "totals read their income and fee labels from the flow classifier" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    create_portfolio_trade(account: account, qty: 2, price: 60, label: "Other", date: period.start_date)
+
+    assert_equal Money.new(120, "USD"), @statement.totals(period: period).contributions
+
+    # Widen the classifier's income set and the same trade leaves the
+    # contribution bucket without Totals being edited.
+    Portfolio::FlowClassifier.stubs(:labels_for).with(:income).returns([ "Dividend", "Interest", "Other" ])
+    Portfolio::FlowClassifier.stubs(:labels_for).with(:fee).returns([ "Fee" ])
+
+    assert_equal Money.new(0, "USD"), InvestmentStatement.new(@family, user: nil).totals(period: period).contributions
+  end
+
+  test "the income buckets cover every income label the classifier knows" do
+    assert_equal %w[Dividend Interest], Portfolio::FlowClassifier.labels_for(:income),
+      "Totals splits income into dividends and interest by literal label; a new income label needs its own bucket there"
+  end
+
+  test "totals cache key carries the v3 aggregation version" do
+    create_investment_account(balance: 500)
+    seen_keys = []
+    Rails.cache.stubs(:fetch).with { |*args| seen_keys << Array(args.first); true }.returns(
+      { contributions: 0, withdrawals: 0, dividends: 0, interest: 0, fees: 0, trades_count: 0 }
+    )
+
+    @statement.totals(period: Period.current_month)
+
+    assert_equal 1, seen_keys.size
+    assert_includes seen_keys.first, "totals_query/v3"
   end
 
   private

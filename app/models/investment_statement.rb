@@ -3,7 +3,7 @@ require "digest/md5"
 class InvestmentStatement
   include Monetizable
 
-  monetize :total_contributions, :total_dividends, :total_interest, :unrealized_gains
+  monetize :total_contributions, :total_dividends, :total_interest, :total_fees, :unrealized_gains
 
   attr_reader :family, :user
 
@@ -23,6 +23,7 @@ class InvestmentStatement
       withdrawals: Money.new(result[:withdrawals], family.currency),
       dividends: Money.new(result[:dividends], family.currency),
       interest: Money.new(result[:interest], family.currency),
+      fees: Money.new(result[:fees], family.currency),
       trades_count: result[:trades_count],
       currency: family.currency
     )
@@ -174,6 +175,11 @@ class InvestmentStatement
   # Total interest (all time) - returns numeric for monetize
   def total_interest
     all_time_totals.interest&.amount || 0
+  end
+
+  # Total fees (all time) - returns numeric for monetize
+  def total_fees
+    all_time_totals.fees&.amount || 0
   end
 
   def unrealized_gains_trend
@@ -388,7 +394,10 @@ class InvestmentStatement
       @all_time_totals ||= totals(period: Period.all_time)
     end
 
-    PeriodTotals = Data.define(:contributions, :withdrawals, :dividends, :interest, :trades_count, :currency) do
+    # fees is stated separately from contributions and withdrawals: a buy's
+    # contribution is the cost of the securities and its fee is in fees, so
+    # contributions + fees is the cash that left for a purchase.
+    PeriodTotals = Data.define(:contributions, :withdrawals, :dividends, :interest, :fees, :trades_count, :currency) do
       def net_flow
         contributions - withdrawals
       end
@@ -477,7 +486,10 @@ class InvestmentStatement
       account_ids_hash = Digest::MD5.hexdigest(account_ids.sort.join(","))
 
       Rails.cache.fetch([
-        "investment_statement", "totals_query/v2", family.id, user&.id,
+        # Bumped when the aggregation's meaning changes (v2: real income
+        # totals; v3: fees, and contributions net of reported fees) so a
+        # deploy never serves the previous shape from Redis.
+        "investment_statement", "totals_query/v3", family.id, user&.id,
         account_ids_hash, date_range.begin, date_range.end, family.entries_cache_version
       ]) { Totals.new(family, account_ids: account_ids, date_range: date_range).call }
     end

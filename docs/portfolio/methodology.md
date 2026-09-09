@@ -53,6 +53,24 @@ issue #119).
 | P18 | Excluded entries, pending transactions and valuations are not classified (nil in Ruby, NULL in SQL) and contribute to nothing. | `Portfolio::FlowClassifierTest` "excluded entries, pending transactions and valuations are not classified" | I2 |
 | P19 | Every label in `Transaction::ACTIVITY_LABELS` has a rule in `Portfolio::FlowClassifier::LABEL_RULES`. Adding a label without deciding its class fails the build. | `Portfolio::FlowClassifierTest` "every activity label has a rule" | maintainability |
 | P20 | The Ruby form (`#classify`) and the SQL form (`#sql_case`, `#classify_ids`) are generated from the same rule table and agree on every entry of a corpus that covers every label, storage shape, kind and counterpart position, at family, account and household scope. The SQL binds only the scope ids; every other literal is a constant. | `Portfolio::FlowClassifierTest` "the SQL form agrees with the Ruby form on every corpus entry at both scopes", "the SQL form only binds the scope ids and never interpolates entry data" | S4 |
+| P21 | `InvestmentStatement::Totals` states contributions (buys) net of any fee the trade reports in `trades.fee`, whichever way the writer stored the amount: `GREATEST(ABS(amount) - fee, ABS(qty * price))`. Manual trades and Binance P2P write `qty * price + fee`; Kraken and Binance spot write `qty * price`; both yield the cost of the securities. A fee a provider embeds but never reports stays inside the contribution, because it is cash that moved. | `InvestmentStatementTest` "contributions exclude a fee the entry amount already includes", "contributions are not reduced by a fee the entry amount excludes" | D4, provider audit |
+| P22 | Withdrawals (sells) are the proceeds after the reported fee: `LEAST(ABS(amount), ABS(qty * price) - fee)`, floored at zero. | `InvestmentStatementTest` "withdrawals are the sale proceeds after the reported fee" | D4 |
+| P23 | `fees` is the sum of Fee-labelled entries (Trade or Transaction), transfer fee legs, and `trades.fee` on every other trade, converted at each entry's date. A Fee-labelled trade counts its amount, never also its fee column. Exposed as `PeriodTotals#fees` and `InvestmentStatement#total_fees`. | `InvestmentStatementTest` "fees sum Fee-labelled entries and transfer fee legs alongside trades.fee" | D4, M6 |
+| P24 | Dividends and interest are summed by label over trades and transactions alike, so every storage shape in the provider audit counts; pending transactions and entries outside the period do not. The Plaid zero-amount shape contributes zero (known limitation). | `InvestmentStatementTest` "dividends and interest count the transaction shapes providers write", "totals aggregate dividend and interest income from income trades", "totals convert foreign-currency dividends into family currency" | S5, we-promise/sure#3350 |
+| P25 | `Totals` reads its income and fee label sets from `Portfolio::FlowClassifier` rather than carrying its own, and its dividend / interest buckets are checked against that set, so the totals and the classifier cannot disagree about which labels are income. Income and fee labels are excluded from the direction buckets, so a relabelled buy is counted once. | `InvestmentStatementTest` "totals read their income and fee labels from the flow classifier", "the income buckets cover every income label the classifier knows", "a buy relabeled to Dividend is counted as income only, not also as a contribution" | 0.4.3 |
+| P26 | The totals cache key carries the aggregation version (`totals_query/v3`), bumped whenever the meaning of a column changes, so a deploy never serves the previous shape from Redis. | `InvestmentStatementTest` "totals cache key carries the v3 aggregation version" | I4 |
+
+## Totals
+
+`InvestmentStatement#totals(period:)` returns contributions, withdrawals,
+dividends, interest, fees and a trade count for the period. The invariant the
+fee rows protect: **no fee is inside contributions or withdrawals and also
+inside fees**. For a manual buy of 10 × 100 with a 5 fee, contributions are
+1 000 and fees 5, and their sum is the 1 005 that left the account.
+
+Contributions and withdrawals remain trades-only, as before this change;
+labelled Contribution / Withdrawal transactions are the cash-flow figures of
+`InvestmentFlowStatement`, a different question.
 
 ## Flow classes
 
@@ -75,7 +93,7 @@ by sign).
 Read from the processors, not inferred. "Amount includes fee" says whether
 the entry amount a processor writes already contains the commission it
 reports in `trades.fee`; it is the input to the fee arithmetic in
-`InvestmentStatement::Totals` (rows P21 onward, added with that change).
+`InvestmentStatement::Totals` (rows P21-P23).
 
 | Provider | Trades: `trades.fee` set? amount includes fee? | Separate Fee entry | Dividend / Interest shape | Transfers | Pending flag |
 | --- | --- | --- | --- | --- | --- |

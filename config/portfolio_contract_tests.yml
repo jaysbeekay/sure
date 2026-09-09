@@ -126,3 +126,38 @@ P20:
     tests:
       - the SQL form agrees with the Ruby form on every corpus entry at both scopes
       - the SQL form only binds the scope ids and never interpolates entry data
+P21:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - contributions exclude a fee the entry amount already includes
+      - contributions are not reduced by a fee the entry amount excludes
+P22:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - withdrawals are the sale proceeds after the reported fee
+P23:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - fees sum Fee-labelled entries and transfer fee legs alongside trades.fee
+P24:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - dividends and interest count the transaction shapes providers write
+      - totals aggregate dividend and interest income from income trades
+      - totals convert foreign-currency dividends into family currency
+P25:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - totals read their income and fee labels from the flow classifier
+      - the income buckets cover every income label the classifier knows
+      - a buy relabeled to Dividend is counted as income only, not also as a contribution
+P26:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - totals cache key carries the v3 aggregation version
