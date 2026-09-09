@@ -114,11 +114,15 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
   # A loan drawn down today has one recorded point at most and no history to
   # compare against; the page must still render.
   test "a loan originated today renders a valid payload with no exception" do
-    account = Account.create!(
-      family: @family, name: "New Loan", balance: 500_000, currency: "USD",
-      accountable: Loan.new(subtype: "mortgage", interest_rate: 6, term_months: 24,
-                            rate_type: "fixed", start_date: @today)
-    )
+    # Created on the pinned day itself: an origination date may not lie in the
+    # future, and @today is ahead of the calendar.
+    account = travel_to(@today) do
+      Account.create!(
+        family: @family, name: "New Loan", balance: 500_000, currency: "USD",
+        accountable: Loan.new(subtype: "mortgage", interest_rate: 6, term_months: 24,
+                              rate_type: "fixed", start_date: @today)
+      )
+    end
     account.balances.create!(date: @today, balance: 500_000, currency: "USD",
                              start_cash_balance: 500_000, flows_factor: -1)
 
