@@ -1,4 +1,40 @@
 <%# locals: (statement:, period:, as_of:, issues:) %>
 
-<%# TODO(#120): section body lands in a following commit. %>
-<div id="portfolio-data_quality"></div>
+<%# The support runbook for "why is my return missing": each row names the
+    holding and the reason (P31), and links to where the user can fix it. %>
+<div id="portfolio-data-quality" class="space-y-4">
+  <% issues.group_by(&:kind).each do |kind, kind_issues| %>
+    <div class="space-y-2" data-portfolio-issue-kind="<%= kind %>">
+      <div class="flex items-start gap-2">
+        <span class="text-warning mt-0.5"><%= icon("alert-triangle", size: "sm", color: "current") %></span>
+        <div>
+          <h3 class="text-sm font-medium text-primary"><%= t("portfolios.data_quality.kinds.#{kind}.title") %></h3>
+          <p class="text-xs text-secondary"><%= t("portfolios.data_quality.kinds.#{kind}.description", days: InvestmentStatement::STALE_PRICE_AFTER_DAYS) %></p>
+        </div>
+      </div>
+      <ul class="bg-container-inset rounded-lg divide-y divide-divider">
+        <% kind_issues.each do |issue| %>
+          <li class="flex items-center justify-between gap-4 px-4 py-2 text-sm">
+            <div class="min-w-0">
+              <p class="text-primary font-medium"><%= issue.security.ticker %></p>
+              <p class="text-xs text-secondary truncate"><%= issue.security.name.presence || issue.security.ticker %></p>
+            </div>
+            <div class="text-right text-xs text-secondary shrink-0">
+              <% case kind %>
+              <% when :missing_cost_basis %>
+                <% if issue.holding %>
+                  <span class="mr-2"><%= issue.holding.account.name %></span>
+                  <%= link_to t("portfolios.data_quality.set_cost_basis"), holding_path(issue.holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline" %>
+                <% end %>
+              <% when :stale_price %>
+                <%= issue.detail ? t("portfolios.data_quality.last_priced", date: l(issue.detail, format: :long)) : t("portfolios.data_quality.never_priced") %>
+              <% when :provider %>
+                <%= t("portfolios.data_quality.provider_statuses.#{issue.detail}", default: issue.detail.to_s) %>
+              <% end %>
+            </div>
+          </li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+</div>

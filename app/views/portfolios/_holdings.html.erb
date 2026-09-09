@@ -1,4 +1,124 @@
 <%# locals: (statement:, period:, as_of:, rows:, sort:, dir:, by:) %>
 
-<%# TODO(#120): section body lands in a following commit. %>
-<div id="portfolio-holdings"></div>
+<%#
+  One row per security across every account (P1), sorted by the statement
+  (P29). Every figure on a row comes from HoldingsTableRow: nothing here
+  calls Holding#avg_cost, #trend or #day_change, each of which issues a
+  query per holding, so the page's query count does not grow with rows.
+  A row expands (native <details>) to its per-account positions, each with
+  the existing holding drawer (D3).
+%>
+<%
+  active_sort = sort.presence || "value"
+  active_dir = dir.presence || "desc"
+  sort_link = ->(key) {
+    next_dir = if active_sort == key
+      active_dir == "asc" ? "desc" : "asc"
+    else
+      key == "name" ? "asc" : "desc"
+    end
+    portfolio_path({ period: period.key, sort: key, dir: next_dir, by: by }.compact)
+  }
+  aria_sort = ->(key) { active_sort == key ? (active_dir == "asc" ? "ascending" : "descending") : nil }
+%>
+
+<div id="portfolio-holdings" class="bg-container-inset rounded-xl p-1 overflow-x-auto">
+  <div class="w-max lg:w-full min-w-[56rem]">
+    <div class="grid grid-cols-12 items-center uppercase text-xs font-medium text-secondary px-4 py-2" role="row">
+      <% [ [ "name", "security", "col-span-3" ], [ nil, "accounts", "col-span-1 justify-self-end" ], [ nil, "qty", "col-span-1 justify-self-end" ], [ nil, "avg_cost", "col-span-1 justify-self-end" ], [ "value", "value", "col-span-2 justify-self-end" ], [ "weight", "weight", "col-span-1 justify-self-end" ], [ "return", "unrealized", "col-span-2 justify-self-end" ], [ "day_change", "day_change", "col-span-1 justify-self-end" ] ].each do |key, label, classes| %>
+        <% if key %>
+          <%= link_to sort_link.call(key),
+                class: class_names("inline-flex items-center gap-1 hover:text-primary", classes, "text-primary" => active_sort == key),
+                data: { turbo_frame: "portfolio_sections" },
+                aria: { sort: aria_sort.call(key) }.compact do %>
+            <%= t("portfolios.holdings.columns.#{label}") %>
+            <% if active_sort == key %>
+              <%= icon(active_dir == "asc" ? "chevron-up" : "chevron-down", size: "xs") %>
+            <% end %>
+          <% end %>
+        <% else %>
+          <%= tag.p t("portfolios.holdings.columns.#{label}"), class: classes %>
+        <% end %>
+      <% end %>
+    </div>
+
+    <div class="bg-container rounded-lg shadow-border-xs divide-y divide-divider">
+      <% rows.each do |row| %>
+        <details class="group/row">
+          <summary class="list-none cursor-pointer grid grid-cols-12 items-center text-primary text-sm font-medium p-4 hover:bg-container-hover focus-ring rounded-lg" data-portfolio-holding="<%= row.ticker %>">
+            <div class="col-span-3 flex items-center gap-3 min-w-0">
+              <%= icon("chevron-right", size: "sm", class: "shrink-0 text-secondary transition-transform group-open/row:rotate-90") %>
+              <% if (logo = row.security.display_logo_url).present? %>
+                <%= image_tag logo, class: "w-8 h-8 rounded-full shrink-0", loading: "lazy", alt: row.ticker %>
+              <% else %>
+                <%= render DS::FilledIcon.new(variant: :text, text: row.name, size: "md", rounded: true) %>
+              <% end %>
+              <div class="min-w-0 space-y-0.5">
+                <p class="truncate"><%= row.name %></p>
+                <div class="flex items-center gap-2">
+                  <%= tag.p row.ticker, class: "text-secondary text-xs uppercase" %>
+                  <% if row.missing_cost_basis %>
+                    <span class="inline-flex items-center gap-1 text-xs text-warning" title="<%= t("portfolios.holdings.missing_cost_basis_hint") %>">
+                      <%= icon("info", size: "xs", color: "current") %>
+                      <%= t("portfolios.holdings.missing_cost_basis") %>
+                    </span>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+
+            <p class="col-span-1 text-right text-secondary"><%= row.accounts_count %></p>
+            <p class="col-span-1 text-right privacy-sensitive"><%= format_quantity(row.qty, exact: row.security.crypto?) %></p>
+            <p class="col-span-1 text-right privacy-sensitive">
+              <%= row.avg_cost ? format_money(row.avg_cost) : tag.span("—", class: "text-secondary") %>
+            </p>
+            <p class="col-span-2 text-right privacy-sensitive"><%= format_money(row.amount_money) %></p>
+            <div class="col-span-1 flex justify-end items-center gap-2">
+              <%= render "shared/progress_circle", progress: row.weight %>
+              <%= tag.p number_to_percentage(row.weight, precision: 1) %>
+            </div>
+            <div class="col-span-2 text-right">
+              <% if row.unrealized %>
+                <p class="privacy-sensitive" style="color: <%= row.unrealized.color %>"><%= format_money(row.unrealized.value) %></p>
+                <p class="text-xs privacy-sensitive" style="color: <%= row.unrealized.color %>">(<%= row.unrealized.percent_formatted %>)</p>
+              <% else %>
+                <p class="text-secondary">—</p>
+                <p class="text-xs text-secondary"><%= t("portfolios.holdings.no_cost_basis") %></p>
+              <% end %>
+            </div>
+            <div class="col-span-1 text-right">
+              <% if row.day_change %>
+                <p class="privacy-sensitive" style="color: <%= row.day_change.color %>"><%= format_money(row.day_change.value) %></p>
+                <p class="text-xs privacy-sensitive" style="color: <%= row.day_change.color %>">(<%= row.day_change.percent_formatted %>)</p>
+              <% else %>
+                <p class="text-secondary">—</p>
+              <% end %>
+            </div>
+          </summary>
+
+          <div class="px-4 pb-4 pl-14">
+            <div class="rounded-lg bg-container-inset divide-y divide-divider" data-portfolio-positions="<%= row.ticker %>">
+              <% row.positions.each do |holding| %>
+                <div class="grid grid-cols-12 items-center text-sm px-4 py-2">
+                  <p class="col-span-4 text-primary truncate"><%= holding.account.name %></p>
+                  <p class="col-span-2 text-right text-secondary privacy-sensitive"><%= format_quantity(holding.qty, exact: holding.account.crypto?) %></p>
+                  <p class="col-span-2 text-right text-secondary privacy-sensitive">
+                    <% if holding.cost_basis.present? && (holding.cost_basis_locked? || holding.cost_basis.positive?) %>
+                      <%= format_money(Money.new(holding.cost_basis, holding.currency)) %>
+                    <% else %>
+                      <span title="<%= t("portfolios.holdings.missing_cost_basis_hint") %>">—</span>
+                    <% end %>
+                  </p>
+                  <p class="col-span-2 text-right text-primary privacy-sensitive"><%= format_money(holding.amount_money) %></p>
+                  <p class="col-span-2 text-right">
+                    <%= link_to t("portfolios.holdings.open_position"), holding_path(holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline text-xs" %>
+                  </p>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </details>
+      <% end %>
+    </div>
+  </div>
+</div>

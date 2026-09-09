@@ -206,3 +206,54 @@ P31:
     tests:
       - data_quality_issues flags missing cost basis, stale prices and unhealthy providers
       - data_quality_issues issues a bounded number of queries
+P32:
+  - file: test/models/portfolio/section_registry_test.rb
+    class: Portfolio::SectionRegistryTest
+    tests:
+      - orders sections by the user's saved order, appending anything it omits
+      - ignores keys in the saved order that no longer exist
+      - appends extra sections after the built-ins
+      - registers the six built-in sections with their partials and locals
+P33:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - saves the section order and collapsed set under the portfolio namespace only
+      - drops preference keys that are not the portfolio's own
+  - file: test/models/user_test.rb
+    class: UserTest
+    tests:
+      - section preferences are namespaced so two pages never touch each other's keys
+P34:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - redirects users without preview access to the dashboard
+      - the nav shows Portfolio on desktop only, and never without the preview flag
+  - file: test/controllers/pages_controller_test.rb
+    class: PagesControllerTest
+    tests:
+      - dashboard investment widget links to the portfolio hub for preview users only
+P35:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - holdings table renders one row per security with its per-account positions
+      - holdings table sorts through whitelisted links that keep the period and grouping
+      - the page's query count is bounded and does not grow with holdings
+P36:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - allocation donut carries the grouping's segments and switches grouping through links
+      - accounts grid links every countable investment account to its holdings tab and skips excluded shares
+      - data quality lists the reasons and hides itself when there is nothing to fix
+  - file: test/helpers/portfolios_helper_test.rb
+    class: PortfoliosHelperTest
+    tests:
+      - allocation colours come from the shared chart palette and wrap around
+P37:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - average costs are preloaded in one query and agree with Holding#calculate_avg_cost

@@ -171,6 +171,127 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "a[href=?]", portfolio_path, count: 0
   end
 
+  # --- holdings table tests ---
+
+  test "holdings table renders one row per security with its per-account positions" do
+    second = create_second_aapl_account(qty: 20, price: 215)
+    statement = InvestmentStatement.new(@family, user: @user)
+    row = statement.holdings_table_rows.find { |r| r.ticker == "AAPL" }
+    assert_equal 2, row.positions.size, "fixture must hold AAPL in two accounts"
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "#portfolio-holdings summary[data-portfolio-holding='AAPL']", count: 1
+    assert_select "#portfolio-holdings summary[data-portfolio-holding='AAPL'] p.privacy-sensitive", text: ApplicationController.helpers.format_money(row.amount_money)
+    positions = css_select("#portfolio-holdings [data-portfolio-positions='AAPL'] a[href^='/holdings/']")
+    assert_equal 2, positions.size
+    assert_includes positions.map { |a| a["href"] }, holding_path(second.holdings.first)
+  end
+
+  test "holdings table sorts through whitelisted links that keep the period and grouping" do
+    zzz = Security.create!(ticker: "ZZZ", name: "Zeta")
+    Holding.create!(account: accounts(:investment), security: zzz, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+
+    get portfolio_path(sort: "name", dir: "asc", by: "kind")
+    assert_response :success
+
+    assert_equal %w[AAPL ZZZ], css_select("#portfolio-holdings summary[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
+    assert_select "#portfolio-holdings a[aria-sort='ascending'][href=?]", "#{portfolio_path}?by=kind&dir=desc&period=last_30_days&sort=name"
+    assert_select "#portfolio-holdings a[href=?]", "#{portfolio_path}?by=kind&dir=desc&period=last_30_days&sort=value"
+    assert_select "#portfolio-holdings a[aria-sort]", count: 1
+
+    get portfolio_path(sort: "value", dir: "asc")
+    assert_equal %w[ZZZ AAPL], css_select("#portfolio-holdings summary[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
+  end
+
+  test "holdings table flags a row whose position has no cost basis" do
+    priced = Security.create!(ticker: "BASIS", name: "With basis")
+    Holding.create!(account: accounts(:investment), security: priced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+
+    get portfolio_path
+    assert_response :success
+
+    # holdings(:one) carries no cost basis; BASIS does.
+    assert_select "summary[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
+    assert_select "summary[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
+    assert_select "summary[data-portfolio-holding='BASIS']", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))}/
+  end
+
+  test "the page's query count is bounded and does not grow with holdings" do
+    build_portfolio(accounts: 10, securities: 6)
+    baseline = capture_sql_queries { get portfolio_path }
+    assert_response :success
+
+    # Measured: 54 queries for this page (layout included) at 10 accounts and
+    # 60 holdings when this test was written, none of them per holding or per
+    # account. The ceiling is that figure plus a little headroom, not a
+    # guess; the assertion below is the one that matters.
+    assert_operator baseline.size, :<=, PORTFOLIO_QUERY_CEILING, "GET /portfolio issued #{baseline.size} queries"
+
+    build_portfolio(accounts: 10, securities: 2, existing_accounts: @family.accounts.where("name LIKE 'Bulk %'").to_a)
+    grown = capture_sql_queries { get portfolio_path }
+    assert_response :success
+
+    assert_equal baseline.size, grown.size, "adding 20 holdings changed the query count:\n#{(grown - baseline).join("\n")}"
+  end
+
+  # --- accounts, allocation and data quality tests ---
+
+  test "accounts grid links every countable investment account to its holdings tab and skips excluded shares" do
+    other = users(:family_member)
+    shared = @family.accounts.create!(name: "Shared brokerage", balance: 500, currency: "USD", accountable: Investment.new, owner: other)
+    shared.share_with!(@user, permission: "read_only", include_in_finances: false)
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "#portfolio-accounts a[href=?]", account_path(accounts(:investment), tab: "holdings")
+    assert_select "#portfolio-accounts a[href=?]", account_path(shared, tab: "holdings"), count: 0
+    assert_equal InvestmentStatement.new(@family, user: @user).investment_accounts.count, css_select("#portfolio-accounts a").size
+  end
+
+  test "allocation donut carries the grouping's segments and switches grouping through links" do
+    statement = InvestmentStatement.new(@family, user: @user)
+
+    get portfolio_path
+    assert_response :success
+    mount = css_select("#portfolio-allocation [data-controller='donut-chart']").first
+    segments = JSON.parse(mount["data-donut-chart-segments-value"])
+    assert_equal statement.allocation_by(nil).map(&:id), segments.map { |s| s["id"] }
+    assert_in_delta 100.0, segments.sum { |s| s["percentage"] }, 0.2
+    assert segments.all? { |s| s["color"].match?(/\A#\h{6}\z/) }
+
+    get portfolio_path(by: "kind", sort: "name", dir: "asc")
+    assert_response :success
+    assert_select "#portfolio-allocation a[aria-current='true'][href=?]", "#{portfolio_path}?by=kind&dir=asc&period=last_30_days&sort=name"
+    assert_select "#portfolio-allocation a[href=?]", "#{portfolio_path}?by=currency&dir=asc&period=last_30_days&sort=name"
+    assert_select "#portfolio-allocation [data-portfolio-allocation='kind'] p", text: I18n.t("portfolios.allocation.kinds.standard")
+  end
+
+  test "data quality lists the reasons and hides itself when there is nothing to fix" do
+    unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
+    offline = Security.create!(ticker: "OFFL", name: "Offline", offline: true)
+    holding = Holding.create!(account: accounts(:investment), security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    Holding.create!(account: accounts(:investment), security: offline, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    Security::Price.create!(security: offline, date: Date.current, price: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(holding), text: I18n.t("portfolios.data_quality.set_cost_basis")
+    assert_select "[data-portfolio-issue-kind='stale_price'] li", text: /NOPX/
+    assert_select "[data-portfolio-issue-kind='stale_price'] li", text: /#{I18n.t("portfolios.data_quality.never_priced")}/
+    assert_select "[data-portfolio-issue-kind='provider'] li", text: /OFFL.*#{I18n.t("portfolios.data_quality.provider_statuses.offline")}/m
+
+    InvestmentStatement.any_instance.stubs(:data_quality_issues).returns([])
+    get portfolio_path
+    assert_response :success
+    assert_select "[data-section-key='data_quality']", count: 0
+  end
+
+  PORTFOLIO_QUERY_CEILING = 60 # measured 54, see the ceiling test
+
   private
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
@@ -183,6 +304,33 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       (0..10).each do |days_ago|
         date = days_ago.days.ago.to_date
         account.balances.create!(date: date, balance: 10_000 + days_ago, cash_balance: 5_000, currency: "USD")
+      end
+    end
+
+    def create_second_aapl_account(qty:, price:)
+      account = @family.accounts.create!(owner: @user, name: "Second Brokerage", balance: qty * price, cash_balance: 0, currency: "USD", accountable: Investment.new)
+      Holding.create!(account: account, security: securities(:aapl), date: Date.current, qty: qty, price: price, amount: qty * price, currency: "USD")
+      account
+    end
+
+    # `accounts` investment accounts each holding `securities` securities,
+    # with a previous-day snapshot per position so day change has work to do.
+    # Every other security has no stored cost basis, the shape a synced
+    # brokerage produces, so a view that reached for Holding#avg_cost (and
+    # its per-holding trades query) would show up in the count.
+    def build_portfolio(accounts:, securities:, existing_accounts: nil)
+      accounts = existing_accounts || Array.new(accounts) do |i|
+        @family.accounts.create!(owner: @user, name: "Bulk #{i}", balance: 1000 * securities, cash_balance: 50, currency: "USD", accountable: Investment.new)
+      end
+      securities = Array.new(securities) do |i|
+        Security.create!(ticker: "B#{SecureRandom.hex(3).upcase}#{i}", name: "Bulk security #{i}")
+      end
+      accounts.each do |account|
+        securities.each_with_index do |security, index|
+          basis = index.even? ? { cost_basis: 90, cost_basis_locked: true } : {}
+          Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: 10, price: 95, amount: 950, currency: "USD", **basis)
+          Holding.create!(account: account, security: security, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD", **basis)
+        end
       end
     end
 end

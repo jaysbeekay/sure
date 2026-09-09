@@ -1,10 +1,59 @@
 ---
 en:
   portfolios:
+    accounts:
+      holdings_tab: Open holdings
+    allocation:
+      grouping_aria_label: Group allocation by
+      groupings:
+        account: Account
+        currency: Currency
+        kind: Kind
+        security: Security
+      kinds:
+        cash: Cash
+        crypto: Crypto
+        standard: Securities
+      total: Total
+      value: Value
+      weight: Weight
+    data_quality:
+      kinds:
+        missing_cost_basis:
+          description: No cost basis is stored or computable for these positions, so their return cannot be shown. Set one from the position.
+          title: Missing cost basis
+        provider:
+          description: The price provider for these securities is not healthy, so their values may not refresh.
+          title: Price provider issues
+        stale_price:
+          description: The latest price is older than %{days} days or there is no price at all, so the value may be out of date.
+          title: Stale prices
+      last_priced: Last priced %{date}
+      never_priced: Never priced
+      provider_statuses:
+        no_provider: No price provider configured
+        offline: Offline security
+        provider_unavailable: Assigned provider unavailable
+        stale: Recent fetches failed
+      set_cost_basis: Set cost basis
     empty_state:
       add_account: Add an investment account
       description: Connect or add a brokerage, retirement or crypto account and this page will show its value, returns and holdings.
       title: No investment accounts yet
+    holdings:
+      columns:
+        accounts: Accounts
+        avg_cost: Avg cost
+        day_change: Day
+        qty: Qty
+        security: Security
+        unrealized: Unrealised P&L
+        value: Value
+        weight: Weight
+      missing_cost_basis: No cost basis
+      missing_cost_basis_hint: At least one position has no stored cost basis, so the row cannot show an average cost or a return.
+      no_cost_basis: no cost basis
+      open_position: Open
     kpi_row:
       as_of: As of %{date}
       day_change: Day change

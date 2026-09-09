@@ -1,10 +1,59 @@
 ---
 de:
   portfolios:
+    accounts:
+      holdings_tab: Positionen öffnen
+    allocation:
+      grouping_aria_label: Allokation gruppieren nach
+      groupings:
+        account: Konto
+        currency: Währung
+        kind: Art
+        security: Wertpapier
+      kinds:
+        cash: Bargeld
+        crypto: Krypto
+        standard: Wertpapiere
+      total: Gesamt
+      value: Wert
+      weight: Gewichtung
+    data_quality:
+      kinds:
+        missing_cost_basis:
+          description: Für diese Positionen ist keine Kostenbasis gespeichert oder berechenbar, daher kann keine Rendite angezeigt werden. Lege sie in der Position fest.
+          title: Fehlende Kostenbasis
+        provider:
+          description: Der Kursanbieter dieser Wertpapiere ist nicht erreichbar, daher werden ihre Werte möglicherweise nicht aktualisiert.
+          title: Probleme mit dem Kursanbieter
+        stale_price:
+          description: Der letzte Kurs ist älter als %{days} Tage oder es gibt gar keinen Kurs, daher kann der Wert veraltet sein.
+          title: Veraltete Kurse
+      last_priced: Zuletzt bewertet am %{date}
+      never_priced: Nie bewertet
+      provider_statuses:
+        no_provider: Kein Kursanbieter konfiguriert
+        offline: Offline-Wertpapier
+        provider_unavailable: Zugewiesener Anbieter nicht verfügbar
+        stale: Letzte Abrufe fehlgeschlagen
+      set_cost_basis: Kostenbasis festlegen
     empty_state:
       add_account: Anlagekonto hinzufügen
       description: Verbinde oder ergänze ein Depot-, Vorsorge- oder Krypto-Konto, dann zeigt diese Seite Wert, Rendite und Bestände.
       title: Noch keine Anlagekonten
+    holdings:
+      columns:
+        accounts: Konten
+        avg_cost: Ø Kosten
+        day_change: Tag
+        qty: Menge
+        security: Wertpapier
+        unrealized: Unrealisierter G/V
+        value: Wert
+        weight: Gewichtung
+      missing_cost_basis: Keine Kostenbasis
+      missing_cost_basis_hint: Mindestens eine Position hat keine gespeicherte Kostenbasis, daher kann die Zeile weder Durchschnittskosten noch eine Rendite zeigen.
+      no_cost_basis: keine Kostenbasis
+      open_position: Öffnen
     kpi_row:
       as_of: Stand %{date}
       day_change: Tagesveränderung
