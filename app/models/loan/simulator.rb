@@ -53,6 +53,12 @@ class Loan
     #                instead of being re-sized back onto the original maturity
     PAYMENT_STRATEGIES = %i[reamortize hold scheduled].freeze
 
+    # Built once: `monthly_rate` runs twice per period, up to MAX_PERIODS times
+    # per simulation. The two-step division is kept as it was so results stay
+    # bit-identical to the schedules already asserted in the tests.
+    PERCENT = BigDecimal("100")
+    MONTHS_PER_YEAR = BigDecimal("12")
+
     def initialize(
       starting_balance:,
       accrual_start_date:,
@@ -199,8 +205,11 @@ class Loan
           .sort_by(&:first)
       end
 
+      # `annual_percentage` is whatever the caller's rate callable returned --
+      # an Integer in the tests, a BigDecimal from RateResolver -- so the
+      # coercion at this boundary stays.
       def monthly_rate(annual_percentage)
-        (BigDecimal(annual_percentage.to_s) / BigDecimal("100")) / BigDecimal("12")
+        (BigDecimal(annual_percentage.to_s) / PERCENT) / MONTHS_PER_YEAR
       end
 
       def callable!(value, name)
