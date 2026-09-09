@@ -22,7 +22,7 @@ module Portfolio
 
     ROW_ID = /\AP(\d+)\z/
     ROW_LINE = /\A\| (P\d+) \|/
-    CLASS_TOKEN = /`([A-Z][A-Za-z0-9]*(?:::[A-Z][A-Za-z0-9]*)*Test)`/
+    TEST_CLASS_PATTERN = /`([A-Z][A-Za-z0-9]*(?:::[A-Z][A-Za-z0-9]*)*Test)`/
 
     def initialize(contract_path:, manifest_path:, root: Rails.root)
       @contract_path = Pathname(contract_path)
@@ -67,7 +67,7 @@ module Portfolio
 
           cells = line.split("|").map(&:strip)
           # | id | decision | demonstrating test | ... -> the test cell is the third.
-          [ match[1], cells[3].to_s.scan(CLASS_TOKEN).flatten.uniq ]
+          [ match[1], cells[3].to_s.scan(TEST_CLASS_PATTERN).flatten.uniq ]
         end
 
         duplicates = parsed.map(&:first).tally.select { |_, count| count > 1 }.keys
