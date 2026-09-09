@@ -73,7 +73,6 @@ class Loan < ApplicationRecord
       break
     end
   end
-  public
 
   # Whether this loan's rate can move over its life. The one place the answer
   # is defined -- callers must not compare rate_type to a string. Anything
