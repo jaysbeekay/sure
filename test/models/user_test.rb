@@ -643,6 +643,48 @@ class UserTest < ActiveSupport::TestCase
     assert_equal %w[transactions_breakdown], @user.preferences["reports_section_order"]
   end
 
+  test "section preferences are namespaced so two pages never touch each other's keys" do
+    @user.update!(preferences: {})
+
+    @user.update_section_preferences("reports", order: %w[transactions_breakdown], collapsed: { "trends_insights" => true })
+    @user.update_section_preferences("portfolio", order: %w[holdings kpis], collapsed: { "kpis" => true })
+    @user.reload
+
+    assert_equal %w[transactions_breakdown], @user.section_order("reports")
+    assert_equal %w[holdings kpis], @user.section_order("portfolio")
+    assert @user.section_collapsed?("reports", "trends_insights")
+    assert_not @user.section_collapsed?("reports", "kpis")
+    assert @user.section_collapsed?("portfolio", "kpis")
+    assert_not @user.section_collapsed?("portfolio", "trends_insights")
+
+    # The legacy Reports readers still answer from the same keys.
+    assert_equal %w[transactions_breakdown], @user.reports_section_order
+    assert @user.reports_section_collapsed?("trends_insights")
+    assert_equal %w[reports_section_order reports_collapsed_sections portfolio_section_order portfolio_collapsed_sections].sort,
+      @user.preferences.keys.sort
+  end
+
+  test "section preferences merge collapsed keys and default the order per namespace" do
+    @user.update!(preferences: {})
+
+    assert_equal %w[kpis value_chart holdings accounts allocation data_quality], @user.section_order("portfolio")
+    assert_not @user.section_collapsed?("portfolio", "kpis")
+
+    @user.update_section_preferences("portfolio", collapsed: { "kpis" => true })
+    @user.update_section_preferences("portfolio", collapsed: { "holdings" => true })
+    @user.reload
+
+    assert @user.section_collapsed?("portfolio", "kpis"), "an earlier toggle must survive a later one"
+    assert @user.section_collapsed?("portfolio", "holdings")
+    assert_equal %w[kpis value_chart holdings accounts allocation data_quality], @user.section_order("portfolio"),
+      "collapsing must not write an order"
+  end
+
+  test "section preferences reject an unknown namespace" do
+    assert_raises(ArgumentError) { @user.section_order("dashboard") }
+    assert_raises(ArgumentError) { @user.update_section_preferences("settings", order: []) }
+  end
+
   test "handles missing nested keys in preferences for collapsed sections" do
     @user.update!(preferences: { "section_order" => %w[cashflow] })
 
