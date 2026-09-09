@@ -6,8 +6,8 @@
 · **Written:** 2026-09-08 · **Updated:** 2026-09-09 (opened upstream; heads below are current)
 
 > **Status 2026-09-09.** we-promise/sure#2984 merged (`6c1c8eeec`), so Path A of §8 applied and was
-> executed: PR-1 is **we-promise/sure#3473** (ready for review; first review round addressed at
-> `0724c935`), PR-2 is **we-promise/sure#3474** (draft, stacked on #3473's commit), and
+> executed: PR-1 is **we-promise/sure#3473** (ready for review; two review rounds addressed, head
+> `73a7368f`), PR-2 is **we-promise/sure#3474** (stacked on #3473's commit, head `50960942`), and
 > we-promise/sure#3296 is closed with the comment §8 specifies. #3332's body is Appendix A.
 > The candidate is rebuilt on upstream `main` directly; §5's `a0a4627a` base is superseded.
 
@@ -29,11 +29,11 @@ which pull request, against which branch, with which file, and what "done" means
 | Branch (on `jaysbeekay/sure`) | What it is | Head at time of writing |
 | --- | --- | --- |
 | `base/upstream-2984` | `upstream/main` of 2026-09-04 with we-promise/sure#2984 vendored; the diff base for PR #109's squash. Not a rebase target any more: upstream `main` carries #2984 itself since 2026-09-09 | `45263aaf` |
-| `feat/loan-amortisation-engine` | PR #109 — engine port + variable rates (`Fixes #3295`); the reviewed source of PR-1 | `50f94cb8` |
-| `feat/mvp-payoff-chart` | PR #111 — projection + chart, stacked on #109 (`Fixes #3332`); the reviewed source of PR-2 | `6eabe6f8` |
-| `upstream/loan-amortisation-engine` | **PR-1's branch, open as we-promise/sure#3473**: #109 squashed to one commit onto upstream `main` `1ab36dad` | `0724c935` |
-| `upstream/loan-balance-chart` | **PR-2's branch, open as we-promise/sure#3474 (draft)**: #111 squashed to one commit on top of PR-1's | `92210149` |
-| `mvp/upstream-candidate` | the same two commits; identical to `upstream/loan-balance-chart` | `92210149` |
+| `feat/loan-amortisation-engine` | PR #109 — engine port + variable rates (`Fixes #3295`); the reviewed source of PR-1 | `2e680bb0` |
+| `feat/mvp-payoff-chart` | PR #111 — projection + chart, stacked on #109 (`Fixes #3332`); the reviewed source of PR-2 | `901ff4c0` |
+| `upstream/loan-amortisation-engine` | **PR-1's branch, open as we-promise/sure#3473**: #109 squashed to one commit onto upstream `main` `1ab36dad` | `73a7368f` |
+| `upstream/loan-balance-chart` | **PR-2's branch, open as we-promise/sure#3474**: #111 squashed to one commit on top of PR-1's | `50960942` |
+| `mvp/upstream-candidate` | the same two commits; identical to `upstream/loan-balance-chart` | `50960942` |
 
 The two `upstream/*` refs are force-pushed with lease on every rebuild (§5); each revision of a
 PR replaces its single commit rather than appending, and the PR thread says so.
@@ -106,7 +106,7 @@ the last push; automatic review does not run on drafts or on non-default base br
 Never push a candidate that was not rebuilt from the reviewed heads. Since 2026-09-09 the base
 is upstream `main` itself (#2984 is on it), so the vendored merge `a0a4627a` is gone from the
 recipe; `origin/base/upstream-2984` survives only as the diff base for PR-1's squash. This is
-the sequence that produced `0724c935` / `92210149`:
+the sequence that produced `73a7368f` / `50960942`:
 
 ```bash
 git fetch origin && git fetch upstream main
