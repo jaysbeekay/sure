@@ -27,6 +27,11 @@ class Loan < ApplicationRecord
   MAX_INTEREST_RATE = 100
 
   validates :subtype, inclusion: { in: SUBTYPES.keys }, allow_blank: true
+  # The form caps the date picker at today; this is the same bound where a
+  # crafted request cannot skip it. A loan drawn down in the future has no
+  # history to chart and would schedule a first payment months away while
+  # charging a month's interest for the gap.
+  validates :start_date, comparison: { less_than_or_equal_to: -> { Date.current } }, allow_nil: true
 
   # The contracted repayment, for a loan that has exactly one.
   #
