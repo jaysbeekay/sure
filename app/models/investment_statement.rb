@@ -268,6 +268,30 @@ class InvestmentStatement
     )
   end
 
+  # Portfolio value (cash + holdings) over the period, in family currency.
+  #
+  # Charted from the *historical* account scope, so a disabled broker keeps its
+  # history up to its cut-off date. The last point therefore diverges from
+  # #portfolio_value (visible accounts only) whenever a disabled account still
+  # carries a non-zero balance. See HistoricalScope for the rationale.
+  def value_series(period: Period.last_30_days)
+    fetch_series(:value, period) { |builder| builder.balance_series }
+  end
+
+  # Holdings-only value (portfolio value minus cash) over the period.
+  def holdings_value_series(period: Period.last_30_days)
+    fetch_series(:holdings_value, period) { |builder| builder.holdings_balance_series }
+  end
+
+  # Unrealized gains (market value minus cost basis) over the period.
+  def gains_series(period: Period.last_30_days)
+    fetch_series(:gains, period) { |builder| builder.gains_series }
+  end
+
+  def historical_scope
+    @historical_scope ||= HistoricalScope.new(family, user: user)
+  end
+
   # Day change across portfolio, summed in family currency
   def day_change
     changes = current_holdings.to_a.filter_map do |h|
@@ -299,6 +323,40 @@ class InvestmentStatement
   end
 
   private
+    # Two layers of caching, mirroring BalanceSheet::NetWorthSeriesBuilder:
+    # Rails.cache across requests, plus a per-instance memo so a single
+    # dashboard render that asks for the same series twice runs one query.
+    def fetch_series(kind, period)
+      @series_cache ||= {}
+      @series_cache[[ kind, period.start_date, period.end_date ]] ||= Rails.cache.fetch(series_cache_key(kind, period)) do
+        yield series_builder(period)
+      end
+    end
+
+    def series_builder(period)
+      Balance::ChartSeriesBuilder.new(
+        account_ids: historical_scope.account_ids,
+        account_active_until_dates: historical_scope.active_until_dates,
+        currency: family.currency,
+        period: period,
+        favorable_direction: "up"
+      )
+    end
+
+    def series_cache_key(kind, period)
+      shares_version = user ? AccountShare.where(user: user).maximum(:updated_at)&.to_i : nil
+
+      key = [
+        "investment_statement_#{kind}_series",
+        user&.id,
+        shares_version,
+        period.start_date,
+        period.end_date
+      ].compact.join("_")
+
+      family.build_cache_key(key, invalidate_on_data_updates: true)
+    end
+
     # Today's rates for every currency present on the family's investment
     # accounts and their holdings. Mirrors BalanceSheet::AccountTotals#exchange_rates.
     def exchange_rates

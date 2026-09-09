@@ -456,6 +456,146 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_in_delta 5.0, trend.percent, 0.1
   end
 
+  test "value_series sums the per-account balance series on every date of the period" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: 5.days.ago.to_date)
+
+    usd = create_investment_account(balance: 1000, currency: "USD")
+    eur = create_investment_account(balance: 500, currency: "EUR")
+    closed = create_investment_account(balance: 300, currency: "USD")
+
+    create_balance(usd, date: 12.days.ago.to_date, amount: 1000)
+    create_balance(usd, date: 7.days.ago.to_date, amount: 1200)
+    create_balance(eur, date: 12.days.ago.to_date, amount: 500, currency: "EUR")
+    create_balance(closed, date: 12.days.ago.to_date, amount: 300)
+
+    closed.update!(status: "disabled", disabled_at: 7.days.ago)
+
+    (12.days.ago.to_date..Date.current).each do |date|
+      ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: date, rate: 1.2)
+    end
+
+    scope = @statement.historical_scope
+    assert_equal 3, scope.account_ids.size
+
+    # Expected windows are derived here, independently of HistoricalScope, so
+    # this asserts the cut-off as well as the summation.
+    expected_windows = { closed.id => closed.disabled_at.to_date - 1.day }
+
+    expected = Hash.new(0)
+    [ usd.id, eur.id, closed.id ].each do |account_id|
+      series = Balance::ChartSeriesBuilder.new(
+        account_ids: [ account_id ],
+        account_active_until_dates: expected_windows.slice(account_id),
+        currency: "USD",
+        period: period,
+        favorable_direction: "up"
+      ).balance_series
+
+      series.values.each { |v| expected[v.date] += v.value.amount }
+    end
+
+    actual = @statement.value_series(period: period)
+
+    assert_equal expected.keys.sort, actual.values.map(&:date).sort
+    actual.values.each do |value|
+      assert_in_delta expected[value.date], value.value.amount, 0.001,
+        "portfolio value on #{value.date} should equal the sum of the per-account series"
+    end
+  end
+
+  test "a disabled account stops contributing to value_series after its cut-off date" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    open_account = create_investment_account(balance: 1000, currency: "USD")
+    closed = create_investment_account(balance: 300, currency: "USD")
+
+    create_balance(open_account, date: 12.days.ago.to_date, amount: 1000)
+    create_balance(closed, date: 12.days.ago.to_date, amount: 300)
+
+    closed.update!(status: "disabled", disabled_at: 7.days.ago)
+    cutoff = 8.days.ago.to_date
+
+    by_date = @statement.value_series(period: period).values.index_by(&:date)
+
+    assert_in_delta 1300, by_date[cutoff].value.amount, 0.001,
+      "on the cut-off date the disabled account still counts"
+    assert_in_delta 1000, by_date[cutoff + 1.day].value.amount, 0.001,
+      "after the cut-off date the disabled account no longer counts"
+    assert_in_delta 1000, by_date[Date.current].value.amount, 0.001
+  end
+
+  test "value_series memoizes the builder per period on the instance" do
+    create_investment_account(balance: 1000, currency: "USD")
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = Series.new(
+      start_date: period.start_date, end_date: period.end_date,
+      interval: period.interval, values: [], favorable_direction: "up"
+    )
+    builder = stub(balance_series: series)
+    Balance::ChartSeriesBuilder.expects(:new).once.returns(builder)
+
+    assert_same series, @statement.value_series(period: period)
+    assert_same series, @statement.value_series(period: period)
+  end
+
+  test "holdings_value_series delegates to the builder's holdings balance series" do
+    create_investment_account(balance: 1000, currency: "USD")
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = Series.new(
+      start_date: period.start_date, end_date: period.end_date,
+      interval: period.interval, values: [], favorable_direction: "up"
+    )
+    builder = mock
+    builder.expects(:holdings_balance_series).once.returns(series)
+    Balance::ChartSeriesBuilder.expects(:new).once.returns(builder)
+
+    assert_same series, @statement.holdings_value_series(period: period)
+  end
+
+  test "gains_series delegates to the builder's gains series" do
+    create_investment_account(balance: 1000, currency: "USD")
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = Series.new(
+      start_date: period.start_date, end_date: period.end_date,
+      interval: period.interval, values: [], favorable_direction: "up"
+    )
+    builder = mock
+    builder.expects(:gains_series).once.returns(series)
+    Balance::ChartSeriesBuilder.expects(:new).once.returns(builder)
+
+    assert_same series, @statement.gains_series(period: period)
+  end
+
+  test "value_series is historical where portfolio_value is live, so a closed account diverges" do
+    # The series is charted from the historical scope, so a disabled broker
+    # keeps its balance up to its cut-off; portfolio_value only sees visible
+    # accounts and drops it immediately.
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: 5.days.ago.to_date)
+
+    open_account = create_investment_account(balance: 1000, currency: "USD")
+    closed = create_investment_account(balance: 300, currency: "USD")
+
+    create_balance(open_account, date: 12.days.ago.to_date, amount: 1000)
+    create_balance(closed, date: 12.days.ago.to_date, amount: 300)
+
+    closed.update!(status: "disabled", disabled_at: 2.days.ago)
+
+    assert_equal 1000, @statement.portfolio_value
+    assert_in_delta 1300, @statement.value_series(period: period).values.last.value.amount, 0.001
+  end
+
+  test "value_series returns a zero series when there are no investment accounts" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = @statement.value_series(period: period)
+
+    assert_predicate series.values, :any?
+    assert series.values.all? { |v| v.value.amount.zero? }
+  end
+
   test "totals skips cache when there are no investment accounts" do
     Rails.cache.expects(:fetch).never
 
@@ -651,6 +791,17 @@ class InvestmentStatementTest < ActiveSupport::TestCase
         cash_balance: cash_balance,
         currency: currency,
         accountable: Investment.new
+      )
+    end
+
+    # end_balance is a stored virtual column; with no flows, start_non_cash_balance
+    # drives it (matching the period_return_trend tests above).
+    def create_balance(account, date:, amount:, currency: "USD")
+      account.balances.create!(
+        date: date,
+        balance: amount,
+        currency: currency,
+        start_non_cash_balance: amount
       )
     end
 
