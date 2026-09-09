@@ -572,6 +572,10 @@ class Account::ProviderImportAdapter
 
             begin
               # Use update_columns to avoid validations and keep this collision handler best-effort.
+              # It also skips the timestamp, so stamp it here: a cache keyed on
+              # holdings.updated_at (InvestmentStatement#holdings_version) must
+              # see this write even when the sync never reaches completion.
+              updates[:updated_at] = Time.current
               existing.update_columns(updates.compact)
             rescue => _
               # Best-effort only; avoid raising in collision handler
