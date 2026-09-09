@@ -56,6 +56,15 @@ module AccountableResource
     return_path = safe_return_to(account_params[:return_to]) || session.delete(:return_to).presence || @account
     redirect_to return_path,
                 notice: t("accounts.create.success", type: accountable_type.name.underscore.humanize)
+  rescue ActiveRecord::RecordInvalid => e
+    # `create_and_sync` saves with `save!`. A validation the user can trip from
+    # the form (a half-filled loan rate change, say) must come back as the form
+    # with the error and what they typed, not as the generic 422 page. The
+    # transaction above has already rolled back; the record on the exception is
+    # the unsaved account with its nested accountable still attached.
+    @account = e.record
+    @error_message = e.record.errors.full_messages.join(", ")
+    render :new, status: :unprocessable_entity
   end
 
   def update

@@ -111,11 +111,14 @@ class Loan < ApplicationRecord
   # is not a state the schedule can represent, and silently keeping both would
   # make which one wins depend on hash ordering.
   #
-  # A submission always carries at least the form's blank sentinel row, so
-  # receiving only blanks means "the user removed them all" and correctly
-  # clears the schedule. Absent the sentinel, removing the last row would send
-  # no `rate_changes` key at all and nested assignment would never call this,
-  # leaving the removed rows persisted.
+  # A submission from the form always carries its hidden sentinel, a bare
+  # `rate_changes[]` with no value. Rack parses that as "" and strong
+  # parameters drop it, so what arrives here when the user removed every row
+  # is an empty array -- which correctly clears the schedule. Absent the
+  # sentinel, removing the last row would send no `rate_changes` key at all,
+  # nested assignment would never call this, and the removed rows would stay
+  # persisted. Blank rows that do reach this method (a row the user added and
+  # left empty) are skipped for the same reason.
   def rate_changes=(rows)
     invalid = []
 

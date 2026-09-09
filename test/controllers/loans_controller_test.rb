@@ -200,9 +200,11 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   test "submitting only the blank sentinel clears the schedule" do
     @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
 
+    # The sentinel is a bare `rate_changes[]=` with no value, which Rack parses
+    # as "" and strong parameters drop, so the writer receives an empty array.
     patch loan_path(@account), params: {
       account: { accountable_attributes: {
-        id: @account.loan.id, rate_type: "variable", rate_changes: [ { effective_date: "", rate: "" } ]
+        id: @account.loan.id, rate_type: "variable", rate_changes: [ "" ]
       } }
     }
 
@@ -278,5 +280,52 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-loan-rate-changes-target=section][hidden]", count: 0
     assert_select "[data-loan-rate-changes-target=rows] input[disabled]", count: 0
     assert_select "[data-loan-rate-changes-target=section] input[name='account[accountable_attributes][rate_changes][]']:not([disabled])", count: 1
+  end
+
+  # `Account.create_and_sync` saves with `save!`, and this is the first Loan
+  # validation a user can trip from the create form. Without a rescue the
+  # request ended on the generic 422 error page and the form was gone.
+  test "a half-filled rate change on create re-renders the form instead of the error page" do
+    assert_no_difference [ "Account.count", "Loan.count" ] do
+      post loans_path, params: { account: {
+        name: "Bad Loan", balance: 50_000, currency: "USD", accountable_type: "Loan",
+        accountable_attributes: {
+          rate_type: "variable", interest_rate: 6, term_months: 12, initial_balance: 50_000,
+          rate_changes: [ "", { effective_date: "", rate: "9" } ]
+        }
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "form[action='#{loans_path}']", count: 1, message: "the new-loan form comes back"
+    assert_select "input[name='account[accountable_attributes][rate_changes][][rate]'][value='9']", count: 1
+    assert_match "effective date and a rate", response.body
+  end
+
+  # The Overview tab quoted `loans.interest_rate`, the origination rate, while
+  # the Schedule tab beside it re-amortised at each recorded change.
+  test "the overview tab shows the rate in force, not the origination rate" do
+    @account.loan.update!(rate_type: "variable", interest_rate: 6,
+                          variable_rate_schedule: { (Date.current - 1.month).iso8601 => "7.25" })
+
+    get account_path(@account, tab: "overview")
+
+    assert_response :success
+    assert_select "h4", text: I18n.t("loans.tabs.overview.interest_rate")
+    assert_match "7.250%", response.body, "the recorded change is the rate in force"
+    assert_no_match "6.000%", response.body, "the origination rate is not what the loan is charging"
+    assert_match I18n.t("loans.tabs.overview.not_applicable"), response.body,
+      "a variable loan has no single monthly payment"
+  end
+
+  test "the overview tab of a fixed loan still shows its rate and monthly payment" do
+    @account.loan.update!(rate_type: "fixed", interest_rate: 6, term_months: 360)
+
+    get account_path(@account, tab: "overview")
+
+    assert_response :success
+    assert_match "6.000%", response.body
+    # 500,000 at 6% over 360 months, the fixture loan's contracted repayment.
+    assert_match "2,997.75", response.body
   end
 end
