@@ -336,7 +336,22 @@ class AccountsController < ApplicationController
       key = [ account.id, as_of, period&.start_date, period&.end_date, period&.key ]
       return @loan_payoff_charts[key] if @loan_payoff_charts.key?(key)
 
-      @loan_payoff_charts[key] = Loan::PayoffChart.new(account.loan, as_of: as_of, period: period).payload
+      @loan_payoff_charts[key] = build_loan_payoff_chart(account, as_of: as_of, period: period)
+    end
+
+    # The payload runs the schedule, the projection and a balance query from
+    # inputs this app does not fully control: `term_months` and `rate_type`
+    # arrive from providers, `start_date` and the rate schedule from the form,
+    # balances from sync. A raise in any of them costs the chart, not the page:
+    # nil is what the component already takes as "no chart", and the account
+    # page then renders exactly as it did before the chart existed. Reported,
+    # because a loan silently losing its chart is a bug someone has to see.
+    def build_loan_payoff_chart(account, as_of:, period:)
+      Loan::PayoffChart.new(account.loan, as_of: as_of, period: period).payload
+    rescue StandardError => e
+      Rails.logger.error("Loan payoff chart failed for account #{account.id}: #{e.class} - #{e.message}")
+      Sentry.capture_exception(e) { |scope| scope.set_tags(record_type: "Account", record_id: account.id) } if defined?(Sentry)
+      nil
     end
 
     def family

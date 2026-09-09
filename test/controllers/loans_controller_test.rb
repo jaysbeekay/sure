@@ -368,4 +368,19 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-loan-rate-changes-target=rows] input[disabled]", count: 0
     assert_select "[data-loan-rate-changes-target=section] input[name='account[accountable_attributes][rate_changes][]']:not([disabled])", count: 1
   end
+
+  # The payload runs the schedule, the projection and a balance query on every
+  # loan page view, from provider-written and user-written inputs. A raise in
+  # any of them must cost the chart, not the page: before this guard the whole
+  # account page was a 500 for a loan that rendered fine without the chart.
+  test "a chart payload that raises degrades to the time-series chart instead of a 500" do
+    Loan::PayoffChart.any_instance.stubs(:payload).raises(ArgumentError, "boom")
+
+    get account_path(@account, tab: "schedule")
+
+    assert_response :success
+    assert_select "[data-controller='time-series-chart']", count: 1
+    assert_select "[data-controller='loan-payoff-chart']", count: 0
+    assert_match "Total Interest", response.body, "the Schedule tab still renders"
+  end
 end
