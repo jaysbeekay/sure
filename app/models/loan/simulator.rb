@@ -131,10 +131,16 @@ class Loan
           interest: interest
         )
 
+        # Two rates on the row, named for what each did: `interest_rate` is
+        # the one the interest column was computed with, so a reader who
+        # recomputes beginning_balance * rate / 12 gets this row's figure;
+        # `sizing_rate` is the one the payment was sized at. They differ only
+        # on a row whose period straddles a rate change.
         payments << {
           payment_number: index + 1,
           payment_date: payment_date,
-          interest_rate: BigDecimal(rate_on(payment_date).to_s),
+          interest_rate: BigDecimal(@accrual_rate_for.call(period_start).to_s),
+          sizing_rate: BigDecimal(rate_on(payment_date).to_s),
           **step
         }
 
