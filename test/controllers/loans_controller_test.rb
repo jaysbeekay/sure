@@ -328,4 +328,47 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     # 500,000 at 6% over 360 months, the fixture loan's contracted repayment.
     assert_match "2,997.75", response.body
   end
+
+  # Codex on we-promise/sure#3473: `update` persisted the balance change (a
+  # valuation and the account's cached balance) before the loan's validation
+  # ran, so a rejected form had committed half of itself.
+  test "a rejected update does not persist the balance change submitted with it" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    balance_before = @account.reload.balance
+
+    assert_no_difference "Entry.count" do
+      patch loan_path(@account), params: { account: {
+        balance: balance_before - 10_000,
+        accountable_attributes: {
+          id: @account.loan.id, rate_type: "variable",
+          rate_changes: [ "", { effective_date: "2026-04-01", rate: "7.25" }, { effective_date: "", rate: "9" } ]
+        }
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal balance_before, @account.reload.balance, "the balance half of a rejected form must not commit"
+  end
+
+  # CodeRabbit on we-promise/sure#3473: `loans/new` renders the method
+  # selector when `step=method_select`, which reads `@provider_configs`; the
+  # rescue path must set it up as `new` does.
+  test "a rejected create with the method-select step still renders" do
+    post loans_path(step: "method_select"), params: { account: {
+      name: "Bad Loan", balance: 50_000, currency: "USD", accountable_type: "Loan",
+      accountable_attributes: { rate_type: "variable", interest_rate: 6, term_months: 12, initial_balance: 50_000,
+                                rate_changes: [ "", { effective_date: "", rate: "9" } ] }
+    } }
+
+    assert_response :unprocessable_entity
+  end
+
+  test "the rate-change controls are design-system buttons" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    get edit_loan_path(@account)
+
+    assert_select "button[data-action='loan-rate-changes#add'] span", text: I18n.t("loans.form.rate_change_add")
+    assert_select "[data-rate-change-row] button[data-action='loan-rate-changes#remove'] span", text: I18n.t("loans.form.rate_change_remove")
+  end
 end

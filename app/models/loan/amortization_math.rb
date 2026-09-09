@@ -13,8 +13,33 @@ class Loan
     #
     # A zero rate is not a degenerate case to guard against, it is an
     # interest-free loan: the balance divided by the periods left.
-    def level_payment(balance:, monthly_rate:, remaining_payments:, currency_precision:)
+    #
+    # `first_period_interest` is for a resize on a rate change: the period
+    # that closes on the change accrued at the OLD rate, and the annuity
+    # formula assumes every remaining period, this one included, accrues at
+    # `monthly_rate`. Sized that way the payment over-covers the first period
+    # and the final settlement becomes a discount of thousands. Given the
+    # interest actually charged this period, the figure returned is the one
+    # payment that covers it and then amortises what is left over the
+    # remaining periods at `monthly_rate` -- level to maturity. With the
+    # interest at `monthly_rate` the two formulas agree exactly, so the plain
+    # one is kept for the common case and stays bit-identical.
+    def level_payment(balance:, monthly_rate:, remaining_payments:, currency_precision:, first_period_interest: nil)
       return BigDecimal("0") if remaining_payments <= 0 || balance <= 0
+
+      if first_period_interest
+        later = remaining_payments - 1
+        annuity = if later.zero?
+          BigDecimal("0")
+        elsif monthly_rate.zero?
+          BigDecimal(later)
+        else
+          later_growth = (1 + monthly_rate)**later
+          (later_growth - 1) / (monthly_rate * later_growth)
+        end
+        return ((balance + first_period_interest) / (1 + annuity)).round(currency_precision)
+      end
+
       return (balance / remaining_payments).round(currency_precision) if monthly_rate.zero?
 
       growth = (1 + monthly_rate)**remaining_payments

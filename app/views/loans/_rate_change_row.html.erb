@@ -23,9 +23,6 @@
          class="form-field__input"
          <%= "disabled" if disabled %>>
 
-  <button type="button" class="text-sm text-secondary underline"
-          data-action="loan-rate-changes#remove"
-          <%= "disabled" if disabled %>>
-    <%= t("loans.form.rate_change_remove") %>
-  </button>
+  <%= render DS::Button.new(text: t("loans.form.rate_change_remove"), variant: "ghost", type: "button",
+                            disabled: disabled, data: { action: "loan-rate-changes#remove" }) %>
 </div>

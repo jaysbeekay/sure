@@ -110,6 +110,34 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
     assert_equal BigDecimal("6"), before[:interest_rate]
   end
 
+  # A resized payment must stay level to maturity. The period that closes on a
+  # rate change accrued at the OLD rate, but the annuity formula assumes every
+  # remaining period, this one included, accrues at the new one; sized that
+  # way, the payment over-covers the first period and the final settlement
+  # becomes a discount of thousands. Codex's example on we-promise/sure#3473:
+  # 500,000 over 24 months, 6% to 18% at month six, level 24,394.64, final
+  # 19,156.02.
+  test "a resized payment stays level through the final settlement" do
+    change_date = Date.new(2026, 7, 1)
+    [ change_date, Date.new(2026, 6, 20) ].each do |effective|
+      result = Loan::Simulator.new(
+        starting_balance: 500_000,
+        accrual_start_date: Date.new(2026, 1, 1),
+        payment_schedule: (1..24).map { |n| Date.new(2026, 1, 1) >> n },
+        accrual_rate_for: ->(date) { date < effective ? 6 : 18 },
+        re_amortisation_events: ->(_from, _to) { [ { date: effective, rate: 18 } ] },
+        currency_precision: 2
+      ).run
+
+      resized = result.payments.find { |p| p[:payment_date] >= effective }[:payment_amount]
+      assert_operator resized, :>, result.payments.first[:payment_amount]
+      assert_in_delta resized, result.payments.last[:payment_amount], 1.0,
+        "change effective #{effective}: the final payment must settle within rounding of the level payment"
+      assert_equal BigDecimal("500000"),
+        result.payments.sum(BigDecimal("0")) { |p| p[:principal_payment] }
+    end
+  end
+
   test "refuses an empty payment schedule rather than inventing a run" do
     error = assert_raises(ArgumentError) do
       Loan::Simulator.new(

@@ -82,11 +82,8 @@
           <%= render "loans/rate_change_row", effective_date: nil, rate: nil %>
         </template>
 
-        <button type="button" class="text-sm text-primary underline"
-                data-action="loan-rate-changes#add"
-                <%= "disabled" if rate_changes_disabled %>>
-          <%= t("loans.form.rate_change_add") %>
-        </button>
+        <%= render DS::Button.new(text: t("loans.form.rate_change_add"), icon: "plus", variant: "ghost", type: "button",
+                                  disabled: rate_changes_disabled, data: { action: "loan-rate-changes#add" }) %>
       </div>
 
       </div>
