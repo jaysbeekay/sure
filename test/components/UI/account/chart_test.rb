@@ -49,7 +49,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
     assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
 
-    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, as_of: Date.current))
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
 
     assert_selector "[data-controller='loan-payoff-chart']"
     assert_no_selector "[data-controller='time-series-chart']"
@@ -83,7 +83,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
     windowed = payload.merge(visible: %w[actual scheduled])
 
-    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: windowed, as_of: Date.current))
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: windowed))
 
     legend = "ul[aria-label='#{I18n.t("UI.account.chart.loan.legend")}'] li"
     assert_selector legend, count: 2
@@ -102,7 +102,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert payload[:projected].any?, "the fixture loan must project, or this asserts nothing"
     stalled = payload.merge(projected_payoff_date: nil, months_saved: 0, interest_saved: 0)
 
-    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: stalled, as_of: Date.current))
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: stalled))
 
     assert_text I18n.t("UI.account.chart.loan.not_converged")
     # The card title; the accessible description also says "projected payoff",
@@ -135,7 +135,7 @@ class UI::Account::ChartTest < ViewComponent::TestCase
       assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
       assert_not_nil payload[:projected_payoff_date], "the fixture loan must project a payoff, or this asserts nothing"
 
-      render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, as_of: Date.current))
+      render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
 
       assert_text I18n.t("UI.account.chart.loan.projection_basis")
     end

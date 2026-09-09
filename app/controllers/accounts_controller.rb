@@ -318,8 +318,6 @@ class AccountsController < ApplicationController
     end
   end
 
-  helper_method :loan_payoff_chart
-
   private
     # Built here rather than in the template: assembling a chart payload is
     # domain work, and a view that constructs it decides how many simulations run

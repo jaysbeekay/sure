@@ -1,5 +1,5 @@
 class UI::Account::Chart < ApplicationComponent
-  attr_reader :account, :loan_chart, :as_of
+  attr_reader :account, :loan_chart
 
   # `loan_chart` is a Loan::PayoffChart payload, built by the controller for a
   # loan account with a schedule and nil for everything else. When present the
@@ -7,12 +7,13 @@ class UI::Account::Chart < ApplicationComponent
   # original schedule and projection on one axis -- and the rest of this card
   # (title, hero figure, trend, period picker, Turbo frame) is unchanged. Every
   # other account type takes the branch it always took (#100, decision 7).
-  def initialize(account:, period: nil, view: nil, loan_chart: nil, as_of: Date.current)
+  # The page's reference date travels inside the payload (`today`), so the
+  # component takes no date of its own.
+  def initialize(account:, period: nil, view: nil, loan_chart: nil)
     @account = account
     @period = period
     @view = view
     @loan_chart = loan_chart
-    @as_of = as_of
   end
 
   def loan_chart?

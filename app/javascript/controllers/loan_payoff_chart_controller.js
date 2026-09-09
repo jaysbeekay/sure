@@ -344,12 +344,19 @@ export default class extends Controller {
       if (!b) return a;
       return date - a.date <= b.date - date ? a : b;
     };
-    const money = (value) =>
-      new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: data.currency || "USD",
-        maximumFractionDigits: 0,
-      }).format(value);
+    const formatter = (() => {
+      try {
+        return new Intl.NumberFormat(undefined, {
+          style: "currency",
+          currency: data.currency || "USD",
+          maximumFractionDigits: 0,
+        });
+      } catch {
+        // A currency code Intl does not know must not take hover with it.
+        return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+      }
+    })();
+    const money = (value) => formatter.format(value);
 
     const showAt = (date) => {
       const px = x(date);

@@ -20,8 +20,10 @@ class Loan
       @payments = deep_freeze(payments)
       @total_interest = @payments.sum(BigDecimal("0")) { |p| p[:interest_payment] }
         .round(currency_precision).freeze
-      @total_cost = (@payments.sum(BigDecimal("0")) { |p| p[:payment_amount] } +
-        @balloon_amount).round(currency_precision).freeze
+      # What the run paid. A balloon is precisely what it did NOT pay, so it
+      # is not added here: a projection that leaves one is not "costing" it.
+      @total_cost = @payments.sum(BigDecimal("0")) { |p| p[:payment_amount] }
+        .round(currency_precision).freeze
       freeze
     end
 
