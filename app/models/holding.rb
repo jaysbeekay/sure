@@ -56,8 +56,18 @@ class Holding < ApplicationRecord
       end
     end
 
+    # A caller that has many holdings can compute the fallback for all of
+    # them in one query and hand each its answer (InvestmentStatement does),
+    # so a page that lists every position does not run calculate_avg_cost's
+    # two queries per holding. nil is a valid preloaded answer: "unknown".
+    return @preloaded_avg_cost if defined?(@preloaded_avg_cost)
+
     # Fallback to calculation for holdings without pre-computed cost_basis
     calculate_avg_cost
+  end
+
+  def preload_avg_cost(value)
+    @preloaded_avg_cost = value
   end
 
   def trend

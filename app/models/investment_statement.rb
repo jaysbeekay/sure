@@ -91,6 +91,15 @@ class InvestmentStatement
     end
   end
 
+  # current_holdings as an Array, with the average-cost fallback for every
+  # holding that has no stored cost basis computed in one query and handed
+  # to the holding (Holding#preload_avg_cost), so unrealized_gains,
+  # unrealized_gains_trend and the roll-up's trends do not run
+  # Holding#calculate_avg_cost's two queries per holding. Memoized.
+  def holdings_with_avg_costs
+    @holdings_with_avg_costs ||= current_holdings.to_a.tap { |holdings| preload_avg_costs(holdings) }
+  end
+
   # Top investments rolled up by security across accounts, ranked by
   # family-currency value. Weight is the security's share of the whole
   # portfolio, cash included -- the same number #allocation reports for it
@@ -244,7 +253,7 @@ class InvestmentStatement
 
   # Unrealized gains across all holdings, summed in family currency
   def unrealized_gains
-    current_holdings.sum do |holding|
+    holdings_with_avg_costs.sum do |holding|
       trend = holding.trend
       trend ? convert_to_family_currency(trend.value, holding.currency) : 0
     end
@@ -271,7 +280,7 @@ class InvestmentStatement
   end
 
   def unrealized_gains_trend
-    holdings = current_holdings.to_a
+    holdings = holdings_with_avg_costs
     return nil if holdings.empty?
 
     # Only include holdings with known cost basis in the calculation
@@ -688,6 +697,57 @@ class InvestmentStatement
       holding.cost_basis.present? && (holding.cost_basis_locked? || holding.cost_basis.positive?)
     end
 
+    # One query for the fallback Holding#calculate_avg_cost would run per
+    # holding: the weighted average of buy trades on or before the holding's
+    # date, converted to the account currency at each trade's date, unknown
+    # (nil) when any of those trades is a Transfer or when there are none.
+    # The SQL mirrors calculate_avg_cost line for line; the parity test in
+    # InvestmentStatementTest holds them together.
+    def preload_avg_costs(holdings)
+      pending = holdings.reject { |holding| stored_cost_basis?(holding) }
+      return if pending.empty?
+
+      rows = ActiveRecord::Base.connection.select_all(
+        ActiveRecord::Base.sanitize_sql_array([
+          <<~SQL.squish,
+            SELECT cur.id AS holding_id,
+              BOOL_OR(trades.investment_activity_label = :transfer_label) AS has_transfer,
+              SUM(CASE WHEN trades.investment_activity_label IS DISTINCT FROM :transfer_label
+                THEN trades.price * trades.qty * COALESCE(exchange_rates.rate, 1) ELSE 0 END) AS total_cost,
+              SUM(CASE WHEN trades.investment_activity_label IS DISTINCT FROM :transfer_label
+                THEN trades.qty ELSE 0 END) AS total_qty
+            FROM holdings cur
+            JOIN accounts ON accounts.id = cur.account_id
+            JOIN entries ON entries.account_id = cur.account_id
+              AND entries.entryable_type = 'Trade'
+              AND entries.date <= cur.date
+            JOIN trades ON trades.id = entries.entryable_id
+              AND trades.security_id = cur.security_id
+              AND trades.qty > 0
+            LEFT JOIN exchange_rates ON (
+              exchange_rates.date = entries.date
+              AND exchange_rates.from_currency = trades.currency
+              AND exchange_rates.to_currency = accounts.currency
+            )
+            WHERE cur.id IN (:holding_ids)
+            GROUP BY cur.id
+          SQL
+          { holding_ids: pending.map(&:id), transfer_label: Trade::TRANSFER_LABEL }
+        ])
+      ).index_by { |row| row["holding_id"] }
+
+      pending.each do |holding|
+        row = rows[holding.id]
+        total_qty = row && row["total_qty"]&.to_d
+        value = if row.nil? || row["has_transfer"] || total_qty.nil? || total_qty <= 0
+          nil
+        else
+          Money.new(row["total_cost"].to_d / total_qty, holding.currency)
+        end
+        holding.preload_avg_cost(value)
+      end
+    end
+
     def pairs_with_buy_trades
       @pairs_with_buy_trades ||= Trade
         .joins(:entry)
@@ -772,8 +832,7 @@ class InvestmentStatement
     # Memoized: top_holdings and allocation both start here, and the
     # grouping and FX conversion need only run once per instance.
     def holdings_rolled_up_by_security
-      @holdings_rolled_up_by_security ||= current_holdings
-        .to_a
+      @holdings_rolled_up_by_security ||= holdings_with_avg_costs
         .group_by(&:security_id)
         .filter_map do |_security_id, holdings|
           security = holdings.first.security

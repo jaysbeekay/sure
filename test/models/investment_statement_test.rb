@@ -1262,6 +1262,58 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_operator queries.size, :<=, 3, "expected the buy-trade pairs and latest prices queries only, got:\n#{queries.join("\n")}"
   end
 
+  test "average costs are preloaded in one query and agree with Holding#calculate_avg_cost" do
+    account = create_investment_account(balance: 10_000, currency: "USD")
+    plain = create_portfolio_security
+    fx = create_portfolio_security
+    transferred = create_portfolio_security
+    unlabelled = create_portfolio_security
+    tradeless = create_portfolio_security
+    future_only = create_portfolio_security
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: 10.days.ago.to_date, rate: 1.2)
+
+    create_portfolio_trade(account: account, security: plain, qty: 10, price: 100, date: 10.days.ago.to_date)
+    create_portfolio_trade(account: account, security: plain, qty: 10, price: 120, date: 5.days.ago.to_date)
+    create_portfolio_trade(account: account, security: plain, qty: -5, price: 130, date: 3.days.ago.to_date)
+    # A EUR trade in a USD account: converted at the trade date's rate.
+    account.entries.create!(name: "EUR buy", date: 10.days.ago.to_date, amount: 500, currency: "EUR", entryable: Trade.new(qty: 5, price: 100, fee: 0, currency: "EUR", security: fx, investment_activity_label: "Buy"))
+    create_portfolio_trade(account: account, security: transferred, qty: 4, price: 50, date: 8.days.ago.to_date)
+    create_portfolio_trade(account: account, security: transferred, qty: 4, price: 60, date: 6.days.ago.to_date, label: "Transfer")
+    create_portfolio_trade(account: account, security: unlabelled, qty: 2, price: 30, date: 9.days.ago.to_date).entryable.update!(investment_activity_label: nil)
+    create_portfolio_trade(account: account, security: future_only, qty: 1, price: 999, date: Date.current)
+
+    [ plain, fx, transferred, unlabelled, tradeless, future_only ].each do |security|
+      Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: 1, price: 100, amount: 100, currency: "USD")
+    end
+
+    holdings = nil
+    queries = capture_sql_queries { holdings = @statement.holdings_with_avg_costs }
+    assert_equal 1, queries.grep(/FROM "trades"|JOIN trades/).size, "the fallback must be one query for every holding"
+
+    holdings.each do |holding|
+      expected = Holding.find(holding.id).send(:calculate_avg_cost)
+      actual = holding.avg_cost
+      if expected.nil?
+        assert_nil actual, holding.security.ticker
+      else
+        assert_in_delta expected.amount, actual.amount, 0.0001, holding.security.ticker
+        assert_equal expected.currency, actual.currency
+      end
+    end
+
+    by_ticker = holdings.index_by { |h| h.security.ticker }
+    assert_in_delta 110, by_ticker[plain.ticker].avg_cost.amount, 0.0001
+    assert_in_delta 120, by_ticker[fx.ticker].avg_cost.amount, 0.0001
+    assert_nil by_ticker[transferred.ticker].avg_cost, "a transfer makes the position's cost unknown"
+    assert_in_delta 30, by_ticker[unlabelled.ticker].avg_cost.amount, 0.0001
+    assert_nil by_ticker[tradeless.ticker].avg_cost
+    assert_nil by_ticker[future_only.ticker].avg_cost, "a trade after the holding date does not count"
+
+    # The KPI readers use the preloaded answers: no trades query of their own.
+    kpi_queries = capture_sql_queries { @statement.unrealized_gains; @statement.unrealized_gains_trend; @statement.top_holdings(limit: 5) }
+    assert_empty kpi_queries.grep(/FROM "trades"|JOIN trades/)
+  end
+
   private
     def create_investment_account(balance:, cash_balance: 0, currency: "USD")
       @family.accounts.create!(
