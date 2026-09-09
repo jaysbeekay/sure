@@ -94,6 +94,7 @@ en:
         weight: "Weight"
       investment_summary:
         title: "Investments"
+        view_portfolio: View portfolio
         total_return: "Total Return"
         holding: "Holding"
         weight: "Weight"

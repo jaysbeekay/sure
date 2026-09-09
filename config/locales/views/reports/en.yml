@@ -140,6 +140,7 @@ en:
       no_liabilities: No liabilities
     investment_performance:
       title: Investment Performance
+      view_portfolio: View portfolio
       portfolio_value: Portfolio Value
       total_return: Total Return
       period_return: Period Return

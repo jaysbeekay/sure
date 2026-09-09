@@ -654,6 +654,17 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/#{Regexp.escape(I18n.t("reports.investment_performance.sells_count", count: 2))}/, response.body)
   end
 
+  test "reports investment section links to the portfolio hub for preview users only" do
+    get reports_path
+    assert_response :ok
+    assert_select "[data-section-key='investment_performance'] a[href='#{portfolio_path}']", count: 0
+
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+    get reports_path
+    assert_response :ok
+    assert_select "[data-section-key='investment_performance'] a[href='#{portfolio_path}']", text: I18n.t("reports.investment_performance.view_portfolio")
+  end
+
   test "index top holdings rolls up a security held in two investment accounts into one row" do
     create_second_aapl_account(qty: 20, price: 215)
 

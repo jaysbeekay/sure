@@ -6,6 +6,10 @@
       <div class="space-y-2">
         <div class="flex items-center gap-2">
           <h2 class="text-lg font-medium"><%= t(".title") %></h2>
+          <%# Preview users only: the hub redirects everyone else, and a link that redirects is still a dead link. %>
+          <% if preview_features_enabled? %>
+            <%= link_to t(".view_portfolio"), portfolio_path, class: "text-sm text-link hover:underline", data: { turbo_frame: "_top" } %>
+          <% end %>
         </div>
 
         <p class="text-primary text-3xl font-medium privacy-sensitive">
