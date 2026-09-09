@@ -91,20 +91,17 @@ class InvestmentStatement
   end
 
   # Top investments rolled up by security across accounts, ranked by
-  # family-currency value. Weight is % of total portfolio (including cash).
-  # Presence is gated on holdings totals — not Account#balance — so a stale
-  # zero portfolio_value still surfaces real positions.
+  # family-currency value. Weight is the security's share of the whole
+  # portfolio, cash included -- the same number #allocation reports for it
+  # (see #weight_denominator). Presence is gated on holdings totals, not
+  # Account#balance, so a stale zero portfolio_value still surfaces real
+  # positions.
   def top_holdings(limit: 5)
     rolled_up = holdings_rolled_up_by_security
     return [] if rolled_up.empty?
 
-    holdings_total = rolled_up.sum { |_, value, _| value }
-    return [] if holdings_total.zero?
-
-    # Prefer portfolio_value (includes cash) for weight; fall back to holdings
-    # total when cached account balances are stale/zero.
-    total = portfolio_value
-    total = holdings_total if total.zero?
+    total = weight_denominator(rolled_up)
+    return [] if total.zero?
 
     # Rank/limit on value first; only then compute cost-basis trends for the
     # rows that will be rendered (avoids avg_cost/trade lookups for the rest).
@@ -120,14 +117,21 @@ class InvestmentStatement
       end
   end
 
-  # Portfolio allocation by security (rolled up across accounts). Weights are
-  # relative to total holdings value (excludes cash) so they sum to ~100%.
+  # Portfolio allocation by security (rolled up across accounts), plus one
+  # cash row for the part of the portfolio no holding accounts for, so the
+  # weights sum to 100 and every security carries the same weight here as in
+  # #top_holdings.
+  #
+  # The cash row is a residual (portfolio value minus holdings total), not
+  # Account#cash_balance: when account balances are stale the residual is
+  # zero and the row is omitted, whereas the reported cash balance could push
+  # the sum past 100.
   def allocation
     rolled_up = holdings_rolled_up_by_security
-    total = rolled_up.sum { |_, value, _| value }
+    total = weight_denominator(rolled_up)
     return [] if total.zero?
 
-    rolled_up.map do |security, value, holdings|
+    rows = rolled_up.map do |security, value, holdings|
       HoldingAllocation.new(
         security: security,
         amount: Money.new(value, family.currency),
@@ -135,6 +139,18 @@ class InvestmentStatement
         trend: combined_holding_trend(holdings)
       )
     end
+
+    cash = total - rolled_up.sum { |_, value, _| value }
+    if cash.positive?
+      rows << HoldingAllocation.new(
+        security: nil,
+        amount: Money.new(cash, family.currency),
+        weight: (cash / total * 100).round(2),
+        trend: nil
+      )
+    end
+
+    rows
   end
 
   # Unrealized gains across all holdings, summed in family currency
@@ -324,10 +340,33 @@ class InvestmentStatement
       end
     end
 
+    # One row of #top_holdings / #allocation. Duck-types the Holding readers
+    # the dashboard, Reports and print views call (ticker, name, security,
+    # weight, amount_money, trend). `security` is nil only for the cash row
+    # #allocation appends.
     HoldingAllocation = Data.define(:security, :amount, :weight, :trend) do
-      def ticker = security.ticker
-      def name = security.name.presence || ticker
+      def cash? = security.nil?
+      def ticker = cash? ? CASH_TICKER : security.ticker
+      def name = cash? ? I18n.t("models.investment_statement.cash") : (security.name.presence || ticker)
       def amount_money = amount
+    end
+
+    CASH_TICKER = "CASH".freeze
+
+    # The one denominator every weight is measured against: the larger of the
+    # live portfolio value (account balances, cash included) and the holdings
+    # total.
+    #
+    # Portfolio value is the right denominator -- a security's weight is its
+    # share of everything the user holds, cash included -- but it is
+    # Account#balance, which can lag the holdings (stale zero after a sync)
+    # or fall below them (negative cash from margin or an unsettled buy).
+    # Dividing by it in either case reports a weight over 100. The holdings
+    # total is a floor that keeps every weight at or below 100; when it wins,
+    # the residual cash is zero or negative and #allocation shows no cash row.
+    def weight_denominator(rolled_up)
+      holdings_total = rolled_up.sum { |_, value, _| value }
+      [ portfolio_value, holdings_total ].max
     end
 
     # Groups current holdings by security and sums family-currency value.

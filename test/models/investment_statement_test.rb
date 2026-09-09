@@ -204,10 +204,121 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     allocation = @statement.allocation
 
-    assert_equal 2, allocation.size
-    assert_equal %w[MSFT AAPL], allocation.map(&:ticker)
+    # Portfolio 5000 (account balances) vs holdings 3500: the 1500 the
+    # holdings do not explain is reported as a cash row so the weights still
+    # sum to 100 and MSFT carries the same 40% here as in top_holdings.
+    assert_equal 3, allocation.size
+    assert_equal %w[MSFT AAPL CASH], allocation.map(&:ticker)
     assert_equal Money.new(1500, "USD"), allocation.find { |a| a.ticker == "AAPL" }.amount
+    assert_in_delta 40.0, allocation.first.weight, 0.01
+    assert allocation.last.cash?
+    assert_equal Money.new(1500, "USD"), allocation.last.amount
     assert_in_delta 100.0, allocation.sum(&:weight), 0.01
+  end
+
+  test "weights never exceed 100 when cash is negative" do
+    # A margin balance or an unsettled buy makes cash negative, so the
+    # portfolio value (960) is below the holdings total (1000). Dividing by
+    # portfolio value would report the single holding at 104.17%.
+    account = create_investment_account(balance: 960, cash_balance: -40, currency: "USD")
+    security = Security.create!(ticker: "VOO", name: "Vanguard S&P 500")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "USD"
+    )
+
+    top = @statement.top_holdings(limit: 5)
+    allocation = @statement.allocation
+
+    assert_in_delta 100.0, top.first.weight, 0.01
+    assert_equal 1, allocation.size, "negative cash must not produce a cash row"
+    assert_in_delta 100.0, allocation.first.weight, 0.01
+  end
+
+  test "top_holdings and allocation report the same weight for a security" do
+    account = create_investment_account(balance: 10_000, cash_balance: 4000, currency: "USD")
+    security = Security.create!(ticker: "VOO", name: "Vanguard S&P 500")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 30, price: 200, amount: 6000, currency: "USD"
+    )
+
+    top_weight = @statement.top_holdings(limit: 1).first.weight
+    allocation = @statement.allocation
+    allocation_weight = allocation.find { |row| row.ticker == "VOO" }.weight
+
+    assert_in_delta 60.0, top_weight, 0.01
+    assert_equal top_weight, allocation_weight
+    assert_equal [ "VOO", "CASH" ], allocation.map(&:ticker)
+    assert_in_delta 40.0, allocation.last.weight, 0.01
+    assert_equal I18n.t("models.investment_statement.cash"), allocation.last.name
+    assert_nil allocation.last.security
+    assert_nil allocation.last.trend
+  end
+
+  test "allocation omits the cash row when account balances are a stale zero" do
+    account = create_investment_account(balance: 0, cash_balance: 0, currency: "USD")
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+
+    allocation = @statement.allocation
+
+    assert_equal %w[AAPL], allocation.map(&:ticker)
+    assert_in_delta 100.0, allocation.first.weight, 0.01
+  end
+
+  test "rolls up the same security held in a foreign-currency account in family currency" do
+    usd_account = create_investment_account(balance: 2000, currency: "USD")
+    eur_account = create_investment_account(balance: 1000, currency: "EUR")
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: usd_account, security: security, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+    Holding.create!(
+      account: eur_account, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "EUR"
+    )
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+
+    top = @statement.top_holdings(limit: 5)
+
+    assert_equal 1, top.size
+    # 2000 USD + 1000 EUR * 1.1
+    assert_equal Money.new(3100, "USD"), top.first.amount_money
+    assert_in_delta 100.0, top.first.weight, 0.01
+  end
+
+  test "a holding in an account shared without include_in_finances is not rolled in" do
+    shared_user = users(:new_email)
+    owned = create_investment_account(balance: 1000, currency: "USD")
+    shared_excluded = create_investment_account(balance: 1000, currency: "USD")
+    owned.update!(owner: shared_user)
+    shared_excluded.share_with!(shared_user, permission: "read_only", include_in_finances: false)
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: owned, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "USD"
+    )
+    Holding.create!(
+      account: shared_excluded, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "USD"
+    )
+
+    statement = InvestmentStatement.new(@family, user: shared_user)
+    top = statement.top_holdings(limit: 5)
+
+    assert_equal 1, top.size
+    assert_equal Money.new(1000, "USD"), top.first.amount_money,
+      "the excluded shared account's holding must not be summed into the user's row"
   end
 
   test "allocation weights sum to 100% with mixed currencies" do
