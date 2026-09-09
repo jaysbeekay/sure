@@ -64,26 +64,41 @@ module AccountableResource
     # the unsaved account with its nested accountable still attached.
     @account = e.record
     @error_message = e.record.errors.full_messages.join(", ")
+    # The `new` template's method-selection branch reads `@provider_configs`,
+    # which the `new` action's before_action sets up; this render needs it too.
+    set_link_options
     render :new, status: :unprocessable_entity
   end
 
   def update
-    # Handle balance update if the value actually changed
-    if account_params[:balance].present? && account_params[:balance].to_d != @account.balance
-      result = @account.set_current_balance(account_params[:balance].to_d)
-      unless result.success?
-        @error_message = result.error_message
-        render :edit, status: :unprocessable_entity
-        return
+    # The balance change and the attribute update are one form, so they commit
+    # or roll back as one. `set_current_balance` writes a valuation and the
+    # account's cached balance; before this, a validation failing on the
+    # attributes (a half-filled loan rate change, say) returned 422 with the
+    # balance half of the rejected form already committed.
+    saved = Account.transaction do
+      # Handle balance update if the value actually changed
+      if account_params[:balance].present? && account_params[:balance].to_d != @account.balance
+        result = @account.set_current_balance(account_params[:balance].to_d)
+        unless result.success?
+          @error_message = result.error_message
+          raise ActiveRecord::Rollback
+        end
       end
+
+      # Update remaining account attributes. Note: currency is intentionally allowed
+      # here so all account types (depositories, credit cards, loans, etc.) can
+      # have their currency changed via this shared update path.
+      update_params = account_params.except(:return_to, :balance, :opening_balance_date)
+      unless @account.update(update_params)
+        @error_message = @account.errors.full_messages.join(", ")
+        raise ActiveRecord::Rollback
+      end
+
+      true
     end
 
-    # Update remaining account attributes. Note: currency is intentionally allowed
-    # here so all account types (depositories, credit cards, loans, etc.) can
-    # have their currency changed via this shared update path.
-    update_params = account_params.except(:return_to, :balance, :opening_balance_date)
-    unless @account.update(update_params)
-      @error_message = @account.errors.full_messages.join(", ")
+    unless saved
       render :edit, status: :unprocessable_entity
       return
     end

@@ -118,6 +118,11 @@ class Loan
         accrual_rate = monthly_rate(@accrual_rate_for.call(period_start))
         sizing_rate = monthly_rate(rate_on(payment_date))
 
+        # Interest first, on the balance the period OPENED with: one charge per
+        # period under monthly accrual. Sizing needs it when the two rates
+        # differ, see below.
+        interest = (balance * accrual_rate).round(@currency_precision)
+
         if @payment_strategy == :scheduled
           # The contract's repayment for THIS period, whatever balance is in
           # front of it. Sizing from the balance would shrink a borrower who is
@@ -145,20 +150,23 @@ class Loan
           # rate CHANGE. Without it, a seeded repayment is overwritten on the
           # very first period it was supposed to govern.
           rate_moved = !previous_sizing_rate.nil? && sizing_rate != previous_sizing_rate
+          # When the period straddles the change -- accrued at the old rate,
+          # sized at the new -- the annuity formula alone over-covers this
+          # period and the payment is not level to maturity (a final
+          # settlement thousands short). The sizing is told what this period
+          # actually charged so the figure covers it and amortises the rest
+          # evenly.
           if payment.nil? || (@payment_strategy == :reamortize && rate_moved)
             payment = AmortizationMath.level_payment(
               balance: balance,
               monthly_rate: sizing_rate,
               remaining_payments: @payment_schedule.length - index,
-              currency_precision: @currency_precision
+              currency_precision: @currency_precision,
+              first_period_interest: (interest if sizing_rate != accrual_rate)
             )
           end
         end
         previous_sizing_rate = sizing_rate
-
-        # Interest first, on the balance the period OPENED with: one charge per
-        # period under monthly accrual.
-        interest = (balance * accrual_rate).round(@currency_precision)
 
         final = (@settle_at_schedule_end && index == @payment_schedule.length - 1) ||
           payment >= balance + interest

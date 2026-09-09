@@ -1,4 +1,4 @@
-class AddVariableRateTrackingToLoans < ActiveRecord::Migration[7.2]
+class AddVariableRateTrackingToLoans < ActiveRecord::Migration[8.1]
   def change
     # Effective date => annual percentage, e.g. {"2026-04-01" => "6.15"}.
     # A JSONB column rather than a table: a handful of rows per loan, always
