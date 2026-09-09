@@ -1,4 +1,9 @@
-<%# locals: (account:) %>
+<%# locals: (account:, as_of: Date.current) %>
+
+<%# ONE reference date for every figure on this tab, supplied by the caller
+    where it has one (the account page passes the same date to the Schedule
+    tab). %>
+<% today = as_of %>
 
 <div class="grid grid-cols-3 gap-2">
   <%= summary_card title: t(".original_principal") do %>
@@ -15,7 +20,7 @@
       origination rate next to a schedule that no longer used it. For a fixed
       loan, or before any change applies, this is the column unchanged. %>
   <%= summary_card title: t(".interest_rate") do %>
-    <% current_rate = account.loan.current_variable_rate(Date.current) %>
+    <% current_rate = account.loan.current_variable_rate(today) %>
     <% if current_rate.present? %>
       <%= number_to_percentage(current_rate, precision: 3) %>
     <% else %>
