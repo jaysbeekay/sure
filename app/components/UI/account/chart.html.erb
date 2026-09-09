@@ -56,6 +56,11 @@
           <%= render "accounts/summary_card", title: loan_interest_saved_title, content: capture { %>
             <%= loan_interest_saved_money.format %>
           <% } %>
+          <%# The basis of the comparison, beside the figures it governs: the
+              schedule's dates are anniversaries of origination, not the
+              lender's posting dates, so a payment posted before its date
+              reads as ahead until that date and one posted after as behind. %>
+          <p class="col-span-2 text-xs text-secondary"><%= t("UI.account.chart.loan.projection_basis") %></p>
         <% elsif loan_projection_not_converged? %>
           <p class="col-span-2 text-sm text-secondary"><%= t("UI.account.chart.loan.not_converged") %></p>
         <% end %>
