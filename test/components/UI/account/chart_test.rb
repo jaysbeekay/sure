@@ -111,6 +111,20 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert_selector "[data-controller='loan-payoff-chart']"
   end
 
+  # The cards compare today's recorded balance with the schedule's balance on
+  # the same day, and a payment posted before its scheduled date reads as
+  # ahead until that date. The basis is stated beside the figures it governs.
+  test "the projection cards state the basis of their comparison" do
+    loan_account = accounts(:loan)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
+    assert_not_nil payload[:projected_payoff_date], "the fixture loan must project a payoff, or this asserts nothing"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
+
+    assert_text I18n.t("UI.account.chart.loan.projection_basis")
+  end
+
   private
     # 10 shares at $100 market price; gain = 1000 - cost_basis * 10
     def create_holding(cost_basis:)
@@ -124,19 +138,5 @@ class UI::Account::ChartTest < ViewComponent::TestCase
         currency: @account.currency,
         cost_basis: cost_basis
       )
-    end
-
-    # The cards compare today's recorded balance with the schedule's balance on
-    # the same day, and a payment posted before its scheduled date reads as
-    # ahead until that date. The basis is stated beside the figures it governs.
-    test "the projection cards state the basis of their comparison" do
-      loan_account = accounts(:loan)
-      payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
-      assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
-      assert_not_nil payload[:projected_payoff_date], "the fixture loan must project a payoff, or this asserts nothing"
-
-      render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
-
-      assert_text I18n.t("UI.account.chart.loan.projection_basis")
     end
 end

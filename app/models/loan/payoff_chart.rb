@@ -42,6 +42,9 @@ class Loan
 
       {
         today: as_of.iso8601,
+        # The tooltip formats dates and money in this locale. The layout
+        # hard-codes `lang="en"`, so the document cannot tell the chart.
+        locale: I18n.locale.to_s,
         currency: currency,
         domain_start: domain_start.iso8601,
         domain_end: domain_end.iso8601,

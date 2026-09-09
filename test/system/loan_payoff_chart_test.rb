@@ -106,6 +106,35 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
     end
   end
 
+  # The tooltip formats its date and its money in the request's locale, which
+  # the payload carries because the layout hard-codes `lang="en"`. Asserted
+  # against what the browser's own Intl produces for German, so the expected
+  # strings are not guessed; and against the English forms, so a formatter
+  # that ignored the locale would fail here.
+  test "the tooltip is formatted in the user's locale" do
+    @user.update!(locale: "de")
+
+    travel_to TODAY do
+      account = on_contract_loan_account
+
+      visit account_path(account, period: "all_time")
+      svg = find("[data-controller='loan-payoff-chart'] svg")
+      svg.send_keys(:arrow_right)
+      tooltip = find("[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all)
+      # The tooltip is one div per line; Capybara joins them without separators.
+      text = tooltip.text(:all)
+
+      german_date = page.evaluate_script("new Intl.DateTimeFormat('de', { month: 'short', year: 'numeric' }).format(new Date(2026, 0, 1))")
+      german_money = page.evaluate_script("new Intl.NumberFormat('de', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(500000)")
+      assert text.start_with?(german_date), "expected the tooltip to open with #{german_date.inspect}, got #{text.inspect}"
+      assert_not text.start_with?("Jan 2026"), "d3's English month name must not leak through"
+      # Intl separates the number and the symbol with a no-break space that
+      # Capybara's text normalises to a plain one; compare on plain spaces.
+      assert_includes text.gsub(/[[:space:]]/, " "), german_money.gsub(/[[:space:]]/, " ")
+      assert_not_includes text, "$500,000", "the English money format must not leak through"
+    end
+  end
+
   private
     def assert_series_painted
       SERIES.each do |key|
@@ -115,6 +144,10 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
         assert_not_equal "none", stroke_of(key),
           "the #{key} line has geometry but no resolved stroke, so it does not mark the screen -- #101 exactly"
       end
+      # The greyed remainder of the recorded line is a token too; it must
+      # resolve without any fallback colour in the controller.
+      shadow = page.evaluate_script("getComputedStyle(document.querySelector(\"svg path[data-series-shadow='actual']\")).stroke")
+      assert_not_equal "none", shadow, "the greyed recorded line has no resolved stroke"
     end
 
     # `stroke: none` is the initial value, and it is what an unresolvable

@@ -165,14 +165,23 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
   end
 
   private
+    # Built the way the account form builds one: with an opening valuation for
+    # the amount borrowed. `Loan#original_balance` reads it; without it the
+    # principal follows whatever the current balance is later set to, and a
+    # schedule read after a balance update would amortise a different loan.
     def build_loan(term_months:, rate_type: "fixed", interest_rate: 6)
-      Account.create!(
+      account = Account.create!(
         family: @family, name: "Loan #{SecureRandom.hex(4)}",
         balance: 500_000, currency: "USD",
         accountable: Loan.new(subtype: "mortgage", interest_rate: interest_rate,
                               term_months: term_months, rate_type: rate_type,
                               start_date: Date.new(2026, 1, 1))
-      ).loan
+      )
+      account.entries.create!(
+        date: Date.new(2026, 1, 1), name: "Opening balance", amount: 500_000, currency: "USD",
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account.loan
     end
 
     def scheduled_balance_at(loan, date)

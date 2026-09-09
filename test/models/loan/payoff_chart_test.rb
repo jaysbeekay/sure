@@ -220,6 +220,19 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_equal payload[:scheduled_payoff_date], payload[:scheduled].last[:date]
   end
 
+  # The layout hard-codes `lang="en"`, so the chart cannot learn the locale
+  # from the document; the payload carries it for the tooltip's date and
+  # money formatting (Codex on we-promise/sure#3474).
+  test "the payload carries the request locale for the tooltip" do
+    loan = on_contract_loan
+
+    assert_equal "en", Loan::PayoffChart.new(loan, as_of: @today).payload[:locale]
+    I18n.with_locale(:de) do
+      assert_equal "de", Loan::PayoffChart.new(loan, as_of: @today).payload[:locale]
+    end
+  end
+
+
   private
     def build_loan(rate_type: "fixed")
       account = Account.create!(

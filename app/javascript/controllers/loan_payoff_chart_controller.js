@@ -51,15 +51,6 @@ export default class extends Controller {
     } else {
       this._draw();
     }
-    // Colours are read at draw time, so a theme switch while this page is open
-    // would otherwise leave the chart painted for the previous theme.
-    if (typeof MutationObserver !== "undefined") {
-      this._themeObserver = new MutationObserver(this._scheduleDraw);
-      this._themeObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme", "class"],
-      });
-    }
   }
 
   disconnect() {
@@ -67,17 +58,7 @@ export default class extends Controller {
     if (this._frame) cancelAnimationFrame(this._frame);
     this._frame = null;
     this._observer?.disconnect();
-    this._themeObserver?.disconnect();
     this._tooltip?.remove();
-  }
-
-  // Design tokens are CSS custom properties. Resolved to a concrete colour at
-  // draw time and applied with .style(), keeping the token as the source.
-  _token(name, fallback) {
-    const value = getComputedStyle(document.documentElement)
-      .getPropertyValue(name)
-      .trim();
-    return value || fallback;
   }
 
   _draw() {
@@ -96,9 +77,16 @@ export default class extends Controller {
     const today = parseDate(data.today);
     if (!domainStart || !domainEnd || domainEnd <= domainStart) return;
 
-    const success = this._token("--color-success", "#15803d");
-    const destructive = this._token("--color-destructive", "#ef4444");
-    const muted = this._token("--color-gray-400", "#9ca3af");
+    // Functional tokens, referenced as CSS variables and applied with
+    // .style(), never .attr(): a variable is substituted in an inline style
+    // property but not in an SVG presentation attribute, where it leaves the
+    // stroke at `none` (#101). No fallback colours: a token that fails to
+    // resolve must fail visibly, and the browser test checks the resolved
+    // stroke. Because these are live variables the browser recolours the
+    // chart on a theme change by itself; no redraw is needed for that.
+    const success = "var(--color-success)";
+    const destructive = "var(--color-destructive)";
+    const muted = "var(--color-tertiary)";
 
     // Drawing order: forecasts underneath, fact on top.
     const series = [
@@ -344,16 +332,24 @@ export default class extends Controller {
       if (!b) return a;
       return date - a.date <= b.date - date ? a : b;
     };
+    // The request's locale travels in the payload: the layout hard-codes
+    // lang="en", so the document cannot say. Both the date and the money in
+    // the tooltip follow it.
+    const locale = data.locale || undefined;
+    const monthYear = new Intl.DateTimeFormat(locale, {
+      month: "short",
+      year: "numeric",
+    });
     const formatter = (() => {
       try {
-        return new Intl.NumberFormat(undefined, {
+        return new Intl.NumberFormat(locale, {
           style: "currency",
           currency: data.currency || "USD",
           maximumFractionDigits: 0,
         });
       } catch {
         // A currency code Intl does not know must not take hover with it.
-        return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+        return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
       }
     })();
     const money = (value) => formatter.format(value);
@@ -375,7 +371,7 @@ export default class extends Controller {
 
       // Text nodes, never innerHTML.
       tooltip.replaceChildren();
-      for (const text of [d3.timeFormat("%b %Y")(date), ...rows]) {
+      for (const text of [monthYear.format(date), ...rows]) {
         const div = document.createElement("div");
         div.textContent = text;
         tooltip.appendChild(div);
