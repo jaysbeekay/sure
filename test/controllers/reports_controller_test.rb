@@ -8,6 +8,31 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     @family = @user.family
   end
 
+  # The Reports section controllers gained `url` and `preferenceKey` values so
+  # the portfolio hub can reuse them. Reports passes neither, so the page must
+  # carry no override attributes and its endpoint must still accept the
+  # original keys; otherwise the defaults have drifted from the literals.
+  test "reports sections rely on the Stimulus defaults and still post to their own endpoint" do
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-controller='reports-sortable']"
+    assert_select "[data-reports-sortable-url-value]", count: 0
+    assert_select "[data-reports-sortable-preference-key-value]", count: 0
+    assert_select "[data-reports-section-url-value]", count: 0
+    assert_select "[data-reports-section-preference-key-value]", count: 0
+
+    patch update_preferences_reports_path,
+      params: { preferences: { reports_section_order: %w[transactions_breakdown trends_insights], reports_collapsed_sections: { trends_insights: true } } },
+      as: :json
+    assert_response :ok
+
+    @user.reload
+    assert_equal %w[transactions_breakdown trends_insights], @user.reports_section_order
+    assert @user.reports_section_collapsed?("trends_insights")
+    assert_nil @user.preferences["portfolio_section_order"]
+  end
+
   test "index renders successfully" do
     get reports_path
     assert_response :ok

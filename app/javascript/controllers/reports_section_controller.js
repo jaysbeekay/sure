@@ -2,9 +2,14 @@ import { Controller } from "@hotwired/stimulus";
 
 export default class extends Controller {
   static targets = ["content", "chevron", "button"];
+  // `url` and `preferenceKey` default to the Reports literals so the Reports
+  // page, which passes neither, keeps posting exactly what it always has; the
+  // portfolio hub passes its own.
   static values = {
     sectionKey: String,
     collapsed: Boolean,
+    url: { type: String, default: "/reports/update_preferences" },
+    preferenceKey: { type: String, default: "reports" },
   };
 
   connect() {
@@ -55,7 +60,7 @@ export default class extends Controller {
 
   async savePreference(collapsed) {
     const preferences = {
-      reports_collapsed_sections: {
+      [`${this.preferenceKeyValue}_collapsed_sections`]: {
         [this.sectionKeyValue]: collapsed,
       },
     };
@@ -70,7 +75,7 @@ export default class extends Controller {
     }
 
     try {
-      const response = await fetch("/reports/update_preferences", {
+      const response = await fetch(this.urlValue, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",

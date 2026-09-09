@@ -3,9 +3,16 @@ import { Controller } from "@hotwired/stimulus";
 export default class extends Controller {
   static targets = ["section", "handle"];
 
-  // Short delay to prevent accidental touches on the grip handle
+  // Short delay to prevent accidental touches on the grip handle.
+  //
+  // `url` and `preferenceKey` let another page (the portfolio hub) reuse this
+  // controller against its own preferences endpoint and keys. The defaults are
+  // the literals Reports has always used, so a page that passes nothing
+  // behaves exactly as before.
   static values = {
     holdDelay: { type: Number, default: 150 },
+    url: { type: String, default: "/reports/update_preferences" },
+    preferenceKey: { type: String, default: "reports" },
   };
 
   connect() {
@@ -293,13 +300,15 @@ export default class extends Controller {
     }
 
     try {
-      const response = await fetch("/reports/update_preferences", {
+      const response = await fetch(this.urlValue, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken.content,
         },
-        body: JSON.stringify({ preferences: { reports_section_order: order } }),
+        body: JSON.stringify({
+          preferences: { [`${this.preferenceKeyValue}_section_order`]: order },
+        }),
       });
 
       if (!response.ok) {
