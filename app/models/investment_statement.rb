@@ -385,6 +385,9 @@ class InvestmentStatement
       end
     end
 
+    # Count plus latest timestamp over the holdings the series can read, so a
+    # cost-basis edit, unlock or remap (rows rewritten in place) and a
+    # deletion (a row gone, timestamps unchanged) each move the gains key.
     def holdings_version
       @holdings_version ||= begin
         holdings = Holding.where(account_id: historical_scope.account_ids)
