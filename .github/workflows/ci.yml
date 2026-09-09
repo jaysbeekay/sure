@@ -158,6 +158,9 @@ jobs:
       - name: Verify loan contract test traceability
         run: bin/rails loans:verify_contract_coverage
 
+      - name: Verify portfolio contract test traceability
+        run: bin/rails portfolio:verify_contract_coverage
+
       # #10 requires the daily-accrual SLO to be enforced by something that can
       # actually fail a build; until now `loans:amortization_benchmark` aborted
       # on breach but no workflow invoked it.
