@@ -15,7 +15,7 @@
   <% else %>
     <%= turbo_frame_tag "portfolio_sections", target: "_top" do %>
       <div class="flex items-center justify-end mb-4">
-        <%= render UI::PeriodPicker.new(selected: @period, url: portfolio_path, frame: "portfolio_sections") %>
+        <%= render UI::PeriodPicker.new(selected: @period, url: portfolio_path, frame: "portfolio_sections", extra_params: { sort: @sort, dir: @dir, by: @by }.compact) %>
       </div>
 
       <div

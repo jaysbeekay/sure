@@ -18,19 +18,29 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal I18n.t("preview.not_enabled"), flash[:alert]
   end
 
-  test "renders the hub, its turbo frame and only the sections that have partials" do
+  test "renders the hub, its turbo frame and every section the family has data for" do
     get portfolio_path
 
     assert_response :success
     assert_select "h1", text: I18n.t("portfolios.show.title")
     assert_select "turbo-frame#portfolio_sections"
 
-    assert_select "[data-section-key=?]", "kpis"
-    assert_select "[data-section-key=?]", "value_chart"
-
-    %w[holdings accounts allocation data_quality].each do |key|
-      assert_select "[data-section-key=?]", key, count: 0, message: "#{key} has no partial yet"
+    # The fixture family holds AAPL in accounts(:investment), so every
+    # section has something to show; data quality is present because the
+    # fixture security has no price rows (stale by definition).
+    %w[kpis value_chart holdings accounts allocation data_quality].each do |key|
+      assert_select "[data-section-key=?]", key, count: 1
     end
+  end
+
+  test "sort and grouping params are whitelisted before they reach the picker links" do
+    get portfolio_path(sort: "name", dir: "asc", by: "kind")
+    assert_response :success
+    assert_select "a[href=?]", "#{portfolio_path}?by=kind&dir=asc&period=last_5_years&sort=name"
+
+    get portfolio_path(sort: "drop table", dir: "sideways", by: "nonsense")
+    assert_response :success
+    assert_select "a[href=?]", "#{portfolio_path}?period=last_5_years"
   end
 
   test "the period picker reflects the requested period" do
@@ -129,7 +139,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path
 
     assert_response :success
-    assert_equal %w[value_chart kpis], css_select("[data-section-key]").map { |node| node["data-section-key"] }
+    # The saved order places the chart first; sections it does not mention
+    # follow in declaration order.
+    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+      css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
   end

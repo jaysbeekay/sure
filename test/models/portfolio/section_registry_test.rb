@@ -5,6 +5,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     @user = users(:family_admin)
     @family = @user.family
     @period = Period.last_30_days
+    @as_of = Date.current
     @statement = InvestmentStatement.new(@family, user: @user)
   end
 
@@ -18,14 +19,34 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     # Every partial gets its locals passed in: none of them reaches for
     # Date.current or Current.family on its own.
     sections.each do |section|
-      assert_equal({ statement: @statement, period: @period, as_of: @as_of }, section[:locals])
+      assert_equal({ statement: @statement, period: @period, as_of: @as_of }, section[:locals].slice(:statement, :period, :as_of),
+        "#{section[:key]} must receive the shared locals rather than reading them itself")
     end
   end
 
-  test "only the sections with partials are visible for now" do
+  test "sections are visible only when the family has data for them" do
     visible = registry.sections.select { |s| s[:visible] }.map { |s| s[:key] }
+    assert_includes visible, "holdings"
+    assert_includes visible, "accounts"
+    assert_includes visible, "allocation"
 
-    assert_equal %w[kpis value_chart], visible
+    # A family with no investment accounts has nothing to list beyond the
+    # always-on KPI row and chart (the controller shows the empty state).
+    empty_statement = InvestmentStatement.new(families(:empty), user: nil)
+    empty = Portfolio::SectionRegistry.new(statement: empty_statement, period: @period, as_of: @as_of, user: @user).sections
+    assert_equal %w[kpis value_chart], empty.select { |s| s[:visible] }.map { |s| s[:key] }
+  end
+
+  test "passes the sort, direction and grouping through to the holdings and allocation locals" do
+    sections = Portfolio::SectionRegistry.new(
+      statement: @statement, period: @period, as_of: @as_of, user: @user, sort: "name", dir: "asc", by: "kind"
+    ).sections.index_by { |s| s[:key] }
+
+    assert_equal "name", sections["holdings"][:locals][:sort]
+    assert_equal "asc", sections["holdings"][:locals][:dir]
+    assert_equal "kind", sections["allocation"][:locals][:by]
+    assert_equal sections["holdings"][:locals][:rows].map(&:ticker).sort, sections["holdings"][:locals][:rows].map(&:ticker)
+    assert sections["data_quality"][:locals].key?(:issues)
   end
 
   test "orders sections by the user's saved order, appending anything it omits" do
