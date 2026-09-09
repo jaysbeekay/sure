@@ -47,6 +47,8 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_equal "kind", sections["allocation"][:locals][:by]
     assert_equal sections["holdings"][:locals][:rows].map(&:ticker).sort, sections["holdings"][:locals][:rows].map(&:ticker)
     assert sections["data_quality"][:locals].key?(:issues)
+    assert_equal %i[value day_change unrealized period_return net_contributions income], sections["kpis"][:locals][:kpis].keys
+    assert_kind_of Series, sections["value_chart"][:locals][:series]
   end
 
   test "orders sections by the user's saved order, appending anything it omits" do

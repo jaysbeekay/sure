@@ -58,7 +58,7 @@ class Portfolio::SectionRegistry
           key: "kpis",
           title: "portfolios.sections.kpis",
           partial: "portfolios/kpi_row",
-          locals: shared_locals,
+          locals: shared_locals.merge(kpis: kpis),
           visible: true,
           collapsible: true
         },
@@ -66,7 +66,7 @@ class Portfolio::SectionRegistry
           key: "value_chart",
           title: "portfolios.sections.value_chart",
           partial: "portfolios/value_chart",
-          locals: shared_locals,
+          locals: shared_locals.merge(series: statement.value_series(period: period)),
           visible: true,
           collapsible: true
         },
@@ -105,6 +105,19 @@ class Portfolio::SectionRegistry
           collapsible: true
         }
       ]
+    end
+
+    # The six KPI figures, read from the statement here so the partial only
+    # formats them.
+    def kpis
+      @kpis ||= {
+        value: statement.portfolio_value_money,
+        day_change: statement.day_change,
+        unrealized: statement.unrealized_gains_trend,
+        period_return: statement.period_return_trend(period: period),
+        net_contributions: statement.net_contributions(period: period),
+        income: statement.totals(period: period).total_income
+      }
     end
 
     def holdings_rows

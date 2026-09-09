@@ -1231,18 +1231,26 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     Security::Price.create!(security: stale, date: as_of - 6.days, price: 10, currency: "USD")
     Security::Price.create!(security: offline, date: as_of, price: 10, currency: "USD")
 
-    # fresh: stored basis. stale: no stored basis but a buy trade computes one. unpriced: nothing.
+    # fresh: stored basis. stale: no stored basis but a buy trade computes one.
+    # unpriced: nothing. moved: a buy plus a Transfer, which makes the cost
+    # unknown by Holding#calculate_avg_cost's rule.
+    moved = Security.create!(ticker: "MOVED", name: "Moved in")
+    Security::Price.create!(security: moved, date: as_of, price: 10, currency: "USD")
     Holding.create!(account: account, security: fresh, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
     Holding.create!(account: account, security: stale, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD")
     create_portfolio_trade(account: account, security: stale, qty: 1, price: 9, date: as_of - 10.days)
     Holding.create!(account: account, security: unpriced, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD")
+    Holding.create!(account: account, security: moved, date: as_of, qty: 2, price: 10, amount: 20, currency: "USD")
+    create_portfolio_trade(account: account, security: moved, qty: 1, price: 9, date: as_of - 10.days)
+    create_portfolio_trade(account: account, security: moved, qty: 1, price: 9, date: as_of - 9.days, label: "Transfer")
     Holding.create!(account: account, security: offline, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
     Holding.create!(account: account, security: cash, date: as_of, qty: 100, price: 1, amount: 100, currency: "USD")
 
     issues = @statement.data_quality_issues(as_of: as_of)
     by_kind = issues.group_by(&:kind).transform_values { |list| list.map { |i| i.security.ticker } }
 
-    assert_equal %w[NOPX], by_kind[:missing_cost_basis], "a buy trade means the basis is computable, so STALE is not flagged"
+    assert_equal %w[MOVED NOPX], by_kind[:missing_cost_basis],
+      "a buy trade means the basis is computable (STALE is not flagged); a Transfer makes it unknown (MOVED is)"
     assert_equal %w[NOPX STALE], by_kind[:stale_price]
     assert_includes by_kind[:provider], "OFFL"
     assert_not_includes issues.map { |i| i.security.ticker }, cash.ticker
@@ -1259,7 +1267,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     @statement.current_holdings.to_a
 
     queries = capture_sql_queries { @statement.data_quality_issues(as_of: Date.current) }
-    assert_operator queries.size, :<=, 3, "expected the buy-trade pairs and latest prices queries only, got:\n#{queries.join("\n")}"
+    assert_operator queries.size, :<=, 3, "expected the cost-basis preload and latest prices queries only, got:\n#{queries.join("\n")}"
   end
 
   test "average costs are preloaded in one query and agree with Holding#calculate_avg_cost" do

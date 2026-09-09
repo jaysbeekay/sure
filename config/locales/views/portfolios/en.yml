@@ -42,8 +42,10 @@ en:
       title: No investment accounts yet
     holdings:
       columns:
+        account: Account
         accounts: Accounts
         avg_cost: Avg cost
+        cost_basis: Cost basis
         day_change: Day
         qty: Qty
         security: Security
@@ -54,6 +56,8 @@ en:
       missing_cost_basis_hint: At least one position has no stored cost basis, so the row cannot show an average cost or a return.
       no_cost_basis: no cost basis
       open_position: Open
+      positions_caption: Positions in %{ticker} by account
+      toggle_positions: Show positions in %{ticker}
     kpi_row:
       as_of: As of %{date}
       day_change: Day change

@@ -42,8 +42,10 @@ de:
       title: Noch keine Anlagekonten
     holdings:
       columns:
+        account: Konto
         accounts: Konten
         avg_cost: Ø Kosten
+        cost_basis: Kostenbasis
         day_change: Tag
         qty: Menge
         security: Wertpapier
@@ -54,6 +56,8 @@ de:
       missing_cost_basis_hint: Mindestens eine Position hat keine gespeicherte Kostenbasis, daher kann die Zeile weder Durchschnittskosten noch eine Rendite zeigen.
       no_cost_basis: keine Kostenbasis
       open_position: Öffnen
+      positions_caption: Positionen in %{ticker} nach Konto
+      toggle_positions: Positionen in %{ticker} anzeigen
     kpi_row:
       as_of: Stand %{date}
       day_change: Tagesveränderung

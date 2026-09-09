@@ -213,15 +213,16 @@ class InvestmentStatement
   end
 
   # Holdings the user should look at before trusting the figures: no cost
-  # basis anywhere (no stored basis and no buy trade to compute one from),
-  # a price older than STALE_PRICE_AFTER_DAYS or no price at all, or a
-  # provider link that is not healthy. Cash securities are never flagged.
-  # One query for the buy-trade pairs and one for the latest price dates,
-  # so the list is bounded regardless of the number of holdings.
+  # basis anywhere (Holding#avg_cost is nil: nothing stored and nothing the
+  # trades can compute, by the same rules the holdings tab applies), a price
+  # older than STALE_PRICE_AFTER_DAYS or no price at all, or a provider link
+  # that is not healthy. Cash securities are never flagged. The cost bases
+  # come from the batched preload and the price dates from one query, so
+  # the list is bounded regardless of the number of holdings.
   STALE_PRICE_AFTER_DAYS = 5
 
   def data_quality_issues(as_of: Date.current)
-    holdings = current_holdings.to_a
+    holdings = holdings_with_avg_costs
     return [] if holdings.empty?
 
     issues = []
@@ -229,7 +230,7 @@ class InvestmentStatement
     holdings.each do |holding|
       next if holding.security.cash?
 
-      if !stored_cost_basis?(holding) && !pairs_with_buy_trades.include?([ holding.account_id, holding.security_id ])
+      if holding.avg_cost.nil?
         issues << DataQualityIssue.new(kind: :missing_cost_basis, holding: holding, security: holding.security, detail: nil)
       end
     end
@@ -746,16 +747,6 @@ class InvestmentStatement
         end
         holding.preload_avg_cost(value)
       end
-    end
-
-    def pairs_with_buy_trades
-      @pairs_with_buy_trades ||= Trade
-        .joins(:entry)
-        .where(entries: { account_id: investment_account_ids, excluded: false })
-        .where("trades.qty > 0")
-        .distinct
-        .pluck(Arel.sql("entries.account_id"), :security_id)
-        .to_set
     end
 
     def latest_price_dates

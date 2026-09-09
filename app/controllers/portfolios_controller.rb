@@ -50,13 +50,18 @@ class PortfoliosController < ApplicationController
         prefs = params.require(:preferences)
 
         {}.tap do |permitted|
-          if prefs[:portfolio_collapsed_sections].present?
-            collapsed = prefs[:portfolio_collapsed_sections].to_unsafe_h
-            permitted["portfolio_collapsed_sections"] = collapsed.transform_values { |v| ActiveModel::Type::Boolean.new.cast(v) == true }
+          # A collapsed set is an object of key => flag; anything else (a
+          # bare string, an array) is not the contract and is dropped rather
+          # than raised on.
+          collapsed = prefs[:portfolio_collapsed_sections]
+          if collapsed.respond_to?(:to_unsafe_h)
+            permitted["portfolio_collapsed_sections"] = collapsed.to_unsafe_h.transform_values { |v| ActiveModel::Type::Boolean.new.cast(v) == true }
           end
 
+          # Deduplicated, first occurrence wins: the registry renders one
+          # section per saved key, so a repeated key would render it twice.
           if prefs[:portfolio_section_order].present?
-            permitted["portfolio_section_order"] = Array(prefs[:portfolio_section_order]).map(&:to_s)
+            permitted["portfolio_section_order"] = Array(prefs[:portfolio_section_order]).map(&:to_s).uniq
           end
         end
       end

@@ -133,6 +133,32 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_nil @user.reload.preferences["reports_section_order"]
   end
 
+  test "a collapsed payload that is not an object is dropped rather than raised on" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_collapsed_sections: "true", portfolio_section_order: %w[kpis] } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_nil @user.preferences["portfolio_collapsed_sections"]
+    assert_equal %w[kpis], @user.section_order("portfolio")
+  end
+
+  test "a saved order with repeated keys renders each section once" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[value_chart kpis value_chart kpis] } },
+      as: :json
+
+    assert_response :ok
+    assert_equal %w[value_chart kpis], @user.reload.section_order("portfolio")
+
+    get portfolio_path
+    assert_response :success
+    keys = css_select("[data-section-key]").map { |node| node["data-section-key"] }
+    assert_equal keys.uniq, keys
+    assert_equal %w[value_chart kpis], keys.first(2)
+  end
+
   test "renders sections in the saved order, collapsed where the user left them" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis], collapsed: { "kpis" => true })
 
@@ -182,8 +208,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path
     assert_response :success
 
-    assert_select "#portfolio-holdings summary[data-portfolio-holding='AAPL']", count: 1
-    assert_select "#portfolio-holdings summary[data-portfolio-holding='AAPL'] p.privacy-sensitive", text: ApplicationController.helpers.format_money(row.amount_money)
+    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL']", count: 1
+    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL'] td[data-portfolio-value]", text: ApplicationController.helpers.format_money(row.amount_money)
+    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL'] button[aria-expanded='false'][aria-controls]"
     positions = css_select("#portfolio-holdings [data-portfolio-positions='AAPL'] a[href^='/holdings/']")
     assert_equal 2, positions.size
     assert_includes positions.map { |a| a["href"] }, holding_path(second.holdings.first)
@@ -196,13 +223,13 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path(sort: "name", dir: "asc", by: "kind")
     assert_response :success
 
-    assert_equal %w[AAPL ZZZ], css_select("#portfolio-holdings summary[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
-    assert_select "#portfolio-holdings a[aria-sort='ascending'][href=?]", "#{portfolio_path}?by=kind&dir=desc&period=last_30_days&sort=name"
-    assert_select "#portfolio-holdings a[href=?]", "#{portfolio_path}?by=kind&dir=desc&period=last_30_days&sort=value"
-    assert_select "#portfolio-holdings a[aria-sort]", count: 1
+    assert_equal %w[AAPL ZZZ], css_select("#portfolio-holdings tr[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
+    assert_select "#portfolio-holdings th[aria-sort='ascending'] a[href=?]", "#{portfolio_path}?by=kind&dir=desc&period=last_30_days&sort=name"
+    assert_select "#portfolio-holdings th a[href=?]", "#{portfolio_path}?by=kind&dir=desc&period=last_30_days&sort=value"
+    assert_select "#portfolio-holdings th[aria-sort]", count: 1
 
     get portfolio_path(sort: "value", dir: "asc")
-    assert_equal %w[ZZZ AAPL], css_select("#portfolio-holdings summary[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
+    assert_equal %w[ZZZ AAPL], css_select("#portfolio-holdings tr[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
   end
 
   test "holdings table flags a row whose position has no cost basis" do
@@ -213,9 +240,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     # holdings(:one) carries no cost basis; BASIS does.
-    assert_select "summary[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
-    assert_select "summary[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
-    assert_select "summary[data-portfolio-holding='BASIS']", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))}/
+    assert_select "tr[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
+    assert_select "tr[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
+    assert_select "tr[data-portfolio-holding='BASIS']", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))}/
   end
 
   test "the page's query count is bounded and does not grow with holdings" do
