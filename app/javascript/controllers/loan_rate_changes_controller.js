@@ -9,8 +9,11 @@ import { Controller } from "@hotwired/stimulus";
 //
 // Hidden means DISABLED, not merely invisible. A disabled input is not
 // submitted, so a fixed-rate loan sends no `rate_changes` key at all and its
-// recorded changes are retained rather than cleared — switching a loan to
-// fixed and back does not lose them.
+// recorded changes are retained rather than cleared. The server renders the
+// section already hidden and disabled for a fixed loan, retained rows
+// included, so this holds without JavaScript too; `toggle()` only follows the
+// select from there. Switching to variable enables the retained rows, and the
+// next save resubmits them rather than the bare sentinel that would clear them.
 export default class extends Controller {
   static targets = ["rows", "template", "empty", "section", "rateType"];
   // The one rate type that cannot move. Anything else non-blank is variable,
