@@ -170,6 +170,52 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_match I18n.t("UI.account.chart.loan.no_payoff"), payload[:aria_description]
   end
 
+  # The G6 data table is built from the same points the lines are drawn from.
+  # The recorded column must be the latest recorded balance on or before each
+  # scheduled date, and nothing at all before the first recorded point.
+  test "the data table's recorded column is the latest balance on or before each date" do
+    loan = on_contract_loan
+    loan.account.balances.where("date < ?", Date.new(2026, 3, 1)).delete_all
+    payload = Loan::PayoffChart.new(loan.reload, as_of: @today, period: @all_time).payload
+    rows = payload[:rows].index_by { |row| row[:date] }
+    recorded = loan.account.balances.order(:date).to_h { |b| [ b.date, b.balance.to_f ] }
+
+    assert_nil rows.fetch("2026-01-01")[:actual], "no balance is recorded on or before this date"
+    assert_nil rows.fetch("2026-02-01")[:actual]
+    assert_equal recorded.fetch(Date.new(2026, 3, 1)), rows.fetch("2026-03-01")[:actual],
+      "a scheduled date with a balance recorded that day carries that balance"
+    assert_equal recorded.fetch(Date.new(2026, 6, 1)), rows.fetch("2026-06-01")[:actual]
+    assert_nil rows.fetch(loan.amortization_schedule.payoff_date.iso8601)[:actual],
+      "future rows have no recorded balance"
+  end
+
+  # Decision 4: the recorded series never starts before the loan does. A
+  # balance row dated before origination (an account opened, then a loan
+  # recorded against it later) must not become a lead-in, and under "All" the
+  # domain already starts at origination, so this is asserted under a period
+  # that opens before the loan and still contains it.
+  test "the actual series is clipped at origination under a period that opens before it" do
+    loan = on_contract_loan
+    loan.account.balances.create!(date: Date.new(2025, 12, 1), balance: 0, currency: "USD",
+                                  start_cash_balance: 0, flows_factor: -1)
+    year = Period.new(key: "last_365_days", start_date: Date.new(2025, 11, 1), end_date: @today)
+
+    payload = Loan::PayoffChart.new(loan.reload, as_of: @today, period: year).payload
+
+    assert_equal loan.origination_date.iso8601, payload[:actual].first[:date],
+      "the first recorded point is origination, not the pre-origination row"
+    assert payload[:actual].none? { |point| Date.iso8601(point[:date]) < loan.origination_date }
+  end
+
+  # #100 acceptance criterion: the chart's endpoint and the card quote one date.
+  test "the projected series ends on the projected payoff date" do
+    loan = on_contract_loan
+    payload = Loan::PayoffChart.new(loan, as_of: @today, period: @all_time).payload
+
+    assert_equal payload[:projected_payoff_date], payload[:projected].last[:date]
+    assert_equal payload[:scheduled_payoff_date], payload[:scheduled].last[:date]
+  end
+
   private
     def build_loan(rate_type: "fixed")
       account = Account.create!(

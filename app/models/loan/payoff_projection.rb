@@ -65,9 +65,12 @@ class Loan
       Money.new(simulation&.balloon_amount || 0, currency)
     end
 
-    # Positive means the loan finishes earlier than the contract said.
+    # Positive means the loan finishes earlier than the contract said. Zero for
+    # a run that never clears the balance: it walks every remaining date, so
+    # there is nothing to subtract -- no convergence guard is needed here, and
+    # one would be untestable, which is why it is not.
     def months_saved
-      return 0 unless applicable? && converged?
+      return 0 unless applicable?
 
       remaining_payment_dates.length - payments.length
     end

@@ -78,6 +78,7 @@ en:
           interest_saved: Interest saved
           interest_added: Additional interest
           not_converged: On the current repayment this balance is not paid off by the original maturity.
+          projection_basis: Compares today's recorded balance with the schedule's balance on the same day. A payment posted before its scheduled date reads as ahead until that date; one posted after reads as behind.
           view_as_table: View chart data as a table
           table:
             date: Date

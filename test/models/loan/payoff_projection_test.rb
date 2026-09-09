@@ -149,6 +149,21 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
       "the repayment must resize when the recorded rate rises"
   end
 
+  # The comparison the cards quote: a balance recorded on a scheduled date,
+  # equal to the schedule's balance for that date, saves nothing. The
+  # projection's first period then charges exactly what the schedule's next
+  # row charges, so `interest_saved` is zero, not merely small.
+  test "a loan exactly on contract saves no interest" do
+    loan = build_loan(term_months: 24)
+    on_date = loan.amortization_schedule.payments.find { |p| p.date > @today }.date
+    loan.account.update!(balance: loan.amortization_schedule.payments.find { |p| p.date == on_date }.ending_balance.amount)
+
+    projection = loan.reload.payoff_projection(as_of: on_date)
+
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount
+  end
+
   private
     def build_loan(term_months:, rate_type: "fixed", interest_rate: 6)
       Account.create!(

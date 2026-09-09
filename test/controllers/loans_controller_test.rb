@@ -432,4 +432,17 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     # 500,000 at 6% over 360 months, the fixture loan's contracted repayment.
     assert_match "2,997.75", response.body
   end
+
+  # Brief 7.4 row 8: the period picker re-renders the chart card's frame, and
+  # the cards and the mount must both live inside it.
+  test "a chart_details frame request carries the mount and both cards inside the frame" do
+    frame_id = ActionView::RecordIdentifier.dom_id(@account, :chart_details)
+
+    get account_path(@account, period: "all_time"), headers: { "Turbo-Frame" => frame_id }
+
+    assert_response :success
+    assert_select "turbo-frame##{frame_id} [data-controller='loan-payoff-chart']", count: 1
+    assert_select "turbo-frame##{frame_id} h4", text: I18n.t("UI.account.chart.loan.projected_payoff"), count: 1
+    assert_select "turbo-frame##{frame_id} h4", text: I18n.t("UI.account.chart.loan.interest_saved"), count: 1
+  end
 end

@@ -156,8 +156,12 @@ export default class extends Controller {
       .attr("height", height)
       .attr("role", "img")
       .attr("aria-label", data.aria_description || "");
+    // aria-details, not aria-describedby: a description is flattened into the
+    // accessible name computation, so describedby would read every cell of a
+    // 360-row table out as the chart's description. details links the table as
+    // a long-form alternative a reader can visit instead.
     if (this.hasTableIdValue && this.tableIdValue) {
-      svg.attr("aria-describedby", this.tableIdValue);
+      svg.attr("aria-details", this.tableIdValue);
     }
 
     // Clip-path ids must be unique in the document. The mount carries the

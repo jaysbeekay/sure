@@ -59,8 +59,11 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       visit account_path(account, period: "all_time")
       assert_selector "[data-controller='loan-payoff-chart'] svg"
 
-      table_id = find("[data-controller='loan-payoff-chart'] svg")["aria-describedby"]
+      svg = find("[data-controller='loan-payoff-chart'] svg")
+      table_id = svg["aria-details"]
       assert_equal ActionView::RecordIdentifier.dom_id(account, :loan_chart_table), table_id
+      assert_nil svg["aria-describedby"],
+        "describedby would flatten every table cell into the chart's description"
 
       find("details summary", text: I18n.t("UI.account.chart.loan.view_as_table")).click
       assert_selector "table##{table_id} tbody tr", count: payload[:rows].length
