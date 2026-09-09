@@ -857,6 +857,11 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     create_income_trade(account: account, label: "Dividend", amount: 50, date: period.start_date)
     create_income_transaction(account: account, label: "Dividend", amount: 12.5, date: period.start_date, extra_shape: :flat)
     create_income_transaction(account: account, label: "Interest", amount: 4, date: period.start_date, extra_shape: :none)
+    # PlaidAccount::Investments::TransactionsProcessor writes a dividend as
+    # a qty-0 trade with amount 0 * price, so its cash is not recoverable
+    # here (its `price` is a per-share figure, not the payment). It is
+    # income with amount 0 until #123 fixes the processor; the 62.5 below
+    # deliberately excludes it.
     create_plaid_dividend_trade(account: account, date: period.start_date)
     # Pending income is not counted until it posts
     create_labelled_transaction(account: account, label: "Dividend", amount: -99, date: period.start_date, extra: { "plaid" => { "pending" => true } })
