@@ -106,8 +106,19 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
     on     = result.payments.find { |p| p[:payment_date] == Date.new(2026, 7, 1) }
 
     assert_operator on[:payment_amount], :>, before[:payment_amount]
-    assert_equal BigDecimal("24"), on[:interest_rate]
+    # Two rates on the row that closes on the change: the period accrued at the
+    # old rate and the payment was sized at the new one. `interest_rate` is the
+    # one the interest column was computed with, so a reader who recomputes
+    # beginning_balance * rate / 12 gets the row's own figure.
+    assert_equal BigDecimal("24"), on[:sizing_rate]
+    assert_equal BigDecimal("6"), on[:interest_rate]
+    assert_equal (on[:beginning_balance] * on[:interest_rate] / 100 / 12).round(2), on[:interest_payment]
     assert_equal BigDecimal("6"), before[:interest_rate]
+    # This run's accrual curve is flat at 6%; only the sizing events move, so
+    # the rows after the change still accrue at 6 and size at 24.
+    after = result.payments.find { |p| p[:payment_date] == Date.new(2026, 8, 1) }
+    assert_equal BigDecimal("6"), after[:interest_rate]
+    assert_equal BigDecimal("24"), after[:sizing_rate]
   end
 
   # The strategy a projection uses. Asked every period, and never re-sized off

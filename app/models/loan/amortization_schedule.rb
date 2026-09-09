@@ -52,14 +52,17 @@ class Loan::AmortizationSchedule
     @rate_resolver = rate_resolver
   end
 
-  # True when this schedule re-amortises part-way through, i.e. the loan has
-  # recorded rate changes falling inside its term. Views use it to decide
-  # whether "the monthly payment" is a meaningful thing to say.
+  # True when this schedule re-amortises part-way through, i.e. the repayment
+  # is re-sized at some payment after the first. Views use it to decide whether
+  # "the monthly payment" is a meaningful thing to say. Asked of the run rather
+  # than of the recorded changes: a change to the same rate, or one effective
+  # on the first payment, is an event that moves nothing in-term, and a
+  # constant payment must not be labelled an opening one.
   def re_amortising?
     return false unless @rate_resolver
     return false unless schedulable?
 
-    @rate_resolver.re_amortisation_events(payment_schedule.first, payment_schedule.last).any?
+    simulation.payments.each_cons(2).any? { |previous, current| previous[:sizing_rate] != current[:sizing_rate] }
   end
 
   # Every scheduled payment, oldest first. Empty when there is nothing to

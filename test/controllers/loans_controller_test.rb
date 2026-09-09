@@ -506,4 +506,24 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "button[data-action='loan-rate-changes#add'] span", text: I18n.t("loans.form.rate_change_add")
     assert_select "[data-rate-change-row] button[data-action='loan-rate-changes#remove'] span", text: I18n.t("loans.form.rate_change_remove")
   end
+
+  # CodeRabbit on we-promise/sure#3473: `create_and_sync` can raise RecordInvalid
+  # from the opening valuation's `entries.create!` or from `lock_saved_attributes!`,
+  # and then `e.record` is an Entry or the accountable, not the account the form
+  # renders.
+  test "a create that fails on the opening valuation still re-renders the form" do
+    invalid_entry = Entry.new.tap(&:validate)
+    Account::OpeningBalanceManager.any_instance.stubs(:set_opening_balance)
+      .raises(ActiveRecord::RecordInvalid.new(invalid_entry))
+
+    assert_no_difference "Account.count" do
+      post loans_path, params: { account: {
+        name: "Loan With Bad Anchor", balance: 50_000, currency: "USD", accountable_type: "Loan",
+        accountable_attributes: { rate_type: "fixed", interest_rate: 6, term_months: 12, initial_balance: 50_000 }
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "form[action='#{loans_path}']", count: 1
+  end
 end

@@ -60,10 +60,18 @@ module AccountableResource
     # `create_and_sync` saves with `save!`. A validation the user can trip from
     # the form (a half-filled loan rate change, say) must come back as the form
     # with the error and what they typed, not as the generic 422 page. The
-    # transaction above has already rolled back; the record on the exception is
-    # the unsaved account with its nested accountable still attached.
-    @account = e.record
-    @error_message = e.record.errors.full_messages.join(", ")
+    # transaction above has already rolled back. The record on the exception is
+    # usually the unsaved account with its nested accountable still attached --
+    # but the opening valuation's `entries.create!` or `lock_saved_attributes!`
+    # can raise too, and then it is an Entry or the accountable, neither of
+    # which the form can render. Recover the account through it, or start from
+    # a fresh one as `new` does.
+    @account = if e.record.is_a?(Account)
+      e.record
+    else
+      e.record.try(:account) || Current.family.accounts.build(currency: Current.family.currency, accountable: accountable_type.new)
+    end
+    @error_message = e.record.errors.full_messages.join(", ").presence || e.message
     # The `new` template's method-selection branch reads `@provider_configs`,
     # which the `new` action's before_action sets up; this render needs it too.
     set_link_options

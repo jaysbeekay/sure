@@ -160,6 +160,25 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
       "the quoted opening payment must be the payment actually scheduled"
     assert_operator changed.amortization_schedule.periodic_payment.amount, :>,
       base.amortization_schedule.periodic_payment.amount
+    # Every payment is sized at the changed rate, so nothing re-amortises
+    # in-term and the card may call this figure THE monthly payment.
+    assert_not changed.amortization_schedule.re_amortising?,
+      "a change effective on the first payment resizes nothing in-term"
+  end
+
+  # CodeRabbit on we-promise/sure#3473: `re_amortising?` answered on event
+  # presence, so a recorded change that never moves the repayment (the same
+  # rate again, or one effective on the first payment) labelled a constant
+  # payment "Opening Payment".
+  test "re_amortising? is true only when the repayment actually moves in-term" do
+    start_date = Date.new(2026, 1, 1)
+    same_rate = build_loan(rate_type: "variable", term_months: 24, start_date: start_date,
+                           variable_rate_schedule: { "2026-07-01" => "6.0" })
+    moved = build_loan(rate_type: "variable", term_months: 24, start_date: start_date,
+                       variable_rate_schedule: { "2026-07-01" => "7.0" })
+
+    assert_not same_rate.amortization_schedule.re_amortising?, "the same rate again is not a resize"
+    assert moved.amortization_schedule.re_amortising?
   end
 
 
