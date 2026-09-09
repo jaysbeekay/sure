@@ -44,25 +44,32 @@
       </div>
 
       <%# Rate changes only mean something for a loan whose rate can move. The
-          section is rendered for every rate type and hidden -- and DISABLED --
-          for fixed, rather than omitted: a disabled input is not submitted, so
-          a fixed loan sends no rate_changes key and its recorded changes are
-          retained rather than cleared. Switching the select to variable reveals
-          them again without a round trip, and without having lost anything. %>
+          section is rendered for every rate type, retained rows included, and
+          for fixed it is hidden AND its inputs disabled -- here, server-side,
+          not only by the Stimulus controller, so a save without JavaScript
+          behaves the same. A disabled input is not submitted, so a fixed loan
+          sends no rate_changes key and its recorded changes are retained
+          rather than cleared. Switching the select to variable enables and
+          reveals the retained rows, and the save resubmits them. %>
+      <% rate_changes_disabled = !account.loan.variable_rate_type? %>
       <div class="space-y-2" data-loan-rate-changes-target="section"
-           <%= "hidden" unless account.loan.variable_rate_type? %>>
+           <%= "hidden" if rate_changes_disabled %>>
         <h3 class="text-sm font-medium text-primary"><%= t("loans.form.rate_changes") %></h3>
         <p class="text-xs text-secondary"><%= t("loans.form.rate_changes_hint") %></p>
 
-        <%# Always submitted, so removing the last row still sends the key and
-            the writer is called to clear the schedule. Without it, "remove
-            them all" would send nothing and silently leave them persisted. %>
-        <input type="hidden" name="account[accountable_attributes][rate_changes][]" value="">
+        <%# Submitted whenever the section is enabled, so removing the last row
+            still sends the key and the writer is called to clear the schedule.
+            Without it, "remove them all" would send nothing and silently leave
+            them persisted. Disabled with the section: on a fixed loan this
+            input alone would otherwise submit and clear the retained rows. %>
+        <input type="hidden" name="account[accountable_attributes][rate_changes][]" value=""
+               <%= "disabled" if rate_changes_disabled %>>
 
         <div data-loan-rate-changes-target="rows" class="space-y-2">
           <% account.loan.rate_change_rows.each do |row| %>
             <%= render "loans/rate_change_row",
-                       effective_date: row[:effective_date], rate: row[:rate] %>
+                       effective_date: row[:effective_date], rate: row[:rate],
+                       disabled: rate_changes_disabled %>
           <% end %>
         </div>
 
@@ -76,7 +83,8 @@
         </template>
 
         <button type="button" class="text-sm text-primary underline"
-                data-action="loan-rate-changes#add">
+                data-action="loan-rate-changes#add"
+                <%= "disabled" if rate_changes_disabled %>>
           <%= t("loans.form.rate_change_add") %>
         </button>
       </div>

@@ -297,4 +297,75 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal first, controller.send(:loan_payoff_chart, @account),
       "and the first is still memoized rather than re-simulated"
   end
+
+  # The validation lives on Loan and is reached through nested attributes, which
+  # validate the nested record only when it has changes. Resubmitting the stored
+  # rows plus a typo'd one leaves the column equal to its stored value, so
+  # without `Loan#changed_for_autosave?` the account saved with a 302 and the
+  # typo'd row vanished.
+  test "an invalid row is rejected even when nothing else on the loan changed" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    patch loan_path(@account), params: { account: { accountable_attributes: {
+      id: @account.loan.id, rate_type: "variable",
+      rate_changes: [ "", { effective_date: "2026-04-01", rate: "7.25" }, { effective_date: "", rate: "9" } ]
+    } } }
+
+    assert_response :unprocessable_entity
+    assert_select "input[name='account[accountable_attributes][rate_changes][][rate]'][value='9']", { count: 1 },
+      "the typed row must come back for correction"
+    assert_equal({ "2026-04-01" => "7.25" }, @account.loan.reload.variable_rate_schedule)
+  end
+
+  # Retained rows are rendered for a fixed loan too, hidden and disabled, so
+  # switching the select to variable reveals them and a save keeps them.
+  # Before this, `rate_change_rows` was empty for a fixed loan, the revealed
+  # section was empty, and saving sent only the sentinel, which cleared them.
+  test "a fixed loan's retained rate changes survive switching to variable and saving" do
+    @account.loan.update!(rate_type: "fixed", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    get edit_loan_path(@account)
+
+    assert_response :success
+    assert_select "[data-loan-rate-changes-target=rows] [data-rate-change-row]", count: 1
+    assert_select "[data-loan-rate-changes-target=rows] input[disabled][value='2026-04-01']", { count: 1 },
+      "retained rows are disabled while the loan is fixed, so they are not submitted"
+
+    # What the browser sends after the select is flipped to variable and the
+    # inputs are enabled: the sentinel and the row it rendered.
+    patch loan_path(@account), params: { account: { accountable_attributes: {
+      id: @account.loan.id, rate_type: "variable",
+      rate_changes: [ "", { effective_date: "2026-04-01", rate: "7.25" } ]
+    } } }
+
+    assert_equal({ "2026-04-01" => "7.25" }, @account.loan.reload.variable_rate_schedule)
+    assert_equal "variable", @account.loan.rate_type
+  end
+
+  # `disabled` used to be applied only by Stimulus, so without JavaScript the
+  # sentinel submitted and the writer read it as "remove them all".
+  test "the edit form of a fixed loan disables the whole rate-change section server-side" do
+    @account.loan.update!(rate_type: "fixed", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    get edit_loan_path(@account)
+
+    assert_select "[data-loan-rate-changes-target=section][hidden]", count: 1
+    assert_select "[data-loan-rate-changes-target=section] input[name='account[accountable_attributes][rate_changes][]'][disabled]", { count: 1 },
+      "the sentinel must be disabled too, or a no-JS save clears the schedule"
+    # The <template> clone is inert and is left enabled; only rendered rows and
+    # the add button are submittable.
+    assert_select "[data-loan-rate-changes-target=rows] input:not([disabled])", count: 0
+    assert_select "[data-loan-rate-changes-target=rows] button:not([disabled])", count: 0
+    assert_select "[data-loan-rate-changes-target=section] > button:not([disabled])", count: 0
+  end
+
+  test "a variable loan's edit form enables the rate-change section server-side" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    get edit_loan_path(@account)
+
+    assert_select "[data-loan-rate-changes-target=section][hidden]", count: 0
+    assert_select "[data-loan-rate-changes-target=rows] input[disabled]", count: 0
+    assert_select "[data-loan-rate-changes-target=section] input[name='account[accountable_attributes][rate_changes][]']:not([disabled])", count: 1
+  end
 end

@@ -148,17 +148,25 @@ class Loan < ApplicationRecord
     self.variable_rate_schedule = parsed
   end
 
+  # The form reaches this record through Account's nested attributes, which
+  # validate it only when it has changes. Resubmitting the stored rows plus a
+  # typo'd one leaves `variable_rate_schedule` equal to its stored value, so
+  # without this the account saved, the typo'd row vanished, and the
+  # validation above only fired when some other field happened to change.
+  def changed_for_autosave?
+    super || invalid_rate_changes.present?
+  end
+
   # Form rows, in a shape the form can render without parsing anything.
   #
-  # Empty for a loan that is not variable: switching a loan to fixed leaves its
-  # recorded changes in the column, and `current_variable_rate` ignores them,
-  # so showing them would offer the user rows that do nothing. They are
-  # retained rather than deleted so switching back does not lose them.
+  # Rendered for every rate type, including fixed: switching a loan to fixed
+  # leaves its recorded changes in the column, `current_variable_rate` ignores
+  # them, and the form hides and disables the section. They are retained rather
+  # than deleted so switching back reveals them, and a save then resubmits them
+  # instead of the sentinel alone, which would clear them.
   #
   # Invalid rows come back too, so a rejected save redisplays what was typed.
   def rate_change_rows
-    return [] unless variable_rate_type?
-
     variable_rates.map { |date, rate| { effective_date: date.to_s, rate: rate.to_s } } +
       Array(invalid_rate_changes)
   end
