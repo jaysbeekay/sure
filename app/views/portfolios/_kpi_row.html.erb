@@ -1,0 +1,43 @@
+<%# locals: (statement:, period:, as_of:) %>
+
+<%# The six numbers that answer "how is the portfolio doing" without scrolling.
+    Every figure comes from the statement the controller built, for the one
+    period and the one `as_of` it captured. %>
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  <%= render "portfolios/kpi_card",
+        icon: "briefcase",
+        label: t("portfolios.kpi_row.value"),
+        money: statement.portfolio_value_money,
+        hint: t("portfolios.kpi_row.as_of", date: l(as_of, format: :long)) %>
+
+  <%= render "portfolios/kpi_card",
+        icon: "activity",
+        label: t("portfolios.kpi_row.day_change"),
+        money: nil,
+        trend: statement.day_change %>
+
+  <%= render "portfolios/kpi_card",
+        icon: "trending-up",
+        label: t("portfolios.kpi_row.unrealized_pnl"),
+        money: nil,
+        trend: statement.unrealized_gains_trend %>
+
+  <%= render "portfolios/kpi_card",
+        icon: "bar-chart-2",
+        label: t("portfolios.kpi_row.period_return"),
+        money: nil,
+        trend: statement.period_return_trend(period: period),
+        hint: period.comparison_label %>
+
+  <%= render "portfolios/kpi_card",
+        icon: "wallet",
+        label: t("portfolios.kpi_row.net_contributions"),
+        money: statement.net_contributions(period: period),
+        hint: period.comparison_label %>
+
+  <%= render "portfolios/kpi_card",
+        icon: "coins",
+        label: t("portfolios.kpi_row.income"),
+        money: statement.totals(period: period).total_income,
+        hint: t("portfolios.kpi_row.income_hint") %>
+</div>

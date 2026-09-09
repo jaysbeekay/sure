@@ -1,0 +1,34 @@
+---
+en:
+  portfolios:
+    empty_state:
+      add_account: Add an investment account
+      description: Connect or add a brokerage, retirement or crypto account and this page will show its value, returns and holdings.
+      title: No investment accounts yet
+    kpi_row:
+      as_of: As of %{date}
+      day_change: Day change
+      income: Income
+      income_hint: Dividends and interest
+      net_contributions: Net contributions
+      no_data: Not enough data
+      period_return: Period return
+      unrealized_pnl: Unrealised P&L
+      value: Value
+    sections:
+      accounts: Accounts
+      allocation: Allocation
+      data_quality: Data quality
+      holdings: Holdings
+      kpis: Overview
+      value_chart: Portfolio value
+    show:
+      drag_to_reorder: Drag to reorder section
+      section_aria_label: "%{title} section. Press Enter or Space to grab for reordering, then use arrow keys to move."
+      sections_aria_label: Portfolio sections
+      subtitle: Everything you hold, what it is worth, and how it has moved.
+      title: Portfolio
+      toggle_section: Toggle section
+    value_chart:
+      as_of: As of %{date}
+      no_data: Not enough data to chart this period.
