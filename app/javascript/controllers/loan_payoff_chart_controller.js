@@ -213,6 +213,15 @@ export default class extends Controller {
 
     // Axes first, so the series draw over them. Text in currentColor: the
     // container carries the text token, so the axis follows the theme.
+    const styleAxis = (g) => {
+      g.selectAll("text")
+        .style("fill", "currentColor")
+        .style("opacity", 0.7)
+        .style("font-size", "11px");
+      g.selectAll("line,path")
+        .style("stroke", "currentColor")
+        .style("opacity", 0.2);
+    };
     svg
       .append("g")
       .attr("transform", `translate(0,${height - margin.bottom})`)
@@ -222,38 +231,14 @@ export default class extends Controller {
           .ticks(Math.max(2, Math.floor(width / 140)))
           .tickSizeOuter(0),
       )
-      .call((g) =>
-        g
-          .selectAll("text")
-          .style("fill", "currentColor")
-          .style("opacity", 0.7)
-          .style("font-size", "11px"),
-      )
-      .call((g) =>
-        g
-          .selectAll("line,path")
-          .style("stroke", "currentColor")
-          .style("opacity", 0.2),
-      );
+      .call(styleAxis);
     svg
       .append("g")
       .attr("transform", `translate(${margin.left},0)`)
       .call(
         d3.axisLeft(y).ticks(4).tickFormat(d3.format("~s")).tickSizeOuter(0),
       )
-      .call((g) =>
-        g
-          .selectAll("text")
-          .style("fill", "currentColor")
-          .style("opacity", 0.7)
-          .style("font-size", "11px"),
-      )
-      .call((g) =>
-        g
-          .selectAll("line,path")
-          .style("stroke", "currentColor")
-          .style("opacity", 0.2),
-      );
+      .call(styleAxis);
 
     const stroke = (path, s, color) =>
       path
