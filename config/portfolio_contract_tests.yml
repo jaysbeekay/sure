@@ -188,3 +188,21 @@ P30:
     class: InvestmentStatementTest
     tests:
       - previous_holdings loads the prior snapshot of every holding in one query
+P29:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - holdings_table_rows rolls positions up per security with stored cost basis only
+      - holdings_table_rows sorts by a whitelisted key and puts rows without the figure last
+      - holdings_table_rows issues no query per holding
+P30:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - allocation_by groups the portfolio by account, currency and kind with weights summing to 100
+P31:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - data_quality_issues flags missing cost basis, stale prices and unhealthy providers
+      - data_quality_issues issues a bounded number of queries

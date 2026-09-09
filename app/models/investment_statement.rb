@@ -154,6 +154,94 @@ class InvestmentStatement
     rows
   end
 
+  # Every security the family holds as one row, with its positions across
+  # accounts, sorted for the portfolio hub's table. Built from
+  # current_holdings and previous_holdings only: no per-row lookups, so the
+  # query count does not grow with the number of holdings (P28, P30).
+  #
+  # Cost basis and unrealised P&L come from the stored cost_basis of every
+  # position (locked, or positive); a position without one leaves both
+  # blank and flags the row. Holding#avg_cost would fall back to a trades
+  # query per position, which is what a table of every holding must avoid.
+  #
+  # sort: one of HOLDINGS_SORT_KEYS; dir: "asc" or "desc". Anything else is
+  # the default (value desc), so the query string cannot raise.
+  HOLDINGS_SORT_KEYS = %w[value weight return day_change name].freeze
+  HOLDINGS_SORT_DIRECTIONS = %w[asc desc].freeze
+
+  def holdings_table_rows(sort: "value", dir: "desc")
+    rolled_up = holdings_rolled_up_by_security
+    return [] if rolled_up.empty?
+
+    total = weight_denominator(rolled_up)
+
+    rows = rolled_up.map do |security, value, positions|
+      build_holdings_table_row(security, value, positions, total)
+    end
+
+    sort_holdings_table_rows(rows, sort: sort, dir: dir)
+  end
+
+  # Allocation of the portfolio grouped by :account, :currency or :kind
+  # (cash, crypto, standard), or by :security (the #allocation roll-up).
+  # Weights within a grouping sum to 100 within rounding: the account
+  # grouping is measured against the account balances, the currency and
+  # kind groupings against the holdings plus each account's positive cash
+  # balance, so a stale or negative cash balance never pushes a grouping
+  # past 100. Segments are sorted by amount, largest first.
+  ALLOCATION_GROUPINGS = %w[security account currency kind].freeze
+
+  def allocation_by(by)
+    case by.to_s
+    when "account" then allocation_by_account
+    when "currency" then allocation_by_currency
+    when "kind" then allocation_by_kind
+    else
+      allocation.map do |row|
+        AllocationSegment.new(id: row.cash? ? "cash" : row.security.id, name: row.name, amount: row.amount, weight: row.weight)
+      end
+    end
+  end
+
+  # Holdings the user should look at before trusting the figures: no cost
+  # basis anywhere (no stored basis and no buy trade to compute one from),
+  # a price older than STALE_PRICE_AFTER_DAYS or no price at all, or a
+  # provider link that is not healthy. Cash securities are never flagged.
+  # One query for the buy-trade pairs and one for the latest price dates,
+  # so the list is bounded regardless of the number of holdings.
+  STALE_PRICE_AFTER_DAYS = 5
+
+  def data_quality_issues(as_of: Date.current)
+    holdings = current_holdings.to_a
+    return [] if holdings.empty?
+
+    issues = []
+
+    holdings.each do |holding|
+      next if holding.security.cash?
+
+      if !stored_cost_basis?(holding) && !pairs_with_buy_trades.include?([ holding.account_id, holding.security_id ])
+        issues << DataQualityIssue.new(kind: :missing_cost_basis, holding: holding, security: holding.security, detail: nil)
+      end
+    end
+
+    holdings.map(&:security).uniq.each do |security|
+      next if security.cash?
+
+      latest = latest_price_dates[security.id]
+      if latest.nil? || latest < as_of - STALE_PRICE_AFTER_DAYS
+        issues << DataQualityIssue.new(kind: :stale_price, holding: nil, security: security, detail: latest)
+      end
+
+      status = security.provider_status
+      issues << DataQualityIssue.new(kind: :provider, holding: nil, security: security, detail: status) unless status == :ok
+    end
+
+    issues.sort_by { |issue| [ DATA_QUALITY_KINDS.index(issue.kind), issue.security.ticker.to_s ] }
+  end
+
+  DATA_QUALITY_KINDS = %i[missing_cost_basis stale_price provider].freeze
+
   # Unrealized gains across all holdings, summed in family currency
   def unrealized_gains
     current_holdings.sum do |holding|
@@ -493,6 +581,19 @@ class InvestmentStatement
     # the dashboard, Reports and print views call (ticker, name, security,
     # weight, amount_money, trend). `security` is nil only for the cash row
     # #allocation appends.
+    HoldingsTableRow = Data.define(
+      :security, :positions, :accounts_count, :qty, :avg_cost, :amount, :weight,
+      :unrealized, :day_change, :missing_cost_basis
+    ) do
+      def ticker = security.ticker
+      def name = security.name.presence || ticker
+      def amount_money = amount
+    end
+
+    AllocationSegment = Data.define(:id, :name, :amount, :weight)
+
+    DataQualityIssue = Data.define(:kind, :holding, :security, :detail)
+
     HoldingAllocation = Data.define(:security, :amount, :weight, :trend) do
       def cash? = security.nil?
       def ticker = cash? ? CASH_TICKER : security.ticker
@@ -513,6 +614,142 @@ class InvestmentStatement
     # Dividing by it in either case reports a weight over 100. The holdings
     # total is a floor that keeps every weight at or below 100; when it wins,
     # the residual cash is zero or negative and #allocation shows no cash row.
+    def build_holdings_table_row(security, value, positions, total)
+      qty = positions.sum(&:qty)
+      basis_positions = positions.select { |holding| stored_cost_basis?(holding) }
+      missing_cost_basis = basis_positions.size < positions.size
+
+      cost = nil
+      unrealized = nil
+      unless missing_cost_basis
+        cost = positions.sum { |holding| convert_to_family_currency(holding.qty * holding.cost_basis, holding.currency) }
+        unrealized = Trend.new(current: Money.new(value, family.currency), previous: Money.new(cost, family.currency))
+      end
+
+      day_changes = positions.filter_map do |holding|
+        trend = holding_day_change(holding)
+        next unless trend
+        [ convert_to_family_currency(trend.current.amount, holding.currency), convert_to_family_currency(trend.previous.amount, holding.currency) ]
+      end
+      day_change = if day_changes.any?
+        Trend.new(
+          current: Money.new(day_changes.sum(&:first), family.currency),
+          previous: Money.new(day_changes.sum(&:last), family.currency)
+        )
+      end
+
+      HoldingsTableRow.new(
+        security: security,
+        positions: positions,
+        accounts_count: positions.map(&:account_id).uniq.size,
+        qty: qty,
+        avg_cost: (cost && qty.positive?) ? Money.new(cost / qty, family.currency) : nil,
+        amount: Money.new(value, family.currency),
+        weight: total.zero? ? 0 : (value / total * 100).round(2),
+        unrealized: unrealized,
+        day_change: day_change,
+        missing_cost_basis: missing_cost_basis
+      )
+    end
+
+    def sort_holdings_table_rows(rows, sort:, dir:)
+      sort = HOLDINGS_SORT_KEYS.include?(sort.to_s) ? sort.to_s : "value"
+      dir = HOLDINGS_SORT_DIRECTIONS.include?(dir.to_s) ? dir.to_s : "desc"
+
+      # Rows without the sorted figure go last whichever direction is asked.
+      present, absent = rows.partition { |row| sort_key_present?(row, sort) }
+      present = present.sort_by { |row| sort_value(row, sort) }
+      present.reverse! if dir == "desc"
+      present + absent
+    end
+
+    def sort_value(row, sort)
+      case sort
+      when "value" then row.amount.amount
+      when "weight" then row.weight
+      when "return" then row.unrealized.value.amount
+      when "day_change" then row.day_change.value.amount
+      when "name" then row.name.downcase
+      end
+    end
+
+    def sort_key_present?(row, sort)
+      case sort
+      when "return" then row.unrealized.present?
+      when "day_change" then row.day_change.present?
+      else true
+      end
+    end
+
+    # The rule Holding#avg_cost applies to a stored basis before it falls
+    # back to trades: locked values are trusted even at zero, unlocked ones
+    # only when positive.
+    def stored_cost_basis?(holding)
+      holding.cost_basis.present? && (holding.cost_basis_locked? || holding.cost_basis.positive?)
+    end
+
+    def pairs_with_buy_trades
+      @pairs_with_buy_trades ||= Trade
+        .joins(:entry)
+        .where(entries: { account_id: investment_account_ids, excluded: false })
+        .where("trades.qty > 0")
+        .distinct
+        .pluck(Arel.sql("entries.account_id"), :security_id)
+        .to_set
+    end
+
+    def latest_price_dates
+      @latest_price_dates ||= Security::Price
+        .where(security_id: current_holdings.map(&:security_id).uniq)
+        .group(:security_id)
+        .maximum(:date)
+    end
+
+    def allocation_by_account
+      segments = investment_accounts.map do |account|
+        [ account.id, account.name, convert_to_family_currency(account.balance, account.currency) ]
+      end
+      build_segments(segments)
+    end
+
+    def allocation_by_currency
+      grouped = Hash.new(0)
+      current_holdings.each { |holding| grouped[holding.currency] += convert_to_family_currency(holding.amount, holding.currency) }
+      investment_accounts.each do |account|
+        cash = account.cash_balance.to_d
+        grouped[account.currency] += convert_to_family_currency(cash, account.currency) if cash.positive?
+      end
+      build_segments(grouped.map { |currency, value| [ currency, currency, value ] })
+    end
+
+    def allocation_by_kind
+      grouped = Hash.new(0)
+      current_holdings.each do |holding|
+        kind = if holding.security.cash? then "cash"
+        elsif holding.security.crypto? then "crypto"
+        else "standard"
+        end
+        grouped[kind] += convert_to_family_currency(holding.amount, holding.currency)
+      end
+      investment_accounts.each do |account|
+        cash = account.cash_balance.to_d
+        grouped["cash"] += convert_to_family_currency(cash, account.currency) if cash.positive?
+      end
+      build_segments(grouped.map { |kind, value| [ kind, kind, value ] })
+    end
+
+    def build_segments(rows)
+      rows = rows.reject { |_, _, value| value.nil? || value <= 0 }
+      total = rows.sum { |_, _, value| value }
+      return [] if total.zero?
+
+      rows
+        .sort_by { |_, _, value| -value }
+        .map do |id, name, value|
+          AllocationSegment.new(id: id.to_s, name: name, amount: Money.new(value, family.currency), weight: (value / total * 100).round(2))
+        end
+    end
+
     def weight_denominator(rolled_up)
       holdings_total = rolled_up.sum { |_, value, _| value }
       [ portfolio_value, holdings_total ].max
