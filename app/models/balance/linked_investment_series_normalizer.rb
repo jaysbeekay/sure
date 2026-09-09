@@ -22,7 +22,16 @@ class Balance::LinkedInvestmentSeriesNormalizer
         interval: interval
       ).balance_series
 
-      common_start_date = common_supported_history_start_date(account_ids)
+      trim_to_supported_history(series, account_ids: account_ids)
+    end
+
+    # Drops the points before the date every linked account in `account_ids`
+    # has real history for, so a series built from balances alone does not
+    # chart flat zeros before a broker's first snapshot. A series the caller
+    # built itself (with cut-off dates, or from holdings or gains) gets the
+    # same trim as #aggregate_account_ids applies to its own.
+    def trim_to_supported_history(series, account_ids:)
+      common_start_date = common_supported_history_start_date(Array(account_ids).compact)
       return series unless common_start_date.present?
 
       trimmed_values = series.values.select { |value| value.date >= common_start_date }

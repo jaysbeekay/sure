@@ -791,7 +791,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       @statement.day_change
     end
 
-    holdings_queries = queries.grep(/DISTINCT ON \(holdings\.account_id, holdings\.security_id\)/)
+    holdings_queries = queries.grep(/DISTINCT ON \(holdings\.account_id, holdings\.security_id\) holdings\.id/)
     assert_equal 1, holdings_queries.size,
       "current_holdings should only run its DISTINCT ON query once per instance, not once per caller"
   end
@@ -1057,6 +1057,58 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     assert_equal 3, @statement.allocation.size
     assert_empty queries.grep(/FROM "trades"/), "Holding#trend must read the stored cost basis, not fall back to trades"
+  end
+
+  test "previous_holdings loads the prior snapshot of every holding in one query" do
+    ira = create_investment_account(balance: 5000)
+    taxable = create_investment_account(balance: 3000)
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    [ [ ira, aapl, 10 ], [ ira, msft, 5 ], [ taxable, aapl, 4 ] ].each do |account, security, qty|
+      Holding.create!(account: account, security: security, date: 2.days.ago.to_date, qty: qty, price: 100, amount: qty * 100, currency: "USD")
+      Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: qty, price: 110, amount: qty * 110, currency: "USD")
+      Holding.create!(account: account, security: security, date: Date.current, qty: qty, price: 120, amount: qty * 120, currency: "USD")
+    end
+    # A holding with no prior snapshot has no day change.
+    only_today = Security.create!(ticker: "NEW", name: "New")
+    Holding.create!(account: taxable, security: only_today, date: Date.current, qty: 1, price: 50, amount: 50, currency: "USD")
+
+    @statement.current_holdings.to_a
+    queries = capture_sql_queries { @statement.previous_holdings; @statement.day_change }
+    holdings_queries = queries.grep(/FROM "holdings"/)
+
+    assert_equal 1, holdings_queries.size, "previous snapshots must come from one query, not one per holding"
+
+    previous = @statement.previous_holdings
+    assert_equal 3, previous.size
+    assert_equal 1.day.ago.to_date, previous[[ ira.id, aapl.id ]].date
+    assert_nil previous[[ taxable.id, only_today.id ]]
+
+    # Same answer as the per-holding lookup, summed in family currency:
+    # today 19 * 120 = 2280 vs yesterday 19 * 110 = 2090.
+    day_change = @statement.day_change
+    assert_equal Money.new(2280, "USD"), day_change.current
+    assert_equal Money.new(2090, "USD"), day_change.previous
+    per_holding = @statement.current_holdings.filter_map { |h| h.day_change }
+    assert_equal per_holding.sum { |t| t.current.amount }, day_change.current.amount
+  end
+
+  test "value_series does not chart leading zeros before a linked account's first supported history" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+    account = create_investment_account(balance: 1000)
+    first_synced = 4.days.ago.to_date
+
+    # Balance rows exist for every day (zeros before the connection), and the
+    # first provider-sourced entry dates the real history.
+    (0..10).each { |offset| create_balance(account, date: 10.days.ago.to_date + offset, amount: offset >= 6 ? 1000 : 0) }
+    account.entries.create!(date: first_synced, name: "Deposit", amount: -1000, currency: "USD", source: "plaid", entryable: Transaction.new)
+
+    series = @statement.value_series(period: period)
+
+    assert_equal first_synced, series.values.first.date
+    assert series.values.none? { |v| v.date < first_synced }
+    assert_equal 1000, series.values.first.value.amount
   end
 
   private

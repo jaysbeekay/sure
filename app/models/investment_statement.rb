@@ -298,16 +298,58 @@ class InvestmentStatement
     @historical_scope ||= HistoricalScope.new(family, user: user)
   end
 
+  # The snapshot before each current holding, keyed by [account_id,
+  # security_id]: the latest row for the same account, security and currency
+  # dated before the current row, which is what Holding#day_change compares
+  # against. One query for every holding rather than one per holding, so a
+  # page that lists every position does not issue a query per row. Memoized
+  # like current_holdings.
+  def previous_holdings
+    @previous_holdings ||= begin
+      current_ids = current_holdings.map(&:id)
+
+      if current_ids.any?
+        Holding
+          .joins(ActiveRecord::Base.sanitize_sql_array([
+            <<~SQL.squish,
+              JOIN holdings current_holdings
+                ON current_holdings.id IN (:current_ids)
+                AND current_holdings.account_id = holdings.account_id
+                AND current_holdings.security_id = holdings.security_id
+                AND current_holdings.currency = holdings.currency
+                AND holdings.date < current_holdings.date
+            SQL
+            { current_ids: current_ids }
+          ]))
+          .select("DISTINCT ON (holdings.account_id, holdings.security_id) holdings.*")
+          .order(Arel.sql("holdings.account_id, holdings.security_id, holdings.date DESC"))
+          .index_by { |holding| [ holding.account_id, holding.security_id ] }
+      else
+        {}
+      end
+    end
+  end
+
+  # Day change for one current holding against its previous snapshot, in the
+  # holding's currency, or nil without a prior snapshot. Same result as
+  # Holding#day_change, without its per-holding query.
+  def holding_day_change(holding)
+    return nil unless holding.amount_money
+
+    previous = previous_holdings[[ holding.account_id, holding.security_id ]]
+    return nil unless previous&.amount_money
+
+    Trend.new(current: holding.amount_money, previous: previous.amount_money)
+  end
+
   # Day change across portfolio, summed in family currency
   def day_change
     changes = current_holdings.to_a.filter_map do |h|
-      t = h.day_change
+      t = holding_day_change(h)
       next nil unless t
-      curr = t.current.is_a?(Money) ? t.current.amount : t.current
-      prev = t.previous.is_a?(Money) ? t.previous.amount : t.previous
       [
-        convert_to_family_currency(curr, h.currency),
-        convert_to_family_currency(prev, h.currency)
+        convert_to_family_currency(t.current.amount, h.currency),
+        convert_to_family_currency(t.previous.amount, h.currency)
       ]
     end
 
@@ -332,10 +374,18 @@ class InvestmentStatement
     # Two layers of caching, mirroring BalanceSheet::NetWorthSeriesBuilder:
     # Rails.cache across requests, plus a per-instance memo so a single
     # dashboard render that asks for the same series twice runs one query.
+    #
+    # Every series is trimmed to the date all linked accounts in the scope
+    # have history for, as the account charts are: the balance rows before a
+    # broker's first snapshot are zeros, and charting them shows a portfolio
+    # that appears from nothing on the day the connection was made.
     def fetch_series(kind, period)
       @series_cache ||= {}
       @series_cache[[ kind, period.start_date, period.end_date ]] ||= Rails.cache.fetch(series_cache_key(kind, period)) do
-        yield series_builder(period)
+        Balance::LinkedInvestmentSeriesNormalizer.trim_to_supported_history(
+          yield(series_builder(period)),
+          account_ids: historical_scope.account_ids
+        )
       end
     end
 

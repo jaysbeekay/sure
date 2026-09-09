@@ -174,3 +174,17 @@ P28:
     class: InvestmentStatementTest
     tests:
       - a rolled-up return is measured over the holdings whose cost basis is known
+P29:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - value_series does not chart leading zeros before a linked account's first supported history
+  - file: test/models/balance/linked_investment_series_normalizer_test.rb
+    class: Balance::LinkedInvestmentSeriesNormalizerTest
+    tests:
+      - trim_to_supported_history drops the points before the common supported start
+P30:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - previous_holdings loads the prior snapshot of every holding in one query
