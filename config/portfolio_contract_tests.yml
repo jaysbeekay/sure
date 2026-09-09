@@ -163,3 +163,13 @@ P26:
     class: InvestmentStatementTest
     tests:
       - totals cache key carries the v3 aggregation version
+P27:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a security whose holdings carry no value is omitted from top_holdings and allocation
+P28:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a rolled-up return is measured over the holdings whose cost basis is known

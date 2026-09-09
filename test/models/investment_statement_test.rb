@@ -922,6 +922,116 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_not_equal before, after, "a revoked share must not keep serving the series it was part of"
   end
 
+  test "gains series cache key changes when a holding's cost basis is edited by hand" do
+    account = create_investment_account(balance: 1000)
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+    holding = Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    period = Period.last_30_days
+
+    gains_before = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+    value_before = InvestmentStatement.new(@family).send(:series_cache_key, :value, period)
+
+    # HoldingsController#update writes the holding alone: no sync completes
+    # and the account row is untouched, so the family key does not move.
+    travel 1.second do
+      holding.set_manual_cost_basis!(90)
+    end
+
+    gains_after = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+    value_after = InvestmentStatement.new(@family).send(:series_cache_key, :value, period)
+
+    assert_not_equal gains_before, gains_after, "a cost-basis edit must not keep serving the gains built before it"
+    assert_equal value_before, value_after, "the value series reads balances, not holdings, and keeps its key"
+  end
+
+  test "gains series cache key changes when a holding is deleted" do
+    account = create_investment_account(balance: 1000)
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+    holding = Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    period = Period.last_30_days
+
+    before = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+    holding.destroy!
+    after = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+
+    assert_not_equal before, after
+  end
+
+  test "a security whose holdings carry no value is omitted from top_holdings and allocation" do
+    account = create_investment_account(balance: 1000, cash_balance: 0, currency: "USD")
+    priced = Security.create!(ticker: "AAPL", name: "Apple")
+    unpriced = Security.create!(ticker: "NOPX", name: "Not Yet Priced")
+
+    Holding.create!(
+      account: account, security: priced, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    # A position with no price yet: qty is real, amount is 0.
+    Holding.create!(
+      account: account, security: unpriced, date: Date.current,
+      qty: 10, price: 0, amount: 0, currency: "USD"
+    )
+
+    assert_equal %w[AAPL], @statement.top_holdings(limit: 5).map(&:ticker)
+    assert_equal %w[AAPL], @statement.allocation.map(&:ticker)
+    assert_in_delta 100.0, @statement.allocation.sum(&:weight), 0.01
+  end
+
+  test "a rolled-up return is measured over the holdings whose cost basis is known" do
+    ira = create_investment_account(balance: 1000, currency: "USD")
+    taxable = create_investment_account(balance: 2000, currency: "USD")
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    Holding.create!(
+      account: ira, security: aapl, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD",
+      cost_basis: 80, cost_basis_locked: true
+    )
+    # Same security, no stored cost basis and no trades: avg_cost is nil.
+    Holding.create!(
+      account: taxable, security: aapl, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    Holding.create!(
+      account: taxable, security: msft, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+
+    aapl_row, msft_row = @statement.top_holdings(limit: 2)
+
+    assert_equal "AAPL", aapl_row.ticker
+    assert_equal Money.new(2000, "USD"), aapl_row.amount_money, "the amount counts every holding"
+    assert_equal Money.new(1000, "USD"), aapl_row.trend.current, "the return covers only the holding with a known cost"
+    assert_equal Money.new(800, "USD"), aapl_row.trend.previous
+    assert_in_delta 25.0, aapl_row.trend.percent, 0.01
+
+    assert_equal "MSFT", msft_row.ticker
+    assert_nil msft_row.trend, "no known cost basis, no return"
+  end
+
+  test "allocation issues no per-holding trade queries when cost basis is stored" do
+    account = create_investment_account(balance: 3000, currency: "USD")
+    3.times do |i|
+      Holding.create!(
+        account: account, security: Security.create!(ticker: "STK#{i}", name: "Stock #{i}"),
+        date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD",
+        cost_basis: 90, cost_basis_locked: true
+      )
+    end
+
+    queries = capture_sql_queries { @statement.allocation }
+
+    assert_equal 3, @statement.allocation.size
+    assert_empty queries.grep(/FROM "trades"/), "Holding#trend must read the stored cost basis, not fall back to trades"
+  end
+
   private
     def create_investment_account(balance:, cash_balance: 0, currency: "USD")
       @family.accounts.create!(

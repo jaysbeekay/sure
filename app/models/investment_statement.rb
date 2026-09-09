@@ -349,26 +349,47 @@ class InvestmentStatement
       )
     end
 
-    # The shares version carries the count as well as the latest timestamp:
-    # revoking a share deletes a row, which changes neither
-    # maximum(:updated_at) nor accounts.updated_at, and a key built from
-    # those alone would keep serving a series that still counts the
-    # revoked account.
+    # Beyond the family key (sync time and accounts.updated_at), the key
+    # carries a version for each table the series reads that can change
+    # without a sync or an account write:
+    #
+    # - shares (every kind): revoking a share deletes a row, which changes
+    #   neither maximum(:updated_at) nor accounts.updated_at, and a key built
+    #   from those alone would keep serving a series that still counts the
+    #   revoked account.
+    # - holdings (gains only): the gains series reads holdings.cost_basis,
+    #   which a manual cost-basis edit, an unlock or a security remap
+    #   rewrites in place. The value series read balances, which only a
+    #   sync rewrites, so they do not pay for the extra queries.
     def series_cache_key(kind, period)
-      shares_version = if user
-        shares = AccountShare.where(user: user)
-        "#{shares.count}-#{shares.maximum(:updated_at)&.to_f || 0}"
-      end
-
       key = [
         "investment_statement_#{kind}_series",
         user&.id,
         shares_version,
+        (holdings_version if kind == :gains),
         period.start_date,
         period.end_date
       ].compact.join("_")
 
       family.build_cache_key(key, invalidate_on_data_updates: true)
+    end
+
+    # Memoized: one instance builds a key per series kind it is asked for,
+    # and the versions need not be re-queried between them.
+    def shares_version
+      return nil unless user
+
+      @shares_version ||= begin
+        shares = AccountShare.where(user: user)
+        "#{shares.count}-#{shares.maximum(:updated_at)&.to_f || 0}"
+      end
+    end
+
+    def holdings_version
+      @holdings_version ||= begin
+        holdings = Holding.where(account_id: historical_scope.account_ids)
+        "#{holdings.count}-#{holdings.maximum(:updated_at)&.to_f || 0}"
+      end
     end
 
     # Today's rates for every currency present on the family's investment
@@ -448,8 +469,15 @@ class InvestmentStatement
     # Returns [[security, value, holdings], ...] sorted by value descending.
     # Callers that need return trends should call combined_holding_trend only
     # for rows they will render (e.g. after top_holdings applies its limit).
+    #
+    # A security whose holdings sum to zero value (a position with no price
+    # yet, so every amount is 0) is left out rather than listed at weight 0;
+    # it appears once it is worth something (methodology P27).
+    #
+    # Memoized: top_holdings and allocation both start here, and the
+    # grouping and FX conversion need only run once per instance.
     def holdings_rolled_up_by_security
-      current_holdings
+      @holdings_rolled_up_by_security ||= current_holdings
         .to_a
         .group_by(&:security_id)
         .filter_map do |_security_id, holdings|
@@ -462,6 +490,11 @@ class InvestmentStatement
         .sort_by { |_, value, _| -value }
     end
 
+    # The return of a rolled-up row is measured over the holdings of the
+    # security whose cost basis is known (Holding#trend is nil otherwise):
+    # current value and cost of those holdings only, in family currency. The
+    # row's amount still counts every holding. With no known cost basis the
+    # trend is nil and readers show no return (methodology P28).
     def combined_holding_trend(holdings)
       currents = []
       previouses = []
