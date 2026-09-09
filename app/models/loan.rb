@@ -27,6 +27,11 @@ class Loan < ApplicationRecord
   MAX_INTEREST_RATE = 100
 
   validates :subtype, inclusion: { in: SUBTYPES.keys }, allow_blank: true
+  # The form's input already declares `max` as today; this is the same bound
+  # where a crafted request cannot skip it. A loan drawn down in the future
+  # would put every schedule date after every recorded balance.
+  validates :start_date, comparison: { less_than_or_equal_to: -> { Date.current },
+                                       message: :in_future }, allow_nil: true
 
   # The contracted repayment, for a loan that has exactly one.
   #

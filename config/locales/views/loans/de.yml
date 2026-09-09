@@ -13,6 +13,15 @@ de:
       rate_type_adjustable: Anpassbar
       rate_type_fixed: Fest
       rate_type_variable: Variabel
+      rate_changes: Zinsänderungen
+      rate_changes_hint: Jede Zeile legt den Zinssatz fest, der ab ihrem Datum bis zur nächsten Änderung gilt. Ein erneut eingegebenes Datum ersetzt diese Zeile, statt eine zweite hinzuzufügen.
+      rate_changes_empty: Keine Zinsänderungen erfasst. Das Darlehen läuft mit dem oben angegebenen Zinssatz.
+      rate_change_add: Zinsänderung hinzufügen
+      rate_change_effective_date: Gültig ab
+      rate_change_rate: Zinssatz
+      rate_change_remove: Entfernen
+      start_date: Auszahlungsdatum
+      start_date_hint: Wann das Darlehen ausgezahlt wurde. Leer lassen, um das Eröffnungsdatum des Kontos zu verwenden.
       none: Keine
       subtype_none: Keine
       subtype_prompt: Kreditart wählen
@@ -40,6 +49,8 @@ de:
         remaining_balance: Restschuld
         total_cost: Gesamtkosten
         total_interest: Zinsen gesamt
+        variable_rate_notice: Der Zinssatz dieses Darlehens ändert sich im Laufe der Zeit. Der Tilgungsplan wird bei jeder erfassten Änderung neu berechnet; das ursprüngliche Ablösedatum bleibt, die Rate wird angepasst. Eine noch nicht erfasste Änderung verschiebt diese Zahlen.
+        opening_payment: Erste Rate
       overview:
         edit_loan_details: Kreditdaten bearbeiten
         interest_rate: Zinssatz

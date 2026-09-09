@@ -92,4 +92,17 @@ class LoanTest < ActiveSupport::TestCase
     assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "variable").amortizable?
     assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "fixed").amortizable?
   end
+
+  # The form caps the origination date at today; the model holds the same
+  # bound where a crafted request cannot skip it.
+  test "an origination date in the future is rejected and today is not" do
+    loan = accounts(:loan).loan
+
+    loan.start_date = Date.current + 1
+    assert_not loan.valid?
+    assert_includes loan.errors[:start_date], I18n.t("activerecord.errors.models.loan.attributes.start_date.in_future")
+
+    loan.start_date = Date.current
+    assert loan.valid?
+  end
 end
