@@ -349,8 +349,16 @@ class InvestmentStatement
       )
     end
 
+    # The shares version carries the count as well as the latest timestamp:
+    # revoking a share deletes a row, which changes neither
+    # maximum(:updated_at) nor accounts.updated_at, and a key built from
+    # those alone would keep serving a series that still counts the
+    # revoked account.
     def series_cache_key(kind, period)
-      shares_version = user ? AccountShare.where(user: user).maximum(:updated_at)&.to_i : nil
+      shares_version = if user
+        shares = AccountShare.where(user: user)
+        "#{shares.count}-#{shares.maximum(:updated_at)&.to_f || 0}"
+      end
 
       key = [
         "investment_statement_#{kind}_series",

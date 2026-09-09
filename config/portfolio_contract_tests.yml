@@ -36,12 +36,14 @@ P5:
     class: InvestmentStatement::HistoricalScopeTest
     tests:
       - includes disabled investment accounts and excludes other types and excluded accounts
+      - includes draft investment accounts
       - with a user, an account shared without include_in_finances is out of scope
 P6:
   - file: test/models/investment_statement/historical_scope_test.rb
     class: InvestmentStatement::HistoricalScopeTest
     tests:
       - active_until_dates covers only disabled accounts, cut off the day before disabling
+      - a disabled account without disabled_at is cut off the day before it was last updated
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:

@@ -37,6 +37,26 @@ class InvestmentStatement::HistoricalScopeTest < ActiveSupport::TestCase
     assert_nil dates[active.id]
   end
 
+  test "includes draft investment accounts" do
+    draft = create_account(accountable: Investment.new)
+    draft.update!(status: "draft")
+
+    scope = InvestmentStatement::HistoricalScope.new(@family)
+
+    assert_includes scope.account_ids, draft.id
+    assert_nil scope.active_until_dates[draft.id], "a draft account has no cut-off"
+  end
+
+  test "a disabled account without disabled_at is cut off the day before it was last updated" do
+    disabled = create_account(accountable: Investment.new)
+    disabled.update!(status: "disabled", disabled_at: nil)
+    disabled.update_column(:updated_at, 5.days.ago)
+
+    dates = InvestmentStatement::HistoricalScope.new(@family).active_until_dates
+
+    assert_equal 5.days.ago.to_date - 1.day, dates[disabled.reload.id]
+  end
+
   test "with a user, an account shared without include_in_finances is out of scope" do
     shared_user = users(:new_email)
     owned = create_account(accountable: Investment.new)

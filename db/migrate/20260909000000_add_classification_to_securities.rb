@@ -46,7 +46,9 @@ class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
     add_column :securities, :region, :string
     add_column :securities, :classification_source, :string
     # A boolean with a constant default is a catalog-only change on
-    # PostgreSQL 11+; existing rows are not rewritten.
+    # PostgreSQL 11+; existing rows are not rewritten. The project ships
+    # PostgreSQL 16 (compose.example.yml, .devcontainer) and the existing
+    # loans migrations rely on the same behaviour.
     add_column :securities, :classification_locked, :boolean, null: false, default: false
 
     CONSTRAINTS.each do |name, (column, values)|

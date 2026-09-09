@@ -904,6 +904,19 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_includes seen_keys.first, "totals_query/v3"
   end
 
+  test "series cache key changes when a share is revoked" do
+    shared_user = users(:new_email)
+    account = create_investment_account(balance: 1000)
+    share = account.share_with!(shared_user, permission: "read_only", include_in_finances: true)
+    period = Period.last_30_days
+
+    before = InvestmentStatement.new(@family, user: shared_user).send(:series_cache_key, :value, period)
+    share.destroy!
+    after = InvestmentStatement.new(@family, user: shared_user).send(:series_cache_key, :value, period)
+
+    assert_not_equal before, after, "a revoked share must not keep serving the series it was part of"
+  end
+
   private
     def create_investment_account(balance:, cash_balance: 0, currency: "USD")
       @family.accounts.create!(
@@ -926,24 +939,6 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       )
     end
 
-    # Investment income (dividends, interest) is recorded as a Trade with
-    # qty: 0 and price: 0, matching Trade::CreateForm#create_income_trade.
-    # A negative amount means cash coming in.
-    def create_income_trade(account:, label:, amount:, date:)
-      account.entries.create!(
-        name: "#{label} #{SecureRandom.hex(3)}",
-        amount: -amount.to_d.abs,
-        date: date,
-        currency: account.currency,
-        entryable: Trade.new(
-          security: Security.create!(ticker: "T#{SecureRandom.hex(8)}", name: "Test Security"),
-          qty: 0,
-          price: 0,
-          currency: account.currency,
-          investment_activity_label: label
-        )
-      )
-    end
 
     def create_trade(account:, qty:, amount:, date:)
       account.entries.create!(
