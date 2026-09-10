@@ -1,6 +1,6 @@
 # Portfolio methodology
 
-Status: **contract in force for the foundations drop** (issue #119). This
+Status: **contract in force for the foundations drop** (issue jaysbeekay/sure#119). This
 document is the decision record for the primitives every portfolio figure is
 built from: which holdings are one row, what a weight is measured against,
 which accounts a chart covers, and what a cash movement *is*. It is normative:
@@ -29,7 +29,7 @@ Excluded entries (`entries.excluded`) and pending transactions
 
 Each row: the decision, the test class and test names that demonstrate it,
 and the ambiguity it resolves (D-numbers refer to the readiness review on
-issue #119).
+issue jaysbeekay/sure#119).
 
 | ID | Decision | Demonstrating test | Resolves |
 | --- | --- | --- | --- |
@@ -59,8 +59,8 @@ issue #119).
 | P24 | Dividends and interest are summed by label over trades and transactions alike, so every storage shape in the provider audit counts; pending transactions and entries outside the period do not. The Plaid zero-amount shape contributes zero (known limitation). | `InvestmentStatementTest` "dividends and interest count the transaction shapes providers write", "totals aggregate dividend and interest income from income trades", "totals convert foreign-currency dividends into family currency" | S5, we-promise/sure#3350 |
 | P25 | `Totals` reads its income and fee label sets from `Portfolio::FlowClassifier` rather than carrying its own, and its dividend / interest buckets are checked against that set, so the totals and the classifier cannot disagree about which labels are income. Income and fee labels are excluded from the direction buckets, so a relabelled buy is counted once. | `InvestmentStatementTest` "totals read their income and fee labels from the flow classifier", "the income buckets cover every income label the classifier knows", "a buy relabeled to Dividend is counted as income only, not also as a contribution" | 0.4.3 |
 | P26 | The totals cache key carries the aggregation version (`totals_query/v3`), bumped whenever the meaning of a column changes, so a deploy never serves the previous shape from Redis. | `InvestmentStatementTest` "totals cache key carries the v3 aggregation version" | I4 |
-| P27 | A security whose current holdings do not sum to a *positive* family-currency value is omitted from `top_holdings` and `allocation`. Zero is a position with no price yet. Negative is corrupt data — `Holding` validates its amounts as non-negative but `Holding::Materializer` writes through `upsert_all`, which skips validations — and keeping it out is what makes P2's denominator a real ceiling: inside the sum it drags `holdings_total` below the largest row and takes that row's weight over 100. | `InvestmentStatementTest` "a security whose holdings carry no value is omitted from top_holdings and allocation", "a holding with a negative value cannot push another security's weight over 100" | #120 Blocker 3, review round 3 |
-| P28 | The return (`trend`) of a rolled-up row is measured over the holdings of that security whose cost basis is known (`Holding#trend` non-nil): the current value and the cost of those holdings only, in family currency. The row's `amount` still counts every holding. With no known cost basis the trend is nil and readers show no return. | `InvestmentStatementTest` "a rolled-up return is measured over the holdings whose cost basis is known" | #133 review |
+| P27 | A security whose current holdings do not sum to a *positive* family-currency value is omitted from `top_holdings` and `allocation`. Zero is a position with no price yet. Negative is corrupt data — `Holding` validates its amounts as non-negative but `Holding::Materializer` writes through `upsert_all`, which skips validations — and keeping it out is what makes P2's denominator a real ceiling: inside the sum it drags `holdings_total` below the largest row and takes that row's weight over 100. | `InvestmentStatementTest` "a security whose holdings carry no value is omitted from top_holdings and allocation", "a holding with a negative value cannot push another security's weight over 100" | jaysbeekay/sure#120 Blocker 3, review round 3 |
+| P28 | The return (`trend`) of a rolled-up row is measured over the holdings of that security whose cost basis is known (`Holding#trend` non-nil): the current value and the cost of those holdings only, in family currency. The row's `amount` still counts every holding. With no known cost basis the trend is nil and readers show no return. | `InvestmentStatementTest` "a rolled-up return is measured over the holdings whose cost basis is known" | jaysbeekay/sure#133 review |
 
 ## Totals
 
@@ -123,16 +123,16 @@ event (Kraken is the near miss and skips its ledger `trade` rows).
 - **Plaid dividends have amount 0.** The processor routes them through the
   trade path with quantity 0, so the cash received is invisible to every
   amount-based total. The classifier still calls them `income`; fixing the
-  amount belongs to the income drop (#123).
+  amount belongs to the income drop (jaysbeekay/sure#123).
 - **SimpleFIN and QIF income is unlabelled** unless the transaction name
   matches the adapter's heuristic. Such rows classify as external flows
   (P17). Labelling is a provider concern, not a classifier one.
 - **Historical FX gaps** fall back to the nearest rate and then to 1:1 in
   `Balance::ChartSeriesBuilder`. A series over a currency with sparse rates
-  is smoothed accordingly; a rate-warning belongs to the returns drop (#121).
+  is smoothed accordingly; a rate-warning belongs to the returns drop (jaysbeekay/sure#121).
 - **`fees` is computed but not shown.** No view reads `PeriodTotals#fees` or
-  `InvestmentStatement#total_fees` yet. The figure exists for the hub (#120)
-  and the income drop (#123) to render; until one does, a user sees no fee
+  `InvestmentStatement#total_fees` yet. The figure exists for the hub (jaysbeekay/sure#120)
+  and the income drop (jaysbeekay/sure#123) to render; until one does, a user sees no fee
   total anywhere, which is why P21 leaves contributions as the cash that
   moved rather than quietly shrinking a displayed number by an unshown one.
 - **A cash security is a holding row.** SnapTrade and Questrade write
@@ -142,7 +142,7 @@ event (Kraken is the near miss and skips its ledger `trade` rows).
   ticker. In `allocation` it therefore sits beside the residual cash row.
   Money is not double counted (the residual is the part the holdings do not
   explain, so the weights still sum to 100), but the first reader of
-  `allocation` (#120) should present the two as one idea.
+  `allocation` (jaysbeekay/sure#120) should present the two as one idea.
 - **Trading212 fee rows.** Order amounts already include fees; a separate
   `FEE` cash row for the same order would count the fee twice. Not observed
   in payloads; recorded so the next person to see one knows where to look.

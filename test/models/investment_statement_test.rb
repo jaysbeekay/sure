@@ -887,7 +887,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     # PlaidAccount::Investments::TransactionsProcessor writes a dividend as
     # a qty-0 trade with amount 0 * price, so its cash is not recoverable
     # here (its `price` is a per-share figure, not the payment). It is
-    # income with amount 0 until #123 fixes the processor; the 62.5 below
+    # income with amount 0 until jaysbeekay/sure#123 fixes the processor; the 62.5 below
     # deliberately excludes it.
     create_plaid_dividend_trade(account: account, date: period.start_date)
     # Pending income is not counted until it posts
