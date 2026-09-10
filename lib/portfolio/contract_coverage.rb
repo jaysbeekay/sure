@@ -27,7 +27,7 @@ module Portfolio
     # `SomeTest` "first test", "second test"; `OtherTest` "third test" -- each
     # quoted name belongs to the class named before it.
     TEST_NAME_PATTERN = /"([^"]+)"/
-    EVIDENCE_TOKEN = /#{TEST_CLASS_PATTERN}|#{TEST_NAME_PATTERN}/
+    EVIDENCE_PATTERN = /#{TEST_CLASS_PATTERN}|#{TEST_NAME_PATTERN}/
 
     def initialize(contract_path:, manifest_path:, root: Rails.root)
       @contract_path = Pathname(contract_path)
@@ -157,7 +157,7 @@ module Portfolio
         evidence = Hash.new { |hash, key| hash[key] = [] }
         current = nil
 
-        cell.scan(EVIDENCE_TOKEN) do |class_name, test_name|
+        cell.scan(EVIDENCE_PATTERN) do |class_name, test_name|
           if class_name
             current = class_name
             evidence[current]
