@@ -30,6 +30,7 @@ de:
           title: Veraltete Kurse
       last_priced: Zuletzt bewertet am %{date}
       never_priced: Nie bewertet
+      read_only: Schreibgeschützt
       provider_statuses:
         no_provider: Kein Kursanbieter konfiguriert
         offline: Offline-Wertpapier

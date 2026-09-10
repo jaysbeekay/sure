@@ -11,11 +11,11 @@ export default class extends Controller {
   static targets = ["row", "chevron"];
 
   toggle(event) {
-    const expanded = this.rowTarget.hidden;
-    this.rowTarget.hidden = !expanded;
-    event.currentTarget.setAttribute("aria-expanded", String(expanded));
+    const willExpand = this.rowTarget.hidden;
+    this.rowTarget.hidden = !willExpand;
+    event.currentTarget.setAttribute("aria-expanded", String(willExpand));
     if (this.hasChevronTarget) {
-      this.chevronTarget.classList.toggle("rotate-90", expanded);
+      this.chevronTarget.classList.toggle("rotate-90", willExpand);
     }
   }
 }

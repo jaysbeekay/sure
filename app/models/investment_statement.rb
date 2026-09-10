@@ -626,14 +626,24 @@ class InvestmentStatement
     # the residual cash is zero or negative and #allocation shows no cash row.
     def build_holdings_table_row(security, value, positions, total)
       qty = positions.sum(&:qty)
-      basis_positions = positions.select { |holding| stored_cost_basis?(holding) }
-      missing_cost_basis = basis_positions.size < positions.size
+
+      # Same rule as combined_holding_trend and the unrealised-gains KPI
+      # (P28): the return covers the positions whose cost basis is known, and
+      # a position is known when Holding#avg_cost answers -- which includes
+      # the trade-history fallback, preloaded for every holding by
+      # holdings_with_avg_costs. Reading `cost_basis` directly instead would
+      # hide a return on this table that the KPI above it counts, for the
+      # same security, on the same page.
+      known = positions.select(&:avg_cost)
+      missing_cost_basis = known.size < positions.size
 
       cost = nil
       unrealized = nil
-      unless missing_cost_basis
-        cost = positions.sum { |holding| convert_to_family_currency(holding.qty * holding.cost_basis, holding.currency) }
-        unrealized = Trend.new(current: Money.new(value, family.currency), previous: Money.new(cost, family.currency))
+      known_qty = known.sum(&:qty)
+      if known.any?
+        cost = known.sum { |holding| convert_to_family_currency(holding.qty * holding.avg_cost.amount, holding.currency) }
+        known_value = known.sum { |holding| convert_to_family_currency(holding.amount, holding.currency) }
+        unrealized = Trend.new(current: Money.new(known_value, family.currency), previous: Money.new(cost, family.currency))
       end
 
       day_changes = positions.filter_map do |holding|
@@ -653,7 +663,7 @@ class InvestmentStatement
         positions: positions,
         accounts_count: positions.map(&:account_id).uniq.size,
         qty: qty,
-        avg_cost: (cost && qty.positive?) ? Money.new(cost / qty, family.currency) : nil,
+        avg_cost: (cost && known_qty.positive?) ? Money.new(cost / known_qty, family.currency) : nil,
         amount: Money.new(value, family.currency),
         weight: total.zero? ? 0 : (value / total * 100).round(2),
         unrealized: unrealized,

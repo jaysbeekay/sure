@@ -139,8 +139,11 @@
                     <td class="px-4 py-2 text-primary truncate"><%= holding.account.name %></td>
                     <td class="px-4 py-2 text-right text-secondary privacy-sensitive"><%= format_quantity(holding.qty, exact: holding.account.crypto?) %></td>
                     <td class="px-4 py-2 text-right text-secondary privacy-sensitive">
-                      <% if holding.cost_basis.present? && (holding.cost_basis_locked? || holding.cost_basis.positive?) %>
-                        <%= format_money(Money.new(holding.cost_basis, holding.currency)) %>
+                      <%# avg_cost, not the raw column: the statement preloads
+                          the trade-history fallback for every holding, so a
+                          position whose basis is computed shows it here too. %>
+                      <% if holding.avg_cost %>
+                        <%= format_money(holding.avg_cost) %>
                       <% else %>
                         <span title="<%= t("portfolios.holdings.missing_cost_basis_hint") %>">—</span>
                       <% end %>

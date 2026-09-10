@@ -38,6 +38,15 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   end
 
   test "passes the sort, direction and grouping through to the holdings and allocation locals" do
+    # Ticker order and name order disagree for this one: it sorts last by
+    # ticker and first by name, so a name sort that secretly ordered by
+    # ticker would put it in the wrong place.
+    zebra = Security.create!(ticker: "ZZZA", name: "Aardvark Holdings")
+    Holding.create!(
+      account: accounts(:investment), security: zebra, date: Date.current,
+      qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true
+    )
+
     sections = Portfolio::SectionRegistry.new(
       statement: @statement, period: @period, as_of: @as_of, user: @user, sort: "name", dir: "asc", by: "kind"
     ).sections.index_by { |s| s[:key] }
@@ -45,7 +54,12 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_equal "name", sections["holdings"][:locals][:sort]
     assert_equal "asc", sections["holdings"][:locals][:dir]
     assert_equal "kind", sections["allocation"][:locals][:by]
-    assert_equal sections["holdings"][:locals][:rows].map(&:ticker).sort, sections["holdings"][:locals][:rows].map(&:ticker)
+    # Ticker order and name order deliberately disagree, so an assertion that
+    # only compared a sorted list against itself would pass either way.
+    rows = sections["holdings"][:locals][:rows]
+    names = rows.map { |row| row.name.downcase }
+    assert_equal names.sort, names, "sort: \"name\" must order by security name, not ticker"
+    assert_equal "ZZZA", rows.first.ticker, "the name sort must put Aardvark first despite its ticker"
     assert sections["data_quality"][:locals].key?(:issues)
     assert_equal %i[value day_change unrealized period_return net_contributions income], sections["kpis"][:locals][:kpis].keys
     assert_kind_of Series, sections["value_chart"][:locals][:series]
@@ -56,6 +70,15 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
 
     assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
+  end
+
+  test "a saved order that repeats a key renders that section once" do
+    @user.update_section_preferences("portfolio", order: %w[value_chart kpis value_chart])
+
+    keys = registry.sections.map { |s| s[:key] }
+
+    assert_equal keys.uniq, keys
+    assert_equal %w[value_chart kpis], keys.first(2)
   end
 
   test "ignores keys in the saved order that no longer exist" do

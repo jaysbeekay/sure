@@ -2,6 +2,9 @@
 
 <%# The support runbook for "why is my return missing": each row names the
     holding and the reason (P31), and links to where the user can fix it. %>
+<%# One query for the accounts this user may write to, rather than a
+    permission lookup per row. %>
+<% writable_accounts = statement.family.accounts.writable_by(Current.user).pluck(:id).to_set %>
 <div id="portfolio-data-quality" class="space-y-4">
   <% issues.group_by(&:kind).each do |kind, kind_issues| %>
     <div class="space-y-2" data-portfolio-issue-kind="<%= kind %>">
@@ -24,7 +27,15 @@
               <% when :missing_cost_basis %>
                 <% if issue.holding %>
                   <span class="mr-2"><%= issue.holding.account.name %></span>
-                  <%= link_to t("portfolios.data_quality.set_cost_basis"), holding_path(issue.holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline" %>
+                  <%# Setting a basis is a PATCH the drawer submits, and that
+                      needs write permission. On a read-only shared account the
+                      row still names the problem; it just does not offer an
+                      action that would be refused. %>
+                  <% if writable_accounts.include?(issue.holding.account_id) %>
+                    <%= link_to t("portfolios.data_quality.set_cost_basis"), holding_path(issue.holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline" %>
+                  <% else %>
+                    <span class="text-subdued"><%= t("portfolios.data_quality.read_only") %></span>
+                  <% end %>
                 <% end %>
               <% when :stale_price %>
                 <%= issue.detail ? t("portfolios.data_quality.last_priced", date: l(issue.detail, format: :long)) : t("portfolios.data_quality.never_priced") %>

@@ -42,7 +42,11 @@ class Portfolio::SectionRegistry
     # mention (a section added since they last dragged one) is appended in
     # declaration order, so a new section always appears rather than
     # disappearing until the next drag. Same rule as Reports.
-    ordered = Array(user&.section_order("portfolio")).filter_map do |key|
+    # `uniq` before the lookup: a saved order that repeats a key would
+    # otherwise render that section once per occurrence. The endpoint
+    # deduplicates what it writes, but an order stored before it did -- or
+    # written by anything else -- still has to render once.
+    ordered = Array(user&.section_order("portfolio")).uniq.filter_map do |key|
       all.find { |section| section[:key] == key }
     end
 

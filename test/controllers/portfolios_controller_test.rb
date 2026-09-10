@@ -235,12 +235,19 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   test "holdings table flags a row whose position has no cost basis" do
     priced = Security.create!(ticker: "BASIS", name: "With basis")
     Holding.create!(account: accounts(:investment), security: priced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    # Neither a stored basis nor a buy trade to compute one from, so
+    # Holding#avg_cost is nil and the row is flagged. AAPL is deliberately
+    # not the example: it has a fixture trade, so its basis is computable
+    # even though nothing is stored on the holding.
+    unknown = Security.create!(ticker: "NOBASIS", name: "Without basis")
+    Holding.create!(account: accounts(:investment), security: unknown, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
 
     get portfolio_path
     assert_response :success
 
-    # holdings(:one) carries no cost basis; BASIS does.
-    assert_select "tr[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
+    assert_select "tr[data-portfolio-holding='NOBASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
+    assert_select "tr[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0,
+      message: "AAPL's basis is computable from its trade, so the row must not warn"
     assert_select "tr[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
     assert_select "tr[data-portfolio-holding='BASIS']", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))}/
   end
@@ -315,6 +322,23 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path
     assert_response :success
     assert_select "[data-section-key='data_quality']", count: 0
+  end
+
+  test "data quality offers the cost-basis drawer only where the user may write" do
+    other = users(:family_member)
+    shared = @family.accounts.create!(name: "Read-only broker", balance: 500, cash_balance: 0, currency: "USD", accountable: Investment.new, owner: other)
+    shared.share_with!(@user, permission: "read_only", include_in_finances: true)
+    unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
+    read_only_holding = Holding.create!(account: shared, security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    own_holding = Holding.create!(account: accounts(:investment), security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(own_holding)
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(read_only_holding), count: 0,
+      message: "a read-only share cannot PATCH the holding, so it must not be offered the drawer"
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
   PORTFOLIO_QUERY_CEILING = 60 # measured 54, see the ceiling test

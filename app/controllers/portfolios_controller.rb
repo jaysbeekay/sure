@@ -4,10 +4,13 @@ class PortfoliosController < ApplicationController
   before_action :require_preview_features!
 
   def show
-    # `as_of` is captured once and passed down: every section reads the same
-    # "today", so a render that straddles midnight can't mix two dates, and
+    # `as_of` is captured once and passed down, so the sections that take a
+    # date -- data quality, the chart's caption -- all read the same one and
     # the partials stay pure (no Date.current / Current.family lookups of
-    # their own).
+    # their own). It does not reach InvestmentStatement's own snapshot FX,
+    # which converts at today's rate by its own contract (P-row I3); a
+    # request that straddles midnight can still pick up the next day's rates
+    # there.
     @as_of = Date.current
     @statement = Current.family.investment_statement(user: Current.user)
     # Query-string state for the holdings sort and the allocation grouping,

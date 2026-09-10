@@ -30,6 +30,7 @@ en:
           title: Stale prices
       last_priced: Last priced %{date}
       never_priced: Never priced
+      read_only: Read-only
       provider_statuses:
         no_provider: No price provider configured
         offline: Offline security

@@ -1,10 +1,11 @@
 <%# locals: (statement:, period:, as_of:) %>
 
 <%# One card per investment account the user may count, straight to its holdings tab.
-    The logo partial reads the attached logo, the provider link and the
-    accountable's colour per account, so they are loaded up front rather
-    than once per card. %>
-<% accounts = statement.investment_accounts.with_attached_logo.includes(:accountable, :account_providers).to_a %>
+    The logo partial reads the attached logo, the accountable's colour and
+    Account#logo_url, which goes through #linked? and touches the provider
+    link, the Plaid account and the SimpleFIN account. All four are loaded
+    up front rather than once per card. %>
+<% accounts = statement.investment_accounts.with_attached_logo.includes(:accountable, :account_providers, :plaid_account, :simplefin_account).to_a %>
 <div id="portfolio-accounts" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
   <% accounts.each do |account| %>
     <%= link_to account_path(account, tab: "holdings"), class: "bg-container-inset rounded-lg p-4 flex items-center justify-between hover:bg-container-hover transition-colors focus-ring", data: { turbo_frame: "_top" } do %>

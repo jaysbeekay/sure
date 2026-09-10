@@ -39,7 +39,12 @@ class Balance::LinkedInvestmentSeriesNormalizerTest < ActiveSupport::TestCase
     account.entries.create!(date: 3.days.ago.to_date, name: "Deposit", amount: -100, currency: "USD", source: "plaid", entryable: Transaction.new)
     values = (0..5).map do |offset|
       date = 5.days.ago.to_date + offset
-      Series::Value.new(date: date, date_formatted: date.to_s, value: Money.new(offset, "USD"), trend: nil)
+      Series::Value.new(
+        date: date,
+        date_formatted: date.to_s,
+        value: Money.new(offset, "USD"),
+        trend: Trend.new(current: Money.new(offset, "USD"), previous: Money.new([ offset - 1, 0 ].max, "USD"), favorable_direction: "up")
+      )
     end
     series = Series.new(start_date: values.first.date, end_date: values.last.date, interval: "1 day", values: values, favorable_direction: "up")
 
@@ -48,6 +53,11 @@ class Balance::LinkedInvestmentSeriesNormalizerTest < ActiveSupport::TestCase
     assert_equal 3.days.ago.to_date, trimmed.start_date
     assert_equal 4, trimmed.values.size
     assert_equal series.end_date, trimmed.end_date
+
+    # The point that survives the trim has nothing before it any more, so it
+    # must not keep reporting a change against the point that was removed.
+    assert_equal trimmed.values.first.value, trimmed.values.first.trend.previous
+    assert trimmed.values.first.trend.direction.flat?
 
     # An unlinked account (no sourced entries, no provider holdings) has no
     # supported-history start, so the series is returned untouched.

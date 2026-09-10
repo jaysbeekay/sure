@@ -1111,7 +1111,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 1000, series.values.first.value.amount
   end
 
-  test "holdings_table_rows rolls positions up per security with stored cost basis only" do
+  test "holdings_table_rows measures a row's return over the positions whose cost basis is known" do
     ira = create_investment_account(balance: 5000, cash_balance: 500)
     taxable = create_investment_account(balance: 3000)
     aapl = Security.create!(ticker: "AAPL", name: "Apple")
@@ -1119,7 +1119,8 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     Holding.create!(account: ira, security: aapl, date: 1.day.ago.to_date, qty: 10, price: 190, amount: 1900, currency: "USD", cost_basis: 150, cost_basis_locked: true)
     Holding.create!(account: ira, security: aapl, date: Date.current, qty: 10, price: 200, amount: 2000, currency: "USD", cost_basis: 150, cost_basis_locked: true)
-    # No stored basis in the second account: the row cannot state a cost.
+    # No stored basis and no trades in the second account, so Holding#avg_cost
+    # is nil there and that position is outside the row's return.
     Holding.create!(account: taxable, security: aapl, date: Date.current, qty: 5, price: 200, amount: 1000, currency: "USD")
     Holding.create!(account: ira, security: msft, date: Date.current, qty: 4, price: 500, amount: 2000, currency: "USD", cost_basis: 400, cost_basis_locked: true)
 
@@ -1131,9 +1132,14 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 2, aapl_row.accounts_count
     assert_equal 15, aapl_row.qty
     assert_equal Money.new(3000, "USD"), aapl_row.amount_money
-    assert aapl_row.missing_cost_basis
-    assert_nil aapl_row.avg_cost
-    assert_nil aapl_row.unrealized
+    assert aapl_row.missing_cost_basis, "one position has no known basis, so the row still warns"
+    # Partial credit, the rule the unrealised-gains KPI and combined_holding_trend
+    # already use (P28): cost and return cover the 10 shares whose basis is
+    # known (2000 now against 1500 cost), not the 5 that have none.
+    assert_equal Money.new(150, "USD"), aapl_row.avg_cost
+    assert_equal Money.new(2000, "USD"), aapl_row.unrealized.current
+    assert_equal Money.new(1500, "USD"), aapl_row.unrealized.previous
+    assert_equal Money.new(500, "USD"), aapl_row.unrealized.value
     # Day change from the one position with a prior snapshot: 2000 vs 1900.
     assert_equal Money.new(100, "USD"), aapl_row.day_change.value
 
@@ -1216,6 +1222,25 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     by_security = @statement.allocation_by("nonsense")
     assert_equal "cash", by_security.last.id, "an unknown grouping is the security roll-up, cash row included"
     assert_in_delta 100.0, by_security.sum(&:weight), 0.01
+  end
+
+  test "every allocation grouping measures the same portfolio" do
+    # One account holding securities plus cash, one all-cash: the shape the
+    # groupings could disagree on, since account grouping reads balances and
+    # currency and kind read holdings plus each account's cash.
+    mixed = create_investment_account(balance: 10_000, cash_balance: 2_000)
+    create_investment_account(balance: 3_000, cash_balance: 3_000)
+    security = create_portfolio_security
+    Holding.create!(account: mixed, security: security, date: Date.current, qty: 80, price: 100, amount: 8_000, currency: "USD")
+
+    totals = InvestmentStatement::ALLOCATION_GROUPINGS.to_h do |by|
+      segments = @statement.allocation_by(by)
+      assert_in_delta 100.0, segments.sum(&:weight), 0.01, "#{by} weights must sum to 100"
+      [ by, segments.sum { |segment| segment.amount.amount } ]
+    end
+
+    assert_equal [ @statement.portfolio_value ], totals.values.uniq,
+      "every grouping must add up to the portfolio value: #{totals.inspect}"
   end
 
   test "data_quality_issues flags missing cost basis, stale prices and unhealthy providers" do

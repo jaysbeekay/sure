@@ -41,9 +41,31 @@ class Balance::LinkedInvestmentSeriesNormalizer
         start_date: trimmed_values.first.date,
         end_date: series.end_date,
         interval: series.interval,
-        values: trimmed_values,
+        values: flatten_first_trend(trimmed_values),
         favorable_direction: series.favorable_direction
       )
+    end
+
+    # The first point of a series has nothing before it to compare against --
+    # the builders already emit it flat. After a trim the new first point
+    # still carries the change against the point that was just removed, so a
+    # tooltip would report a move out of history the chart no longer draws.
+    def flatten_first_trend(values)
+      first = values.first
+      return values unless first&.trend
+
+      flat = Series::Value.new(
+        date: first.date,
+        date_formatted: first.date_formatted,
+        value: first.value,
+        trend: Trend.new(
+          current: first.value,
+          previous: first.value,
+          favorable_direction: first.trend.favorable_direction
+        )
+      )
+
+      [ flat, *values.drop(1) ]
     end
 
     private

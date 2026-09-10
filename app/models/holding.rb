@@ -70,6 +70,17 @@ class Holding < ApplicationRecord
     @preloaded_avg_cost = value
   end
 
+  # A reload replaces the attributes, so an answer computed from the old ones
+  # must go with them -- including #trend, which is derived from avg_cost.
+  # Without this a caller that preloads, reloads and reads would get the
+  # pre-reload cost basis back.
+  def reload(*)
+    remove_instance_variable(:@preloaded_avg_cost) if defined?(@preloaded_avg_cost)
+    remove_instance_variable(:@trend) if defined?(@trend)
+    remove_instance_variable(:@day_change) if defined?(@day_change)
+    super
+  end
+
   def trend
     @trend ||= calculate_trend
   end

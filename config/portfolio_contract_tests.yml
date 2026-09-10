@@ -188,25 +188,26 @@ P30:
     class: InvestmentStatementTest
     tests:
       - previous_holdings loads the prior snapshot of every holding in one query
-P29:
+P31:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - holdings_table_rows rolls positions up per security with stored cost basis only
+      - holdings_table_rows measures a row's return over the positions whose cost basis is known
       - holdings_table_rows sorts by a whitelisted key and puts rows without the figure last
       - holdings_table_rows issues no query per holding
-P30:
+P32:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
       - allocation_by groups the portfolio by account, currency and kind with weights summing to 100
-P31:
+      - every allocation grouping measures the same portfolio
+P33:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
       - data_quality_issues flags missing cost basis, stale prices and unhealthy providers
       - data_quality_issues issues a bounded number of queries
-P32:
+P34:
   - file: test/models/portfolio/section_registry_test.rb
     class: Portfolio::SectionRegistryTest
     tests:
@@ -214,7 +215,7 @@ P32:
       - ignores keys in the saved order that no longer exist
       - appends extra sections after the built-ins
       - registers the six built-in sections with their partials and locals
-P33:
+P35:
   - file: test/controllers/portfolios_controller_test.rb
     class: PortfoliosControllerTest
     tests:
@@ -224,7 +225,7 @@ P33:
     class: UserTest
     tests:
       - section preferences are namespaced so two pages never touch each other's keys
-P34:
+P36:
   - file: test/controllers/portfolios_controller_test.rb
     class: PortfoliosControllerTest
     tests:
@@ -234,14 +235,14 @@ P34:
     class: PagesControllerTest
     tests:
       - dashboard investment widget links to the portfolio hub for preview users only
-P35:
+P37:
   - file: test/controllers/portfolios_controller_test.rb
     class: PortfoliosControllerTest
     tests:
       - holdings table renders one row per security with its per-account positions
       - holdings table sorts through whitelisted links that keep the period and grouping
       - the page's query count is bounded and does not grow with holdings
-P36:
+P38:
   - file: test/controllers/portfolios_controller_test.rb
     class: PortfoliosControllerTest
     tests:
@@ -252,7 +253,7 @@ P36:
     class: PortfoliosHelperTest
     tests:
       - allocation colours come from the shared chart palette and wrap around
-P37:
+P39:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
