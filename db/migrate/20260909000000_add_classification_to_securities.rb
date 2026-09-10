@@ -38,22 +38,27 @@ class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
     "chk_securities_classification_source" => [ "classification_source", CLASSIFICATION_SOURCES ]
   }.freeze
 
+  # Every step is written to be safe to run again. Without a DDL transaction
+  # each statement commits on its own while schema_migrations stays unwritten,
+  # so a process killed part-way leaves some columns created and the migration
+  # still pending -- and the next run would die on "column already exists"
+  # rather than finishing the job.
   def up
-    add_column :securities, :asset_class, :string
-    add_column :securities, :asset_sub_class, :string
-    add_column :securities, :sector, :string
-    add_column :securities, :industry, :string
-    add_column :securities, :region, :string
-    add_column :securities, :classification_source, :string
+    add_column :securities, :asset_class, :string, if_not_exists: true
+    add_column :securities, :asset_sub_class, :string, if_not_exists: true
+    add_column :securities, :sector, :string, if_not_exists: true
+    add_column :securities, :industry, :string, if_not_exists: true
+    add_column :securities, :region, :string, if_not_exists: true
+    add_column :securities, :classification_source, :string, if_not_exists: true
     # A boolean with a constant default is a catalog-only change on
     # PostgreSQL 11+; existing rows are not rewritten. The project ships
     # PostgreSQL 16 (compose.example.yml, .devcontainer) and the existing
     # loans migrations rely on the same behaviour.
-    add_column :securities, :classification_locked, :boolean, null: false, default: false
+    add_column :securities, :classification_locked, :boolean, null: false, default: false, if_not_exists: true
 
     CONSTRAINTS.each do |name, (column, values)|
       add_check_constraint :securities, "#{column} IN (#{values.map { |v| "'#{v}'" }.join(', ')})",
-        name: name, validate: false
+        name: name, validate: false, if_not_exists: true
     end
 
     CONSTRAINTS.each_key do |name|
@@ -63,15 +68,12 @@ class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
 
   def down
     CONSTRAINTS.each_key do |name|
-      remove_check_constraint :securities, name: name
+      remove_check_constraint :securities, name: name, if_exists: true
     end
 
-    remove_column :securities, :classification_locked
-    remove_column :securities, :classification_source
-    remove_column :securities, :region
-    remove_column :securities, :industry
-    remove_column :securities, :sector
-    remove_column :securities, :asset_sub_class
-    remove_column :securities, :asset_class
+    %i[
+      classification_locked classification_source region industry sector
+      asset_sub_class asset_class
+    ].each { |column| remove_column :securities, column, if_exists: true }
   end
 end

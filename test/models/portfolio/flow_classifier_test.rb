@@ -174,6 +174,21 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
     assert_equal :external_outflow, @family_scope.classify(withdrawal)
   end
 
+  test "a pending flag that is not a boolean is read the same way by both forms" do
+    # ActiveModel::Type::Boolean is the Ruby definition, so anything present
+    # that is not one of its false values is pending. The SQL form used to
+    # cast with ::boolean, which disagrees ('no' is false to PostgreSQL and
+    # true to ActiveModel) and raises on anything it cannot parse.
+    shapes = { "no" => nil, "maybe" => nil, "true" => nil, "false" => :income, "0" => :income, "" => :income }
+
+    shapes.each do |flag, expected|
+      entry = create_labelled_transaction(account: @brokerage, label: "Dividend", amount: -10, extra: { "plaid" => { "pending" => flag } })
+
+      assert_equal expected, @family_scope.classify(entry.reload), "Ruby, pending=#{flag.inspect}"
+      assert_equal expected, @family_scope.classify_ids([ entry.id ])[entry.id], "SQL, pending=#{flag.inspect}"
+    end
+  end
+
   test "excluded entries, pending transactions and valuations are not classified" do
     excluded = create_portfolio_trade(account: @brokerage, qty: 1, price: 10, excluded: true)
     pending = create_labelled_transaction(account: @brokerage, label: "Dividend", amount: -10, extra: { "simplefin" => { "pending" => true } })
@@ -217,8 +232,15 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
       assert_equal corpus.size, sql.size
       ruby.each do |id, ruby_class|
         entry = corpus.find { |e| e.id == id }
-        assert_equal ruby_class, sql.fetch(id),
+        # assert_nil / assert_equal split so a nil expectation does not trip
+        # Minitest's deprecation of assert_equal nil.
+        message =
           "scope #{classifier.scope_account_ids.size} accounts: #{entry.name} (#{entry.entryable_type}, #{entry.entryable.try(:investment_activity_label).inspect}, kind #{entry.entryable.try(:kind).inspect})"
+        if ruby_class.nil?
+          assert_nil sql.fetch(id), message
+        else
+          assert_equal ruby_class, sql.fetch(id), message
+        end
       end
     end
 
@@ -235,6 +257,13 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
       assert_includes sql, "'#{label}'"
     end
     assert_no_match(/#\{/, sql)
+
+    # Finished SQL, not a template. If any `:name` survived here, handing the
+    # CASE to sanitize_sql_array (as an earlier version did) would read it as
+    # a bind variable and raise before the query ran -- which is what a label
+    # carrying a colon used to do. `::` casts are not placeholders.
+    placeholders = sql.gsub("::", "").scan(/:[a-zA-Z]\w*/)
+    assert_empty placeholders, "sql_case must be final SQL, not a bind template"
   end
 
   private
@@ -288,6 +317,13 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
 
       entries << create_portfolio_trade(account: @brokerage, qty: 1, price: 10, excluded: true)
       entries << create_labelled_transaction(account: @brokerage, label: "Dividend", amount: -10, extra: { "plaid" => { "pending" => true } })
+      # Providers write real booleans, but the flag is whatever arrived. A
+      # string PostgreSQL would read as a boolean and one it cannot read at
+      # all both have to classify the same way in Ruby and in SQL -- the
+      # second used to abort the whole query rather than one entry.
+      entries << create_labelled_transaction(account: @brokerage, label: "Dividend", amount: -11, extra: { "plaid" => { "pending" => "no" } })
+      entries << create_labelled_transaction(account: @brokerage, label: "Dividend", amount: -12, extra: { "plaid" => { "pending" => "maybe" } })
+      entries << create_labelled_transaction(account: @brokerage, label: "Dividend", amount: -13, extra: { "plaid" => { "pending" => "false" } })
       entries << @brokerage.entries.create!(name: "Valuation", date: Date.current, amount: 1000, currency: "USD", entryable: Valuation.new(kind: "reconciliation"))
       entries
     end

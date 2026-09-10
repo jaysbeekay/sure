@@ -218,6 +218,28 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_in_delta 100.0, allocation.sum(&:weight), 0.01
   end
 
+  test "a holding with a negative value cannot push another security's weight over 100" do
+    # Holding validates amount >= 0, but Holding::Materializer writes through
+    # upsert_all, which skips validations, so an over-sell can land a negative
+    # row. Written the same way here.
+    account = create_investment_account(balance: 0, cash_balance: 0, currency: "USD")
+    good = Security.create!(ticker: "GOOD", name: "Good")
+    bad = Security.create!(ticker: "BAD", name: "Bad")
+    Holding.create!(account: account, security: good, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD")
+    Holding.insert_all([ {
+      account_id: account.id, security_id: bad.id, date: Date.current,
+      qty: -5, price: 100, amount: -500, currency: "USD",
+      created_at: Time.current, updated_at: Time.current
+    } ])
+
+    top = @statement.top_holdings(limit: 5)
+
+    assert_equal %w[GOOD], top.map(&:ticker), "the corrupt row is left out, not listed at a negative weight"
+    assert_in_delta 100.0, top.first.weight, 0.01
+    assert_operator top.map(&:weight).max, :<=, 100.0
+    assert_in_delta 100.0, @statement.allocation.sum(&:weight), 0.01
+  end
+
   test "weights never exceed 100 when cash is negative" do
     # A margin balance or an unsettled buy makes cash negative, so the
     # portfolio value (960) is below the holdings total (1000). Dividing by
@@ -785,46 +807,48 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "the investment_accounts lookup backing current_holdings should only run once, even for the empty case"
   end
 
-  test "contributions exclude a fee the entry amount already includes" do
+  test "contributions and withdrawals are the cash the trade entry records" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
     account = create_investment_account(balance: 500)
 
-    # Trade::CreateForm shape: amount = qty * price + fee = 1005
+    # Trade::CreateForm shape: amount = qty * price + fee = 1005, the cash out.
     create_portfolio_trade(account: account, qty: 10, price: 100, fee: 5, date: period.start_date)
-
-    totals = @statement.totals(period: period)
-
-    assert_equal Money.new(1000, "USD"), totals.contributions
-    assert_equal Money.new(5, "USD"), totals.fees
-  end
-
-  test "contributions are not reduced by a fee the entry amount excludes" do
-    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
-    account = create_investment_account(balance: 500)
-
-    # Kraken / Binance-spot shape: amount = qty * price = 1000, fee reported separately
+    # Kraken / Binance-spot shape: amount = qty * price = 1000, fee reported
+    # separately, so the cash out was 1005 and the entry records 1000.
     create_portfolio_trade(account: account, qty: 10, price: 100, fee: 5, date: period.start_date, fee_in_amount: false)
 
     totals = @statement.totals(period: period)
 
-    assert_equal Money.new(1000, "USD"), totals.contributions
-    assert_equal Money.new(5, "USD"), totals.fees
+    assert_equal Money.new(2005, "USD"), totals.contributions
+    assert_equal Money.new(10, "USD"), totals.fees
   end
 
-  test "withdrawals are the sale proceeds after the reported fee" do
+  test "a stale, zero or foreign-currency price cannot move contributions or withdrawals" do
+    # Each of these shapes broke an earlier version of this aggregation that
+    # measured the cash against qty * price: a price far above the amount
+    # doubled a contribution, a price that rounds to zero erased a sale, and a
+    # sell whose quantity is already net of its fee (Binance P2P) had the fee
+    # charged twice. The cash on the entry is the only figure reported now.
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
     account = create_investment_account(balance: 500)
 
-    # amount = -1000 + 5 = -995 (fee inside the amount)
-    create_portfolio_trade(account: account, qty: -10, price: 100, fee: 5, date: period.start_date)
-    # amount = -1000, fee 5 reported separately
-    create_portfolio_trade(account: account, qty: -10, price: 100, fee: 5, date: period.start_date, fee_in_amount: false)
+    # A buy whose stored price is stale (or quoted in another currency).
+    create_portfolio_trade(account: account, qty: 10, price: 200, fee: 0, date: period.start_date, fee_in_amount: false)
+      .update!(amount: 1000)
+    # A sale of a sub-1e-10 crypto: trades.price is numeric(19,10), so the
+    # price stores as 0 while the cash is real.
+    create_portfolio_trade(account: account, qty: -100_000_000_000, price: 0, fee: 0, date: period.start_date, fee_in_amount: false)
+      .update!(amount: -1000)
+    # Binance P2P sell: amount is the gross fiat, qty is already net of the
+    # crypto fee, so qty * price is the amount less the fee.
+    create_portfolio_trade(account: account, qty: -99, price: 10, fee: 10, date: period.start_date, fee_in_amount: false)
+      .update!(amount: -1000)
 
     totals = @statement.totals(period: period)
 
-    assert_equal Money.new(1990, "USD"), totals.withdrawals
+    assert_equal Money.new(1000, "USD"), totals.contributions, "a stale price must not inflate the contribution"
+    assert_equal Money.new(2000, "USD"), totals.withdrawals, "neither sale may shrink or vanish"
     assert_equal Money.new(10, "USD"), totals.fees
-    assert_equal Money.new(0, "USD"), totals.contributions
   end
 
   test "fees sum Fee-labelled entries and transfer fee legs alongside trades.fee" do
@@ -845,7 +869,10 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     totals = @statement.totals(period: period)
 
     assert_equal Money.new(13.45, "USD"), totals.fees
-    assert_equal Money.new(100, "USD"), totals.contributions
+    # The buy's amount is 100 + 2 fee, the cash that left; the fee is inside
+    # the contribution and in `fees`, which is what P21 says of a writer that
+    # folds its fee in.
+    assert_equal Money.new(102, "USD"), totals.contributions
     assert_equal 2, totals.trades_count
     assert_equal 13.45, @statement.total_fees
   end

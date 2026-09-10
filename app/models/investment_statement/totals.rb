@@ -41,21 +41,25 @@ class InvestmentStatement::Totals
 
     # One aggregation over the period's trades and labelled transactions.
     #
-    # Contributions and withdrawals are trades by direction: buys (qty > 0)
-    # are cash going out to buy securities, sells (qty < 0) cash coming in.
-    # Both are stated net of any fee the trade reports in trades.fee, so
-    # that figure and `fees` never contain the same money twice
-    # (docs/portfolio/methodology.md, P21-P22). The complication is that
-    # writers disagree on whether the entry amount already contains the fee:
-    # Trade::CreateForm and Binance P2P write qty * price + fee, Kraken and
-    # Binance spot write qty * price. So a buy is
-    #   GREATEST(ABS(amount) - fee, ABS(qty * price))
-    # -- subtract the fee when the amount carried it, and fall back to the
-    # cost of the securities themselves when it did not -- and a sale is
-    #   LEAST(ABS(amount), ABS(qty * price) - fee)
-    # -- the proceeds after the fee, whichever way the amount was written.
-    # A provider that embeds a fee it never reports (Trade Republic,
-    # Trading212) leaves it inside the amount, which is the cash that moved.
+    # Contributions and withdrawals are the cash each trade entry records
+    # (`ABS(entries.amount)`), unchanged from before this class reported fees.
+    # `fees` is reported beside them rather than subtracted out of them,
+    # because whether a trade's amount already contains its fee is a property
+    # of the writer, not of the row: `Trade::CreateForm` and Binance P2P fold
+    # the fee in, Kraken and Binance spot do not, and nothing stored on the
+    # entry says which (docs/portfolio/methodology.md, "Provider audit").
+    #
+    # Inferring it from `qty * price` was tried and removed. `trades.price` is
+    # not a second opinion about the cash: it is `numeric(19,10)`, so a
+    # sub-1e-10 crypto price stores as 0 and a sale measured against it
+    # disappears from the totals; it can be stale or in another currency, and
+    # then a buy measured against it doubles; and on the one writer whose sell
+    # quantity is already net of its fee (Binance P2P) the comparison charges
+    # the fee twice. Each of those was reproduced. The cash on the entry is
+    # the only figure that is always exactly what moved, so it is the one
+    # reported, and P21 states the consequence: for a writer that folds the
+    # fee in, that fee is inside the contribution and in `fees`, so the two
+    # do not add up to cash out for every provider.
     #
     # Income is by label, whether the provider stored it as a qty-0 Trade or
     # as a Transaction: the same labels Portfolio::FlowClassifier calls
@@ -69,16 +73,15 @@ class InvestmentStatement::Totals
     # account_ids is already scoped to the family's visible (draft/active)
     # investment accounts, so the query trusts that input and skips a join back
     # to accounts for family/status filtering. Transactions are narrowed to
-    # the income and fee shapes in the WHERE clause; nothing else on a
-    # Transaction feeds a total, so the scan stays as small as the old
-    # trades-only one.
+    # the income and fee shapes in the WHERE clause, so the rows scanned are
+    # the period's trades plus its labelled investment transactions.
     def aggregation_sql
       <<~SQL
         SELECT
           COALESCE(SUM(CASE WHEN trades.qty > 0 AND NOT #{income_or_fee_sql}
-            THEN GREATEST(ABS(entries.amount) - trades.fee, ABS(trades.qty * trades.price)) * COALESCE(er.rate, 1) ELSE 0 END), 0) as contributions,
+            THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as contributions,
           COALESCE(SUM(CASE WHEN trades.qty < 0 AND NOT #{income_or_fee_sql}
-            THEN GREATEST(LEAST(ABS(entries.amount), ABS(trades.qty * trades.price) - trades.fee), 0) * COALESCE(er.rate, 1) ELSE 0 END), 0) as withdrawals,
+            THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as withdrawals,
           COALESCE(SUM(CASE WHEN #{label_sql} = 'Dividend' THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as dividends,
           COALESCE(SUM(CASE WHEN #{label_sql} = 'Interest' THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as interest,
           COALESCE(SUM(CASE

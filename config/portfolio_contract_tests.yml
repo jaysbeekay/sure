@@ -128,17 +128,17 @@ P20:
     tests:
       - the SQL form agrees with the Ruby form on every corpus entry at both scopes
       - the SQL form only binds the scope ids and never interpolates entry data
+      - a pending flag that is not a boolean is read the same way by both forms
 P21:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - contributions exclude a fee the entry amount already includes
-      - contributions are not reduced by a fee the entry amount excludes
+      - contributions and withdrawals are the cash the trade entry records
 P22:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - withdrawals are the sale proceeds after the reported fee
+      - a stale, zero or foreign-currency price cannot move contributions or withdrawals
 P23:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
@@ -168,6 +168,7 @@ P27:
     class: InvestmentStatementTest
     tests:
       - a security whose holdings carry no value is omitted from top_holdings and allocation
+      - a holding with a negative value cannot push another security's weight over 100
 P28:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest

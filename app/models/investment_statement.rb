@@ -473,9 +473,14 @@ class InvestmentStatement
     # Callers that need return trends should call combined_holding_trend only
     # for rows they will render (e.g. after top_holdings applies its limit).
     #
-    # A security whose holdings sum to zero value (a position with no price
-    # yet, so every amount is 0) is left out rather than listed at weight 0;
-    # it appears once it is worth something (methodology P27).
+    # A security whose holdings do not sum to a positive value is left out
+    # rather than listed at weight 0 or at a negative weight (methodology
+    # P27). Zero is a position with no price yet. Negative is corrupt data:
+    # Holding validates qty, price and amount as non-negative, but
+    # Holding::Materializer writes through upsert_all, which does not run
+    # validations, so an over-sell can land one. Keeping it out is what makes
+    # the weight denominator a real ceiling -- with a negative row in the sum,
+    # holdings_total falls below the largest row and its weight goes over 100.
     #
     # Memoized: top_holdings and allocation both start here, and the
     # grouping and FX conversion need only run once per instance.
@@ -486,7 +491,7 @@ class InvestmentStatement
         .filter_map do |_security_id, holdings|
           security = holdings.first.security
           value = holdings.sum { |h| convert_to_family_currency(h.amount, h.currency) }
-          next if value.zero?
+          next unless value.positive?
 
           [ security, value, holdings ]
         end

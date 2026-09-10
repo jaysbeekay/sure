@@ -100,19 +100,16 @@ class Portfolio::FlowClassifier
     ids = Array(entry_ids).map(&:to_s)
     return {} if ids.empty?
 
-    sql = ActiveRecord::Base.sanitize_sql_array([
-      <<~SQL.squish,
-        SELECT entries.id, #{sql_case} AS flow_class
-        FROM entries
-        #{sql_joins}
-        WHERE entries.id IN (:entry_ids)
-      SQL
-      { entry_ids: ids }
-    ])
-
-    ActiveRecord::Base.connection.select_rows(sql).to_h do |id, flow_class|
-      [ id, flow_class&.to_sym ]
-    end
+    # The ids are bound by ActiveRecord rather than written into the string.
+    # Building the whole statement and passing it back through
+    # sanitize_sql_array would make Rails read any `:word` inside a label or
+    # a literal as a bind variable it cannot find, and raise before the query
+    # ever ran; #sql_case is already sanitized, and Arel.sql says so.
+    Entry
+      .where(id: ids)
+      .joins(sql_joins)
+      .pluck(Arel.sql("entries.id"), Arel.sql(sql_case))
+      .to_h { |id, flow_class| [ id, flow_class&.to_sym ] }
   end
 
   # The joins #sql_case relies on. The caller's query must select FROM
@@ -138,27 +135,24 @@ class Portfolio::FlowClassifier
   # in it comes from the constants above; the scope ids are the only bound
   # value.
   def sql_case
-    ActiveRecord::Base.sanitize_sql_array([
-      <<~SQL.squish,
-        CASE
-          WHEN entries.excluded THEN NULL
-          WHEN entries.entryable_type NOT IN ('Trade', 'Transaction') THEN NULL
-          WHEN entries.entryable_type = 'Transaction' AND (#{pending_sql}) THEN NULL
-          WHEN transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard' THEN 'fee'
-          WHEN #{label_sql} IN (#{quote_list(INCOME_LABELS)}) THEN 'income'
-          WHEN #{label_sql} IN (#{quote_list(FEE_LABELS)}) THEN 'fee'
-          WHEN #{label_sql} IN (#{quote_list(INTERNAL_LABELS)}) THEN 'internal'
-          WHEN #{label_sql} IN (#{quote_list(EXTERNAL_LABELS)}) THEN #{direction_sql}
-          WHEN #{label_sql} = '#{TRANSFER_LABEL}' AND entries.entryable_type = 'Trade'
-            THEN CASE WHEN #{security_transfer_counterpart_in_scope_sql} THEN 'internal' ELSE #{direction_sql} END
-          WHEN #{label_sql} = '#{TRANSFER_LABEL}' THEN #{transfer_resolution_sql}
-          WHEN entries.entryable_type = 'Trade' THEN 'internal'
-          WHEN transactions.kind IN (#{quote_list(Transaction::TRANSFER_KINDS)}) THEN #{transfer_resolution_sql}
-          ELSE #{direction_sql}
-        END
-      SQL
-      { scope_account_ids: scope_account_ids }
-    ])
+    <<~SQL.squish
+      CASE
+        WHEN entries.excluded THEN NULL
+        WHEN entries.entryable_type NOT IN ('Trade', 'Transaction') THEN NULL
+        WHEN entries.entryable_type = 'Transaction' AND (#{pending_sql}) THEN NULL
+        WHEN transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard' THEN 'fee'
+        WHEN #{label_sql} IN (#{quote_list(INCOME_LABELS)}) THEN 'income'
+        WHEN #{label_sql} IN (#{quote_list(FEE_LABELS)}) THEN 'fee'
+        WHEN #{label_sql} IN (#{quote_list(INTERNAL_LABELS)}) THEN 'internal'
+        WHEN #{label_sql} IN (#{quote_list(EXTERNAL_LABELS)}) THEN #{direction_sql}
+        WHEN #{label_sql} = '#{TRANSFER_LABEL}' AND entries.entryable_type = 'Trade'
+          THEN CASE WHEN #{security_transfer_counterpart_in_scope_sql} THEN 'internal' ELSE #{direction_sql} END
+        WHEN #{label_sql} = '#{TRANSFER_LABEL}' THEN #{transfer_resolution_sql}
+        WHEN entries.entryable_type = 'Trade' THEN 'internal'
+        WHEN transactions.kind IN (#{quote_list(Transaction::TRANSFER_KINDS)}) THEN #{transfer_resolution_sql}
+        ELSE #{direction_sql}
+      END
+    SQL
   end
 
   private
@@ -246,7 +240,7 @@ class Portfolio::FlowClassifier
     end
 
     def transfer_resolution_sql
-      "CASE WHEN flow_counterpart_entries.account_id = ANY(ARRAY[:scope_account_ids]::uuid[]) THEN 'internal' ELSE #{direction_sql} END"
+      "CASE WHEN flow_counterpart_entries.account_id = ANY(#{scope_ids_sql}) THEN 'internal' ELSE #{direction_sql} END"
     end
 
     def security_transfer_counterpart_in_scope_sql
@@ -257,7 +251,7 @@ class Portfolio::FlowClassifier
           JOIN trades counterpart_trades
             ON counterpart_trades.id = counterpart_entries.entryable_id
             AND counterpart_entries.entryable_type = 'Trade'
-          WHERE counterpart_entries.account_id = ANY(ARRAY[:scope_account_ids]::uuid[])
+          WHERE counterpart_entries.account_id = ANY(#{scope_ids_sql})
             AND counterpart_entries.account_id <> entries.account_id
             AND counterpart_entries.date = entries.date
             AND counterpart_entries.excluded = false
@@ -268,11 +262,45 @@ class Portfolio::FlowClassifier
       SQL
     end
 
-    # Same providers and flag as Transaction#pending? and Transaction.pending.
+    # Same providers and the same truth test as Transaction#pending?, which
+    # casts the stored flag with ActiveModel::Type::Boolean: anything present
+    # is pending unless it is one of that type's false values.
+    #
+    # Deliberately not `::boolean`, which the rest of the app uses. A cast
+    # disagrees with the Ruby side on the values PostgreSQL accepts but
+    # ActiveModel does not ('no' is false to PostgreSQL and true to
+    # ActiveModel), and it raises PG::InvalidTextRepresentation on anything it
+    # cannot parse at all -- which would take out a whole daily query, not one
+    # entry, once a later drop embeds this CASE in one. Providers write real
+    # booleans today; this keeps the two forms equal (P20) whatever arrives.
+    # ActiveModel::Type::Boolean's false values, plus the empty string, which
+    # that type answers outside FALSE_VALUES (it casts "" to nil, and nil is
+    # not pending).
+    FALSE_FLAG_VALUES = (ActiveModel::Type::Boolean::FALSE_VALUES.grep(String) + [ "" ]).uniq.freeze
+
     def pending_sql
+      false_list = quote_list(FALSE_FLAG_VALUES)
+
       Transaction::PENDING_PROVIDERS
-        .map { |provider| "(transactions.extra -> '#{provider}' ->> 'pending')::boolean = true" }
+        .map do |provider|
+          flag = "(transactions.extra -> '#{provider}' ->> 'pending')"
+          "(#{flag} IS NOT NULL AND #{flag} NOT IN (#{false_list}))"
+        end
         .join(" OR ")
+    end
+
+    # The one bound value in the whole expression, sanitized on its own and
+    # then written into the CASE as a literal.
+    #
+    # The alternative -- handing the finished CASE to sanitize_sql_array with
+    # a named bind -- makes Rails scan a string that already contains every
+    # label literal for `:name` placeholders, so the day a label carries a
+    # colon ("Fee:Broker") it raises PreparedStatementInvalid before the
+    # query runs, taking out whatever the CASE was embedded in.
+    def scope_ids_sql
+      @scope_ids_sql ||= ActiveRecord::Base.sanitize_sql_array(
+        [ "ARRAY[:scope_account_ids]::uuid[]", { scope_account_ids: scope_account_ids } ]
+      )
     end
 
     def quote_list(values)
