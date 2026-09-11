@@ -12,13 +12,11 @@ class Loan
   # payment the simulator did not choose -- and that belongs with the change
   # that introduces it, not as unreachable state carried in advance.
   class SimulationResult
-    attr_reader :payments, :total_interest, :total_cost
+    attr_reader :payments, :total_interest
 
     def initialize(payments:, currency_precision:)
       @payments = deep_freeze(payments)
       @total_interest = @payments.sum(BigDecimal("0")) { |p| p[:interest_payment] }
-        .round(currency_precision).freeze
-      @total_cost = @payments.sum(BigDecimal("0")) { |p| p[:payment_amount] }
         .round(currency_precision).freeze
       freeze
     end

@@ -128,7 +128,7 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal({ "2026-04-01" => "8.25" }, loan.variable_rate_schedule)
   end
 
-  test "blank and unparseable rows are dropped rather than raising" do
+  test "blank and unparseable rows are kept out of the schedule without raising" do
     loan = build_loan(rate_type: "variable")
 
     loan.rate_changes = [
