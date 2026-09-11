@@ -86,16 +86,21 @@ class Loan
         period.nil? || period.key.to_s == "all_time"
       end
 
+      # Memoised, as is domain_end: visible? and table_rows read the domain for
+      # every point, and a loan with no start date finds its origination through
+      # the account's first valuation, which is a lookup each time it is asked.
       def domain_start
-        whole_life? ? loan.origination_date : period.start_date
+        @domain_start ||= whole_life? ? loan.origination_date : period.start_date
       end
 
       # Under "All", far enough to hold every line: the contract's payoff and
       # the projection's, whichever is later, and never before today.
       def domain_end
-        return period.end_date unless whole_life?
-
-        [ schedule.payoff_date, projection.payoff_date, as_of ].compact.max
+        @domain_end ||= if whole_life?
+          [ schedule.payoff_date, projection.payoff_date, as_of ].compact.max
+        else
+          period.end_date
+        end
       end
 
       # Recorded balances from the domain's start to today, or to the period's

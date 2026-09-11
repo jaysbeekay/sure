@@ -233,7 +233,47 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
   end
 
 
+  # jjmata on we-promise/sure#3474: the domain was recomputed for every plotted
+  # point and table row, and for a loan with no start date each computation
+  # looked origination up again -- about 4,400 statements for one page under
+  # All. The work a payload does must not grow with the length of the schedule.
+  test "building the payload does not repeat its lookups per scheduled payment" do
+    short = build_undated_loan(term_months: 24)
+    long = build_undated_loan(term_months: 360)
+
+    short_count = sql_statements { Loan::PayoffChart.new(short, as_of: @today, period: @all_time).payload }
+    long_count = sql_statements { Loan::PayoffChart.new(long, as_of: @today, period: @all_time).payload }
+
+    assert_equal short_count, long_count,
+      "a 360-payment schedule ran #{long_count} statements where a 24-payment one ran #{short_count}"
+  end
+
   private
+    # Every statement, including those the query cache answers: a cached
+    # lookup still builds its relation and records.
+    def sql_statements(&block)
+      count = 0
+      counter = ->(*, payload) { count += 1 unless payload[:name] == "SCHEMA" }
+      ActiveSupport::Notifications.subscribed(counter, "sql.active_record", &block)
+      count
+    end
+
+    # A loan with no recorded start date, as a loan created before the field
+    # existed has: origination falls back to the account's first valuation.
+    def build_undated_loan(term_months:)
+      account = Account.create!(
+        family: @family, name: "Undated Loan #{SecureRandom.hex(4)}",
+        balance: 500_000, currency: "USD",
+        accountable: Loan.new(subtype: "mortgage", interest_rate: 6, term_months: term_months, rate_type: "fixed")
+      )
+      account.entries.create!(
+        date: Date.new(2026, 1, 1), name: "Opening balance", amount: 500_000, currency: "USD",
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      record_balances(account)
+      account.loan
+    end
+
     def build_loan(rate_type: "fixed")
       account = Account.create!(
         family: @family, name: "Loan #{SecureRandom.hex(4)}",
