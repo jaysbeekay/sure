@@ -2,9 +2,13 @@
 # Open the pull request for the current up/* delivery branch, from one body
 # template (docs/upstream/pr-body.md) filled in with the branch's commits.
 #
-#   bin/upstream-pr fork --title "..."                  # fork PR against mirror/upstream-main: CI and bots first
-#   bin/upstream-pr upstream --title "..." --fixes 3295 # DRAFT PR on we-promise/sure, once the fork PR is green
-#   ... --dry-run                                       # print the body and the gh command, create nothing
+# Run it by path from the fork's main checkout while the delivery branch is
+# checked out in a worktree: the branch is rooted at upstream main and does
+# not carry this script or its template.
+#
+#   ../sure/bin/upstream-pr fork --title "..."                  # fork PR against mirror/upstream-main: CI and bots first
+#   ../sure/bin/upstream-pr upstream --title "..." --fixes 3295 # DRAFT PR on we-promise/sure, once the fork PR is green
+#   ... --dry-run                                               # print the body and the gh command, create nothing
 #
 # See docs/llm-guides/upstream-delivery.md.
 set -euo pipefail
@@ -16,7 +20,7 @@ while [ $# -gt 0 ]; do
     --title) title="$2"; shift 2 ;;
     --fixes) fixes="$2"; shift 2 ;;
     --dry-run) dry=1; shift ;;
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
     *) echo "upstream-pr: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -35,16 +39,37 @@ case "$branch" in
 esac
 
 git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/we-promise/sure.git
-git fetch -q --no-tags upstream main
+git fetch -q --no-tags upstream main origin mirror/upstream-main
 fork="$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
 owner="${fork%%/*}"
+
+# The template lives beside this script in the fork's main checkout, not on
+# the delivery branch.
+template="$(cd "$(dirname "$0")/.." && pwd)/docs/upstream/pr-body.md"
+[ -f "$template" ] || { echo "upstream-pr: $template not found; run this script from the fork's main checkout" >&2; exit 2; }
+
+if [ "$target" = fork ]; then
+  # A fork PR is only a rehearsal of the upstream one while the mirror is at
+  # upstream main. The nightly refresh can lag; bring it up now if it does.
+  mirror="$(git rev-parse --verify -q refs/remotes/origin/mirror/upstream-main || true)"
+  if [ "$mirror" != "$(git rev-parse upstream/main)" ]; then
+    echo "mirror/upstream-main is behind upstream/main; refreshing it"
+    git push origin refs/remotes/upstream/main:refs/heads/mirror/upstream-main ${mirror:+--force-with-lease=refs/heads/mirror/upstream-main:$mirror}
+  fi
+  if ! git merge-base --is-ancestor upstream/main HEAD; then
+    echo "upstream-pr: $branch is not rebased on upstream/main; run bin/upstream-rebase first" >&2; exit 2
+  fi
+fi
 
 commits="$(git log --reverse --format='- %h %s' upstream/main..HEAD)"
 files="$(git diff --stat upstream/main...HEAD | tail -1)"
 fixes_line="Fixes we-promise/sure#${fixes:-<issue>}"
-[ "$target" = fork ] && fixes_line="Fork pre-flight for the upstream PR (${fixes_line}); base is mirror/upstream-main, so the diff is exactly what upstream will see."
+[ "$target" = fork ] && fixes_line="Fork pre-flight for the upstream PR (${fixes_line}); base is mirror/upstream-main at the same commit as upstream main, so the diff is what upstream will see."
 
-body="$(sed -e "s|{{FIXES}}|$fixes_line|" -e "s|{{FILES}}|$files|" docs/upstream/pr-body.md)"
+# Parameter expansion, not sed: the values can carry any character.
+body="$(cat "$template")"
+body="${body//\{\{FIXES\}\}/$fixes_line}"
+body="${body//\{\{FILES\}\}/$files}"
 body="${body//\{\{COMMITS\}\}/$commits}"
 
 if [ "$target" = fork ]; then

@@ -24,8 +24,13 @@
 
 ## Verification
 
-- `bin/rails test <paths>`:
-- `bin/rubocop`, `bundle exec erb_lint`, `npm run lint`, `bin/brakeman`: clean
+<!-- Paste the results; do not claim a check that was not run. -->
+
+- `bin/rails test <paths>`: <runs, failures>
+- `bin/rubocop`: <result>
+- `bundle exec erb_lint`: <result>
+- `npm run lint`: <result>
+- `bin/brakeman`: <result>
 
 ## Blast radius
 

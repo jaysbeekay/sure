@@ -4,29 +4,43 @@ One branch, two pull requests, ordinary commits. This replaces the
 squash-and-rebuild flow the loan chart went through (`docs/plans/loan-chart-upstream-delivery.md`),
 which cost a rebuild, a hand-applied diff and a force-push for every review round.
 
+## Layout
+
+The tooling (`bin/upstream-*`, `docs/upstream/pr-body.md`) is fork-only, and a delivery branch
+is rooted at upstream `main`, so the branch does not carry it. Keep fork `main` checked out in
+the primary clone (`sure/`) and put each delivery branch in a worktree beside it; run the tools
+by path from the worktree. Once:
+
+```bash
+git remote add upstream https://github.com/we-promise/sure.git
+```
+
 ## The flow
 
 1. **Branch from upstream, not from fork `main`.** Fork `main` carries work that is not
-   going upstream. `git fetch upstream main && git checkout -b up/<feature> upstream/main`.
-   The `up/` prefix is what the scripts below key on.
+   going upstream.
+   `git fetch upstream main && git worktree add ../up-<feature> -b up/<feature> upstream/main && cd ../up-<feature>`.
+   The `up/` prefix is what the scripts key on.
 2. **Open the fork PR first**, against `mirror/upstream-main`:
-   `bin/upstream-pr fork --title "..."`. The mirror is refreshed from we-promise/sure `main`
-   every night (`.github/workflows/mirror-upstream.yml`), so the fork PR's diff is exactly the
-   diff upstream will see, and this fork's CI and review bots run on it.
+   `../sure/bin/upstream-pr fork --title "..."`. The mirror is refreshed from we-promise/sure
+   `main` every night (`.github/workflows/mirror-upstream.yml`), and the script refreshes it
+   again if it lags and refuses a branch that is not rebased on upstream `main`, so the fork
+   PR's diff is the diff upstream will see, and this fork's CI and review bots run on it.
 3. **When it is green, open the upstream PR from the same branch**, as a draft:
-   `bin/upstream-pr upstream --title "..." --fixes <upstream issue>`. The body comes from
-   `docs/upstream/pr-body.md`; fill in demo data, screenshots and migration notes before taking
-   it out of draft, because maintainers ask for all three.
+   `../sure/bin/upstream-pr upstream --title "..." --fixes <upstream issue>`. The body comes
+   from `docs/upstream/pr-body.md`; fill in demo data, screenshots, migration notes and the
+   verification results before taking it out of draft, because maintainers ask for all of them
+   and the template claims nothing on your behalf.
 4. **Answer review with commits, not replacements.** Push fix commits to `up/<feature>`. Both
    PRs update; a reviewer's thread stays attached to the line it was on, and the bots review the
    increment. Upstream squash-merges, so the commit list on the branch is not what lands.
    Reply on a thread with one line naming the commit; leave resolving to the maintainer.
 5. **Rebase only when you must**: a conflict with `main`, or a maintainer asking, or right
-   before merge. `bin/upstream-rebase <test paths>` rebases onto `upstream/main`, lints the
-   files the branch changes, and runs the tests you name.
+   before merge. `../sure/bin/upstream-rebase <test paths>` rebases onto `upstream/main`, lints
+   the files the branch changes, and runs the tests you name.
 6. **A stacked change** branches from the parent's `up/` branch and carries the parent's commits
    until the parent's upstream PR merges; say so in the body. Then
-   `bin/upstream-rebase --onto up/<parent> <test paths>` drops them.
+   `../sure/bin/upstream-rebase --onto up/<parent> <test paths>` drops them.
 7. **Sync fork `main` weekly**: `bin/upstream-sync` opens the merge PR. Rebase open `up/*`
    branches after it merges so conflicts stay small.
 
