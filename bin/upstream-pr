@@ -39,7 +39,8 @@ case "$branch" in
 esac
 
 git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/we-promise/sure.git
-git fetch -q --no-tags upstream main origin mirror/upstream-main
+git fetch -q --no-tags upstream main
+git fetch -q --no-tags origin mirror/upstream-main || true
 fork="$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
 owner="${fork%%/*}"
 
