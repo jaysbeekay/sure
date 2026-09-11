@@ -93,6 +93,23 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal BigDecimal("9.5"), loan.current_variable_rate(Date.new(2026, 7, 1))
   end
 
+  # One reader of the column. `RateResolver` used to re-parse what
+  # `variable_rates` had already sorted by, so the two read paths returned
+  # different types for the same rows, and a parsing fix could land in one
+  # and not the other.
+  test "variable_rates is the one parsed reading of the column, dated and decimal" do
+    loan = build_loan(
+      rate_type: "variable",
+      variable_rate_schedule: { "2026-07-01" => "9.5", "2026-04-01" => "18.0" }
+    )
+
+    assert_equal [ [ Date.new(2026, 4, 1), BigDecimal("18.0") ], [ Date.new(2026, 7, 1), BigDecimal("9.5") ] ],
+      loan.variable_rates
+    assert_equal [ Date, BigDecimal ], loan.variable_rates.first.map(&:class)
+    assert_equal [ { effective_date: "2026-04-01", rate: "18.0" }, { effective_date: "2026-07-01", rate: "9.5" } ],
+      loan.rate_change_rows, "the form still renders what was stored"
+  end
+
   test "a fixed loan ignores any rate changes recorded against it" do
     loan = build_loan(rate_type: "fixed", variable_rate_schedule: { "2026-04-01" => "18.0" })
 

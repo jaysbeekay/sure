@@ -34,8 +34,7 @@ class Loan
     def accrual_rate_for(date)
       return loan.interest_rate unless loan.variable_rate_type?
 
-      rate = rate_changes.reverse_each.find { |effective_date, _| effective_date <= date }&.last
-      rate.nil? ? loan.interest_rate : BigDecimal(rate.to_s)
+      rate_changes.reverse_each.find { |effective_date, _| effective_date <= date }&.last || loan.interest_rate
     end
 
     # Every recorded change falling inside [from_date, to_date], as the
@@ -54,12 +53,13 @@ class Loan
     private
       attr_reader :loan
 
-      # The recorded changes as [Date, rate] pairs, oldest first, parsed once.
-      # The simulator asks for a rate up to three times a period over as many
-      # as 1,200 periods; reparsing and re-sorting the column each time is the
-      # kind of cost that only shows up on the longest loans.
+      # Loan#variable_rates, read once. The simulator asks for a rate up to
+      # three times a period over as many as 1,200 periods; reparsing and
+      # re-sorting the column each time is the kind of cost that only shows up
+      # on the longest loans. Parsing stays in Loan, so this reader and that one
+      # cannot drift apart.
       def rate_changes
-        @rate_changes ||= loan.variable_rates.map { |date, rate| [ Date.iso8601(date.to_s), rate ] }
+        @rate_changes ||= loan.variable_rates
       end
   end
 end

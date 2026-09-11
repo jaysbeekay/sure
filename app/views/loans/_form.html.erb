@@ -38,9 +38,14 @@
       <p class="text-xs text-secondary"><%= t("loans.form.start_date_hint") %></p>
 
       <div class="flex items-center gap-2">
+        <%# Bounded here rather than validated on Loan: PlaidAccount::Liabilities::StudentLoanProcessor
+            writes this column from provider dates, and a term the simulator will not walk is
+            answered tolerantly there (no schedule, as for an unknown rate type). %>
         <%= loan_form.number_field :term_months,
                                  label: t("loans.form.term_months"),
-                                 placeholder: t("loans.form.term_months_placeholder") %>
+                                 placeholder: t("loans.form.term_months_placeholder"),
+                                 min: 1,
+                                 max: Loan::Simulator::MAX_PERIODS %>
       </div>
 
       <%# Rate changes only mean something for a loan whose rate can move. The
