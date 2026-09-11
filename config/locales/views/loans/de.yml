@@ -31,6 +31,7 @@ de:
       interest_rate: Zinssatz
       monthly_payment: Monatliche Zahlung
       not_applicable: Nicht zutreffend
+      original_payoff_date: Ursprüngliches Ablösedatum
       original_principal: Ursprünglicher Kreditbetrag
       remaining_principal: Verbleibender Kreditbetrag
       term: Laufzeit
@@ -46,7 +47,6 @@ de:
         monthly_payment: Monatsrate
         number: "Nr."
         payment: Rate
-        payoff_date: Ablösedatum
         principal: Tilgung
         remaining_balance: Restschuld
         total_cost: Gesamtkosten
@@ -56,6 +56,7 @@ de:
         interest_rate: Zinssatz
         monthly_payment: Monatsrate
         not_applicable: "–"
+        original_payoff_date: Ursprüngliches Ablösedatum
         original_principal: Ursprüngliche Kreditsumme
         remaining_principal: Restschuld
         term: Laufzeit
