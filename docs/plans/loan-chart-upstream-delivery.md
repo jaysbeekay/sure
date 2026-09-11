@@ -8,10 +8,10 @@
 > **Status 2026-09-11.** we-promise/sure#2984 merged on 2026-09-09 (`6c1c8eeec`), and Path A of §8
 > was carried out that day. Both upstream pull requests are **open and not merged**:
 >
-> - PR-1, **we-promise/sure#3473**. A maintainer requested changes on 2026-09-09 (add demo data,
->   and screenshots); the demo data and screenshots went up on 2026-09-11. On 2026-09-11 a
->   maintainer also merged upstream `main` into the branch from the PR page, which the next rebuild
->   superseded.
+> - PR-1, **we-promise/sure#3473**, is **a draft again**: it went back to draft on 2026-09-11, and a
+>   maintainer's changes-requested review from 2026-09-09 (add demo data, and screenshots) still
+>   stands. The demo data and screenshots went up on 2026-09-11. That day a maintainer also merged
+>   upstream `main` into the branch from the PR page, which the next rebuild superseded.
 > - PR-2, **we-promise/sure#3474**, is out of draft, still carrying PR-1's commit.
 >
 > we-promise/sure#3296 is closed with the comment §8 specifies; #3332's body is Appendix A.
@@ -107,8 +107,9 @@ The 11 files: `app/components/UI/account_page.rb`, `app/models/loan.rb`,
 with `base/upstream-2984`, never with this fork's `main`, whose loan files are the fork's own engine
 and differ by design.
 
-PR-1 opened as we-promise/sure#3473 and PR-2 as we-promise/sure#3474 (as a draft; both are out of
-draft since); we-promise/sure#3296 is closed. The one conflict between the PR-2
+PR-1 opened as we-promise/sure#3473 and PR-2 as we-promise/sure#3474 (as a draft). #3474 has been
+out of draft since; #3473 went back to draft on 2026-09-11 under the maintainer's changes-requested
+review. we-promise/sure#3296 is closed. The one conflict between the PR-2
 branch and upstream `main` is `app/components/UI/account/chart.html.erb`, where upstream #2733
 added `data-time-series-chart-selectable-value="true"` to the block PR-2 moves into its `else`
 branch; the rebuild carries the attribute into that branch.
@@ -137,10 +138,14 @@ Develop on the two existing PR branches, not on the candidate:
 - PR-1 work → `feat/loan-amortisation-engine` (PR #109, base `base/upstream-2984`)
 - PR-2 work → `feat/mvp-payoff-chart` (PR #111, base `feat/loan-amortisation-engine`)
 
-Both PRs are open on the fork, out of draft since their review rounds began, and are not merged
-until their exit criteria (§6.3, §7.6) are met; CI, cubic, Codacy and CodeRabbit run there. The
-candidate is rebuilt from their heads (§5) only when both are ready, and is what gets pushed
-upstream. Request `@coderabbitai full review` on each after the last push; automatic review does
+Both PRs are open on the fork, out of draft since their review rounds began, and are **never
+merged**. #109's base is the frozen `base/upstream-2984`: merging it would move that base to
+#109's head and leave PR-1's squash in §5 empty. #111's base is #109's branch: merging it would put
+PR-2 inside PR-1. Their exit criteria (§6.3, §7.6) gate the upstream PRs, not a fork merge. CI,
+cubic, Codacy and CodeRabbit run there. The candidate is rebuilt from their heads (§5) only when
+both are ready, and is what gets pushed upstream. When #3473 and #3474 merge upstream, or close,
+close #109 and #111 unmerged with a link to the upstream outcome, and start §9.
+Request `@coderabbitai full review` on each after the last push; automatic review does
 not run on drafts or on non-default base branches.
 
 ## 5. Step 0: rebuild the candidate from the PR heads
@@ -160,9 +165,17 @@ read -r CANDIDATE PR1 PR2 <<< "$(git ls-remote origin refs/heads/mvp/upstream-ca
 git checkout -B mvp/upstream-candidate upstream/main
 # commit 1: PR-1, squashed. Without --reject, `git apply` is all-or-nothing: if upstream `main`
 # has moved under these files it applies nothing, exits non-zero and leaves the tree clean.
-# Stop there, and do not add --reject to force it. Bring the fork branches up to date with
-# upstream `main` first (merge into #109, then into #111, push), then restart from the checkout.
+# Do not add --reject to force it, and do NOT merge upstream `main` into #109/#111 to catch up:
+# the patch is diffed from the frozen base, which upstream `main` differs from in hundreds of
+# files, so after that merge the patch carries all of them and fails worse. Retry with --3way
+# (the commented line below), which merges each file against its base blob and marks only real
+# conflicts. Once upstream has added a migration, expect exactly one: the version line of
+# db/schema.rb; PR-1's two loan columns merge cleanly (observed 2026-09-11). Keep the LATER
+# version, `git add db/schema.rb`, and check `git diff upstream/main -- db/schema.rb` shows only
+# the two columns (plus the version line if PR-1's migration is the newer). Any other conflicted
+# file is new drift: `git reset --hard` and investigate before going on.
 git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index
+# on failure: git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index --3way
 git commit -m "feat(loans): amortisation engine and variable-rate loans
 
 Fixes we-promise/sure#3295"
@@ -178,7 +191,10 @@ git show origin/feat/mvp-payoff-chart:app/components/UI/account/chart.html.erb >
 git add -A && git commit -m "feat(loans): payoff projection and the loan balance chart
 
 Fixes we-promise/sure#3332"
-bin/rails test test/models/loan test/models/loan_test.rb test/models/plaid_account/liabilities/mortgage_processor_test.rb test/controllers/loans_controller_test.rb test/controllers/accounts_controller_test.rb test/components/UI/account test/i18n_test.rb
+# PR-1 changes AccountableResource#update, the edit action every account type shares, so every
+# account type's controller test runs; the demo generator seeds loans, and the Plaid liability
+# processors write loan terms.
+bin/rails test test/models/loan test/models/loan_test.rb test/models/demo/generator_test.rb test/models/plaid_account/liabilities test/controllers/{credit_cards,cryptos,depositories,investments,loans,other_assets,other_liabilities,properties,vehicles,accounts}_controller_test.rb test/components/UI/account test/i18n_test.rb
 DISABLE_PARALLELIZATION=true bin/rails test test/system/loan_payoff_chart_test.rb
 bin/rubocop && bundle exec erb_lint ./app/**/*.erb && npm run lint && bin/brakeman --no-pager
 # A bare --force-with-lease protects nothing here: it compares against the remote-tracking ref
@@ -340,8 +356,9 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 > **Executed 2026-09-09 via Path A.** #2984 had merged, so the candidate was rebuilt on upstream
 > `main` (§5) and PR-1 opened as we-promise/sure#3473 from `upstream/loan-amortisation-engine`;
 > PR-2 opened as a draft, we-promise/sure#3474, from `upstream/loan-balance-chart`, with its
-> body stating that its diff includes PR-1's commit until #3473 merges; both are out of draft
-> since. #3296 closed with the comment below. The text that follows is kept as the rationale;
+> body stating that its diff includes PR-1's commit until #3473 merges. #3474 has been out of
+> draft since; #3473 went back to draft on 2026-09-11. #3296 closed with the comment below. The
+> text that follows is kept as the rationale;
 > where it says to wait for PR-1 before opening PR-2, see "Exception taken" at the end of this
 > section.
 
