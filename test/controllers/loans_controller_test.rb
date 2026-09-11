@@ -145,7 +145,12 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     get account_path(@account, tab: "schedule")
     flat_body = response.body
 
-    @account.loan.update!(variable_rate_schedule: { "2027-01-01" => "18.0" })
+    # A year into the 24-month term, whatever today is. The fixture loan has no
+    # start_date, so its origination moves with the clock; a fixed date would
+    # fall before the first payment once the calendar passed it, and the
+    # schedule would stop re-amortising.
+    change_date = @account.loan.origination_date >> 12
+    @account.loan.update!(variable_rate_schedule: { change_date.iso8601 => "18.0" })
     get account_path(@account, tab: "schedule")
 
     assert_response :success
@@ -197,13 +202,12 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
       } }
     }
 
+    # Asserted on the response, not on a Loan rebuilt in the test: a redirect
+    # with the schedule untouched would otherwise pass.
+    assert_response :unprocessable_entity
     assert_equal({ "2026-04-01" => "7.25" }, @account.loan.reload.variable_rate_schedule,
       "a rejected submission must not alter the persisted schedule")
-    loan = @account.loan
-    loan.rate_changes = [ { effective_date: "", rate: "9" } ]
-    assert_not loan.valid?
-    assert_equal [ { effective_date: "", rate: "9" } ], loan.invalid_rate_changes
-    assert_includes loan.rate_change_rows, { effective_date: "", rate: "9" },
+    assert_select "input[name='account[accountable_attributes][rate_changes][][rate]'][value='9']", { count: 1 },
       "the typed row comes back so the form can redisplay it"
   end
 
