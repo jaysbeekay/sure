@@ -3,19 +3,19 @@
 **Tracker:** [#100](https://github.com/jaysbeekay/sure/issues/100) (the single open issue on this fork)
 · **Delivery vehicle:** [#107](https://github.com/jaysbeekay/sure/issues/107)
 · **Upstream issues:** we-promise/sure#3295 (engine + variable rates), we-promise/sure#3332 (projection + chart)
-· **Written:** 2026-09-08 · **Updated:** 2026-09-11 (every SHA in §1 re-read that day with `git ls-remote` and `gh pr view`)
+· **Written:** 2026-09-08 · **Updated:** 2026-09-11
 
 > **Status 2026-09-11.** we-promise/sure#2984 merged on 2026-09-09 (`6c1c8eeec`), and Path A of §8
 > was carried out that day. Both upstream pull requests are **open and not merged**:
 >
-> - PR-1, **we-promise/sure#3473**, is out of draft. A maintainer requested changes on 2026-09-09
->   (add demo data, and screenshots). Its head is `3bc468a7`, a merge of upstream `main` that a
->   maintainer made from the PR page on 2026-09-11, on top of our `73a7368f`.
-> - PR-2, **we-promise/sure#3474**, is out of draft; head `50960942`, still carrying PR-1's commit.
+> - PR-1, **we-promise/sure#3473**. A maintainer requested changes on 2026-09-09 (add demo data,
+>   and screenshots); the demo data and screenshots went up on 2026-09-11. On 2026-09-11 a
+>   maintainer also merged upstream `main` into the branch from the PR page, which the next rebuild
+>   superseded.
+> - PR-2, **we-promise/sure#3474**, is out of draft, still carrying PR-1's commit.
 >
 > we-promise/sure#3296 is closed with the comment §8 specifies; #3332's body is Appendix A.
-> **The upstream PRs are behind the fork.** #109 and #111 took another review round on 2026-09-11
-> (`352b9970`, `3a7dea21`) that no rebuild has carried yet (§5). §5's `a0a4627a` base is superseded.
+> Where each branch is *right now* is not recorded here; §1 says how to read it.
 
 This is the document an application developer executes. #100's body records *what* the chart
 does and the nine owner decisions behind it; this brief says *where* each piece is built, in
@@ -32,17 +32,23 @@ which pull request, against which branch, with which file, and what "done" means
 
 ## 1. Ground truth: branches and heads
 
-| Branch (on `jaysbeekay/sure`) | What it is | Head, verified 2026-09-11 |
+| Branch (on `jaysbeekay/sure`) | What it is | Where its head is read |
 | --- | --- | --- |
-| `base/upstream-2984` | `upstream/main` of 2026-09-04 with we-promise/sure#2984 vendored; the diff base for PR #109's squash. Not a rebase target any more: upstream `main` carries #2984 itself since 2026-09-09 | `45263aaf` |
-| `feat/loan-amortisation-engine` | PR #109 — engine port + variable rates (`Fixes #3295`); the reviewed source of PR-1 | `352b9970` |
-| `feat/mvp-payoff-chart` | PR #111 — projection + chart, stacked on #109 (`Fixes #3332`); the reviewed source of PR-2 | `3a7dea21` |
-| `upstream/loan-amortisation-engine` | **PR-1's branch, open as we-promise/sure#3473**: #109 at `2e680bb0` squashed to one commit, `73a7368f`, onto upstream `main` `1ab36dad`; then a maintainer's merge of upstream `main` | `3bc468a7` |
-| `upstream/loan-balance-chart` | **PR-2's branch, open as we-promise/sure#3474**: #111 at `901ff4c0` squashed to one commit on top of `73a7368f` | `50960942` |
-| `mvp/upstream-candidate` | the same two commits; identical to `upstream/loan-balance-chart` | `50960942` |
+| `base/upstream-2984` | `upstream/main` of 2026-09-04 with we-promise/sure#2984 vendored, frozen at `45263aaf`; the diff base for PR #109's squash. Not a rebase target any more: upstream `main` carries #2984 itself since 2026-09-09 | never moves |
+| `feat/loan-amortisation-engine` | PR #109 — engine port + variable rates (`Fixes #3295`); the reviewed source of PR-1 | `gh pr view 109 --json headRefOid` |
+| `feat/mvp-payoff-chart` | PR #111 — projection + chart, stacked on #109 (`Fixes #3332`); the reviewed source of PR-2 | `gh pr view 111 --json headRefOid` |
+| `upstream/loan-amortisation-engine` | **PR-1's branch, open as we-promise/sure#3473**: #109 squashed to one commit onto current upstream `main` | `gh pr view 3473 --repo we-promise/sure --json headRefOid` |
+| `upstream/loan-balance-chart` | **PR-2's branch, open as we-promise/sure#3474**: #111 squashed to one commit on top of PR-1's | `gh pr view 3474 --repo we-promise/sure --json headRefOid` |
+| `mvp/upstream-candidate` | the same two commits; identical to `upstream/loan-balance-chart` after every rebuild | `git ls-remote origin refs/heads/mvp/upstream-candidate` |
 
-A SHA in this table is a snapshot of active pull requests, not a contract. Re-read it before acting
-on it: `git ls-remote origin 'refs/heads/feat/*' 'refs/heads/upstream/*' refs/heads/mvp/upstream-candidate`.
+This table records no heads on purpose. Every earlier revision of it did, was described as
+"verified", and was wrong within hours, because a review round lands on a branch faster than a
+document can follow it. The commands in the last column are the ground truth; a SHA written here
+would only ever be a claim about the past. Read all of them at once with:
+
+```bash
+git ls-remote origin 'refs/heads/feat/*' 'refs/heads/upstream/*' refs/heads/mvp/upstream-candidate
+```
 
 The two `upstream/*` refs are force-pushed with lease on every rebuild (§5); each revision of a
 PR replaces its single commit rather than appending, and the PR thread says so.
@@ -147,6 +153,10 @@ leases added on 2026-09-11 after review:
 
 ```bash
 git fetch origin && git fetch upstream main
+# Record the heads the three pushes at the end are allowed to replace, NOW, after §1's "Keeping
+# the two sides in step" check and before anything is rebuilt. A commit that lands on any of them
+# while the rebuild runs then refuses the push instead of vanishing.
+read -r CANDIDATE PR1 PR2 <<< "$(git ls-remote origin refs/heads/mvp/upstream-candidate refs/heads/upstream/loan-amortisation-engine refs/heads/upstream/loan-balance-chart | awk '{print $1}' | tr '\n' ' ')"
 git checkout -B mvp/upstream-candidate upstream/main
 # commit 1: PR-1, squashed. Without --reject, `git apply` is all-or-nothing: if upstream `main`
 # has moved under these files it applies nothing, exits non-zero and leaves the tree clean.
@@ -172,10 +182,9 @@ bin/rails test test/models/loan test/models/loan_test.rb test/models/plaid_accou
 DISABLE_PARALLELIZATION=true bin/rails test test/system/loan_payoff_chart_test.rb
 bin/rubocop && bundle exec erb_lint ./app/**/*.erb && npm run lint && bin/brakeman --no-pager
 # A bare --force-with-lease protects nothing here: it compares against the remote-tracking ref
-# that the fetch above just refreshed, so it never refuses. Name the head each push expects to
-# replace -- §1's, after §1's "Keeping the two sides in step" check -- so a commit that arrived
-# since (as `3bc468a7` did on #3473) refuses the push instead of vanishing.
-CANDIDATE=50960942 PR1=3bc468a7 PR2=50960942   # §1's heads as of 2026-09-11; re-read before use
+# that the fetch above just refreshed, so it never refuses. Each push names the head it expects
+# to replace, captured at the top of this recipe, so a commit that arrived since (as a
+# maintainer's merge of `main` did on #3473 on 2026-09-11) refuses the push instead of vanishing.
 git push --force-with-lease=refs/heads/mvp/upstream-candidate:$CANDIDATE origin mvp/upstream-candidate
 git push --force-with-lease=refs/heads/upstream/loan-amortisation-engine:$PR1 origin HEAD~1:refs/heads/upstream/loan-amortisation-engine   # #3473
 git push --force-with-lease=refs/heads/upstream/loan-balance-chart:$PR2 origin HEAD:refs/heads/upstream/loan-balance-chart                 # #3474
