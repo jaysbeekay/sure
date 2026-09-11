@@ -131,7 +131,7 @@ class TransactionTest < ActiveSupport::TestCase
   test "every SQL pending predicate agrees with pending? on any stored flag" do
     account = families(:empty).accounts.create! name: "Pending parity", balance: 0, currency: "USD", accountable: Depository.new
 
-    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", 1, 0 ].each do |flag|
+    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", 1, 0, 0.0 ].each do |flag|
       transaction = create_transaction(account: account, amount: 10).entryable
       transaction.update!(extra: { "plaid" => { "pending" => flag } })
 

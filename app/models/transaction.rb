@@ -115,8 +115,9 @@ class Transaction < ApplicationRecord
   # COALESCE maps a missing flag or JSON null to "", a false value, so no
   # provider's term is ever NULL and NOT (...) is exact.
   #
-  # One known gap: a JSON number 0.0 is pending here ('0.0') but not to
-  # #pending? (0.0 == 0). No provider writes one.
+  # A JSON number 0.0 renders as '0.0' and is pending here; #pending? agrees,
+  # because FALSE_VALUES is a Set keyed by eql? and 0.0 is not eql? to 0. The
+  # parity test carries the case.
   def self.pending_sql(table_alias = "transactions")
     false_values = PENDING_FLAG_FALSE_VALUES.map { |value| "'#{value.gsub("'", "''")}'" }.join(", ")
 
