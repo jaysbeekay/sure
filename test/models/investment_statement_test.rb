@@ -791,7 +791,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       @statement.day_change
     end
 
-    holdings_queries = queries.grep(/DISTINCT ON \(holdings\.account_id, holdings\.security_id\)/)
+    holdings_queries = queries.grep(/DISTINCT ON \(holdings\.account_id, holdings\.security_id\) holdings\.id/)
     assert_equal 1, holdings_queries.size,
       "current_holdings should only run its DISTINCT ON query once per instance, not once per caller"
   end
@@ -1091,6 +1091,294 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     assert_equal 3, @statement.allocation.size
     assert_empty queries.grep(/FROM "trades"/), "Holding#trend must read the stored cost basis, not fall back to trades"
+  end
+
+  test "previous_holdings loads the prior snapshot of every holding in one query" do
+    ira = create_investment_account(balance: 5000)
+    taxable = create_investment_account(balance: 3000)
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    [ [ ira, aapl, 10 ], [ ira, msft, 5 ], [ taxable, aapl, 4 ] ].each do |account, security, qty|
+      Holding.create!(account: account, security: security, date: 2.days.ago.to_date, qty: qty, price: 100, amount: qty * 100, currency: "USD")
+      Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: qty, price: 110, amount: qty * 110, currency: "USD")
+      Holding.create!(account: account, security: security, date: Date.current, qty: qty, price: 120, amount: qty * 120, currency: "USD")
+    end
+    # A holding with no prior snapshot has no day change.
+    only_today = Security.create!(ticker: "NEW", name: "New")
+    Holding.create!(account: taxable, security: only_today, date: Date.current, qty: 1, price: 50, amount: 50, currency: "USD")
+
+    @statement.current_holdings.to_a
+    queries = capture_sql_queries { @statement.previous_holdings; @statement.day_change }
+    holdings_queries = queries.grep(/FROM "holdings"/)
+
+    assert_equal 1, holdings_queries.size, "previous snapshots must come from one query, not one per holding"
+
+    previous = @statement.previous_holdings
+    assert_equal 3, previous.size
+    assert_equal 1.day.ago.to_date, previous[[ ira.id, aapl.id ]].date
+    assert_nil previous[[ taxable.id, only_today.id ]]
+
+    # Same answer as the per-holding lookup, summed in family currency:
+    # today 19 * 120 = 2280 vs yesterday 19 * 110 = 2090.
+    day_change = @statement.day_change
+    assert_equal Money.new(2280, "USD"), day_change.current
+    assert_equal Money.new(2090, "USD"), day_change.previous
+    per_holding = @statement.current_holdings.filter_map { |h| h.day_change }
+    assert_equal per_holding.sum { |t| t.current.amount }, day_change.current.amount
+  end
+
+  test "value_series does not chart leading zeros before a linked account's first supported history" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+    account = create_investment_account(balance: 1000)
+    first_synced = 4.days.ago.to_date
+
+    # Balance rows exist for every day (zeros before the connection), and the
+    # first provider-sourced entry dates the real history.
+    (0..10).each { |offset| create_balance(account, date: 10.days.ago.to_date + offset, amount: offset >= 6 ? 1000 : 0) }
+    account.entries.create!(date: first_synced, name: "Deposit", amount: -1000, currency: "USD", source: "plaid", entryable: Transaction.new)
+
+    series = @statement.value_series(period: period)
+
+    assert_equal first_synced, series.values.first.date
+    assert series.values.none? { |v| v.date < first_synced }
+    assert_equal 1000, series.values.first.value.amount
+  end
+
+  test "holdings_table_rows measures a row's return over the positions whose cost basis is known" do
+    ira = create_investment_account(balance: 5000, cash_balance: 500)
+    taxable = create_investment_account(balance: 3000)
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    Holding.create!(account: ira, security: aapl, date: 1.day.ago.to_date, qty: 10, price: 190, amount: 1900, currency: "USD", cost_basis: 150, cost_basis_locked: true)
+    Holding.create!(account: ira, security: aapl, date: Date.current, qty: 10, price: 200, amount: 2000, currency: "USD", cost_basis: 150, cost_basis_locked: true)
+    # No stored basis and no trades in the second account, so Holding#avg_cost
+    # is nil there and that position is outside the row's return.
+    Holding.create!(account: taxable, security: aapl, date: Date.current, qty: 5, price: 200, amount: 1000, currency: "USD")
+    Holding.create!(account: ira, security: msft, date: Date.current, qty: 4, price: 500, amount: 2000, currency: "USD", cost_basis: 400, cost_basis_locked: true)
+
+    rows = @statement.holdings_table_rows
+
+    assert_equal %w[AAPL MSFT], rows.map(&:ticker)
+    aapl_row, msft_row = rows
+
+    assert_equal 2, aapl_row.accounts_count
+    assert_equal 15, aapl_row.qty
+    assert_equal Money.new(3000, "USD"), aapl_row.amount_money
+    assert aapl_row.missing_cost_basis, "one position has no known basis, so the row still warns"
+    # Partial credit, the rule the unrealised-gains KPI and combined_holding_trend
+    # already use (P28): cost and return cover the 10 shares whose basis is
+    # known (2000 now against 1500 cost), not the 5 that have none.
+    assert_equal Money.new(150, "USD"), aapl_row.avg_cost
+    assert_equal Money.new(2000, "USD"), aapl_row.unrealized.current
+    assert_equal Money.new(1500, "USD"), aapl_row.unrealized.previous
+    assert_equal Money.new(500, "USD"), aapl_row.unrealized.value
+    # Day change from the one position with a prior snapshot: 2000 vs 1900.
+    assert_equal Money.new(100, "USD"), aapl_row.day_change.value
+
+    assert_not msft_row.missing_cost_basis
+    assert_equal Money.new(400, "USD"), msft_row.avg_cost
+    assert_equal Money.new(400, "USD"), msft_row.unrealized.value
+    assert_nil msft_row.day_change
+    # Weights use the same denominator as top_holdings: max(8000, 5000).
+    assert_in_delta 37.5, aapl_row.weight, 0.01
+    assert_in_delta 25.0, msft_row.weight, 0.01
+  end
+
+  test "holdings_table_rows sorts by a whitelisted key and puts rows without the figure last" do
+    account = create_investment_account(balance: 6000)
+    with_basis = Security.create!(ticker: "BBB", name: "Beta")
+    without_basis = Security.create!(ticker: "AAA", name: "Alpha")
+    big = Security.create!(ticker: "CCC", name: "Gamma")
+
+    Holding.create!(account: account, security: with_basis, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD", cost_basis: 800, cost_basis_locked: true)
+    Holding.create!(account: account, security: without_basis, date: Date.current, qty: 1, price: 2000, amount: 2000, currency: "USD")
+    Holding.create!(account: account, security: big, date: Date.current, qty: 1, price: 3000, amount: 3000, currency: "USD", cost_basis: 3500, cost_basis_locked: true)
+
+    assert_equal %w[CCC AAA BBB], @statement.holdings_table_rows.map(&:ticker), "default is value desc"
+    assert_equal %w[BBB AAA CCC], @statement.holdings_table_rows(sort: "value", dir: "asc").map(&:ticker)
+    assert_equal %w[AAA BBB CCC], @statement.holdings_table_rows(sort: "name", dir: "asc").map(&:ticker)
+    assert_equal %w[CCC BBB AAA], @statement.holdings_table_rows(sort: "name", dir: "desc").map(&:ticker)
+    # Return: BBB +200, CCC -500, AAA unknown and therefore last both ways.
+    assert_equal %w[BBB CCC AAA], @statement.holdings_table_rows(sort: "return", dir: "desc").map(&:ticker)
+    assert_equal %w[CCC BBB AAA], @statement.holdings_table_rows(sort: "return", dir: "asc").map(&:ticker)
+    assert_equal %w[CCC AAA BBB], @statement.holdings_table_rows(sort: "drop table", dir: "sideways").map(&:ticker), "unknown keys fall back to the default"
+  end
+
+  test "holdings_table_rows issues no query per holding" do
+    account = create_investment_account(balance: 10_000)
+    5.times do |i|
+      security = Security.create!(ticker: "S#{i}", name: "Security #{i}")
+      Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: 1, price: 90, amount: 90, currency: "USD")
+      Holding.create!(account: account, security: security, date: Date.current, qty: 1, price: 100, amount: 100, currency: "USD", cost_basis: 80)
+    end
+    @statement.current_holdings.to_a
+
+    queries = capture_sql_queries { @statement.holdings_table_rows(sort: "day_change", dir: "desc") }
+
+    assert_equal 1, queries.grep(/FROM "holdings"/).size, "only the previous-snapshot query may run"
+    assert_empty queries.grep(/FROM "trades"|FROM "security_prices"/), "no cost-basis fallback or price lookups per row"
+  end
+
+  test "allocation_by groups the portfolio by account, currency and kind with weights summing to 100" do
+    usd = create_investment_account(balance: 3000, cash_balance: 1000, currency: "USD")
+    eur = create_investment_account(balance: 2000, cash_balance: -50, currency: "EUR")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+    stock = Security.create!(ticker: "AAPL", name: "Apple")
+    coin = Security.create!(ticker: "BTCUSD", name: "Bitcoin", exchange_operating_mic: Provider::BinancePublic::BINANCE_MIC)
+    cash_security = Security.cash_for(eur)
+
+    Holding.create!(account: usd, security: stock, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD")
+    Holding.create!(account: usd, security: coin, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+    Holding.create!(account: eur, security: stock, date: Date.current, qty: 5, price: 200, amount: 1000, currency: "EUR")
+    Holding.create!(account: eur, security: cash_security, date: Date.current, qty: 500, price: 1, amount: 500, currency: "EUR")
+
+    by_account = @statement.allocation_by(:account)
+    assert_equal [ usd.id, eur.id ].map(&:to_s), by_account.map(&:id)
+    assert_equal Money.new(3000, "USD"), by_account.first.amount
+    assert_in_delta 100.0, by_account.sum(&:weight), 0.01
+
+    by_currency = @statement.allocation_by("currency")
+    # USD: 1000 + 1000 holdings + 1000 cash = 3000; EUR: (1000 + 500) * 1.1 = 1650; negative EUR cash is omitted.
+    assert_equal %w[USD EUR], by_currency.map(&:id)
+    assert_equal Money.new(3000, "USD"), by_currency.first.amount
+    assert_in_delta 1650, by_currency.last.amount.amount, 0.001
+    assert_in_delta 100.0, by_currency.sum(&:weight), 0.01
+
+    by_kind = @statement.allocation_by(:kind)
+    # standard: 1000 + 1100; cash: 1000 + 550; crypto: 1000
+    assert_equal %w[standard cash crypto], by_kind.map(&:id)
+    assert_in_delta 2100, by_kind.first.amount.amount, 0.001
+    assert_in_delta 1550, by_kind.second.amount.amount, 0.001
+    assert_in_delta 100.0, by_kind.sum(&:weight), 0.01
+
+    by_security = @statement.allocation_by("nonsense")
+    assert_equal "cash", by_security.last.id, "an unknown grouping is the security roll-up, cash row included"
+    assert_in_delta 100.0, by_security.sum(&:weight), 0.01
+  end
+
+  test "every allocation grouping measures the same portfolio" do
+    # One account holding securities plus cash, one all-cash: the shape the
+    # groupings could disagree on, since account grouping reads balances and
+    # currency and kind read holdings plus each account's cash.
+    mixed = create_investment_account(balance: 10_000, cash_balance: 2_000)
+    create_investment_account(balance: 3_000, cash_balance: 3_000)
+    security = create_portfolio_security
+    Holding.create!(account: mixed, security: security, date: Date.current, qty: 80, price: 100, amount: 8_000, currency: "USD")
+
+    totals = InvestmentStatement::ALLOCATION_GROUPINGS.to_h do |by|
+      segments = @statement.allocation_by(by)
+      assert_in_delta 100.0, segments.sum(&:weight), 0.01, "#{by} weights must sum to 100"
+      [ by, segments.sum { |segment| segment.amount.amount } ]
+    end
+
+    assert_equal [ @statement.portfolio_value ], totals.values.uniq,
+      "every grouping must add up to the portfolio value: #{totals.inspect}"
+  end
+
+  test "data_quality_issues flags missing cost basis, stale prices and unhealthy providers" do
+    account = create_investment_account(balance: 5000)
+    as_of = Date.current
+    fresh = Security.create!(ticker: "FRESH", name: "Fresh")
+    stale = Security.create!(ticker: "STALE", name: "Stale")
+    unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
+    offline = Security.create!(ticker: "OFFL", name: "Offline", offline: true)
+    cash = Security.cash_for(account)
+
+    Security::Price.create!(security: fresh, date: as_of - 2.days, price: 10, currency: "USD")
+    Security::Price.create!(security: stale, date: as_of - 6.days, price: 10, currency: "USD")
+    Security::Price.create!(security: offline, date: as_of, price: 10, currency: "USD")
+
+    # fresh: stored basis. stale: no stored basis but a buy trade computes one.
+    # unpriced: nothing. moved: a buy plus a Transfer, which makes the cost
+    # unknown by Holding#calculate_avg_cost's rule.
+    moved = Security.create!(ticker: "MOVED", name: "Moved in")
+    Security::Price.create!(security: moved, date: as_of, price: 10, currency: "USD")
+    Holding.create!(account: account, security: fresh, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    Holding.create!(account: account, security: stale, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD")
+    create_portfolio_trade(account: account, security: stale, qty: 1, price: 9, date: as_of - 10.days)
+    Holding.create!(account: account, security: unpriced, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD")
+    Holding.create!(account: account, security: moved, date: as_of, qty: 2, price: 10, amount: 20, currency: "USD")
+    create_portfolio_trade(account: account, security: moved, qty: 1, price: 9, date: as_of - 10.days)
+    create_portfolio_trade(account: account, security: moved, qty: 1, price: 9, date: as_of - 9.days, label: "Transfer")
+    Holding.create!(account: account, security: offline, date: as_of, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    Holding.create!(account: account, security: cash, date: as_of, qty: 100, price: 1, amount: 100, currency: "USD")
+
+    issues = @statement.data_quality_issues(as_of: as_of)
+    by_kind = issues.group_by(&:kind).transform_values { |list| list.map { |i| i.security.ticker } }
+
+    assert_equal %w[MOVED NOPX], by_kind[:missing_cost_basis],
+      "a buy trade means the basis is computable (STALE is not flagged); a Transfer makes it unknown (MOVED is)"
+    assert_equal %w[NOPX STALE], by_kind[:stale_price]
+    assert_includes by_kind[:provider], "OFFL"
+    assert_not_includes issues.map { |i| i.security.ticker }, cash.ticker
+    assert_equal as_of - 6.days, issues.find { |i| i.kind == :stale_price && i.security == stale }.detail
+    assert_equal :offline, issues.find { |i| i.kind == :provider && i.security == offline }.detail
+  end
+
+  test "data_quality_issues issues a bounded number of queries" do
+    account = create_investment_account(balance: 5000)
+    6.times do |i|
+      security = Security.create!(ticker: "Q#{i}", name: "Q #{i}")
+      Holding.create!(account: account, security: security, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    end
+    @statement.current_holdings.to_a
+
+    queries = capture_sql_queries { @statement.data_quality_issues(as_of: Date.current) }
+    assert_operator queries.size, :<=, 3, "expected the cost-basis preload and latest prices queries only, got:\n#{queries.join("\n")}"
+  end
+
+  test "average costs are preloaded in one query and agree with Holding#calculate_avg_cost" do
+    account = create_investment_account(balance: 10_000, currency: "USD")
+    plain = create_portfolio_security
+    fx = create_portfolio_security
+    transferred = create_portfolio_security
+    unlabelled = create_portfolio_security
+    tradeless = create_portfolio_security
+    future_only = create_portfolio_security
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: 10.days.ago.to_date, rate: 1.2)
+
+    create_portfolio_trade(account: account, security: plain, qty: 10, price: 100, date: 10.days.ago.to_date)
+    create_portfolio_trade(account: account, security: plain, qty: 10, price: 120, date: 5.days.ago.to_date)
+    create_portfolio_trade(account: account, security: plain, qty: -5, price: 130, date: 3.days.ago.to_date)
+    # A EUR trade in a USD account: converted at the trade date's rate.
+    account.entries.create!(name: "EUR buy", date: 10.days.ago.to_date, amount: 500, currency: "EUR", entryable: Trade.new(qty: 5, price: 100, fee: 0, currency: "EUR", security: fx, investment_activity_label: "Buy"))
+    create_portfolio_trade(account: account, security: transferred, qty: 4, price: 50, date: 8.days.ago.to_date)
+    create_portfolio_trade(account: account, security: transferred, qty: 4, price: 60, date: 6.days.ago.to_date, label: "Transfer")
+    create_portfolio_trade(account: account, security: unlabelled, qty: 2, price: 30, date: 9.days.ago.to_date).entryable.update!(investment_activity_label: nil)
+    create_portfolio_trade(account: account, security: future_only, qty: 1, price: 999, date: Date.current)
+
+    [ plain, fx, transferred, unlabelled, tradeless, future_only ].each do |security|
+      Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: 1, price: 100, amount: 100, currency: "USD")
+    end
+
+    holdings = nil
+    queries = capture_sql_queries { holdings = @statement.holdings_with_avg_costs }
+    assert_equal 1, queries.grep(/FROM "trades"|JOIN trades/).size, "the fallback must be one query for every holding"
+
+    holdings.each do |holding|
+      expected = Holding.find(holding.id).send(:calculate_avg_cost)
+      actual = holding.avg_cost
+      if expected.nil?
+        assert_nil actual, holding.security.ticker
+      else
+        assert_in_delta expected.amount, actual.amount, 0.0001, holding.security.ticker
+        assert_equal expected.currency, actual.currency
+      end
+    end
+
+    by_ticker = holdings.index_by { |h| h.security.ticker }
+    assert_in_delta 110, by_ticker[plain.ticker].avg_cost.amount, 0.0001
+    assert_in_delta 120, by_ticker[fx.ticker].avg_cost.amount, 0.0001
+    assert_nil by_ticker[transferred.ticker].avg_cost, "a transfer makes the position's cost unknown"
+    assert_in_delta 30, by_ticker[unlabelled.ticker].avg_cost.amount, 0.0001
+    assert_nil by_ticker[tradeless.ticker].avg_cost
+    assert_nil by_ticker[future_only.ticker].avg_cost, "a trade after the holding date does not count"
+
+    # The KPI readers use the preloaded answers: no trades query of their own.
+    kpi_queries = capture_sql_queries { @statement.unrealized_gains; @statement.unrealized_gains_trend; @statement.top_holdings(limit: 5) }
+    assert_empty kpi_queries.grep(/FROM "trades"|JOIN trades/)
   end
 
   private

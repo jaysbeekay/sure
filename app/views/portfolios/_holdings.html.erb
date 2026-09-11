@@ -1,0 +1,146 @@
+<%# locals: (statement:, period:, as_of:, rows:, sort:, dir:, by:) %>
+
+<%#
+  One row per security across every account (P1), sorted by the statement
+  (P29). Every figure on a row comes from HoldingsTableRow: nothing here
+  calls Holding#avg_cost, #trend or #day_change, each of which issues a
+  query per holding, so the page's query count does not grow with rows.
+  A summary row reveals its per-account positions (D3), each with the
+  existing holding drawer, through the row-expander controller: a native
+  <details> cannot sit inside a table, and a table is what this is.
+%>
+<%
+  active_sort = sort.presence || "value"
+  active_dir = dir.presence || "desc"
+  columns = PortfoliosHelper::HOLDINGS_COLUMNS
+%>
+
+<div id="portfolio-holdings" class="bg-container-inset rounded-xl p-1 overflow-x-auto">
+  <table class="w-full min-w-[56rem] text-sm">
+    <thead>
+      <tr class="uppercase text-xs font-medium text-secondary">
+        <% columns.each do |key, label, align| %>
+          <%= tag.th scope: "col", class: "px-4 py-2 font-medium #{align}", aria: { sort: holdings_aria_sort(key, active_sort: active_sort, active_dir: active_dir) }.compact do %>
+            <% if key %>
+              <%= link_to holdings_sort_link(key, active_sort: active_sort, active_dir: active_dir, period: period, by: by),
+                    class: class_names("inline-flex items-center gap-1 hover:text-primary focus-ring rounded", "text-primary" => active_sort == key),
+                    data: { turbo_frame: "portfolio_sections" } do %>
+                <%= t("portfolios.holdings.columns.#{label}") %>
+                <% if active_sort == key %>
+                  <%= icon(active_dir == "asc" ? "chevron-up" : "chevron-down", size: "xs") %>
+                <% end %>
+              <% end %>
+            <% else %>
+              <%= t("portfolios.holdings.columns.#{label}") %>
+            <% end %>
+          <% end %>
+        <% end %>
+      </tr>
+    </thead>
+
+    <% rows.each do |row| %>
+      <% positions_id = "portfolio-positions-#{row.security.id}" %>
+      <tbody class="bg-container shadow-border-xs text-primary font-medium" data-controller="row-expander">
+        <tr data-portfolio-holding="<%= row.ticker %>" class="hover:bg-container-hover">
+          <td class="px-4 py-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <button type="button"
+                      class="shrink-0 text-secondary hover:text-primary focus-ring rounded"
+                      data-action="row-expander#toggle"
+                      aria-expanded="false"
+                      aria-controls="<%= positions_id %>"
+                      aria-label="<%= t("portfolios.holdings.toggle_positions", ticker: row.ticker) %>">
+                <%= icon("chevron-right", size: "sm", class: "transition-transform", data: { row_expander_target: "chevron" }) %>
+              </button>
+              <% if (logo = row.security.display_logo_url).present? %>
+                <%= image_tag logo, class: "w-8 h-8 rounded-full shrink-0", loading: "lazy", alt: row.ticker %>
+              <% else %>
+                <%= render DS::FilledIcon.new(variant: :text, text: row.name, size: "md", rounded: true) %>
+              <% end %>
+              <div class="min-w-0 space-y-0.5">
+                <p class="truncate"><%= row.name %></p>
+                <div class="flex items-center gap-2">
+                  <%= tag.p row.ticker, class: "text-secondary text-xs uppercase" %>
+                  <% if row.missing_cost_basis %>
+                    <span class="inline-flex items-center gap-1 text-xs text-warning" title="<%= t("portfolios.holdings.missing_cost_basis_hint") %>">
+                      <%= icon("info", size: "xs", color: "current") %>
+                      <%= t("portfolios.holdings.missing_cost_basis") %>
+                    </span>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+          </td>
+          <td class="px-4 py-3 text-right text-secondary"><%= row.accounts_count %></td>
+          <td class="px-4 py-3 text-right privacy-sensitive"><%= format_quantity(row.qty, exact: row.security.crypto?) %></td>
+          <td class="px-4 py-3 text-right privacy-sensitive">
+            <%= row.avg_cost ? format_money(row.avg_cost) : tag.span("—", class: "text-secondary") %>
+          </td>
+          <td class="px-4 py-3 text-right privacy-sensitive" data-portfolio-value><%= format_money(row.amount_money) %></td>
+          <td class="px-4 py-3">
+            <div class="flex justify-end items-center gap-2">
+              <%= render "shared/progress_circle", progress: row.weight %>
+              <%= number_to_percentage(row.weight, precision: 1) %>
+            </div>
+          </td>
+          <td class="px-4 py-3 text-right">
+            <% if row.unrealized %>
+              <p class="privacy-sensitive" style="color: <%= row.unrealized.color %>"><%= format_money(row.unrealized.value) %></p>
+              <p class="text-xs privacy-sensitive" style="color: <%= row.unrealized.color %>">(<%= row.unrealized.percent_formatted %>)</p>
+            <% else %>
+              <p class="text-secondary">—</p>
+              <p class="text-xs text-secondary"><%= t("portfolios.holdings.no_cost_basis") %></p>
+            <% end %>
+          </td>
+          <td class="px-4 py-3 text-right">
+            <% if row.day_change %>
+              <p class="privacy-sensitive" style="color: <%= row.day_change.color %>"><%= format_money(row.day_change.value) %></p>
+              <p class="text-xs privacy-sensitive" style="color: <%= row.day_change.color %>">(<%= row.day_change.percent_formatted %>)</p>
+            <% else %>
+              <p class="text-secondary">—</p>
+            <% end %>
+          </td>
+        </tr>
+
+        <tr id="<%= positions_id %>" hidden data-row-expander-target="row" data-portfolio-positions="<%= row.ticker %>">
+          <td colspan="<%= columns.size %>" class="px-4 pb-4 pl-14">
+            <table class="w-full text-sm bg-container-inset rounded-lg">
+              <caption class="sr-only"><%= t("portfolios.holdings.positions_caption", ticker: row.ticker) %></caption>
+              <thead class="sr-only">
+                <tr>
+                  <th scope="col"><%= t("portfolios.holdings.columns.account") %></th>
+                  <th scope="col"><%= t("portfolios.holdings.columns.qty") %></th>
+                  <th scope="col"><%= t("portfolios.holdings.columns.cost_basis") %></th>
+                  <th scope="col"><%= t("portfolios.holdings.columns.value") %></th>
+                  <th scope="col"><span class="sr-only"><%= t("portfolios.holdings.open_position") %></span></th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-divider">
+                <% row.positions.each do |holding| %>
+                  <tr>
+                    <td class="px-4 py-2 text-primary truncate"><%= holding.account.name %></td>
+                    <td class="px-4 py-2 text-right text-secondary privacy-sensitive"><%= format_quantity(holding.qty, exact: holding.account.crypto?) %></td>
+                    <td class="px-4 py-2 text-right text-secondary privacy-sensitive">
+                      <%# avg_cost, not the raw column: the statement preloads
+                          the trade-history fallback for every holding, so a
+                          position whose basis is computed shows it here too. %>
+                      <% if holding.avg_cost %>
+                        <%= format_money(holding.avg_cost) %>
+                      <% else %>
+                        <span title="<%= t("portfolios.holdings.missing_cost_basis_hint") %>">—</span>
+                      <% end %>
+                    </td>
+                    <td class="px-4 py-2 text-right text-primary privacy-sensitive"><%= format_money(holding.amount_money) %></td>
+                    <td class="px-4 py-2 text-right">
+                      <%= link_to t("portfolios.holdings.open_position"), holding_path(holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline text-xs" %>
+                    </td>
+                  </tr>
+                <% end %>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      </tbody>
+    <% end %>
+  </table>
+</div>

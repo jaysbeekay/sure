@@ -1,0 +1,86 @@
+---
+de:
+  portfolios:
+    allocation:
+      grouping_aria_label: Allokation gruppieren nach
+      groupings:
+        account: Konto
+        currency: Währung
+        kind: Art
+        security: Wertpapier
+      kinds:
+        cash: Bargeld
+        crypto: Krypto
+        standard: Wertpapiere
+      total: Gesamt
+      value: Wert
+      weight: Gewichtung
+    data_quality:
+      kinds:
+        missing_cost_basis:
+          description: Für diese Positionen ist keine Kostenbasis gespeichert oder berechenbar, daher kann keine Rendite angezeigt werden. Lege sie in der Position fest.
+          title: Fehlende Kostenbasis
+        provider:
+          description: Der Kursanbieter dieser Wertpapiere ist nicht erreichbar, daher werden ihre Werte möglicherweise nicht aktualisiert.
+          title: Probleme mit dem Kursanbieter
+        stale_price:
+          description: Der letzte Kurs ist älter als %{days} Tage oder es gibt gar keinen Kurs, daher kann der Wert veraltet sein.
+          title: Veraltete Kurse
+      last_priced: Zuletzt bewertet am %{date}
+      never_priced: Nie bewertet
+      read_only: Schreibgeschützt
+      provider_statuses:
+        no_provider: Kein Kursanbieter konfiguriert
+        offline: Offline-Wertpapier
+        provider_unavailable: Zugewiesener Anbieter nicht verfügbar
+        stale: Letzte Abrufe fehlgeschlagen
+      set_cost_basis: Kostenbasis festlegen
+    empty_state:
+      add_account: Anlagekonto hinzufügen
+      description: Verbinde oder ergänze ein Depot-, Vorsorge- oder Krypto-Konto, dann zeigt diese Seite Wert, Rendite und Bestände.
+      title: Noch keine Anlagekonten
+    holdings:
+      columns:
+        account: Konto
+        accounts: Konten
+        avg_cost: Ø Kosten
+        cost_basis: Kostenbasis
+        day_change: Tag
+        qty: Menge
+        security: Wertpapier
+        unrealized: Unrealisierter G/V
+        value: Wert
+        weight: Gewichtung
+      missing_cost_basis: Keine Kostenbasis
+      missing_cost_basis_hint: Mindestens eine Position hat keine gespeicherte Kostenbasis, daher kann die Zeile weder Durchschnittskosten noch eine Rendite zeigen.
+      no_cost_basis: keine Kostenbasis
+      open_position: Öffnen
+      positions_caption: Positionen in %{ticker} nach Konto
+      toggle_positions: Positionen in %{ticker} anzeigen
+    kpi_row:
+      as_of: Stand %{date}
+      day_change: Tagesveränderung
+      income: Erträge
+      income_hint: Dividenden und Zinsen
+      net_contributions: Nettoeinzahlungen
+      no_data: Nicht genug Daten
+      period_return: Rendite im Zeitraum
+      unrealized_pnl: Nicht realisiertes Ergebnis
+      value: Wert
+    sections:
+      accounts: Konten
+      allocation: Aufteilung
+      data_quality: Datenqualität
+      holdings: Bestände
+      kpis: Überblick
+      value_chart: Portfoliowert
+    show:
+      drag_to_reorder: Zum Umsortieren ziehen
+      section_aria_label: "Abschnitt %{title}. Drücke Enter oder Leertaste, um ihn zum Umsortieren zu greifen, dann bewege ihn mit den Pfeiltasten."
+      sections_aria_label: Portfolio-Abschnitte
+      subtitle: Alles, was du hältst, was es wert ist und wie es sich entwickelt hat.
+      title: Portfolio
+      toggle_section: Abschnitt ein-/ausklappen
+    value_chart:
+      as_of: Stand %{date}
+      no_data: Nicht genug Daten für ein Diagramm in diesem Zeitraum.

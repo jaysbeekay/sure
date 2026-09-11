@@ -176,3 +176,87 @@ P28:
     class: InvestmentStatementTest
     tests:
       - a rolled-up return is measured over the holdings whose cost basis is known
+P29:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - value_series does not chart leading zeros before a linked account's first supported history
+  - file: test/models/balance/linked_investment_series_normalizer_test.rb
+    class: Balance::LinkedInvestmentSeriesNormalizerTest
+    tests:
+      - trim_to_supported_history drops the points before the common supported start
+P30:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - previous_holdings loads the prior snapshot of every holding in one query
+P31:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - holdings_table_rows measures a row's return over the positions whose cost basis is known
+      - holdings_table_rows sorts by a whitelisted key and puts rows without the figure last
+      - holdings_table_rows issues no query per holding
+P32:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - allocation_by groups the portfolio by account, currency and kind with weights summing to 100
+      - every allocation grouping measures the same portfolio
+P33:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - data_quality_issues flags missing cost basis, stale prices and unhealthy providers
+      - data_quality_issues issues a bounded number of queries
+P34:
+  - file: test/models/portfolio/section_registry_test.rb
+    class: Portfolio::SectionRegistryTest
+    tests:
+      - orders sections by the user's saved order, appending anything it omits
+      - ignores keys in the saved order that no longer exist
+      - appends extra sections after the built-ins
+      - registers the six built-in sections with their partials and locals
+P35:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - saves the section order and collapsed set under the portfolio namespace only
+      - drops preference keys that are not the portfolio's own
+  - file: test/models/user_test.rb
+    class: UserTest
+    tests:
+      - section preferences are namespaced so two pages never touch each other's keys
+P36:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - redirects users without preview access to the dashboard
+      - the nav shows Portfolio on desktop only, and never without the preview flag
+  - file: test/controllers/pages_controller_test.rb
+    class: PagesControllerTest
+    tests:
+      - dashboard investment widget links to the portfolio hub for preview users only
+P37:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - holdings table renders one row per security with its per-account positions
+      - holdings table sorts through whitelisted links that keep the period and grouping
+      - the page's query count is bounded and does not grow with holdings
+P38:
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - allocation donut carries the grouping's segments and switches grouping through links
+      - accounts grid links every countable investment account to its holdings tab and skips excluded shares
+      - data quality lists the reasons and hides itself when there is nothing to fix
+  - file: test/helpers/portfolios_helper_test.rb
+    class: PortfoliosHelperTest
+    tests:
+      - allocation colours come from the shared chart palette and wrap around
+P39:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - average costs are preloaded in one query and agree with Holding#calculate_avg_cost
