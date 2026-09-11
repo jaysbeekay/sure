@@ -73,8 +73,7 @@ class Loan < ApplicationRecord
 
   private def rate_changes_must_be_parseable
     Array(invalid_rate_changes).each do |row|
-      errors.add(:base, I18n.t("activerecord.errors.models.loan.invalid_rate_change",
-                               default: "Rate change rows need both an effective date and a rate."))
+      errors.add(:base, I18n.t("activerecord.errors.models.loan.invalid_rate_change"))
       break
     end
   end
@@ -97,11 +96,11 @@ class Loan < ApplicationRecord
   end
 
   # The rate in force on a given date: the latest change effective on or before
-  # it, falling back to the loan's own rate before any change applies.
+  # it, falling back to the loan's own rate before any change applies. One
+  # implementation of that lookup, RateResolver's, so the Overview tab and the
+  # schedule cannot disagree about which rate a date carries.
   def current_variable_rate(as_of = Date.current)
-    return interest_rate unless variable_rate_type?
-
-    variable_rates.reverse.find { |date, _| date <= as_of }&.last || interest_rate
+    RateResolver.for(self).accrual_rate_for(as_of)
   end
 
   # Rows the form submitted that could not be parsed. Kept so the save can be
@@ -149,7 +148,9 @@ class Loan < ApplicationRecord
           raise ArgumentError, "rate out of range"
         end
 
-        acc[Date.parse(date.to_s).iso8601] = parsed_rate.to_s("F")
+        # ISO 8601 only, as variable_rates reads it back. Date.parse would
+        # accept "1" as the first of the current month.
+        acc[Date.iso8601(date.to_s).iso8601] = parsed_rate.to_s("F")
       rescue ArgumentError, TypeError, Date::Error, FloatDomainError
         invalid << { effective_date: date.to_s, rate: rate.to_s }
       end

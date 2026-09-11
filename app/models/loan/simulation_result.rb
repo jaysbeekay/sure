@@ -12,17 +12,13 @@ class Loan
   # enough. That leaves a balloon, and #payoff_date refuses to give a date for
   # a loan that was never paid off.
   class SimulationResult
-    attr_reader :payments, :balloon_amount, :total_interest, :total_cost
+    attr_reader :payments, :balloon_amount, :total_interest
 
     def initialize(payments:, currency_precision:, converged: true, balloon_amount: BigDecimal("0"))
       @converged = converged
       @balloon_amount = BigDecimal(balloon_amount.to_s).round(currency_precision).freeze
       @payments = deep_freeze(payments)
       @total_interest = @payments.sum(BigDecimal("0")) { |p| p[:interest_payment] }
-        .round(currency_precision).freeze
-      # What the run paid. A balloon is precisely what it did NOT pay, so it
-      # is not added here: a projection that leaves one is not "costing" it.
-      @total_cost = @payments.sum(BigDecimal("0")) { |p| p[:payment_amount] }
         .round(currency_precision).freeze
       freeze
     end
