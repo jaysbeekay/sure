@@ -186,6 +186,23 @@ class Loan < ApplicationRecord
     @amortization_schedule ||= AmortizationSchedule.for(self)
   end
 
+  # The columns AmortizationSchedule.for reads from the loan itself. Assigning
+  # any of them drops the memoised schedule, as reload does, so a read after the
+  # change answers with the new terms rather than the ones it was built from.
+  SCHEDULE_INPUTS = %i[interest_rate term_months rate_type start_date variable_rate_schedule].freeze
+
+  SCHEDULE_INPUTS.each do |input|
+    define_method(:"#{input}=") do |value|
+      @amortization_schedule = nil
+      super(value)
+    end
+  end
+
+  def reload(*)
+    @amortization_schedule = nil
+    super
+  end
+
   # Where the loan is heading from today's balance. Not memoised: `as_of`
   # makes each call a different question.
   def payoff_projection(as_of: Date.current)
