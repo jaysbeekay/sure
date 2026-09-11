@@ -185,6 +185,31 @@ class TransactionTest < ActiveSupport::TestCase
     assert_equal [ posted.id ], pending_entry.entryable.pending_duplicate_candidates.map(&:id)
   end
 
+  # Narrowed to some providers, the SQL is the same rule applied to those
+  # providers' flags only: another provider's flag must not leak in.
+  test "pending_sql for a provider subset agrees with pending? on that provider's flag alone" do
+    account = families(:empty).accounts.create! name: "Pending subset", balance: 0, currency: "USD", accountable: Depository.new
+
+    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", "maybe", 1, 0 ].each do |flag|
+      transaction = create_transaction(account: account, amount: 10).entryable
+      transaction.update!(extra: { "up" => { "pending" => flag }, "plaid" => { "pending" => true } })
+      expected = Transaction.new(extra: { "up" => { "pending" => flag } }).pending?
+
+      assert_equal expected, Transaction.where(Transaction.pending_sql(providers: %w[up])).exists?(transaction.id),
+        "pending_sql(providers: up) disagrees with pending? on #{flag.inspect}"
+      assert_equal !expected, Transaction.where(Transaction.not_pending_sql(providers: %w[up])).exists?(transaction.id),
+        "not_pending_sql(providers: up) disagrees with pending? on #{flag.inspect}"
+    end
+  end
+
+  test "pending_sql rejects providers it has no pending flag for" do
+    error = assert_raises(ArgumentError) { Transaction.pending_sql(providers: %w[up monzo]) }
+    assert_match(/unknown pending provider.*monzo/i, error.message)
+
+    error = assert_raises(ArgumentError) { Transaction.not_pending_sql(providers: []) }
+    assert_match(/at least one pending provider/i, error.message)
+  end
+
   test "investment_contribution is a valid kind" do
     transaction = Transaction.new(kind: "investment_contribution")
 
