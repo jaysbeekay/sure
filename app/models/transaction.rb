@@ -117,18 +117,33 @@ class Transaction < ApplicationRecord
   #
   # One known gap: a JSON number 0.0 is pending here ('0.0') but not to
   # #pending? (0.0 == 0). No provider writes one.
-  def self.pending_sql(table_alias = "transactions")
+  #
+  # +providers+ narrows the check to some of PENDING_PROVIDERS, for reads that
+  # act only on their own provider's flag. The names are interpolated, so any
+  # other name is rejected rather than quoted.
+  def self.pending_sql(table_alias = "transactions", providers: PENDING_PROVIDERS)
     false_values = PENDING_FLAG_FALSE_VALUES.map { |value| "'#{value.gsub("'", "''")}'" }.join(", ")
 
-    PENDING_PROVIDERS
+    pending_flag_providers(providers)
       .map { |provider| "COALESCE(#{table_alias}.extra -> '#{provider}' ->> 'pending', '') NOT IN (#{false_values})" }
       .join(" OR ")
   end
 
   # The negation of pending_sql, for queries that must leave pending rows out.
-  def self.not_pending_sql(table_alias = "transactions")
-    "NOT (#{pending_sql(table_alias)})"
+  def self.not_pending_sql(table_alias = "transactions", providers: PENDING_PROVIDERS)
+    "NOT (#{pending_sql(table_alias, providers: providers)})"
   end
+
+  def self.pending_flag_providers(providers)
+    providers = Array(providers).map(&:to_s)
+    raise ArgumentError, "at least one pending provider is required" if providers.empty?
+
+    unknown = providers - PENDING_PROVIDERS
+    raise ArgumentError, "unknown pending provider: #{unknown.join(", ")}" if unknown.any?
+
+    providers
+  end
+  private_class_method :pending_flag_providers
 
   # Pre-computed SQL fragment for subqueries that check if a transaction (aliased as "t") is pending.
   # Stored as a constant so static analysis can verify it contains no user input.
