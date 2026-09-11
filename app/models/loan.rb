@@ -186,6 +186,23 @@ class Loan < ApplicationRecord
     @amortization_schedule ||= AmortizationSchedule.for(self)
   end
 
+  # The columns AmortizationSchedule.for reads from the loan itself. Assigning
+  # any of them drops the memoised schedule, as reload does, so a read after the
+  # change answers with the new terms rather than the ones it was built from.
+  SCHEDULE_INPUTS = %i[interest_rate term_months rate_type start_date variable_rate_schedule].freeze
+
+  SCHEDULE_INPUTS.each do |input|
+    define_method(:"#{input}=") do |value|
+      @amortization_schedule = nil
+      super(value)
+    end
+  end
+
+  def reload(*)
+    @amortization_schedule = nil
+    super
+  end
+
   # The date the loan was drawn down. Recorded explicitly when the borrower
   # knows it -- a loan is often drawn down before the account tracking it is
   # created -- and otherwise taken from the account's first valuation (the

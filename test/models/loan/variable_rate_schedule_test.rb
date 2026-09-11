@@ -258,6 +258,28 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal({ "2027-01-01" => "0.0", "2028-01-01" => "100.0" }, loan.variable_rate_schedule)
   end
 
+  # CodeRabbit on we-promise/sure#3474: the schedule is memoised on the loan.
+  # Assigning any input it is built from must drop it, or a later read on the
+  # same instance answers with the old terms.
+  test "changing an input the schedule is built from rebuilds the schedule" do
+    loan = build_loan(rate_type: "variable", term_months: 24, start_date: Date.new(2026, 1, 1))
+    assert_not loan.amortization_schedule.re_amortising?
+
+    loan.rate_changes = [ { effective_date: "2026-07-01", rate: "18" } ]
+    assert loan.amortization_schedule.re_amortising?, "rate_changes= must drop the memoised schedule"
+
+    opening_payment = loan.amortization_schedule.periodic_payment.amount
+    loan.interest_rate = 9
+    assert_operator loan.amortization_schedule.periodic_payment.amount, :>, opening_payment,
+      "interest_rate= must drop the memoised schedule"
+
+    loan.term_months = 12
+    assert_equal 12, loan.amortization_schedule.payments.count, "term_months= must drop the memoised schedule"
+
+    loan.reload
+    assert_equal 24, loan.amortization_schedule.payments.count, "reload must drop the memoised schedule"
+  end
+
   private
     def build_loan(rate_type:, interest_rate: 6, term_months: 360, start_date: nil,
                    variable_rate_schedule: {})
