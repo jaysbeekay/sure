@@ -31,17 +31,12 @@ class InvestmentStatement::HistoricalScope
     @account_ids ||= accounts.map(&:id)
   end
 
-  # The last date each disabled account still contributes to a series. Mirrors
-  # BalanceSheet::NetWorthSeriesBuilder#disabled_account_active_until_dates so
-  # a closed broker drops out of the chart on the day it was disabled rather
-  # than carrying its final balance forward forever.
+  # The last date each disabled account still contributes to a series: the
+  # cut-off net worth uses, from the one place it is defined, so a closed
+  # broker drops out of the chart on the day it was disabled rather than
+  # carrying its final balance forward forever.
   def active_until_dates
-    @active_until_dates ||= accounts.each_with_object({}) do |account, dates|
-      next unless account.disabled?
-
-      disabled_on = (account.disabled_at || account.updated_at).to_date
-      dates[account.id] = disabled_on - 1.day
-    end
+    @active_until_dates ||= BalanceSheet::HistoricalAccountScope.active_until_dates(accounts)
   end
 
   private
