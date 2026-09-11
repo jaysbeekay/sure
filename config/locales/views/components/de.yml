@@ -132,14 +132,11 @@ de:
           interest_added: "Zusätzliche Zinsen"
           interest_saved: "Eingesparte Zinsen"
           legend: "Diagrammreihen"
-          months_behind:
-            one: "%{count} Monat später als geplant"
-            other: "%{count} Monate später als geplant"
           months_saved:
             one: "%{count} Monat früher als geplant"
             other: "%{count} Monate früher als geplant"
           no_payoff: "mit der aktuellen Rate nicht erreicht"
-          not_converged: "Mit der aktuellen Rate ist dieser Saldo bis zum ursprünglichen Laufzeitende nicht getilgt."
+          not_converged: "Mit der aktuellen Rate ist dieser Saldo bis zum ursprünglichen Laufzeitende nicht getilgt; %{balloon} blieben offen."
           on_schedule: "Im Plan"
           projected: "Prognose ab heute"
           projected_payoff: "Voraussichtliche Tilgung"

@@ -52,12 +52,19 @@ class UI::Account::Chart < ApplicationComponent
     loan_chart[:projected].any? && loan_projected_payoff_date.nil?
   end
 
+  # Never "behind": the projection walks only the remaining contracted dates,
+  # so months_saved is zero or positive. A borrower whose balance the contract
+  # no longer clears has no payoff date at all and takes the not-converged
+  # notice instead, with the balloon it would leave.
   def loan_schedule_comparison
     months = loan_chart[:months_saved].to_i
     return I18n.t("UI.account.chart.loan.on_schedule") if months.zero?
 
-    key = months.positive? ? "months_saved" : "months_behind"
-    I18n.t("UI.account.chart.loan.#{key}", count: months.abs)
+    I18n.t("UI.account.chart.loan.months_saved", count: months)
+  end
+
+  def loan_balloon_money
+    Money.new(loan_chart[:balloon].to_f, loan_chart[:currency])
   end
 
   def loan_interest_saved_money

@@ -148,7 +148,11 @@ export default class extends Controller {
       .attr("width", width)
       .attr("height", height)
       .attr("role", "img")
-      .attr("aria-label", data.aria_description || "");
+      .attr("aria-label", data.aria_description || "")
+      // The picture is also a keyboard control: arrow keys step the tooltip
+      // through the plotted dates. Say so, since role=img alone would not.
+      .attr("aria-roledescription", data.labels?.interactive_chart || "interactive chart")
+      .attr("aria-keyshortcuts", "ArrowLeft ArrowRight Home End Escape");
     // aria-details, not aria-describedby: a description is flattened into the
     // accessible name computation, so describedby would read every cell of a
     // 360-row table out as the chart's description. details links the table as
@@ -374,7 +378,13 @@ export default class extends Controller {
             : null;
         })
         .filter(Boolean);
-      if (!rows.length) return;
+      // The domain can open before the first series point (a period that
+      // starts before origination). Off every series there is nothing to
+      // say, and the previous position must not stay on screen.
+      if (!rows.length) {
+        hide();
+        return;
+      }
 
       // Text nodes, never innerHTML. Date and figures take the shared content
       // classes, as the other charts' tooltips do.

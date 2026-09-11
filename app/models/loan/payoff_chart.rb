@@ -57,6 +57,10 @@ class Loan
         # comparison that does not exist.
         months_saved: projection.converged? ? projection.months_saved : nil,
         interest_saved: projection.converged? ? projection.interest_saved.amount.to_f : nil,
+        # What the contracted repayment leaves owing at the original maturity
+        # when it does not clear the balance; nil when it does. The one figure
+        # the not-converged notice can quote.
+        balloon: projection.applicable? && !projection.converged? ? projection.balloon_amount.amount.to_f : nil,
         rows: table_rows(series),
         labels: labels,
         aria_description: aria_description
@@ -168,16 +172,17 @@ class Loan
       # date, the schedule's balance, and the projection's. Built here so the
       # table and the chart cannot disagree about a single figure.
       def table_rows(series)
-        # Newest first, reversed once: each row below scans it for the latest
-        # recorded balance on or before its date.
-        actual = series[:actual].reverse.map { |p| [ Date.iso8601(p[:date]), p[:balance] ] }
+        # Oldest first, as the series builder emits it, so each row can find
+        # the latest recorded balance on or before its date by binary search
+        # rather than a scan per row.
+        actual = series[:actual].map { |p| [ Date.iso8601(p[:date]), p[:balance] ] }
         projected = series[:projected].to_h { |p| [ p[:date], p[:balance] ] }
 
         series[:scheduled].filter_map do |point|
           date = Date.iso8601(point[:date])
           next unless date.between?(domain_start, domain_end)
 
-          recorded = actual.find { |recorded_on, _| recorded_on <= date } if date <= as_of
+          recorded = latest_recorded_on_or_before(actual, date) if date <= as_of
           {
             date: point[:date],
             actual: recorded&.last,
@@ -185,6 +190,13 @@ class Loan
             projected: projected[point[:date]]
           }
         end
+      end
+
+      # The last [date, balance] pair dated on or before `date`, from a list
+      # sorted by date; nil when every recorded point is later.
+      def latest_recorded_on_or_before(actual, date)
+        first_after = actual.bsearch_index { |recorded_on, _| recorded_on > date } || actual.length
+        actual[first_after - 1] if first_after.positive?
       end
 
       def labels

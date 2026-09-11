@@ -143,7 +143,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     @account.loan.update!(rate_type: "variable", interest_rate: 6, term_months: 24)
 
     get account_path(@account, tab: "schedule")
-    flat_body = response.body
+    flat_payments = schedule_table_cells
 
     # A year into the 24-month term, whatever today is. The fixture loan has no
     # start_date, so its origination moves with the clock; a fixed date would
@@ -154,8 +154,11 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     get account_path(@account, tab: "schedule")
 
     assert_response :success
-    assert_not_equal flat_body, response.body,
-      "recording a rate change must change what the schedule tab renders"
+    # The schedule's own cells, not the whole body: the chart card above the
+    # tabs carries its own data table, which moves for the same change.
+    assert_equal flat_payments.length, schedule_table_cells.length
+    assert_not_equal flat_payments, schedule_table_cells,
+      "recording a rate change must change the payments the schedule tab renders"
     # A substring free of characters ERB escapes -- the full string contains an
     # apostrophe and renders as &#39;.
     assert_match "re-amortises at each recorded change", response.body
@@ -290,30 +293,6 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_nil chart_payload
     assert_select "[data-controller='time-series-chart']", count: 1
   end
-  # The helper takes an account and memoized into a single slot regardless of
-  # it, so the second loan rendered in one request would have been handed the
-  # first one's chart. Unreachable through the Schedule tab, which renders one
-  # account -- and a helper_method any view can call is not a place to leave a
-  # latent wrong-account bug.
-  test "the payoff chart memo is keyed by the account it was asked about" do
-    other = Account.create!(
-      family: @account.family, name: "Second Loan", balance: 120_000, currency: "USD",
-      accountable: Loan.new(subtype: "auto", interest_rate: 9, term_months: 60,
-                            rate_type: "fixed", start_date: Date.new(2026, 6, 1))
-    )
-
-    controller = AccountsController.new
-    controller.params = ActionController::Parameters.new
-
-    first = controller.send(:loan_payoff_chart, @account)
-    second = controller.send(:loan_payoff_chart, other)
-
-    assert_not_equal first[:scheduled], second[:scheduled],
-      "the second account was handed the first account's chart"
-    assert_equal first, controller.send(:loan_payoff_chart, @account),
-      "and the first is still memoized rather than re-simulated"
-  end
-
   # The validation lives on Loan and is reached through nested attributes, which
   # validate the nested record only when it has changes. Resubmitting the stored
   # rows plus a typo'd one leaves the column equal to its stored value, so
@@ -578,5 +557,17 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :unprocessable_entity
     assert_select "form[action='#{loans_path}']", count: 1
+    # Rebuilt from the submission, not a blank account: what was typed comes
+    # back for correction.
+    assert_select "input[name='account[name]'][value='Loan With Bad Anchor']", count: 1
+    assert_select "input[name='account[accountable_attributes][interest_rate]'][value='6']", count: 1
   end
+
+  private
+    # The payment cells of the Schedule tab's table, leaving out the chart
+    # card's data table that sits above the tabs.
+    def schedule_table_cells
+      chart_table = ActionView::RecordIdentifier.dom_id(@account, :loan_chart_table)
+      css_select("table:not(##{chart_table}) tbody td").map { |cell| cell.text.strip }
+    end
 end

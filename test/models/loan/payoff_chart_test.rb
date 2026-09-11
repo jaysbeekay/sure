@@ -172,6 +172,10 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
 
     assert_nil payload[:projected_payoff_date]
     assert_match I18n.t("UI.account.chart.loan.no_payoff"), payload[:aria_description]
+    # The balloon travels with the payload for the notice; on a loan that does
+    # pay off it is nil, so a card is never quoted a figure of zero.
+    assert_operator payload[:balloon], :>, 0
+    assert_nil Loan::PayoffChart.new(on_contract_loan, as_of: @today).payload[:balloon]
   end
 
   # The G6 data table is built from the same points the lines are drawn from.

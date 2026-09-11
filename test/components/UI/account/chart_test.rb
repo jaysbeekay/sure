@@ -100,11 +100,13 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
     assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
     assert payload[:projected].any?, "the fixture loan must project, or this asserts nothing"
-    stalled = payload.merge(projected_payoff_date: nil, months_saved: 0, interest_saved: 0)
+    stalled = payload.merge(projected_payoff_date: nil, months_saved: nil, interest_saved: nil, balloon: 12_345.67)
 
     render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: stalled))
 
-    assert_text I18n.t("UI.account.chart.loan.not_converged")
+    # The notice quotes the balloon, so the page says how far behind rather
+    # than only that it is.
+    assert_text I18n.t("UI.account.chart.loan.not_converged", balloon: Money.new(12_345.67, "USD").format)
     # The card title; the accessible description also says "projected payoff",
     # and must, so the text alone would not tell the two apart.
     assert_no_selector "h4", text: I18n.t("UI.account.chart.loan.projected_payoff")

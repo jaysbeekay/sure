@@ -62,7 +62,7 @@
               reads as ahead until that date and one posted after as behind. %>
           <p class="col-span-2 text-xs text-secondary"><%= t("UI.account.chart.loan.projection_basis") %></p>
         <% elsif loan_projection_not_converged? %>
-          <p class="col-span-2 text-sm text-secondary"><%= t("UI.account.chart.loan.not_converged") %></p>
+          <p class="col-span-2 text-sm text-secondary"><%= t("UI.account.chart.loan.not_converged", balloon: loan_balloon_money.format) %></p>
         <% end %>
       </div>
 

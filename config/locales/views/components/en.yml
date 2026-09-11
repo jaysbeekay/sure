@@ -71,13 +71,10 @@ en:
           months_saved:
             one: "%{count} month sooner than scheduled"
             other: "%{count} months sooner than scheduled"
-          months_behind:
-            one: "%{count} month later than scheduled"
-            other: "%{count} months later than scheduled"
           on_schedule: On schedule
           interest_saved: Interest saved
           interest_added: Additional interest
-          not_converged: On the current repayment this balance is not paid off by the original maturity.
+          not_converged: On the current repayment this balance is not paid off by the original maturity; %{balloon} would still be owed.
           projection_basis: Compares today's recorded balance with the schedule's balance on the same day. A payment posted before its scheduled date reads as ahead until that date; one posted after reads as behind.
           view_as_table: View chart data as a table
           table:

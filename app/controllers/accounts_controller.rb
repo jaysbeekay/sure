@@ -322,23 +322,9 @@ class AccountsController < ApplicationController
 
   private
     # Built here rather than in the template: assembling a chart payload is
-    # domain work, and a view that constructs it decides how many simulations run
-    # per render with nothing to stop it happening twice.
-    # Keyed by what the answer depends on, not stored in a bare ivar. The
-    # arguments are the whole point of the memo: a single slot would hand the
-    # first account's chart to every later one in the same request, and `||=`
-    # would re-run the simulation on every call for a loan whose payload is
-    # legitimately nil.
-    def loan_payoff_chart(account, as_of: Date.current, period: nil)
-      return nil unless account.accountable.is_a?(Loan)
-
-      @loan_payoff_charts ||= {}
-      key = [ account.id, as_of, period&.start_date, period&.end_date, period&.key ]
-      return @loan_payoff_charts[key] if @loan_payoff_charts.key?(key)
-
-      @loan_payoff_charts[key] = build_loan_payoff_chart(account, as_of: as_of, period: period)
-    end
-
+    # domain work, and `show` asks for it exactly once per request, so there
+    # is nothing to memoise.
+    #
     # The payload runs the schedule, the projection and a balance query from
     # inputs this app does not fully control: `term_months` and `rate_type`
     # arrive from providers, `start_date` and the rate schedule from the form,
@@ -346,7 +332,9 @@ class AccountsController < ApplicationController
     # nil is what the component already takes as "no chart", and the account
     # page then renders exactly as it did before the chart existed. Reported,
     # because a loan silently losing its chart is a bug someone has to see.
-    def build_loan_payoff_chart(account, as_of:, period:)
+    def loan_payoff_chart(account, as_of:, period:)
+      return nil unless account.accountable.is_a?(Loan)
+
       Loan::PayoffChart.new(account.loan, as_of: as_of, period: period).payload
     rescue StandardError => e
       Rails.logger.error("Loan payoff chart failed for account #{account.id}: #{e.class} - #{e.message}")

@@ -36,11 +36,10 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       assert_series_painted
       strokes_in_light = SERIES.to_h { |key| [ key, stroke_of(key) ] }
 
-      # The controller watches data-theme and redraws; the strokes must
-      # resolve again from the dark palette, not stay stale.
+      # The strokes are live CSS variables, so the browser repaints them from
+      # the dark palette without a redraw; nothing in the controller watches
+      # the theme. Wait on the computed stroke itself.
       page.execute_script("document.documentElement.setAttribute('data-theme', 'dark')")
-      # The redraw runs from a MutationObserver, on the next animation frame;
-      # the paths exist before and after it, so wait on the stroke itself.
       wait_until { stroke_of("actual") != strokes_in_light["actual"] }
       assert_series_painted
       assert_not_equal strokes_in_light["actual"], stroke_of("actual"),
