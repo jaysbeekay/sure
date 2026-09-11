@@ -64,7 +64,10 @@ class InvestmentStatement::Totals
     # Income is by label, whether the provider stored it as a qty-0 Trade or
     # as a Transaction: the same labels Portfolio::FlowClassifier calls
     # income, read from it so the two cannot drift. Fees are the Fee-labelled
-    # entries plus trades.fee on every other trade. Income and fee labels are
+    # entries plus trades.fee on every other trade; a Fee-labelled trade reads
+    # its fee column only when its amount is zero, never both (P23). Pending is
+    # the classifier's rule too, not Transaction's ::boolean cast (P25).
+    # Income and fee labels are
     # excluded from the direction buckets rather than relying on qty: 0, so a
     # buy relabelled Dividend is counted once.
     #
@@ -85,7 +88,7 @@ class InvestmentStatement::Totals
           COALESCE(SUM(CASE WHEN #{label_sql} = 'Dividend' THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as dividends,
           COALESCE(SUM(CASE WHEN #{label_sql} = 'Interest' THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as interest,
           COALESCE(SUM(CASE
-            WHEN #{fee_sql} THEN ABS(entries.amount)
+            WHEN #{fee_sql} THEN COALESCE(NULLIF(ABS(entries.amount), 0), trades.fee, 0)
             WHEN trades.id IS NOT NULL THEN trades.fee
             ELSE 0
           END * COALESCE(er.rate, 1)), 0) as fees,
@@ -124,8 +127,12 @@ class InvestmentStatement::Totals
       "(#{label_sql} IN (#{quote_list(fee_labels)}) OR (transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard'))"
     end
 
+    # Not Transaction.pending_providers_sql: its ::boolean cast raises on a
+    # flag PostgreSQL cannot parse, so one such entry aborted the family's
+    # whole aggregation. The classifier's rule never raises and agrees with
+    # Transaction#pending? (P25).
     def pending_exclusion_sql
-      Transaction.pending_providers_sql("transactions")
+      "AND NOT (#{Portfolio::FlowClassifier.pending_sql})"
     end
 
     def income_labels

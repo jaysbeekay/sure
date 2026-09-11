@@ -536,9 +536,10 @@ class InvestmentStatement
 
       Rails.cache.fetch([
         # Bumped when the aggregation's meaning changes (v2: real income
-        # totals; v3: fees, and contributions net of reported fees) so a
-        # deploy never serves the previous shape from Redis.
-        "investment_statement", "totals_query/v3", family.id, user&.id,
+        # totals; v3: fees, and contributions net of reported fees; v4: a
+        # zero-amount Fee-labelled trade counts its fee column) so a deploy
+        # never serves the previous shape from Redis.
+        "investment_statement", "totals_query/v4", family.id, user&.id,
         account_ids_hash, date_range.begin, date_range.end, family.entries_cache_version
       ]) { Totals.new(family, account_ids: account_ids, date_range: date_range).call }
     end

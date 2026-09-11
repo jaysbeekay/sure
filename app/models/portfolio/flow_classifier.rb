@@ -70,6 +70,20 @@ class Portfolio::FlowClassifier
     LABEL_RULES.select { |_, rule| rule == klass }.keys.freeze
   end
 
+  # True for a `transactions` row the classifier calls pending, as SQL. Public
+  # so InvestmentStatement::Totals applies the same rule rather than
+  # Transaction's ::boolean cast (see FALSE_FLAG_VALUES for why not the cast).
+  def self.pending_sql
+    false_list = FALSE_FLAG_VALUES.map { |value| ActiveRecord::Base.connection.quote(value) }.join(", ")
+
+    Transaction::PENDING_PROVIDERS
+      .map do |provider|
+        flag = "(transactions.extra -> '#{provider}' ->> 'pending')"
+        "(#{flag} IS NOT NULL AND #{flag} NOT IN (#{false_list}))"
+      end
+      .join(" OR ")
+  end
+
   INCOME_LABELS = labels_for(:income)
   FEE_LABELS = labels_for(:fee)
   INTERNAL_LABELS = labels_for(:internal)
@@ -114,6 +128,13 @@ class Portfolio::FlowClassifier
 
   # The joins #sql_case relies on. The caller's query must select FROM
   # `entries` and place this fragment before its WHERE clause.
+  #
+  # One row per entry, which an aggregate embedding this relies on: the
+  # transfers join cannot fan out because Transfer validates
+  # inflow_transaction_id and outflow_transaction_id as unique and requires
+  # opposite amounts, so a transaction is a leg of at most one transfer. A
+  # writer that bypasses validations (insert_all) could break that, and a SUM
+  # over this join would then count the entry twice.
   def sql_joins
     <<~SQL.squish
       LEFT JOIN trades ON entries.entryable_type = 'Trade' AND trades.id = entries.entryable_id
@@ -279,14 +300,7 @@ class Portfolio::FlowClassifier
     FALSE_FLAG_VALUES = (ActiveModel::Type::Boolean::FALSE_VALUES.grep(String) + [ "" ]).uniq.freeze
 
     def pending_sql
-      false_list = quote_list(FALSE_FLAG_VALUES)
-
-      Transaction::PENDING_PROVIDERS
-        .map do |provider|
-          flag = "(transactions.extra -> '#{provider}' ->> 'pending')"
-          "(#{flag} IS NOT NULL AND #{flag} NOT IN (#{false_list}))"
-        end
-        .join(" OR ")
+      self.class.pending_sql
     end
 
     # The one bound value in the whole expression, sanitized on its own and
