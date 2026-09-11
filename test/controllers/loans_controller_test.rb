@@ -529,6 +529,45 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "h4", text: "Payoff Date", count: 0
   end
 
+  # Owner review of #3474: beside the contract's figures, the Schedule tab says
+  # when the loan will actually be paid off -- the projection from today's
+  # balance that the chart above it draws.
+  test "the schedule tab forecasts the payoff date from today's balance" do
+    draw_down_loan_two_years_ago
+    schedule = @account.loan.amortization_schedule
+    scheduled_today = schedule.payments.select { |payment| payment.date <= Date.current }.last
+    assert scheduled_today, "the fixture loan must be part-way through its schedule"
+    @account.update!(balance: scheduled_today.ending_balance.amount / 2)
+
+    forecast = @account.loan.reload.payoff_projection(as_of: Date.current).payoff_date
+    assert forecast, "a loan ahead of schedule has a forecast payoff date"
+    assert_operator forecast, :<, schedule.payoff_date,
+      "the fixture must be ahead, or this cannot tell the forecast from the original date"
+
+    get account_path(@account, tab: "schedule")
+
+    assert_response :success
+    card = css_select("h4").find { |title| title.text.strip == "Forecasted Payoff Date" }&.parent
+    assert card, "the schedule tab has a forecasted payoff date card"
+    assert_equal I18n.l(forecast, format: :long), card.at_css("p").text.strip
+    assert card.parent.css("h4").any? { |title| title.text.strip == "Total Interest" },
+      "the card sits among the Schedule cards"
+  end
+
+  test "the forecasted payoff date card says when the repayment no longer clears the loan" do
+    draw_down_loan_two_years_ago
+    @account.update!(balance: @account.loan.original_balance.amount * 10)
+    assert_not @account.loan.reload.payoff_projection(as_of: Date.current).converged?,
+      "the fixture must be too far behind to clear, or this cannot reach the notice"
+
+    get account_path(@account, tab: "schedule")
+
+    assert_response :success
+    card = css_select("h4").find { |title| title.text.strip == "Forecasted Payoff Date" }&.parent
+    assert card, "the schedule tab has a forecasted payoff date card"
+    assert_equal "Not paid off on the current repayment", card.at_css("p").text.strip
+  end
+
   # Codex on we-promise/sure#3473: `update` persisted the balance change (a
   # valuation and the account's cached balance) before the loan's validation
   # ran, so a rejected form had committed half of itself.
@@ -639,5 +678,18 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     # The payment cells of the Schedule tab's table, the only table on the page.
     def schedule_table_cells
       css_select("table tbody td").map { |cell| cell.text.strip }
+    end
+
+    # The fixture loan starts today with no opening valuation. Drawn down two
+    # years ago, it has payments behind it; with the valuation the account form
+    # records, its principal stays the amount borrowed when a test then moves
+    # the balance -- without one the schedule would amortise the new balance.
+    def draw_down_loan_two_years_ago
+      start_date = Date.current - 2.years
+      @account.loan.update!(start_date: start_date)
+      @account.entries.create!(
+        date: start_date, name: "Opening balance", amount: @account.balance, currency: @account.currency,
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
     end
 end
