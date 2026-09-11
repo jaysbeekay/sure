@@ -23,6 +23,6 @@ git merge --no-edit upstream/main || {
   echo; echo "upstream-sync: conflicts. Resolve them, commit, 'git push -u origin $branch', then open the PR against main." >&2; exit 1; }
 
 git push -q -u origin "$branch"
-gh pr create --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" --base main --head "$branch" \
+gh pr create --repo "$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')" --base main --head "$branch" \
   --title "Sync main with we-promise/sure ($(git rev-parse --short upstream/main))" \
   --body "$(printf 'Merges %s commit(s) from we-promise/sure main up to %s.\n\nRebase open up/* delivery branches with bin/upstream-rebase once this merges.' "$behind" "$(git rev-parse --short upstream/main)")"

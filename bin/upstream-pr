@@ -36,7 +36,7 @@ esac
 
 git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/we-promise/sure.git
 git fetch -q --no-tags upstream main
-fork="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+fork="$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')"
 owner="${fork%%/*}"
 
 commits="$(git log --reverse --format='- %h %s' upstream/main..HEAD)"
