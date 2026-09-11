@@ -103,7 +103,15 @@ module AccountableResource
         raise ActiveRecord::Rollback
       end
 
+      # Inside the transaction, as `create` does: the locks are saved with
+      # `update!`, and a raise there after the commit left the balance and the
+      # attributes above in place behind a failed request.
+      @account.lock_saved_attributes!
+
       true
+    rescue ActiveRecord::RecordInvalid => e
+      @error_message = e.record.errors.full_messages.join(", ").presence || e.message
+      raise ActiveRecord::Rollback
     end
 
     unless saved
@@ -111,7 +119,6 @@ module AccountableResource
       return
     end
 
-    @account.lock_saved_attributes!
     redirect_back_or_to account_path(@account), notice: t("accounts.update.success", type: accountable_type.name.underscore.humanize)
   end
 
