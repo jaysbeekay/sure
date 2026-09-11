@@ -386,6 +386,17 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_match "2,997.75", response.body
   end
 
+  # Owner review of #3474: the Overview cards name the amounts as the loan
+  # amount rather than "principal".
+  test "the overview tab names the original and remaining loan amounts" do
+    get account_path(@account, tab: "overview")
+
+    assert_response :success
+    assert_select "h4", text: "Original Loan Amount", count: 1
+    assert_select "h4", text: "Remaining Loan Amount", count: 1
+    assert_select "h4", text: /Principal/, count: 0
+  end
+
   # Codex on we-promise/sure#3473: `update` persisted the balance change (a
   # valuation and the account's cached balance) before the loan's validation
   # ran, so a rejected form had committed half of itself.
