@@ -17,6 +17,11 @@
 # contract (see PortfoliosController#show), so a render straddling midnight can
 # still pick up the next day's rates there.
 class Portfolio::SectionRegistry
+  # The built-in section keys, in declaration order. The preferences
+  # endpoint accepts only these, so a saved order or collapsed set cannot
+  # carry arbitrary strings into the user's preferences.
+  KEYS = %w[kpis value_chart holdings accounts allocation data_quality].freeze
+
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
   # `sort`, `dir` and `by` are the query-string state of the holdings table
@@ -109,7 +114,7 @@ class Portfolio::SectionRegistry
           key: "data_quality",
           title: "portfolios.sections.data_quality",
           partial: "portfolios/data_quality",
-          locals: shared_locals.merge(issues: data_quality_issues),
+          locals: shared_locals.merge(issues: data_quality_issues, writable_account_ids: writable_account_ids),
           visible: data_quality_issues.any?,
           collapsible: true
         }
@@ -139,6 +144,17 @@ class Portfolio::SectionRegistry
 
     def data_quality_issues
       @data_quality_issues ||= statement.data_quality_issues(as_of: as_of)
+    end
+
+    # The accounts the user may write to, for the data-quality rows that
+    # offer the cost-basis drawer: one query here rather than a permission
+    # lookup per row, and none when there is nothing to list.
+    def writable_account_ids
+      @writable_account_ids ||= if user && data_quality_issues.any?
+        statement.family.accounts.writable_by(user).pluck(:id).to_set
+      else
+        Set.new
+      end
     end
 
     def shared_locals

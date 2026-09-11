@@ -1,5 +1,9 @@
 import { Controller } from "@hotwired/stimulus";
 
+// The name is historical: written for the Reports page, now the drag-to-
+// reorder control for every page built on the Reports section framework
+// (the portfolio hub too). Renaming it would touch every Reports data
+// attribute for no behaviour change.
 export default class extends Controller {
   static targets = ["section", "handle"];
 

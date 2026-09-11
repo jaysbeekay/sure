@@ -12,25 +12,7 @@
 <%
   active_sort = sort.presence || "value"
   active_dir = dir.presence || "desc"
-  sort_link = ->(key) {
-    next_dir = if active_sort == key
-      active_dir == "asc" ? "desc" : "asc"
-    else
-      key == "name" ? "asc" : "desc"
-    end
-    portfolio_path({ period: period.key, sort: key, dir: next_dir, by: by }.compact)
-  }
-  aria_sort = ->(key) { active_sort == key ? (active_dir == "asc" ? "ascending" : "descending") : nil }
-  columns = [
-    [ "name", "security", "text-left" ],
-    [ nil, "accounts", "text-right" ],
-    [ nil, "qty", "text-right" ],
-    [ nil, "avg_cost", "text-right" ],
-    [ "value", "value", "text-right" ],
-    [ "weight", "weight", "text-right" ],
-    [ "return", "unrealized", "text-right" ],
-    [ "day_change", "day_change", "text-right" ]
-  ]
+  columns = PortfoliosHelper::HOLDINGS_COLUMNS
 %>
 
 <div id="portfolio-holdings" class="bg-container-inset rounded-xl p-1 overflow-x-auto">
@@ -38,9 +20,9 @@
     <thead>
       <tr class="uppercase text-xs font-medium text-secondary">
         <% columns.each do |key, label, align| %>
-          <%= tag.th scope: "col", class: "px-4 py-2 font-medium #{align}", aria: { sort: key ? aria_sort.call(key) : nil }.compact do %>
+          <%= tag.th scope: "col", class: "px-4 py-2 font-medium #{align}", aria: { sort: holdings_aria_sort(key, active_sort: active_sort, active_dir: active_dir) }.compact do %>
             <% if key %>
-              <%= link_to sort_link.call(key),
+              <%= link_to holdings_sort_link(key, active_sort: active_sort, active_dir: active_dir, period: period, by: by),
                     class: class_names("inline-flex items-center gap-1 hover:text-primary focus-ring rounded", "text-primary" => active_sort == key),
                     data: { turbo_frame: "portfolio_sections" } do %>
                 <%= t("portfolios.holdings.columns.#{label}") %>

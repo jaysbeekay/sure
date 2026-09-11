@@ -161,6 +161,18 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_nil @user.reload.preferences["reports_section_order"]
   end
 
+  test "drops section keys the registry does not know, in both shapes" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[kpis nonsense value_chart], portfolio_collapsed_sections: { kpis: true, nonsense: true } } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_equal %w[kpis value_chart], @user.section_order("portfolio")
+    assert_equal({ "kpis" => true }, @user.preferences["portfolio_collapsed_sections"],
+      "an unknown key must not be written into the user's preferences")
+  end
+
   test "a collapsed payload that is not an object is dropped rather than raised on" do
     patch update_preferences_portfolio_path,
       params: { preferences: { portfolio_collapsed_sections: "true", portfolio_section_order: %w[kpis] } },

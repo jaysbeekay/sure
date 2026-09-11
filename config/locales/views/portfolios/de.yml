@@ -1,8 +1,6 @@
 ---
 de:
   portfolios:
-    accounts:
-      holdings_tab: Positionen öffnen
     allocation:
       grouping_aria_label: Allokation gruppieren nach
       groupings:

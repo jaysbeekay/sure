@@ -1,5 +1,9 @@
 import { Controller } from "@hotwired/stimulus";
 
+// The name is historical: this controller was written for the Reports page
+// and is now the collapse control for every page built on the Reports
+// section framework (the portfolio hub too). Renaming it would touch every
+// Reports data attribute for no behaviour change.
 export default class extends Controller {
   static targets = ["content", "chevron", "button"];
   // `url` and `preferenceKey` default to the Reports literals so the Reports

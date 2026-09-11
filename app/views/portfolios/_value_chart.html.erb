@@ -16,8 +16,7 @@
   <% if series && series.values.size >= 2 %>
     <div
       id="portfolioValueChart"
-      class="w-full min-h-52 privacy-sensitive"
-      style="height: 13rem;"
+      class="w-full h-52 privacy-sensitive"
       data-controller="time-series-chart"
       data-time-series-chart-data-value="<%= series.to_json %>"></div>
   <% else %>
