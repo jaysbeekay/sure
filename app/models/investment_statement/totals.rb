@@ -127,10 +127,10 @@ class InvestmentStatement::Totals
       "(#{label_sql} IN (#{quote_list(fee_labels)}) OR (transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard'))"
     end
 
-    # Not Transaction.pending_providers_sql: its ::boolean cast raises on a
-    # flag PostgreSQL cannot parse, so one such entry aborted the family's
-    # whole aggregation. The classifier's rule never raises and agrees with
-    # Transaction#pending? (P25).
+    # The classifier's rule, which is Transaction.pending_sql: it agrees with
+    # Transaction#pending? and never raises, where the ::boolean cast this
+    # used to carry aborted the family's whole aggregation on a flag
+    # PostgreSQL could not parse (P25).
     def pending_exclusion_sql
       "AND NOT (#{Portfolio::FlowClassifier.pending_sql})"
     end

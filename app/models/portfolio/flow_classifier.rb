@@ -70,18 +70,13 @@ class Portfolio::FlowClassifier
     LABEL_RULES.select { |_, rule| rule == klass }.keys.freeze
   end
 
-  # True for a `transactions` row the classifier calls pending, as SQL. Public
-  # so InvestmentStatement::Totals applies the same rule rather than
-  # Transaction's ::boolean cast (see FALSE_FLAG_VALUES for why not the cast).
+  # True for a `transactions` row the classifier calls pending, as SQL: the
+  # rule Transaction#pending? applies, in Transaction.pending_sql's words, so
+  # this class, InvestmentStatement::Totals and every other SQL reader of the
+  # flag share one definition (P25). Kept as a method here so the CASE below
+  # and Totals name the same thing.
   def self.pending_sql
-    false_list = FALSE_FLAG_VALUES.map { |value| ActiveRecord::Base.connection.quote(value) }.join(", ")
-
-    Transaction::PENDING_PROVIDERS
-      .map do |provider|
-        flag = "(transactions.extra -> '#{provider}' ->> 'pending')"
-        "(#{flag} IS NOT NULL AND #{flag} NOT IN (#{false_list}))"
-      end
-      .join(" OR ")
+    Transaction.pending_sql("transactions")
   end
 
   INCOME_LABELS = labels_for(:income)
@@ -282,22 +277,6 @@ class Portfolio::FlowClassifier
         )
       SQL
     end
-
-    # Same providers and the same truth test as Transaction#pending?, which
-    # casts the stored flag with ActiveModel::Type::Boolean: anything present
-    # is pending unless it is one of that type's false values.
-    #
-    # Deliberately not `::boolean`, which the rest of the app uses. A cast
-    # disagrees with the Ruby side on the values PostgreSQL accepts but
-    # ActiveModel does not ('no' is false to PostgreSQL and true to
-    # ActiveModel), and it raises PG::InvalidTextRepresentation on anything it
-    # cannot parse at all -- which would take out a whole daily query, not one
-    # entry, once a later drop embeds this CASE in one. Providers write real
-    # booleans today; this keeps the two forms equal (P20) whatever arrives.
-    # ActiveModel::Type::Boolean's false values, plus the empty string, which
-    # that type answers outside FALSE_VALUES (it casts "" to nil, and nil is
-    # not pending).
-    FALSE_FLAG_VALUES = (ActiveModel::Type::Boolean::FALSE_VALUES.grep(String) + [ "" ]).uniq.freeze
 
     def pending_sql
       self.class.pending_sql

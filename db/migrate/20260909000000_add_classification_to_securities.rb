@@ -18,7 +18,7 @@
 # locks instead of one full-table scan under an exclusive lock; it needs
 # `disable_ddl_transaction!` to mean anything, and `validate_check_constraint`
 # has no inverse for a `change` block to record.
-class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
+class AddClassificationToSecurities < ActiveRecord::Migration[8.1]
   disable_ddl_transaction!
 
   ASSET_CLASSES = %w[
