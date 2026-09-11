@@ -386,6 +386,27 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-rate-change-row] button[data-action='loan-rate-changes#remove'] span", text: I18n.t("loans.form.rate_change_remove")
   end
 
+  # The design-system guide asks inputs to take the form's field shape. The rows
+  # were bare inputs outside any .form-field, so they rendered with no field
+  # border and no visible label. The partial is also the Stimulus clone
+  # template, so each label wraps its input rather than pointing at an id that
+  # every cloned row would repeat.
+  test "each rate-change input is a labelled form field without an id" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    get edit_loan_path(@account)
+
+    assert_response :success
+    rows = "[data-loan-rate-changes-target=rows] [data-rate-change-row]"
+    assert_select "#{rows} .form-field label", count: 2
+    assert_select "#{rows} .form-field label input[type=date][value='2026-04-01']", count: 1
+    assert_select "#{rows} .form-field label input[type=number][value='7.25']", count: 1
+    assert_select "#{rows} .form-field__label", text: I18n.t("loans.form.rate_change_effective_date")
+    assert_select "#{rows} .form-field__label", text: I18n.t("loans.form.rate_change_rate")
+    # Unscoped on purpose: the <template> copy is the one every added row clones.
+    assert_select "[data-rate-change-row] input[id]", count: 0
+  end
+
   # CodeRabbit on we-promise/sure#3473: `create_and_sync` can raise RecordInvalid
   # from the opening valuation's `entries.create!` or from `lock_saved_attributes!`,
   # and then `e.record` is an Entry or the accountable, not the account the form
