@@ -116,6 +116,14 @@ class Loan::AmortizationSchedule
     payments.find { |payment| payment.date.year == date.year && payment.date.month == date.month }
   end
 
+  # The repayment in force on `as_of`: the next scheduled payment on or after
+  # it, sized at every rate change recorded before that payment. A variable
+  # loan has no single monthly payment, but it always has this one. Nil once
+  # the schedule has run out.
+  def payment_in_force(as_of)
+    payments.find { |payment| payment.date >= as_of }&.payment
+  end
+
   private
     # One payment per month of the term, stepping from origination. `>>` gives
     # the calendar-correct answer at month ends: 31 January plus one month is
