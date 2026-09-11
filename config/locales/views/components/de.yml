@@ -142,13 +142,7 @@ de:
           projected_payoff: "Voraussichtliche Tilgung"
           projection_basis: "Vergleicht den heute erfassten Saldo mit dem Saldo laut Tilgungsplan am selben Tag. Eine vor ihrem Fälligkeitstermin gebuchte Zahlung erscheint bis zu diesem Termin als Vorsprung, eine danach gebuchte als Rückstand."
           scheduled: "Ursprünglicher Tilgungsplan"
-          table:
-            actual: "Erfasster Saldo"
-            date: "Datum"
-            projected: "Prognostizierter Saldo"
-            scheduled: "Geplanter Saldo"
           today: "Heute"
-          view_as_table: "Diagrammdaten als Tabelle anzeigen"
         no_data_available: Keine Daten vorhanden
         title:
           balance: Saldo

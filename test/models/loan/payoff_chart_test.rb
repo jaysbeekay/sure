@@ -178,23 +178,12 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_nil Loan::PayoffChart.new(on_contract_loan, as_of: @today).payload[:balloon]
   end
 
-  # The G6 data table is built from the same points the lines are drawn from.
-  # The recorded column must be the latest recorded balance on or before each
-  # scheduled date, and nothing at all before the first recorded point.
-  test "the data table's recorded column is the latest balance on or before each date" do
-    loan = on_contract_loan
-    loan.account.balances.where("date < ?", Date.new(2026, 3, 1)).delete_all
-    payload = Loan::PayoffChart.new(loan.reload, as_of: @today, period: @all_time).payload
-    rows = payload[:rows].index_by { |row| row[:date] }
-    recorded = loan.account.balances.order(:date).to_h { |b| [ b.date, b.balance.to_f ] }
+  # Owner review of #3474: the chart has no data table any more; the Schedule
+  # tab carries the figures, so the payload builds no rows for one.
+  test "the payload carries no data table rows" do
+    payload = Loan::PayoffChart.new(on_contract_loan, as_of: @today, period: @all_time).payload
 
-    assert_nil rows.fetch("2026-01-01")[:actual], "no balance is recorded on or before this date"
-    assert_nil rows.fetch("2026-02-01")[:actual]
-    assert_equal recorded.fetch(Date.new(2026, 3, 1)), rows.fetch("2026-03-01")[:actual],
-      "a scheduled date with a balance recorded that day carries that balance"
-    assert_equal recorded.fetch(Date.new(2026, 6, 1)), rows.fetch("2026-06-01")[:actual]
-    assert_nil rows.fetch(loan.amortization_schedule.payoff_date.iso8601)[:actual],
-      "future rows have no recorded balance"
+    assert_not payload.key?(:rows), "nothing renders table rows, so the payload must not build them"
   end
 
   # Decision 4: the recorded series never starts before the loan does. A

@@ -33,7 +33,7 @@ const parseDate = (s) => {
 let clipSerial = 0;
 
 export default class extends Controller {
-  static values = { data: Object, tableId: String };
+  static values = { data: Object };
 
   connect() {
     this._draw = this._draw.bind(this);
@@ -153,14 +153,6 @@ export default class extends Controller {
       // through the plotted dates. Say so, since role=img alone would not.
       .attr("aria-roledescription", data.labels?.interactive_chart || "interactive chart")
       .attr("aria-keyshortcuts", "ArrowLeft ArrowRight Home End Escape");
-    // aria-details, not aria-describedby: a description is flattened into the
-    // accessible name computation, so describedby would read every cell of a
-    // 360-row table out as the chart's description. details links the table as
-    // a long-form alternative a reader can visit instead.
-    if (this.hasTableIdValue && this.tableIdValue) {
-      svg.attr("aria-details", this.tableIdValue);
-    }
-
     // Clip-path ids must be unique in the document. The mount carries the
     // account's own dom_id, which already is; a counter covers a mount without
     // one. Nothing random: the ids are read by url(#...) only.
@@ -444,18 +436,16 @@ export default class extends Controller {
       .on("pointerleave", hide);
 
     // Keyboard traversal: the same nearest-point data a hover shows, stepped
-    // through the dates the data table lists -- one per scheduled payment in
-    // the window -- so the keyboard and the table give the same figures (G6).
-    // The recorded line's own points are weekly and would otherwise repeat
-    // the same month several times over. Arrow keys move, Home/End jump,
-    // Escape clears.
-    const rowDates = (data.rows || [])
-      .map((row) => parseDate(row.date))
+    // through the scheduled payment dates in the window (G6). The recorded
+    // line's own points are weekly and would otherwise repeat the same month
+    // several times over. Arrow keys move, Home/End jump, Escape clears.
+    const scheduledDates = (data.scheduled || [])
+      .map((point) => parseDate(point.date))
       .filter((date) => date && date >= domainStart && date <= domainEnd);
     const stops = Array.from(
       new Set(
-        (rowDates.length
-          ? rowDates
+        (scheduledDates.length
+          ? scheduledDates
           : series.flatMap((s) => s.points).map((p) => p.date)
         )
           .filter((date) => date >= domainStart && date <= domainEnd)

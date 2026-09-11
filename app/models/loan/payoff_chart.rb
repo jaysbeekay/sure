@@ -61,7 +61,6 @@ class Loan
         # when it does not clear the balance; nil when it does. The one figure
         # the not-converged notice can quote.
         balloon: projection.applicable? && !projection.converged? ? projection.balloon_amount.amount.to_f : nil,
-        rows: table_rows(series),
         labels: labels,
         aria_description: aria_description
       }
@@ -90,9 +89,9 @@ class Loan
         period.nil? || period.key.to_s == "all_time"
       end
 
-      # Memoised, as is domain_end: visible? and table_rows read the domain for
-      # every point, and a loan with no start date finds its origination through
-      # the account's first valuation, which is a lookup each time it is asked.
+      # Memoised, as is domain_end: visible? reads the domain for every point,
+      # and a loan with no start date finds its origination through the
+      # account's first valuation, which is a lookup each time it is asked.
       def domain_start
         @domain_start ||= whole_life? ? loan.origination_date : period.start_date
       end
@@ -165,38 +164,6 @@ class Loan
 
         inside = dates.count { |date| date.between?(domain_start, domain_end) }
         inside >= 2 || (dates.first < domain_start && dates.last > domain_end)
-      end
-
-      # The accessible data alternative (gate G6): one row per scheduled date
-      # inside the domain, carrying the recorded balance on or before that
-      # date, the schedule's balance, and the projection's. Built here so the
-      # table and the chart cannot disagree about a single figure.
-      def table_rows(series)
-        # Oldest first, as the series builder emits it, so each row can find
-        # the latest recorded balance on or before its date by binary search
-        # rather than a scan per row.
-        actual = series[:actual].map { |p| [ Date.iso8601(p[:date]), p[:balance] ] }
-        projected = series[:projected].to_h { |p| [ p[:date], p[:balance] ] }
-
-        series[:scheduled].filter_map do |point|
-          date = Date.iso8601(point[:date])
-          next unless date.between?(domain_start, domain_end)
-
-          recorded = latest_recorded_on_or_before(actual, date) if date <= as_of
-          {
-            date: point[:date],
-            actual: recorded&.last,
-            scheduled: point[:balance],
-            projected: projected[point[:date]]
-          }
-        end
-      end
-
-      # The last [date, balance] pair dated on or before `date`, from a list
-      # sorted by date; nil when every recorded point is later.
-      def latest_recorded_on_or_before(actual, date)
-        first_after = actual.bsearch_index { |recorded_on, _| recorded_on > date } || actual.length
-        actual[first_after - 1] if first_after.positive?
       end
 
       def labels

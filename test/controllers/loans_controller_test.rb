@@ -97,10 +97,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     get account_path(@account, tab: "schedule")
 
     assert_response :success
-    # The chart card above the tabs carries its own data table (#100), so the
-    # count is scoped to the schedule's table.
-    chart_table = ActionView::RecordIdentifier.dom_id(@account, :loan_chart_table)
-    assert_select "table:not(##{chart_table}) tbody tr", count: @account.loan.term_months
+    assert_select "table tbody tr", count: @account.loan.term_months
     assert_match "Total Interest", response.body
   end
 
@@ -262,7 +259,9 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert payload["projected"].length > 1
     assert_equal %w[actual projected scheduled], payload.fetch("visible").sort
     assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} [data-controller='loan-payoff-chart']", count: 1
-    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} table", count: 1
+    # Owner review of #3474: the chart card carries no data table; the Schedule
+    # tab has the figures.
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(@account, :chart_details)} table", count: 0
   end
 
   test "the schedule tab renders its table without a chart of its own" do
@@ -270,7 +269,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "[data-controller='loan-payoff-chart']", { count: 1 }, "one chart on the page, in the chart card"
-    assert_select "table", { minimum: 2 }, "the schedule table and the chart's data table"
+    assert_select "table", { count: 1 }, "the Schedule tab's table is the only one: the chart has no data table"
   end
 
   # A stray what-if parameter from an old link must change nothing: the
@@ -607,10 +606,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   end
 
   private
-    # The payment cells of the Schedule tab's table, leaving out the chart
-    # card's data table that sits above the tabs.
+    # The payment cells of the Schedule tab's table, the only table on the page.
     def schedule_table_cells
-      chart_table = ActionView::RecordIdentifier.dom_id(@account, :loan_chart_table)
-      css_select("table:not(##{chart_table}) tbody td").map { |cell| cell.text.strip }
+      css_select("table tbody td").map { |cell| cell.text.strip }
     end
 end

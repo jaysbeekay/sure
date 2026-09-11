@@ -10,9 +10,9 @@ require "application_system_test_case"
 #
 # So these assertions are deliberately about the rendered SVG and the DOM
 # around it: that each series exists as a path with real geometry and a
-# stroke that will mark the screen, in both themes; that the data table and
-# the keyboard give a screen-reader or keyboard user the same figures (gate
-# G6); and that the live region stays quiet under a pointer. A test that
+# stroke that will mark the screen, in both themes; that the description and
+# the keyboard give a screen-reader or keyboard user the figures (gate G6);
+# and that the live region stays quiet under a pointer. A test that
 # re-checked payoff dates here would be re-running Loan::PayoffChartTest
 # through a browser, slowly.
 class LoanPayoffChartTest < ApplicationSystemTestCase
@@ -47,28 +47,21 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
     end
   end
 
-  # Gate G6: the table the SVG describes itself with carries the same rows the
-  # lines are drawn from, and it is real DOM the page exposes rather than a
-  # screen-reader-only summary.
-  test "the SVG is described by a data table with one row per plotted date" do
+  # Gate G6 without a table (owner review of #3474: the Schedule tab carries the
+  # figures). The SVG names the balance and every payoff date in its label, the
+  # same text is real DOM, and it points at no table that is not there.
+  test "the SVG carries its description and no data table" do
     travel_to TODAY do
       account = on_contract_loan_account
       payload = Loan::PayoffChart.new(account.loan, as_of: TODAY, period: all_time_period).payload
 
       visit account_path(account, period: "all_time")
-      assert_selector "[data-controller='loan-payoff-chart'] svg"
-
       svg = find("[data-controller='loan-payoff-chart'] svg")
-      table_id = svg["aria-details"]
-      assert_equal ActionView::RecordIdentifier.dom_id(account, :loan_chart_table), table_id
-      assert_nil svg["aria-describedby"],
-        "describedby would flatten every table cell into the chart's description"
 
-      find("details summary", text: I18n.t("UI.account.chart.loan.view_as_table")).click
-      assert_selector "table##{table_id} tbody tr", count: payload[:rows].length
+      assert_equal payload[:aria_description], svg["aria-label"]
+      assert_nil svg["aria-details"], "the chart must not point at a table"
       assert_selector "p.sr-only", text: payload[:aria_description], visible: :all
-      assert_equal payload[:aria_description],
-        find("[data-controller='loan-payoff-chart'] svg")["aria-label"]
+      assert_no_selector "##{ActionView::RecordIdentifier.dom_id(account, :chart)} table", visible: :all
     end
   end
 

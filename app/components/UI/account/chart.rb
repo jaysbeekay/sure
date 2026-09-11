@@ -24,10 +24,6 @@ class UI::Account::Chart < ApplicationComponent
     dom_id(account, :loan_chart)
   end
 
-  def loan_table_id
-    dom_id(account, :loan_chart_table)
-  end
-
   # The series with a line inside the domain, in drawing order, each with the
   # style the controller gives it. Style is carried by the legend as well as
   # the line: solid is fact, dashed is forecast, and hue alone would fail in
@@ -74,12 +70,6 @@ class UI::Account::Chart < ApplicationComponent
   def loan_interest_saved_title
     key = loan_chart[:interest_saved].to_f.negative? ? "interest_added" : "interest_saved"
     I18n.t("UI.account.chart.loan.#{key}")
-  end
-
-  def loan_money(amount)
-    return nil if amount.nil?
-
-    Money.new(amount, loan_chart[:currency]).format
   end
 
   def period

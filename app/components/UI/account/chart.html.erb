@@ -73,11 +73,10 @@
         <div id="<%= loan_chart_id %>"
              class="w-full h-full privacy-sensitive text-primary"
              data-controller="loan-payoff-chart"
-             data-loan-payoff-chart-data-value="<%= loan_chart.to_json %>"
-             data-loan-payoff-chart-table-id-value="<%= loan_table_id %>"></div>
+             data-loan-payoff-chart-data-value="<%= loan_chart.to_json %>"></div>
       </div>
 
-      <ul class="flex flex-wrap gap-x-4 gap-y-1 px-4 pt-2 text-xs text-secondary" aria-label="<%= t("UI.account.chart.loan.legend") %>">
+      <ul class="flex flex-wrap gap-x-4 gap-y-1 px-4 pt-2 pb-4 text-xs text-secondary" aria-label="<%= t("UI.account.chart.loan.legend") %>">
         <% loan_legend.each do |key, style| %>
           <li class="flex items-center gap-1.5">
             <span class="inline-block w-4 h-0 border-t-2 <%= "border-dashed" if style[:dashed] %>" style="border-color: var(<%= style[:token] %>);" aria-hidden="true"></span>
@@ -86,42 +85,9 @@
         <% end %>
       </ul>
 
-      <%# Real DOM text, not only the SVG's aria-label (gate G6). %>
+      <%# Real DOM text, not only the SVG's aria-label (gate G6). The chart has no
+          data table of its own: the Schedule tab carries the figures. %>
       <p class="sr-only"><%= loan_chart[:aria_description] %></p>
-
-      <%# The tabular alternative the SVG points at through aria-details: the
-          same rows the lines are drawn from, so the two cannot disagree. The
-          inline disclosure keeps the toggle a quiet text link under the legend. %>
-      <%= render DS::Disclosure.new(variant: :inline, class: "px-4 pb-4 text-sm") do |disclosure| %>
-        <% disclosure.with_summary_content do %>
-          <span class="inline-flex items-center gap-1 text-secondary">
-            <%= t("UI.account.chart.loan.view_as_table") %>
-            <%= helpers.icon "chevron-down", class: "group-open:rotate-180 motion-safe:transition-transform motion-safe:duration-150" %>
-          </span>
-        <% end %>
-        <div class="max-h-64 overflow-y-auto rounded-lg border border-alpha-black-25">
-          <table id="<%= loan_table_id %>" class="w-full text-sm">
-            <thead class="sticky top-0 bg-container border-b border-alpha-black-25">
-              <tr class="text-secondary text-left">
-                <th scope="col" class="font-medium px-3 py-2"><%= t("UI.account.chart.loan.table.date") %></th>
-                <th scope="col" class="font-medium px-3 py-2 text-right"><%= t("UI.account.chart.loan.table.actual") %></th>
-                <th scope="col" class="font-medium px-3 py-2 text-right"><%= t("UI.account.chart.loan.table.scheduled") %></th>
-                <th scope="col" class="font-medium px-3 py-2 text-right"><%= t("UI.account.chart.loan.table.projected") %></th>
-              </tr>
-            </thead>
-            <tbody>
-              <% loan_chart[:rows].each do |row| %>
-                <tr class="border-b border-alpha-black-25 last:border-0">
-                  <td class="px-3 py-1.5 text-primary"><%= I18n.l(Date.iso8601(row[:date]), format: :long) %></td>
-                  <td class="px-3 py-1.5 text-right tabular-nums privacy-sensitive"><%= loan_money(row[:actual]) %></td>
-                  <td class="px-3 py-1.5 text-right tabular-nums privacy-sensitive"><%= loan_money(row[:scheduled]) %></td>
-                  <td class="px-3 py-1.5 text-right tabular-nums privacy-sensitive"><%= loan_money(row[:projected]) %></td>
-                </tr>
-              <% end %>
-            </tbody>
-          </table>
-        </div>
-      <% end %>
     <% else %>
       <div class="h-64 pb-4">
         <% if series.any? %>

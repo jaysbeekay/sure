@@ -53,8 +53,9 @@ class UI::Account::ChartTest < ViewComponent::TestCase
 
     assert_selector "[data-controller='loan-payoff-chart']"
     assert_no_selector "[data-controller='time-series-chart']"
-    # Inside a collapsed <details>, so hidden until opened.
-    assert_selector "table##{ActionView::RecordIdentifier.dom_id(loan_account, :loan_chart_table)}", visible: :all
+    # Owner review of #3474: no data table under the chart; the Schedule tab
+    # carries the figures.
+    assert_no_selector "table", visible: :all
     assert_selector "p.sr-only", text: payload[:aria_description], visible: :all
   end
 
@@ -133,20 +134,6 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
 
     assert_text I18n.t("UI.account.chart.loan.projection_basis")
-  end
-
-  # jjmata on we-promise/sure#3474: the table toggle is DS::Disclosure, so it
-  # carries the design system's summary contract (focus ring, no native
-  # marker) rather than a hand-built <details>.
-  test "the chart's table toggle is a design-system disclosure" do
-    loan_account = accounts(:loan)
-    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
-    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
-
-    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
-
-    assert_selector "details.group > summary.focus-ring", text: I18n.t("UI.account.chart.loan.view_as_table")
-    assert_selector "details.group table##{ActionView::RecordIdentifier.dom_id(loan_account, :loan_chart_table)}", visible: :all
   end
 
   # jjmata on we-promise/sure#3474: the trend, its comparison label and the
