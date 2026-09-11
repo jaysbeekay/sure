@@ -125,6 +125,48 @@ class TransactionTest < ActiveSupport::TestCase
     assert_not transaction.pending?
   end
 
+  # The SQL forms of "is this pending?" must give the answer pending? gives for
+  # whatever is stored. PostgreSQL's ::boolean reads "no", "False", "Off" and
+  # " false" as false where ActiveModel::Type::Boolean reads them as true.
+  test "every SQL pending predicate agrees with pending? on any stored flag" do
+    account = families(:empty).accounts.create! name: "Pending parity", balance: 0, currency: "USD", accountable: Depository.new
+
+    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", 1, 0 ].each do |flag|
+      transaction = create_transaction(account: account, amount: 10).entryable
+      transaction.update!(extra: { "plaid" => { "pending" => flag } })
+
+      sql_pending_answers(transaction).each do |form, answer|
+        assert_equal transaction.pending?, answer, "#{form} disagrees with pending? on #{flag.inspect}"
+      end
+    end
+  end
+
+  # ::boolean raises PG::InvalidTextRepresentation on a value it cannot parse,
+  # which aborts the whole query -- an income statement, a balance sync -- not
+  # just the one row.
+  test "no SQL pending predicate raises on a flag PostgreSQL cannot cast" do
+    account = families(:empty).accounts.create! name: "Pending parity", balance: 0, currency: "USD", accountable: Depository.new
+    transaction = create_transaction(account: account, amount: 10).entryable
+    transaction.update!(extra: { "simplefin" => { "pending" => "maybe" } })
+
+    assert transaction.pending?
+    sql_pending_answers(transaction).each do |form, answer|
+      assert answer, "#{form} should call a \"maybe\" flag pending, as pending? does"
+    end
+  end
+
+  test "pending_duplicate_candidates offers only transactions pending? calls posted" do
+    account = families(:empty).accounts.create! name: "Merge", balance: 0, currency: "USD", accountable: Depository.new
+    pending_entry = create_transaction(account: account, amount: 10)
+    pending_entry.entryable.update!(extra: { "plaid" => { "pending" => true } })
+
+    posted = create_transaction(account: account, amount: 10)
+    create_transaction(account: account, amount: 10).entryable.update!(extra: { "plaid" => { "pending" => "no" } })
+    create_transaction(account: account, amount: 10).entryable.update!(extra: { "plaid" => { "pending" => "maybe" } })
+
+    assert_equal [ posted.id ], pending_entry.entryable.pending_duplicate_candidates.map(&:id)
+  end
+
   test "investment_contribution is a valid kind" do
     transaction = Transaction.new(kind: "investment_contribution")
 
@@ -307,4 +349,23 @@ class TransactionTest < ActiveSupport::TestCase
 
     assert_nil category.reload.last_used_at
   end
+
+  private
+    # Whether each SQL form of "is this transaction pending?" says it is.
+    def sql_pending_answers(transaction)
+      entry_id = transaction.entry.id
+      posted_row = ActiveRecord::Base.connection.select_value(
+        ActiveRecord::Base.sanitize_sql_array([
+          "SELECT 1 FROM transactions t WHERE t.id = ? #{Transaction.pending_providers_sql("t")}", transaction.id
+        ])
+      )
+
+      {
+        "Transaction.pending" => Transaction.pending.exists?(transaction.id),
+        "Transaction.excluding_pending" => !Transaction.excluding_pending.exists?(transaction.id),
+        "Entry.pending" => Entry.pending.exists?(entry_id),
+        "Entry.excluding_pending (PENDING_CHECK_SQL)" => !Entry.excluding_pending.exists?(entry_id),
+        "Transaction.pending_providers_sql" => posted_row.nil?
+      }
+    end
 end
