@@ -171,6 +171,16 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-loan-rate-changes-fixed-type-value='fixed']", count: 1
   end
 
+  # A term the simulator will not walk leaves the loan without a schedule
+  # (see Loan#amortizable?). The model stays tolerant because a provider writes
+  # this column too; the form is where a person typing it is told the limit.
+  test "the term input declares the range a schedule can be built for" do
+    get edit_loan_path(@account)
+
+    assert_response :success
+    assert_select "input[name='account[accountable_attributes][term_months]'][min='1'][max='#{Loan::Simulator::MAX_PERIODS}']", count: 1
+  end
+
   # A row with one half filled in is a typo, not a blank. Dropping it silently
   # loses what the user typed between submit and redisplay and never tells them
   # which row went.

@@ -70,7 +70,9 @@ class Loan
 
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
       if @payment_schedule.length > MAX_PERIODS
-        raise ArgumentError, "payment schedule exceeds #{MAX_PERIODS} periods"
+        raise ArgumentError,
+          "payment schedule has #{@payment_schedule.length} periods (#{@payment_schedule.first} to #{@payment_schedule.last}), " \
+          "more than the #{MAX_PERIODS} allowed"
       end
       unless PAYMENT_STRATEGIES.include?(@payment_strategy)
         raise ArgumentError, "unsupported payment strategy: #{@payment_strategy.inspect}"

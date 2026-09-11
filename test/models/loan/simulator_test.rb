@@ -181,7 +181,9 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
         payment_schedule: over, accrual_rate_for: ->(_d) { 5 }, currency_precision: 2
       )
     end
-    assert_match(/exceeds/, error.message)
+    # The message carries the schedule it refused, so a report of it says
+    # which run tripped the guard rather than only restating the limit.
+    assert_match(/has 1201 periods \(2026-02-01 to 2126-02-01\), more than the 1200 allowed/, error.message)
   end
 
   private

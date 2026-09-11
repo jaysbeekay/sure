@@ -87,9 +87,13 @@ class Loan < ApplicationRecord
     rate_type.present? && rate_type != FIXED_RATE_TYPE
   end
 
-  # Recorded rate changes as [effective date string, rate] pairs, oldest first.
+  # Recorded rate changes as [Date, BigDecimal] pairs, oldest first. The one
+  # place the column is parsed: RateResolver and the form rows read these
+  # pairs rather than the raw JSON, so every reader agrees on what a row means.
   def variable_rates
-    (variable_rate_schedule || {}).sort_by { |date, _rate| Date.iso8601(date.to_s) }
+    (variable_rate_schedule || {})
+      .map { |date, rate| [ Date.iso8601(date.to_s), BigDecimal(rate.to_s) ] }
+      .sort_by(&:first)
   end
 
   # The rate in force on a given date: the latest change effective on or before
@@ -97,8 +101,7 @@ class Loan < ApplicationRecord
   def current_variable_rate(as_of = Date.current)
     return interest_rate unless variable_rate_type?
 
-    rate = variable_rates.reverse.find { |date, _| Date.iso8601(date.to_s) <= as_of }&.last
-    rate.nil? ? interest_rate : BigDecimal(rate.to_s)
+    variable_rates.reverse.find { |date, _| date <= as_of }&.last || interest_rate
   end
 
   # Rows the form submitted that could not be parsed. Kept so the save can be
@@ -175,7 +178,7 @@ class Loan < ApplicationRecord
   #
   # Invalid rows come back too, so a rejected save redisplays what was typed.
   def rate_change_rows
-    variable_rates.map { |date, rate| { effective_date: date.to_s, rate: rate.to_s } } +
+    variable_rates.map { |date, rate| { effective_date: date.iso8601, rate: rate.to_s("F") } } +
       Array(invalid_rate_changes)
   end
 
