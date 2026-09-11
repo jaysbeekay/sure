@@ -31,8 +31,8 @@ en:
       interest_rate: Interest Rate
       monthly_payment: Monthly Payment
       not_applicable: N/A
-      original_principal: Original Principal
-      remaining_principal: Remaining Principal
+      original_principal: Original Loan Amount
+      remaining_principal: Remaining Loan Amount
       term: Term
       type: Type
       unknown: Unknown
@@ -55,8 +55,8 @@ en:
         interest_rate: Interest Rate
         monthly_payment: Monthly Payment
         not_applicable: N/A
-        original_principal: Original Principal
-        remaining_principal: Remaining Principal
+        original_principal: Original Loan Amount
+        remaining_principal: Remaining Loan Amount
         term: Term
         type: Type
         unknown: Unknown

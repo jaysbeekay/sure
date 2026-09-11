@@ -152,7 +152,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     # The schedule's own cells, not the whole body: the chart card above the
-    # tabs carries its own data table, which moves for the same change.
+    # tabs moves for the same change.
     assert_equal flat_payments.length, schedule_table_cells.length
     assert_not_equal flat_payments, schedule_table_cells,
       "recording a rate change must change the payments the schedule tab renders"
@@ -497,6 +497,17 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "[data-controller='loan-payoff-chart']", count: 1
+  end
+
+  # Owner review of #3474: the Overview cards name the amounts as the loan
+  # amount rather than "principal".
+  test "the overview tab names the original and remaining loan amounts" do
+    get account_path(@account, tab: "overview")
+
+    assert_response :success
+    assert_select "h4", text: "Original Loan Amount", count: 1
+    assert_select "h4", text: "Remaining Loan Amount", count: 1
+    assert_select "h4", text: /Principal/, count: 0
   end
 
   # Codex on we-promise/sure#3473: `update` persisted the balance change (a
