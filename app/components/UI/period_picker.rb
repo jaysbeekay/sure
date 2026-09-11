@@ -11,22 +11,27 @@ class UI::PeriodPicker < ApplicationComponent
   #
   # NOTE: `url` must be a path without a query string; pass query state via
   # `extra_params` so the picker can compose `?period=…` cleanly.
-  attr_reader :selected_key, :url, :frame, :extra_params, :placement
+  attr_reader :selected_key, :url, :frame, :extra_params, :placement, :options
 
-  def initialize(selected:, url:, frame: nil, extra_params: {}, placement: "bottom-end")
+  # `options` narrows the menu to [key, label] pairs, for a chart that offers
+  # its own timescales under the shared period keys (the loan chart). Without
+  # it every Period is offered under its own short label.
+  def initialize(selected:, url:, frame: nil, extra_params: {}, placement: "bottom-end", options: nil)
     @selected_key = selected.respond_to?(:key) ? selected.key : selected.to_s
     @url = url
     @frame = frame
     @extra_params = (extra_params || {}).symbolize_keys
     @placement = placement
+    @options = options
   end
 
-  def periods
-    Period.all
+  # [key, label] pairs, in menu order.
+  def items
+    options || Period.all.map { |period| [ period.key, period.label_short ] }
   end
 
   def selected_label
-    period_for(selected_key).label_short
+    options&.to_h&.fetch(selected_key, nil) || period_for(selected_key).label_short
   end
 
   def selected?(key)

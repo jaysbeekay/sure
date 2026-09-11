@@ -147,6 +147,44 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     render_inline(UI::Account::Chart.new(account: loan_account))
   end
 
+  # Owner review of #3474: a loan's picker offers timescales that run forward
+  # from its start date, labelled M, 90D, YTD, 1Y, 5Y, 10Y and All. The keys are
+  # the shared periods', so a pick stays the user's default everywhere, and a
+  # saved period the loan chart does not offer reads as All.
+  test "a loan's period picker offers windows that run from its start" do
+    loan_account = accounts(:loan)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, period: Period.from_key("last_5_years")))
+
+    {
+      "current_month" => "M", "last_90_days" => "90D", "current_year" => "YTD", "last_365_days" => "1Y",
+      "last_5_years" => "5Y", "last_10_years" => "10Y", "all_time" => "All"
+    }.each do |key, label|
+      # The label's own span: the link also holds the menu's check-mark slot.
+      assert_selector "a[href*='period=#{key}'] span", exact_text: label, visible: :all
+    end
+    assert_no_selector "a[href*='period=last_30_days']", visible: :all
+    assert_selector "button", text: "5Y"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, period: Period.from_key("last_30_days")))
+    assert_selector "button", text: "All"
+  end
+
+  # Owner review of #3474: on a loan the change line compares today's balance
+  # with the amount borrowed, whatever window is picked.
+  test "a loan's change line compares with the original loan amount" do
+    loan_account = accounts(:loan)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, period: Period.from_key("last_5_years")))
+
+    assert_text I18n.t("UI.account.chart.loan.since_start")
+    assert_no_text Period.from_key("last_5_years").comparison_label
+  end
+
   private
     # 10 shares at $100 market price; gain = 1000 - cost_basis * 10
     def create_holding(cost_basis:)

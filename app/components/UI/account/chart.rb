@@ -165,11 +165,33 @@ class UI::Account::Chart < ApplicationComponent
     series.values.last&.value || Money.new(0, account.currency)
   end
 
+  # A loan's chart offers its own timescales, each running forward from the
+  # loan's start (Loan::PayoffChart::WINDOWS); every other chart offers every
+  # period.
+  def period_picker_options
+    Loan::PayoffChart.window_options if loan_chart?
+  end
+
+  # A saved period the loan chart does not offer shows the whole life, so its
+  # picker reads All.
+  def period_picker_selected
+    return period unless loan_chart?
+
+    Loan::PayoffChart::WINDOWS.key?(period.key.to_s) ? period.key.to_s : "all_time"
+  end
+
+  # On a loan the change line compares today's balance with the amount
+  # borrowed, whatever window is picked (owner review of #3474).
   def trend
-    series.trend
+    return series.trend unless loan_chart?
+
+    Trend.new(current: account.balance_money, previous: account.loan.original_balance,
+              favorable_direction: account.favorable_direction)
   end
 
   def comparison_label
+    return I18n.t("UI.account.chart.loan.since_start") if loan_chart?
+
     start_date = series.start_date
     return period.comparison_label if start_date.blank?
 

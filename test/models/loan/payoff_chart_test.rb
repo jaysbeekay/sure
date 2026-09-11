@@ -46,55 +46,82 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_equal loan.account.balance.to_f, payload[:projected].first[:balance]
   end
 
-  # Decision 4 on #100: the recorded series ends at today or at the period's
-  # end, whichever comes first, and never starts before origination. Queried
-  # past today it would carry today's balance forward as a flat line; queried
-  # past the period's end it would break out of the window the picker chose.
-  test "the actual series ends at the earlier of today and the period end, in the loan's currency" do
+  # Owner review of #3474: a timescale picked on a loan's chart runs forward
+  # from origination -- 1Y is the loan's first year -- rather than back from
+  # today. The recorded series still ends at today or at the window's end,
+  # whichever comes first, and never starts before origination. Queried past
+  # today it would carry today's balance forward as a flat line.
+  test "the actual series ends at the earlier of today and the window's end, in the loan's currency" do
     loan = on_contract_loan
 
     whole_life = Loan::PayoffChart.new(loan, as_of: @today, period: @all_time).payload
     assert_equal @today.iso8601, whole_life[:actual].last[:date]
     assert_operator Date.iso8601(whole_life[:actual].first[:date]), :>=, loan.origination_date
 
-    last_month = Period.new(key: "last_month", start_date: Date.new(2026, 12, 1), end_date: Date.new(2026, 12, 31))
-    clipped = Loan::PayoffChart.new(loan, as_of: @today, period: last_month).payload
-    assert_equal last_month.end_date.iso8601, clipped[:actual].last[:date]
-    assert clipped[:actual].all? { |point| Date.iso8601(point[:date]) <= last_month.end_date }
+    ninety_days = Period.new(key: "last_90_days", start_date: @today - 90, end_date: @today)
+    clipped = Loan::PayoffChart.new(loan, as_of: @today, period: ninety_days).payload
+    window_end = loan.origination_date + 90
+    assert_equal window_end.iso8601, clipped[:actual].last[:date]
+    assert clipped[:actual].all? { |point| Date.iso8601(point[:date]).between?(loan.origination_date, window_end) }
 
     assert_equal "USD", clipped[:currency]
     assert_equal loan.account.balance.to_f, whole_life[:actual].last[:balance],
       "the recorded balance is read in the loan's own currency, so no exchange rate applies"
   end
 
-  test "the domain runs origination to the later payoff under All, and is the period otherwise" do
+  # The loan chart's windows: M is the first month, 90D the first ninety days,
+  # YTD origination to today, 1Y, 5Y and 10Y the first years. None runs past
+  # the later payoff, where All ends.
+  test "the domain runs forward from origination: the whole life under All, the chosen window otherwise" do
     loan = on_contract_loan
-    schedule = loan.amortization_schedule
-    projection = loan.payoff_projection(as_of: @today)
+    start = loan.origination_date
+    whole_life_end = [ loan.amortization_schedule.payoff_date, loan.payoff_projection(as_of: @today).payoff_date ].max
+    window = ->(key) { Period.new(key: key, start_date: @today - 30, end_date: @today) }
 
     whole_life = Loan::PayoffChart.new(loan, as_of: @today, period: @all_time).payload
-    assert_equal loan.origination_date.iso8601, whole_life[:domain_start]
-    assert_equal [ schedule.payoff_date, projection.payoff_date ].max.iso8601, whole_life[:domain_end]
+    assert_equal start.iso8601, whole_life[:domain_start]
+    assert_equal whole_life_end.iso8601, whole_life[:domain_end]
 
-    period = Period.last_30_days
-    windowed = Loan::PayoffChart.new(loan, as_of: @today, period: period).payload
-    assert_equal period.start_date.iso8601, windowed[:domain_start]
-    assert_equal period.end_date.iso8601, windowed[:domain_end]
+    {
+      "current_month" => start >> 1,
+      "last_90_days" => start + 90,
+      "current_year" => @today,
+      "last_365_days" => start >> 12,
+      "last_5_years" => whole_life_end
+    }.each do |key, expected_end|
+      windowed = Loan::PayoffChart.new(loan, as_of: @today, period: window.(key)).payload
+      assert_equal start.iso8601, windowed[:domain_start], "#{key} must start at origination, not count back from today"
+      assert_equal expected_end.iso8601, windowed[:domain_end], "#{key} must end on #{expected_end}"
+    end
   end
 
-  # Under a period that ends today the projection has one point inside the
-  # domain -- today -- and a point is not a line. The legend must not promise
-  # one; the scheduled line crosses the window and stays.
-  test "forward series are visible only when the domain reaches past today" do
+  # Under a window that ends by today the projection has at most one point
+  # inside the domain -- today -- and a point is not a line. The legend must not
+  # promise one; a window that reaches past today draws it.
+  test "forward series are visible only when the window reaches past today" do
     loan = on_contract_loan
-    thirty_days = Period.new(key: "last_30_days", start_date: @today - 30, end_date: @today)
+    window = ->(key) { Period.new(key: key, start_date: @today - 30, end_date: @today) }
 
-    windowed = Loan::PayoffChart.new(loan, as_of: @today, period: thirty_days).payload
-    assert_equal %w[actual scheduled], windowed[:visible].map(&:to_s)
-    assert windowed[:projected].length > 1, "the series is still in the payload; only its legend entry is withheld"
+    to_date = Loan::PayoffChart.new(loan, as_of: @today, period: window.("current_year")).payload
+    assert_equal %w[actual scheduled], to_date[:visible].map(&:to_s)
+    assert to_date[:projected].length > 1, "the series is still in the payload; only its legend entry is withheld"
 
+    first_five_years = Loan::PayoffChart.new(loan, as_of: @today, period: window.("last_5_years")).payload
+    assert_includes first_five_years[:visible].map(&:to_s), "projected"
+  end
+
+  # The picker's choice is shared with every account, so a loan page can be
+  # opened under a period its chart does not offer. That shows the whole life.
+  test "a saved period the loan chart does not offer shows the loan's whole life" do
+    loan = on_contract_loan
     whole_life = Loan::PayoffChart.new(loan, as_of: @today, period: @all_time).payload
-    assert_includes whole_life[:visible].map(&:to_s), "projected"
+
+    %w[last_7_days last_30_days current_week last_month].each do |key|
+      period = Period.new(key: key, start_date: @today - 30, end_date: @today)
+      payload = Loan::PayoffChart.new(loan, as_of: @today, period: period).payload
+      assert_equal whole_life.values_at(:domain_start, :domain_end), payload.values_at(:domain_start, :domain_end),
+        "#{key} is not a loan window, so the chart shows the whole life"
+    end
   end
 
   # Overlapping the schedule IS the on-track picture; the projection is not
@@ -188,20 +215,21 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
 
   # Decision 4: the recorded series never starts before the loan does. A
   # balance row dated before origination (an account opened, then a loan
-  # recorded against it later) must not become a lead-in, and under "All" the
-  # domain already starts at origination, so this is asserted under a period
-  # that opens before the loan and still contains it.
-  test "the actual series is clipped at origination under a period that opens before it" do
+  # recorded against it later) must not become a lead-in, whatever window is
+  # picked: every loan window opens at origination.
+  test "the actual series never starts before origination, whatever the window" do
     loan = on_contract_loan
     loan.account.balances.create!(date: Date.new(2025, 12, 1), balance: 0, currency: "USD",
                                   start_cash_balance: 0, flows_factor: -1)
-    year = Period.new(key: "last_365_days", start_date: Date.new(2025, 11, 1), end_date: @today)
+    first_year = Period.new(key: "last_365_days", start_date: @today - 365, end_date: @today)
 
-    payload = Loan::PayoffChart.new(loan.reload, as_of: @today, period: year).payload
+    [ @all_time, first_year ].each do |period|
+      payload = Loan::PayoffChart.new(loan.reload, as_of: @today, period: period).payload
 
-    assert_equal loan.origination_date.iso8601, payload[:actual].first[:date],
-      "the first recorded point is origination, not the pre-origination row"
-    assert payload[:actual].none? { |point| Date.iso8601(point[:date]) < loan.origination_date }
+      assert_equal loan.origination_date.iso8601, payload[:actual].first[:date],
+        "the first recorded point is origination, not the pre-origination row (#{period.key})"
+      assert payload[:actual].none? { |point| Date.iso8601(point[:date]) < loan.origination_date }
+    end
   end
 
   # #100 acceptance criterion: the chart's endpoint and the card quote one date.

@@ -10,18 +10,38 @@ class Loan
   #              made are in here without being named: they are why today's
   #              balance is what it is.
   #
-  # The period governs the x-domain (#100, decision 4). Under "All" the domain
-  # runs origination -> the later payoff date so every series has room; under
-  # any other period it is the period itself, the forward series fall outside
-  # it, and the chart shows recorded against scheduled history. `Period` is not
-  # touched to achieve this: the payload carries the domain and the controller
-  # draws to it.
+  # The picked timescale governs the x-domain (#100, decision 4), running
+  # forward from origination (owner review of #3474). Under "All" the domain
+  # runs origination -> the later payoff date so every series has room; under a
+  # window it runs origination -> the window's end, and the forward series show
+  # only when that reaches past today. `Period` is not touched to achieve this:
+  # the payload carries the domain and the controller draws to it.
   #
   # The actual series is never queried past today. Balance::ChartSeriesBuilder
   # carries the last observation forward, so asking it for future dates would
   # draw a flat line asserting the balance never moves again.
   class PayoffChart
     SERIES = %i[actual scheduled projected].freeze
+
+    # The timescales a loan's chart offers, keyed by the shared Period key the
+    # picker saves as the user's default. Each maps the loan's start date and
+    # today to where the window ends: M the first month, 90D the first ninety
+    # days, YTD origination to today, 1Y, 5Y and 10Y the first years. All has no
+    # end and shows the whole life.
+    WINDOWS = {
+      "current_month" => ->(start, _as_of) { start >> 1 },
+      "last_90_days" => ->(start, _as_of) { start + 90 },
+      "current_year" => ->(_start, as_of) { as_of },
+      "last_365_days" => ->(start, _as_of) { start >> 12 },
+      "last_5_years" => ->(start, _as_of) { start >> 60 },
+      "last_10_years" => ->(start, _as_of) { start >> 120 },
+      "all_time" => nil
+    }.freeze
+
+    # [key, label] pairs for the loan chart's period picker, in WINDOWS order.
+    def self.window_options
+      WINDOWS.keys.map { |key| [ key, I18n.t("UI.account.chart.loan.windows.#{key}") ] }
+    end
 
     def initialize(loan, as_of: Date.current, period: nil)
       @loan = loan
@@ -81,43 +101,52 @@ class Loan
         loan.account.currency
       end
 
-      # No period, or the "All" period, means the loan's whole life. Upstream's
-      # "All" starts at the family's oldest entry, which for a loan younger than
-      # the family is years before it existed; the domain starts at origination
-      # instead, and the actual series is clipped there too.
+      # Every window on a loan's chart runs forward from origination rather than
+      # back from today (owner review of #3474), so 1Y is the loan's first year.
+      # No period, "All", and any period the loan chart does not offer -- the
+      # picker's choice is shared with every account -- mean the whole life.
+      # Upstream's "All" starts at the family's oldest entry, which for a loan
+      # younger than the family is years before it existed.
       def whole_life?
-        period.nil? || period.key.to_s == "all_time"
+        window_end.nil?
+      end
+
+      # Where the chosen window ends, before it is capped at the whole life's
+      # end; nil for the whole life.
+      def window_end
+        return @window_end if defined?(@window_end)
+
+        @window_end = period && WINDOWS[period.key.to_s]&.call(loan.origination_date, as_of)
       end
 
       # Memoised, as is domain_end: visible? reads the domain for every point,
       # and a loan with no start date finds its origination through the
       # account's first valuation, which is a lookup each time it is asked.
       def domain_start
-        @domain_start ||= whole_life? ? loan.origination_date : period.start_date
+        @domain_start ||= loan.origination_date
       end
 
-      # Under "All", far enough to hold every line: the contract's payoff and
-      # the projection's, whichever is later, and never before today.
+      # The whole life reaches far enough to hold every line: the contract's
+      # payoff and the projection's, whichever is later, and never before today.
+      # A window ends where it ends, but never past that and never on its start.
       def domain_end
-        @domain_end ||= if whole_life?
-          [ schedule.payoff_date, projection.payoff_date, as_of ].compact.max
-        else
-          period.end_date
+        @domain_end ||= begin
+          whole_life_end = [ schedule.payoff_date, projection.payoff_date, as_of ].compact.max
+          whole_life? ? whole_life_end : [ [ window_end, whole_life_end ].min, domain_start + 1 ].max
         end
       end
 
-      # Recorded balances from the domain's start to today, or to the period's
-      # end when that comes first (Last Month must stay inside its own window).
-      # Nothing before origination, and nothing before the first materialised
-      # balance: the series builder carries the last observation forward and
-      # reports zero before there is one, and a flat zero lead-in reads as a
-      # balance that was not there.
+      # Recorded balances from origination to today, or to the window's end when
+      # that comes first. Nothing before the first materialised balance: the
+      # series builder carries the last observation forward and reports zero
+      # before there is one, and a flat zero lead-in reads as a balance that
+      # was not there.
       def actual_series
         first_balance_date = loan.account.balances.minimum(:date)
         return [] if first_balance_date.nil?
 
-        from = [ domain_start, loan.origination_date, first_balance_date ].compact.max
-        to = [ period&.end_date, as_of ].compact.min
+        from = [ domain_start, first_balance_date ].compact.max
+        to = [ domain_end, as_of ].min
         return [] if from > to
 
         loan.account.balance_series(period: Period.custom(start_date: from, end_date: to)).values.map do |value|

@@ -77,6 +77,15 @@ en:
           not_converged: On the current repayment this balance is not paid off by the original maturity; %{balloon} would still be owed.
           projection_basis: Compares today's recorded balance with the schedule's balance on the same day. A payment posted before its scheduled date reads as ahead until that date; one posted after reads as behind.
           legend: Chart series
+          since_start: since the loan started
+          windows:
+            current_month: M
+            last_90_days: 90D
+            current_year: YTD
+            last_365_days: 1Y
+            last_5_years: 5Y
+            last_10_years: 10Y
+            all_time: All
         no_data_available: "No data available"
         title:
           balance: Balance
