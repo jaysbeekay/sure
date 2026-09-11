@@ -155,6 +155,24 @@ class TransactionTest < ActiveSupport::TestCase
     end
   end
 
+  # A provider key holding something other than an object says nothing about
+  # that provider, and must not stop another provider's flag from counting.
+  # SQL reads NULL for it and moves on; pending? used to raise inside
+  # Hash#dig and rescue the whole row to false.
+  test "malformed metadata under one provider does not hide another provider's flag" do
+    account = families(:empty).accounts.create! name: "Pending parity", balance: 0, currency: "USD", accountable: Depository.new
+
+    [ "bad", [ "pending" ], 1 ].each do |malformed|
+      transaction = create_transaction(account: account, amount: 10).entryable
+      transaction.update!(extra: { "simplefin" => malformed, "plaid" => { "pending" => true } })
+
+      assert transaction.pending?, "pending? should see plaid's flag past simplefin => #{malformed.inspect}"
+      sql_pending_answers(transaction).each do |form, answer|
+        assert answer, "#{form} should see plaid's flag past simplefin => #{malformed.inspect}"
+      end
+    end
+  end
+
   test "pending_duplicate_candidates offers only transactions pending? calls posted" do
     account = families(:empty).accounts.create! name: "Merge", balance: 0, currency: "USD", accountable: Depository.new
     pending_entry = create_transaction(account: account, amount: 10)
