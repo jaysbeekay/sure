@@ -179,7 +179,11 @@ class Transaction < ApplicationRecord
   def pending?
     extra_data = extra.is_a?(Hash) ? extra : {}
     PENDING_PROVIDERS.any? do |provider|
-      ActiveModel::Type::Boolean.new.cast(extra_data.dig(provider, "pending"))
+      # A provider key holding anything but an object says nothing about that
+      # provider. Skip it, as pending_sql does, rather than let Hash#dig raise
+      # and the rescue below hide every other provider's flag.
+      provider_data = extra_data[provider]
+      provider_data.is_a?(Hash) && ActiveModel::Type::Boolean.new.cast(provider_data["pending"])
     end
   rescue StandardError
     false
