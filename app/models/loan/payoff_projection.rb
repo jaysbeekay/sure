@@ -122,12 +122,23 @@ class Loan
         remaining_scheduled_payments.sum(BigDecimal("0")) { |payment| payment.interest.amount }
       end
 
+      # The date the period containing `as_of` opened: the last scheduled
+      # payment on or before it, or origination before the first. The simulator
+      # charges a period at the rate in force when it OPENED, so the projection's
+      # first period opens where the schedule's does. Opened at `as_of`, a rate
+      # change recorded between the last payment and today re-rated a month the
+      # schedule charges at the old rate, and a borrower exactly on contract was
+      # quoted interest they will never pay.
+      def current_period_start
+        schedule.payments.reverse_each.find { |payment| payment.date <= as_of }&.date || schedule.start_date
+      end
+
       def simulation
         return nil unless applicable?
 
         @simulation ||= Simulator.new(
           starting_balance: current_balance.amount,
-          accrual_start_date: as_of,
+          accrual_start_date: current_period_start,
           payment_schedule: remaining_payment_dates,
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
           re_amortisation_events: rate_resolver.method(:re_amortisation_events),

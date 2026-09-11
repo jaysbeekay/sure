@@ -164,6 +164,29 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_equal BigDecimal("0"), projection.interest_saved.amount
   end
 
+  # Under monthly accrual a period is charged at the rate in force when it
+  # OPENED (Loan::Simulator's class comment), so a change recorded between the
+  # last payment and today belongs to the next period. Opening the projection's
+  # first period at `as_of` instead re-rated the month already running, and a
+  # variable borrower exactly on contract was quoted interest the schedule
+  # never charges.
+  test "a rate change between the last payment and today does not re-rate the month already running" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    last_paid = loan.amortization_schedule.payments.select { |p| p.date <= @today }.last.date
+    change_date = last_paid + 5
+    assert_operator change_date, :<, @today, "the change must fall inside the period already running"
+
+    loan.update!(variable_rate_schedule: { change_date.iso8601 => "12.0" })
+    # Fresh records: the schedule read above is memoised without the change.
+    loan.account.update!(balance: scheduled_balance_at(Loan.find(loan.id), @today))
+    projection = Loan.find(loan.id).payoff_projection(as_of: @today)
+
+    assert projection.converged?
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount,
+      "on contract, the projection must charge the running month what the schedule charges it"
+  end
+
   private
     # Built the way the account form builds one: with an opening valuation for
     # the amount borrowed. `Loan#original_balance` reads it; without it the
