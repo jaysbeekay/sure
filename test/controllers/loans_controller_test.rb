@@ -364,6 +364,24 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal balance_before, @account.reload.balance, "the balance half of a rejected form must not commit"
   end
 
+  # CodeRabbit on we-promise/sure#3474: `lock_saved_attributes!` saves with
+  # `update!`. Run after the transaction had committed, a raise there left the
+  # balance change and the attribute update in place behind a failed request.
+  test "an update whose attribute lock fails commits neither the balance nor the attributes" do
+    balance_before = @account.reload.balance
+    name_before = @account.name
+    Account.any_instance.stubs(:lock_saved_attributes!).raises(ActiveRecord::RecordInvalid.new(@account))
+
+    assert_no_difference "Entry.count" do
+      patch loan_path(@account), params: { account: { name: "Renamed Loan", balance: balance_before - 10_000 } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "form[action='#{loan_path(@account)}']", count: 1
+    assert_equal balance_before, @account.reload.balance, "the balance must roll back with the failed lock"
+    assert_equal name_before, @account.name, "the attribute update must roll back with the failed lock"
+  end
+
   # CodeRabbit on we-promise/sure#3473: `loans/new` renders the method
   # selector when `step=method_select`, which reads `@provider_configs`; the
   # rescue path must set it up as `new` does.
