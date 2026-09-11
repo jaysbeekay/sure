@@ -283,7 +283,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     # the add button are submittable.
     assert_select "[data-loan-rate-changes-target=rows] input:not([disabled])", count: 0
     assert_select "[data-loan-rate-changes-target=rows] button:not([disabled])", count: 0
-    assert_select "[data-loan-rate-changes-target=section] > button:not([disabled])", count: 0
+    assert_select "[data-loan-rate-changes-target=section] button[data-action='loan-rate-changes#add']:not([disabled])", count: 0
   end
 
   test "a variable loan's edit form enables the rate-change section server-side" do
@@ -294,6 +294,33 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-loan-rate-changes-target=section][hidden]", count: 0
     assert_select "[data-loan-rate-changes-target=rows] input[disabled]", count: 0
     assert_select "[data-loan-rate-changes-target=section] input[name='account[accountable_attributes][rate_changes][]']:not([disabled])", count: 1
+  end
+
+  # Owner review of #3474: the rate changes open from a collapsed disclosure,
+  # as Additional details does, and the loan's fields keep the form's spacing
+  # instead of stacking flush against each other.
+  test "the rate changes sit in a collapsed disclosure and the loan fields are spaced" do
+    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+
+    get edit_loan_path(@account)
+
+    assert_select "[data-loan-rate-changes-target=section] details:not([open]) > summary", text: /#{I18n.t("loans.form.rate_changes")}/
+    assert_select "[data-loan-rate-changes-target=section] details [data-loan-rate-changes-target=rows] input[name$='[rate]'][value='7.25']", count: 1
+    assert_select "[data-controller='loan-rate-changes'].space-y-2", count: 1
+  end
+
+  # Owner review of #3474: what kind of loan it is belongs with the account's
+  # own fields, straight after the balance, before the loan's terms.
+  test "the subtype sits under the balance, above the loan's terms" do
+    get edit_loan_path(@account)
+
+    body = response.body
+    balance = body.index('name="account[balance]"')
+    subtype = body.index('name="account[accountable_attributes][subtype]"')
+    terms = body.index('name="account[accountable_attributes][initial_balance]"')
+    assert balance && subtype && terms, "the balance, subtype and original balance fields must all render"
+    assert_operator balance, :<, subtype, "the subtype comes after the balance"
+    assert_operator subtype, :<, terms, "the subtype comes before the loan's terms"
   end
 
   # `Account.create_and_sync` saves with `save!`, and this is the first Loan
@@ -319,7 +346,9 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # The Overview tab quoted `loans.interest_rate`, the origination rate, while
   # the Schedule tab beside it re-amortised at each recorded change.
   test "the overview tab shows the rate in force, not the origination rate" do
-    @account.loan.update!(rate_type: "variable", interest_rate: 6,
+    # Drawn down two years ago, so the change a month ago re-sizes a repayment
+    # the loan was already making rather than setting its first one.
+    @account.loan.update!(rate_type: "variable", interest_rate: 6, start_date: Date.current - 2.years,
                           variable_rate_schedule: { (Date.current - 1.month).iso8601 => "7.25" })
 
     get account_path(@account, tab: "overview")
@@ -328,8 +357,22 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "h4", text: I18n.t("loans.tabs.overview.interest_rate")
     assert_match "7.250%", response.body, "the recorded change is the rate in force"
     assert_no_match "6.000%", response.body, "the origination rate is not what the loan is charging"
-    assert_match I18n.t("loans.tabs.overview.not_applicable"), response.body,
-      "a variable loan has no single monthly payment"
+
+    # Owner review of #3474: the repayment card quotes the scheduled repayment
+    # in force today -- the next payment on or after it, sized at the rates
+    # recorded so far -- rather than N/A.
+    schedule = @account.loan.amortization_schedule
+    in_force = schedule.payments.find { |payment| payment.date >= Date.current }.payment
+    assert_not_equal schedule.periodic_payment, in_force,
+      "the fixture must re-amortise before today, or this cannot tell today's repayment from the opening one"
+    # Scoped to the card: the Schedule tab's table on the same page lists every
+    # payment, so the figure turns up in the body whether or not the card has it.
+    card = css_select("h4").find { |title| title.text.strip == I18n.t("loans.tabs.overview.monthly_payment") }&.parent
+    assert card, "the overview has a monthly payment card"
+    assert_includes card.at_css("p").text,
+      ActiveSupport::NumberHelper.number_to_rounded(in_force.amount, precision: 2, delimiter: ","),
+      "the card quotes the repayment in force today"
+    assert_no_match I18n.t("loans.tabs.overview.not_applicable"), card.text
   end
 
   test "the overview tab of a fixed loan still shows its rate and monthly payment" do
