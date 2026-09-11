@@ -64,6 +64,14 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert_no_selector "[data-controller='loan-payoff-chart']"
   end
 
+  # Owner review of #3474: the balance a loan's chart plots is what is still
+  # owed, and the title says so without "principal".
+  test "a loan account's chart is titled remaining balance" do
+    render_inline(UI::Account::Chart.new(account: accounts(:loan)))
+
+    assert_selector "p", exact_text: "Remaining balance"
+  end
+
   test "a loan without a chart payload falls back to the chart every account has" do
     loan_account = accounts(:loan)
 
