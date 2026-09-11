@@ -1,0 +1,48 @@
+name: Mirror upstream main
+
+# Keeps mirror/upstream-main equal to we-promise/sure main, so a delivery
+# branch (up/*) can open a fork pull request against it and get this fork's CI
+# and review bots before the same branch opens a pull request upstream.
+# See docs/llm-guides/upstream-delivery.md.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-upstream
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'jaysbeekay/sure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          # The push below uses the credential the checkout action manages;
+          # the origin URL itself stays free of the token.
+          persist-credentials: true
+
+      - name: Push we-promise/sure main to mirror/upstream-main
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/we-promise/sure.git
+
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin mirror/upstream-main || true
+
+          # The mirror only ever moves to upstream's current main. The lease
+          # names the head it expects to replace, so two runs cannot race.
+          lease=()
+          if mirror_sha="$(git rev-parse --verify -q refs/remotes/origin/mirror/upstream-main)"; then
+            lease=(--force-with-lease="refs/heads/mirror/upstream-main:${mirror_sha}")
+          fi
+          git push origin refs/remotes/upstream/main:refs/heads/mirror/upstream-main "${lease[@]}"

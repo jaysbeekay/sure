@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Rebase the current delivery branch onto we-promise/sure main, then lint the
+# files it changes and run the tests you name.
+#
+# Run it by path from the fork's main checkout while the delivery branch is
+# checked out in a worktree: the branch is rooted at upstream main and does
+# not carry this script. The linters and bin/rails are the branch's own.
+#
+#   ../sure/bin/upstream-rebase                       # rebase, lint changed files
+#   ../sure/bin/upstream-rebase test/models/loan      # ... and run these tests
+#   ../sure/bin/upstream-rebase --onto up/parent ...  # a stacked branch: drop the
+#                                                     # parent's commits once its
+#                                                     # upstream PR has merged
+#   ../sure/bin/upstream-rebase --no-lint ...
+#
+# See docs/llm-guides/upstream-delivery.md.
+set -euo pipefail
+
+onto=""
+lint=1
+tests=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --onto) onto="$2"; shift 2 ;;
+    --no-lint) lint=0; shift ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    *) tests+=("$1"); shift ;;
+  esac
+done
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+case "$branch" in
+  up/*) ;;
+  *) echo "upstream-rebase: '$branch' is not a delivery branch (up/*); refusing to rebase it." >&2; exit 2 ;;
+esac
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "upstream-rebase: the working tree is not clean; commit or stash first." >&2
+  exit 2
+fi
+
+git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/we-promise/sure.git
+git fetch --no-tags upstream main
+
+before="$(git rev-parse --short HEAD)"
+if [ -n "$onto" ]; then
+  echo "Rebasing $branch onto upstream/main, dropping the commits it shares with $onto"
+  git rebase --onto upstream/main "$onto" || {
+    echo; echo "upstream-rebase: conflicts. Resolve them, 'git rebase --continue', then run this again with the same arguments." >&2; exit 1; }
+else
+  echo "Rebasing $branch onto upstream/main"
+  git rebase upstream/main || {
+    echo; echo "upstream-rebase: conflicts. Resolve them, 'git rebase --continue', then run this again with the same arguments." >&2; exit 1; }
+fi
+echo "$branch: $before -> $(git rev-parse --short HEAD), $(git rev-list --count upstream/main..HEAD) commit(s) on upstream/main $(git rev-parse --short upstream/main)"
+
+if [ "$lint" -eq 1 ]; then
+  # One path per NUL, so a filename with a space survives xargs.
+  changed() { git diff -z --name-only upstream/main...HEAD --diff-filter=AMR | tr '\0' '\n' | grep -E "$1" | tr '\n' '\0' || true; }
+  rb="$(changed '\.rb$')"; erb="$(changed '\.erb$')"; js="$(changed '\.js$')"
+  [ -n "$rb" ] && { echo "rubocop"; printf '%s' "$rb" | xargs -0 bin/rubocop; }
+  [ -n "$erb" ] && { echo "erb_lint"; printf '%s' "$erb" | xargs -0 bundle exec erb_lint; }
+  [ -n "$js" ] && { echo "biome"; printf '%s' "$js" | xargs -0 npx biome lint; }
+fi
+
+if [ ${#tests[@]} -gt 0 ]; then
+  echo "bin/rails test ${tests[*]}"
+  bin/rails test "${tests[@]}"
+else
+  echo "No tests named; run the suites the change touches before pushing."
+fi
