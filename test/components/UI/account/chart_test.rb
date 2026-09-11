@@ -125,6 +125,31 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert_text I18n.t("UI.account.chart.loan.projection_basis")
   end
 
+  # jjmata on we-promise/sure#3474: the table toggle is DS::Disclosure, so it
+  # carries the design system's summary contract (focus ring, no native
+  # marker) rather than a hand-built <details>.
+  test "the chart's table toggle is a design-system disclosure" do
+    loan_account = accounts(:loan)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan fixture must have a schedule, or this test asserts nothing"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
+
+    assert_selector "details.group > summary.focus-ring", text: I18n.t("UI.account.chart.loan.view_as_table")
+    assert_selector "details.group table##{ActionView::RecordIdentifier.dom_id(loan_account, :loan_chart_table)}", visible: :all
+  end
+
+  # jjmata on we-promise/sure#3474: the trend, its comparison label and the
+  # chart mount all read the series. It is built once per render, not once per
+  # reader.
+  test "the card builds its balance series once per render" do
+    loan_account = accounts(:loan)
+    series = loan_account.balance_series(period: Period.last_30_days, view: "balance")
+    loan_account.expects(:balance_series).once.returns(series)
+
+    render_inline(UI::Account::Chart.new(account: loan_account))
+  end
+
   private
     # 10 shares at $100 market price; gain = 1000 - cost_basis * 10
     def create_holding(cost_basis:)

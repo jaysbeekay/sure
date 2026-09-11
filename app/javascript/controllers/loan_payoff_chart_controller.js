@@ -1,5 +1,10 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
+import {
+  CHART_TOOLTIP_CONTEXT_CLASSES,
+  CHART_TOOLTIP_VALUE_CLASSES,
+  createChartTooltip,
+} from "utils/chart_tooltip";
 
 // The loan balance chart: three series on one axis.
 //
@@ -315,11 +320,10 @@ export default class extends Controller {
     { x, series, width, height, margin, data, domainStart, domainEnd, splitAt },
   ) {
     this._tooltip?.remove();
-    const tooltip = document.createElement("div");
-    tooltip.className =
-      "absolute pointer-events-none hidden rounded-md bg-container shadow-border-xs px-2 py-1 text-xs text-primary";
     this.element.style.position = "relative";
-    this.element.appendChild(tooltip);
+    // The shared visual contract the other chart controllers use: the
+    // .chart-tooltip surface, z-50 and privacy-sensitive.
+    const tooltip = createChartTooltip(this.element);
     this._tooltip = tooltip;
 
     const bisect = d3.bisector((d) => d.date).left;
@@ -363,21 +367,34 @@ export default class extends Controller {
             return null;
           const point = nearest(s.points, date);
           return point
-            ? `${data.labels?.[s.key] || s.key}: ${money(point.balance)}`
+            ? {
+                label: data.labels?.[s.key] || s.key,
+                value: money(point.balance),
+              }
             : null;
         })
         .filter(Boolean);
       if (!rows.length) return;
 
-      // Text nodes, never innerHTML.
-      tooltip.replaceChildren();
-      for (const text of [monthYear.format(date), ...rows]) {
-        const div = document.createElement("div");
-        div.textContent = text;
-        tooltip.appendChild(div);
-      }
-      tooltip.classList.remove("hidden");
-      tooltip.style.left = `${Math.min(px + 12, width - 150)}px`;
+      // Text nodes, never innerHTML. Date and figures take the shared content
+      // classes, as the other charts' tooltips do.
+      const dateRow = document.createElement("div");
+      dateRow.className = CHART_TOOLTIP_CONTEXT_CLASSES;
+      dateRow.textContent = monthYear.format(date);
+      const valueRows = rows.map(({ label, value }) => {
+        const row = document.createElement("div");
+        const amount = document.createElement("span");
+        amount.className = CHART_TOOLTIP_VALUE_CLASSES;
+        amount.textContent = value;
+        row.append(`${label}: `, amount);
+        return row;
+      });
+      tooltip.replaceChildren(dateRow, ...valueRows);
+      tooltip.style.display = "block";
+      // Measured once the content is in: the shared surface is padded, so a
+      // fixed allowance would let a long row run past the chart's right edge.
+      const left = Math.min(px + 12, width - tooltip.offsetWidth - 4);
+      tooltip.style.left = `${Math.max(margin.left, left)}px`;
       tooltip.style.top = `${margin.top}px`;
       splitAt(Math.max(margin.left, Math.min(px, width - margin.right)));
     };
@@ -396,7 +413,7 @@ export default class extends Controller {
     };
 
     const hide = () => {
-      tooltip.classList.add("hidden");
+      tooltip.style.display = "none";
       announce(false);
       splitAt(width - margin.right);
     };

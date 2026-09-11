@@ -88,6 +88,10 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       tooltip = find("[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all)
       first = tooltip.text(:all)
       assert_match I18n.t("UI.account.chart.loan.scheduled"), first
+      # jjmata on we-promise/sure#3474: the tooltip is built from
+      # utils/chart_tooltip, so it shares the other charts' surface and z-index.
+      assert_includes tooltip[:class].to_s.split, "chart-tooltip"
+      assert_includes tooltip[:class].to_s.split, "z-50"
 
       svg.send_keys(:arrow_right)
       assert_not_equal first, tooltip.text(:all), "the second press moves to the next date"
@@ -101,7 +105,7 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
         const box = rect.getBoundingClientRect();
         rect.dispatchEvent(new PointerEvent("pointermove", { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true }));
       JS
-      assert_selector "[data-controller='loan-payoff-chart'] div:not(.hidden)", text: I18n.t("UI.account.chart.loan.scheduled")
+      assert_selector "[data-controller='loan-payoff-chart'] div.chart-tooltip", text: I18n.t("UI.account.chart.loan.scheduled")
       assert_no_selector "[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all
     end
   end

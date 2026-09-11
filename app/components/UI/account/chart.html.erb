@@ -89,11 +89,17 @@
       <%# Real DOM text, not only the SVG's aria-label (gate G6). %>
       <p class="sr-only"><%= loan_chart[:aria_description] %></p>
 
-      <%# The tabular alternative the SVG points at through aria-describedby:
-          the same rows the lines are drawn from, so the two cannot disagree. %>
-      <details class="px-4 pb-4 text-sm">
-        <summary class="cursor-pointer text-secondary"><%= t("UI.account.chart.loan.view_as_table") %></summary>
-        <div class="mt-2 max-h-64 overflow-y-auto rounded-lg border border-alpha-black-25">
+      <%# The tabular alternative the SVG points at through aria-details: the
+          same rows the lines are drawn from, so the two cannot disagree. The
+          inline disclosure keeps the toggle a quiet text link under the legend. %>
+      <%= render DS::Disclosure.new(variant: :inline, class: "px-4 pb-4 text-sm") do |disclosure| %>
+        <% disclosure.with_summary_content do %>
+          <span class="inline-flex items-center gap-1 text-secondary">
+            <%= t("UI.account.chart.loan.view_as_table") %>
+            <%= helpers.icon "chevron-down", class: "group-open:rotate-180 motion-safe:transition-transform motion-safe:duration-150" %>
+          </span>
+        <% end %>
+        <div class="max-h-64 overflow-y-auto rounded-lg border border-alpha-black-25">
           <table id="<%= loan_table_id %>" class="w-full text-sm">
             <thead class="sticky top-0 bg-container border-b border-alpha-black-25">
               <tr class="text-secondary text-left">
@@ -115,7 +121,7 @@
             </tbody>
           </table>
         </div>
-      </details>
+      <% end %>
     <% else %>
       <div class="h-64 pb-4">
         <% if series.any? %>

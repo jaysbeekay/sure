@@ -157,8 +157,9 @@ class UI::Account::Chart < ApplicationComponent
     @view ||= "balance"
   end
 
+  # Read by the trend, its comparison label and the chart mount; built once.
   def series
-    account.balance_series(period: period, view: view)
+    @series ||= account.balance_series(period: period, view: view)
   end
 
   # Current total unrealized gains, taken from the series so the main indicator
