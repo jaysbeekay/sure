@@ -903,6 +903,40 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal Money.new(0, "USD"), totals.contributions
   end
 
+  # The classifier reads a pending flag without casting it: `::boolean` raises
+  # on a value PostgreSQL cannot parse ("maybe") and disagrees with ActiveModel
+  # on one it can ("no"). Totals used the cast, so a single such flag aborted
+  # the family's whole aggregation -- and every page that reads it -- while the
+  # classifier answered the same entry without complaint.
+  test "totals read a non-boolean pending flag the way the flow classifier does" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    entries = { "maybe" => -11, "no" => -13, "false" => -17, "0" => -19 }.map do |flag, amount|
+      create_labelled_transaction(account: account, label: "Dividend", amount: amount, date: period.start_date,
+                                  extra: { "plaid" => { "pending" => flag } })
+    end
+
+    totals = @statement.totals(period: period)
+
+    classifier = Portfolio::FlowClassifier.new(scope_account_ids: [ account.id ])
+    posted = entries.select { |entry| classifier.classify(entry.reload) == :income }
+    assert_equal Money.new(36, "USD"), totals.dividends, "\"false\" and \"0\" have posted; \"maybe\" and \"no\" are pending"
+    assert_equal posted.sum { |entry| entry.amount.abs }, totals.dividends.amount
+  end
+
+  # "Never also its fee column" guards a double count. When the amount is zero
+  # the column is the only record of the fee, and reading the amount alone
+  # dropped it from the total.
+  test "a Fee-labelled trade with no amount counts its fee column, and never both" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_portfolio_trade(account: account, qty: 0, price: 0, label: "Fee", fee: 7, fee_in_amount: false, date: period.start_date)
+    create_portfolio_trade(account: account, qty: 0, price: 0, label: "Fee", fee: 5, fee_in_amount: true, date: period.start_date)
+
+    assert_equal Money.new(12, "USD"), @statement.totals(period: period).fees
+  end
+
   test "totals read their income and fee labels from the flow classifier" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
     account = create_investment_account(balance: 500)
@@ -923,7 +957,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "Totals splits income into dividends and interest by literal label; a new income label needs its own bucket there"
   end
 
-  test "totals cache key carries the v3 aggregation version" do
+  test "totals cache key carries the v4 aggregation version" do
     create_investment_account(balance: 500)
     seen_keys = []
     Rails.cache.stubs(:fetch).with { |*args| seen_keys << Array(args.first); true }.returns(
@@ -933,7 +967,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     @statement.totals(period: Period.current_month)
 
     assert_equal 1, seen_keys.size
-    assert_includes seen_keys.first, "totals_query/v3"
+    assert_includes seen_keys.first, "totals_query/v4"
   end
 
   test "series cache key changes when a share is revoked" do

@@ -144,6 +144,7 @@ P23:
     class: InvestmentStatementTest
     tests:
       - fees sum Fee-labelled entries and transfer fee legs alongside trades.fee
+      - a Fee-labelled trade with no amount counts its fee column, and never both
 P24:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
@@ -158,11 +159,12 @@ P25:
       - totals read their income and fee labels from the flow classifier
       - the income buckets cover every income label the classifier knows
       - a buy relabeled to Dividend is counted as income only, not also as a contribution
+      - totals read a non-boolean pending flag the way the flow classifier does
 P26:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - totals cache key carries the v3 aggregation version
+      - totals cache key carries the v4 aggregation version
 P27:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
