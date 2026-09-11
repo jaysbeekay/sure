@@ -18,6 +18,34 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal I18n.t("preview.not_enabled"), flash[:alert]
   end
 
+  # The class-level gate covers every action, so the one endpoint that writes
+  # cannot save preferences for a page its caller is not allowed to see.
+  test "preference writes are preview-gated like the page" do
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => false))
+
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[kpis] } },
+      as: :json
+
+    assert_redirected_to root_path
+    assert_nil @user.reload.preferences["portfolio_section_order"]
+  end
+
+  # The KPI row reads the family's income totals. Those used a ::boolean cast
+  # on provider pending flags, so one flag PostgreSQL cannot parse raised out
+  # of the aggregation and took the whole page down with it.
+  test "the hub renders when an income entry carries a non-boolean pending flag" do
+    accounts(:investment).entries.create!(
+      name: "Dividend", date: Date.current, amount: -12, currency: "USD",
+      entryable: Transaction.new(investment_activity_label: "Dividend", extra: { "plaid" => { "pending" => "maybe" } })
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "kpis", count: 1
+  end
+
   test "renders the hub, its turbo frame and every section the family has data for" do
     get portfolio_path
 

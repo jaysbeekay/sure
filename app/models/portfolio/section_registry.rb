@@ -11,8 +11,11 @@
 #
 # Every local a partial needs is passed in. Nothing here (and nothing in the
 # partials) reads Date.current or Current.family: the controller captures one
-# `as_of` and one statement per request and hands them down, so a render that
-# straddles midnight cannot show two different todays.
+# `as_of` and one statement per request and hands them down, so the sections
+# that take a date all read the same one. That does not reach
+# InvestmentStatement's snapshot FX, which converts at today's rate by its own
+# contract (see PortfoliosController#show), so a render straddling midnight can
+# still pick up the next day's rates there.
 class Portfolio::SectionRegistry
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
@@ -50,9 +53,11 @@ class Portfolio::SectionRegistry
       all.find { |section| section[:key] == key }
     end
 
-    all.each { |section| ordered << section unless ordered.include?(section) }
-
-    ordered
+    # Matched by key, never by comparing whole section hashes: a section's
+    # locals carry the statement and whatever it has memoised, and the order
+    # must not depend on how those compare.
+    placed = ordered.map { |section| section[:key] }
+    ordered + all.reject { |section| placed.include?(section[:key]) }
   end
 
   private
