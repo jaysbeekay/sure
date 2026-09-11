@@ -510,6 +510,25 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "h4", text: /Principal/, count: 0
   end
 
+  # Owner review of #3474: the contract's payoff date is one of the loan's
+  # terms, so it sits with the others on Overview, named as the original date.
+  test "the overview tab shows the original payoff date and the schedule tab does not" do
+    payoff_date = @account.loan.amortization_schedule&.payoff_date
+    assert payoff_date, "the fixture loan must have a schedule, or there is no date to show"
+
+    get account_path(@account, tab: "overview")
+
+    assert_response :success
+    # Both tabs render into the page, so the card is found by its title and
+    # placed by the cards beside it.
+    card = css_select("h4").find { |title| title.text.strip == "Original Payoff Date" }&.parent
+    assert card, "the overview has an original payoff date card"
+    assert_equal I18n.l(payoff_date, format: :long), card.at_css("p").text.strip
+    assert card.parent.css("h4").any? { |title| title.text.strip == "Original Loan Amount" },
+      "the card sits among the Overview cards"
+    assert_select "h4", text: "Payoff Date", count: 0
+  end
+
   # Codex on we-promise/sure#3473: `update` persisted the balance change (a
   # valuation and the account's cached balance) before the loan's validation
   # ran, so a rejected form had committed half of itself.

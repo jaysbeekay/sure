@@ -55,6 +55,14 @@
     <% end %>
   <% end %>
 
+  <%# When the contract's last payment falls due. A variable loan keeps this
+      date through its rate changes -- the schedule resizes the repayment
+      instead -- so it is the loan's original payoff date either way. %>
+  <%= summary_card title: t(".original_payoff_date") do %>
+    <% original_payoff_date = account.loan.amortization_schedule&.payoff_date %>
+    <%= original_payoff_date ? l(original_payoff_date, format: :long) : t(".unknown") %>
+  <% end %>
+
   <%= summary_card title: t(".type") do %>
     <%= account.loan.rate_type&.titleize || t(".unknown") %>
   <% end %>

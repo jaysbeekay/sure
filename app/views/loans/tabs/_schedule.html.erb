@@ -7,7 +7,7 @@
 <% payments = schedule.payments %>
 
 <div class="space-y-4">
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+  <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
     <%# A re-amortising loan has no single monthly payment, so the card says
         which one this is rather than implying the figure holds for the term. %>
     <%= summary_card title: schedule.re_amortising? ? t(".opening_payment") : t(".monthly_payment") do %>
@@ -20,10 +20,6 @@
 
     <%= summary_card title: t(".total_cost") do %>
       <%= format_money schedule.total_paid %>
-    <% end %>
-
-    <%= summary_card title: t(".payoff_date") do %>
-      <%= l schedule.payoff_date, format: :long %>
     <% end %>
   </div>
 

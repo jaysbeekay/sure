@@ -31,6 +31,7 @@ en:
       interest_rate: Interest Rate
       monthly_payment: Monthly Payment
       not_applicable: N/A
+      original_payoff_date: Original Payoff Date
       original_principal: Original Loan Amount
       remaining_principal: Remaining Loan Amount
       term: Term
@@ -46,7 +47,6 @@ en:
         monthly_payment: Monthly Payment
         number: "#"
         payment: Payment
-        payoff_date: Payoff Date
         principal: Principal
         remaining_balance: Remaining Balance
         total_cost: Total Cost
@@ -55,6 +55,7 @@ en:
         interest_rate: Interest Rate
         monthly_payment: Monthly Payment
         not_applicable: N/A
+        original_payoff_date: Original Payoff Date
         original_principal: Original Loan Amount
         remaining_principal: Remaining Loan Amount
         term: Term
