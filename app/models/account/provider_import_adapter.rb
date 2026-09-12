@@ -795,7 +795,7 @@ class Account::ProviderImportAdapter
       .where(amount: amount)
       .where(currency: currency)
       .where(date: (date - date_window.days)..date) # Pending must be ON or BEFORE posted date
-      .where("(#{Transaction.pending_sql('transactions')})")
+      .where(Transaction.pending_sql("transactions"))
       .order(date: :desc) # Prefer most recent pending transaction
 
     candidates.first
@@ -837,7 +837,7 @@ class Account::ProviderImportAdapter
       .where(currency: currency)
       .where(date: (date - date_window.days)..date) # Pending ON or BEFORE posted
       .where("ABS(entries.amount) BETWEEN ? AND ?", min_pending_abs, max_pending_abs)
-      .where("(#{Transaction.pending_sql('transactions')})")
+      .where(Transaction.pending_sql("transactions"))
 
     # If merchant_id is provided, prioritize matching by merchant
     if merchant_id.present?
@@ -902,7 +902,7 @@ class Account::ProviderImportAdapter
       .where(currency: currency)
       .where(date: (date - date_window.days)..date)
       .where("ABS(entries.amount) BETWEEN ? AND ?", min_pending_abs, max_pending_abs)
-      .where("(#{Transaction.pending_sql('transactions')})")
+      .where(Transaction.pending_sql("transactions"))
 
     # For low confidence, require BOTH merchant AND name match (stronger signal needed)
     if merchant_id.present? && name.present?

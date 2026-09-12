@@ -128,14 +128,19 @@ class Transaction < ApplicationRecord
         "COALESCE(#{quoted_table}.extra -> #{connection.quote(provider)} ->> #{connection.quote("pending")}, #{connection.quote("")}) NOT IN (#{false_values})"
       end
       .join(" OR ")
+      .then { |predicate| "(#{predicate})" }
   end
 
   def self.pending_flag_false_values_sql
     @pending_flag_false_values_sql ||= PENDING_FLAG_FALSE_VALUES.map { |value| connection.quote(value) }.join(", ").freeze
   end
 
+  # A fixed-alias fragment for correlated SQL. Keep it as a constant so static
+  # analysis can verify that the raw SQL is built only from provider constants.
+  PENDING_CHECK_SQL = pending_sql("t").freeze
+
   def self.pending_check_sql
-    @pending_check_sql ||= pending_sql("t").freeze
+    PENDING_CHECK_SQL
   end
 
   # The negation of pending_sql, for queries that must leave pending rows out.
