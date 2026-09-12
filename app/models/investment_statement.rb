@@ -3,7 +3,7 @@ require "digest/md5"
 class InvestmentStatement
   include Monetizable
 
-  monetize :total_contributions, :total_dividends, :total_interest, :unrealized_gains
+  monetize :total_contributions, :total_dividends, :total_interest, :total_fees, :unrealized_gains
 
   attr_reader :family, :user
 
@@ -23,6 +23,7 @@ class InvestmentStatement
       withdrawals: Money.new(result[:withdrawals], family.currency),
       dividends: Money.new(result[:dividends], family.currency),
       interest: Money.new(result[:interest], family.currency),
+      fees: Money.new(result[:fees], family.currency),
       trades_count: result[:trades_count],
       currency: family.currency
     )
@@ -90,34 +91,67 @@ class InvestmentStatement
     end
   end
 
-  # Top holdings by family-currency value
+  # Top investments rolled up by security across accounts, ranked by
+  # family-currency value. Weight is the security's share of the whole
+  # portfolio, cash included -- the same number #allocation reports for it
+  # (see #weight_denominator). Presence is gated on holdings totals, not
+  # Account#balance, so a stale zero portfolio_value still surfaces real
+  # positions.
   def top_holdings(limit: 5)
-    current_holdings
-      .to_a
-      .sort_by { |h| -convert_to_family_currency(h.amount, h.currency) }
-      .first(limit)
-  end
+    rolled_up = holdings_rolled_up_by_security
+    return [] if rolled_up.empty?
 
-  # Portfolio allocation by security. Weights and amounts are computed in the
-  # family's currency so cross-currency holdings compare correctly.
-  def allocation
-    converted = current_holdings.to_a.map do |holding|
-      [ holding, convert_to_family_currency(holding.amount, holding.currency) ]
-    end
-
-    total = converted.sum { |_, value| value }
+    total = weight_denominator(rolled_up)
     return [] if total.zero?
 
-    converted
-      .sort_by { |_, value| -value }
-      .map do |holding, value|
+    # Rank/limit on value first; only then compute cost-basis trends for the
+    # rows that will be rendered (avoids avg_cost/trade lookups for the rest).
+    rolled_up
+      .first(limit)
+      .map do |security, value, holdings|
         HoldingAllocation.new(
-          security: holding.security,
+          security: security,
           amount: Money.new(value, family.currency),
           weight: (value / total * 100).round(2),
-          trend: holding.trend
+          trend: combined_holding_trend(holdings)
         )
       end
+  end
+
+  # Portfolio allocation by security (rolled up across accounts), plus one
+  # cash row for the part of the portfolio no holding accounts for, so the
+  # weights sum to 100 and every security carries the same weight here as in
+  # #top_holdings.
+  #
+  # The cash row is a residual (portfolio value minus holdings total), not
+  # Account#cash_balance: when account balances are stale the residual is
+  # zero and the row is omitted, whereas the reported cash balance could push
+  # the sum past 100.
+  def allocation
+    rolled_up = holdings_rolled_up_by_security
+    total = weight_denominator(rolled_up)
+    return [] if total.zero?
+
+    rows = rolled_up.map do |security, value, holdings|
+      HoldingAllocation.new(
+        security: security,
+        amount: Money.new(value, family.currency),
+        weight: (value / total * 100).round(2),
+        trend: combined_holding_trend(holdings)
+      )
+    end
+
+    cash = total - rolled_up.sum { |_, value, _| value }
+    if cash.positive?
+      rows << HoldingAllocation.new(
+        security: nil,
+        amount: Money.new(cash, family.currency),
+        weight: (cash / total * 100).round(2),
+        trend: nil
+      )
+    end
+
+    rows
   end
 
   # Unrealized gains across all holdings, summed in family currency
@@ -141,6 +175,11 @@ class InvestmentStatement
   # Total interest (all time) - returns numeric for monetize
   def total_interest
     all_time_totals.interest&.amount || 0
+  end
+
+  # Total fees (all time) - returns numeric for monetize
+  def total_fees
+    all_time_totals.fees&.amount || 0
   end
 
   def unrealized_gains_trend
@@ -235,6 +274,30 @@ class InvestmentStatement
     )
   end
 
+  # Portfolio value (cash + holdings) over the period, in family currency.
+  #
+  # Charted from the *historical* account scope, so a disabled broker keeps its
+  # history up to its cut-off date. The last point therefore diverges from
+  # #portfolio_value (visible accounts only) whenever a disabled account still
+  # carries a non-zero balance. See HistoricalScope for the rationale.
+  def value_series(period: Period.last_30_days)
+    fetch_series(:value, period) { |builder| builder.balance_series }
+  end
+
+  # Holdings-only value (portfolio value minus cash) over the period.
+  def holdings_value_series(period: Period.last_30_days)
+    fetch_series(:holdings_value, period) { |builder| builder.holdings_balance_series }
+  end
+
+  # Unrealized gains (market value minus cost basis) over the period.
+  def gains_series(period: Period.last_30_days)
+    fetch_series(:gains, period) { |builder| builder.gains_series }
+  end
+
+  def historical_scope
+    @historical_scope ||= HistoricalScope.new(family, user: user)
+  end
+
   # Day change across portfolio, summed in family currency
   def day_change
     changes = current_holdings.to_a.filter_map do |h|
@@ -266,6 +329,72 @@ class InvestmentStatement
   end
 
   private
+    # Two layers of caching, mirroring BalanceSheet::NetWorthSeriesBuilder:
+    # Rails.cache across requests, plus a per-instance memo so a single
+    # dashboard render that asks for the same series twice runs one query.
+    def fetch_series(kind, period)
+      @series_cache ||= {}
+      @series_cache[[ kind, period.start_date, period.end_date ]] ||= Rails.cache.fetch(series_cache_key(kind, period)) do
+        yield series_builder(period)
+      end
+    end
+
+    def series_builder(period)
+      Balance::ChartSeriesBuilder.new(
+        account_ids: historical_scope.account_ids,
+        account_active_until_dates: historical_scope.active_until_dates,
+        currency: family.currency,
+        period: period,
+        favorable_direction: "up"
+      )
+    end
+
+    # Beyond the family key (sync time and accounts.updated_at), the key
+    # carries a version for each table the series reads that can change
+    # without a sync or an account write:
+    #
+    # - shares (every kind): revoking a share deletes a row, which changes
+    #   neither maximum(:updated_at) nor accounts.updated_at, and a key built
+    #   from those alone would keep serving a series that still counts the
+    #   revoked account.
+    # - holdings (gains only): the gains series reads holdings.cost_basis,
+    #   which a manual cost-basis edit, an unlock or a security remap
+    #   rewrites in place. The value series read balances, which only a
+    #   sync rewrites, so they do not pay for the extra queries.
+    def series_cache_key(kind, period)
+      key = [
+        "investment_statement_#{kind}_series",
+        user&.id,
+        shares_version,
+        (holdings_version if kind == :gains),
+        period.start_date,
+        period.end_date
+      ].compact.join("_")
+
+      family.build_cache_key(key, invalidate_on_data_updates: true)
+    end
+
+    # Memoized: one instance builds a key per series kind it is asked for,
+    # and the versions need not be re-queried between them.
+    def shares_version
+      return nil unless user
+
+      @shares_version ||= begin
+        shares = AccountShare.where(user: user)
+        "#{shares.count}-#{shares.maximum(:updated_at)&.to_f || 0}"
+      end
+    end
+
+    # Count plus latest timestamp over the holdings the series can read, so a
+    # cost-basis edit, unlock or remap (rows rewritten in place) and a
+    # deletion (a row gone, timestamps unchanged) each move the gains key.
+    def holdings_version
+      @holdings_version ||= begin
+        holdings = Holding.where(account_id: historical_scope.account_ids)
+        "#{holdings.count}-#{holdings.maximum(:updated_at)&.to_f || 0}"
+      end
+    end
+
     # Today's rates for every currency present on the family's investment
     # accounts and their holdings. Mirrors BalanceSheet::AccountTotals#exchange_rates.
     def exchange_rates
@@ -297,7 +426,10 @@ class InvestmentStatement
       @all_time_totals ||= totals(period: Period.all_time)
     end
 
-    PeriodTotals = Data.define(:contributions, :withdrawals, :dividends, :interest, :trades_count, :currency) do
+    # fees is stated separately from contributions and withdrawals: a buy's
+    # contribution is the cost of the securities and its fee is in fees, so
+    # contributions + fees is the cash that left for a purchase.
+    PeriodTotals = Data.define(:contributions, :withdrawals, :dividends, :interest, :fees, :trades_count, :currency) do
       def net_flow
         contributions - withdrawals
       end
@@ -307,7 +439,89 @@ class InvestmentStatement
       end
     end
 
-    HoldingAllocation = Data.define(:security, :amount, :weight, :trend)
+    # One row of #top_holdings / #allocation. Duck-types the Holding readers
+    # the dashboard, Reports and print views call (ticker, name, security,
+    # weight, amount_money, trend). `security` is nil only for the cash row
+    # #allocation appends.
+    HoldingAllocation = Data.define(:security, :amount, :weight, :trend) do
+      def cash? = security.nil?
+      def ticker = cash? ? CASH_TICKER : security.ticker
+      def name = cash? ? I18n.t("models.investment_statement.cash") : (security.name.presence || ticker)
+      def amount_money = amount
+    end
+
+    CASH_TICKER = "CASH".freeze
+
+    # The one denominator every weight is measured against: the larger of the
+    # live portfolio value (account balances, cash included) and the holdings
+    # total.
+    #
+    # Portfolio value is the right denominator -- a security's weight is its
+    # share of everything the user holds, cash included -- but it is
+    # Account#balance, which can lag the holdings (stale zero after a sync)
+    # or fall below them (negative cash from margin or an unsettled buy).
+    # Dividing by it in either case reports a weight over 100. The holdings
+    # total is a floor that keeps every weight at or below 100; when it wins,
+    # the residual cash is zero or negative and #allocation shows no cash row.
+    def weight_denominator(rolled_up)
+      holdings_total = rolled_up.sum { |_, value, _| value }
+      [ portfolio_value, holdings_total ].max
+    end
+
+    # Groups current holdings by security and sums family-currency value.
+    # Returns [[security, value, holdings], ...] sorted by value descending.
+    # Callers that need return trends should call combined_holding_trend only
+    # for rows they will render (e.g. after top_holdings applies its limit).
+    #
+    # A security whose holdings do not sum to a positive value is left out
+    # rather than listed at weight 0 or at a negative weight (methodology
+    # P27). Zero is a position with no price yet. Negative is corrupt data:
+    # Holding validates qty, price and amount as non-negative, but
+    # Holding::Materializer writes through upsert_all, which does not run
+    # validations, so an over-sell can land one. Keeping it out is what makes
+    # the weight denominator a real ceiling -- with a negative row in the sum,
+    # holdings_total falls below the largest row and its weight goes over 100.
+    #
+    # Memoized: top_holdings and allocation both start here, and the
+    # grouping and FX conversion need only run once per instance.
+    def holdings_rolled_up_by_security
+      @holdings_rolled_up_by_security ||= current_holdings
+        .to_a
+        .group_by(&:security_id)
+        .filter_map do |_security_id, holdings|
+          security = holdings.first.security
+          value = holdings.sum { |h| convert_to_family_currency(h.amount, h.currency) }
+          next unless value.positive?
+
+          [ security, value, holdings ]
+        end
+        .sort_by { |_, value, _| -value }
+    end
+
+    # The return of a rolled-up row is measured over the holdings of the
+    # security whose cost basis is known (Holding#trend is nil otherwise):
+    # current value and cost of those holdings only, in family currency. The
+    # row's amount still counts every holding. With no known cost basis the
+    # trend is nil and readers show no return (methodology P28).
+    def combined_holding_trend(holdings)
+      currents = []
+      previouses = []
+
+      holdings.each do |holding|
+        trend = holding.trend
+        next unless trend
+
+        currents << convert_to_family_currency(trend.current, holding.currency)
+        previouses << convert_to_family_currency(trend.previous, holding.currency)
+      end
+
+      return nil if currents.empty?
+
+      Trend.new(
+        current: Money.new(currents.sum, family.currency),
+        previous: Money.new(previouses.sum, family.currency)
+      )
+    end
 
     def investment_account_ids
       @investment_account_ids ||= investment_accounts.pluck(:id)
@@ -321,7 +535,11 @@ class InvestmentStatement
       account_ids_hash = Digest::MD5.hexdigest(account_ids.sort.join(","))
 
       Rails.cache.fetch([
-        "investment_statement", "totals_query", family.id, user&.id,
+        # Bumped when the aggregation's meaning changes (v2: real income
+        # totals; v3: fees, and contributions net of reported fees; v4: a
+        # zero-amount Fee-labelled trade counts its fee column) so a deploy
+        # never serves the previous shape from Redis.
+        "investment_statement", "totals_query/v4", family.id, user&.id,
         account_ids_hash, date_range.begin, date_range.end, family.entries_cache_version
       ]) { Totals.new(family, account_ids: account_ids, date_range: date_range).call }
     end

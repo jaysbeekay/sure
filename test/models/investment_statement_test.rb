@@ -1,6 +1,8 @@
 require "test_helper"
 
 class InvestmentStatementTest < ActiveSupport::TestCase
+  include PortfolioFlowTestHelper
+
   setup do
     @family = families(:empty)
     # families(:empty) defaults to currency "USD"
@@ -85,6 +87,262 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     # 2000 EUR = 2200 USD > 2100 USD, so ASML outranks AAPL in family currency
     top = @statement.top_holdings(limit: 2)
     assert_equal %w[ASML AAPL], top.map(&:ticker)
+  end
+
+  test "top_holdings rolls up the same security across accounts" do
+    ira = create_investment_account(balance: 5000, cash_balance: 0, currency: "USD")
+    taxable = create_investment_account(balance: 3000, cash_balance: 0, currency: "USD")
+    other = create_investment_account(balance: 2000, cash_balance: 0, currency: "USD")
+
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    Holding.create!(
+      account: ira, security: aapl, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+    Holding.create!(
+      account: taxable, security: aapl, date: Date.current,
+      qty: 15, price: 200, amount: 3000, currency: "USD"
+    )
+    Holding.create!(
+      account: other, security: msft, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+
+    top = @statement.top_holdings(limit: 5)
+
+    assert_equal %w[AAPL MSFT], top.map(&:ticker)
+    assert_equal 1, top.count { |row| row.ticker == "AAPL" }
+    assert_equal Money.new(5000, "USD"), top.first.amount_money
+    # Portfolio total = 5000 + 3000 + 2000 = 10000; AAPL = 50%, MSFT = 20%
+    assert_in_delta 50.0, top.first.weight, 0.01
+    assert_in_delta 20.0, top.second.weight, 0.01
+  end
+
+  test "top_holdings weight is percent of total portfolio including cash" do
+    account = create_investment_account(balance: 10_000, cash_balance: 4000, currency: "USD")
+    security = Security.create!(ticker: "VOO", name: "Vanguard S&P 500")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 30, price: 200, amount: 6000, currency: "USD"
+    )
+
+    top = @statement.top_holdings(limit: 1)
+
+    assert_equal 1, top.size
+    # 6000 / 10000 portfolio = 60% (not 100% of holdings)
+    assert_in_delta 60.0, top.first.weight, 0.01
+  end
+
+  test "top_holdings still lists positions when portfolio_value is stale zero" do
+    # Cached Account#balance can lag behind Holding rows; presence must not
+    # depend on portfolio_value alone.
+    account = create_investment_account(balance: 0, cash_balance: 0, currency: "USD")
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+
+    assert_equal 0, @statement.portfolio_value
+
+    top = @statement.top_holdings(limit: 5)
+
+    assert_equal 1, top.size
+    assert_equal "AAPL", top.first.ticker
+    assert_equal Money.new(2000, "USD"), top.first.amount_money
+    # Falls back to holdings total as weight denominator when portfolio is 0
+    assert_in_delta 100.0, top.first.weight, 0.01
+  end
+
+  test "top_holdings computes trends only for the selected limit" do
+    large = create_investment_account(balance: 5000, cash_balance: 0)
+    small = create_investment_account(balance: 1000, cash_balance: 0)
+
+    top_security = Security.create!(ticker: "TOP1", name: "Top One")
+    skipped_security = Security.create!(ticker: "SKIP", name: "Skipped")
+
+    Holding.create!(
+      account: large, security: top_security, date: Date.current,
+      qty: 50, price: 100, amount: 5000, currency: "USD",
+      cost_basis: 90, cost_basis_locked: true
+    )
+    Holding.create!(
+      account: small, security: skipped_security, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD",
+      cost_basis: 90, cost_basis_locked: true
+    )
+
+    # Only the one holding in the selected top security should ask for a trend
+    Holding.any_instance.expects(:trend).once.returns(nil)
+
+    top = @statement.top_holdings(limit: 1)
+
+    assert_equal %w[TOP1], top.map(&:ticker)
+  end
+
+  test "allocation rolls up duplicate securities and weights sum to 100%" do
+    ira = create_investment_account(balance: 3000, currency: "USD")
+    taxable = create_investment_account(balance: 2000, currency: "USD")
+
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    Holding.create!(
+      account: ira, security: aapl, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    Holding.create!(
+      account: taxable, security: aapl, date: Date.current,
+      qty: 5, price: 100, amount: 500, currency: "USD"
+    )
+    Holding.create!(
+      account: ira, security: msft, date: Date.current,
+      qty: 20, price: 100, amount: 2000, currency: "USD"
+    )
+
+    allocation = @statement.allocation
+
+    # Portfolio 5000 (account balances) vs holdings 3500: the 1500 the
+    # holdings do not explain is reported as a cash row so the weights still
+    # sum to 100 and MSFT carries the same 40% here as in top_holdings.
+    assert_equal 3, allocation.size
+    assert_equal %w[MSFT AAPL CASH], allocation.map(&:ticker)
+    assert_equal Money.new(1500, "USD"), allocation.find { |a| a.ticker == "AAPL" }.amount
+    assert_in_delta 40.0, allocation.first.weight, 0.01
+    assert allocation.last.cash?
+    assert_equal Money.new(1500, "USD"), allocation.last.amount
+    assert_in_delta 100.0, allocation.sum(&:weight), 0.01
+  end
+
+  test "a holding with a negative value cannot push another security's weight over 100" do
+    # Holding validates amount >= 0, but Holding::Materializer writes through
+    # upsert_all, which skips validations, so an over-sell can land a negative
+    # row. Written the same way here.
+    account = create_investment_account(balance: 0, cash_balance: 0, currency: "USD")
+    good = Security.create!(ticker: "GOOD", name: "Good")
+    bad = Security.create!(ticker: "BAD", name: "Bad")
+    Holding.create!(account: account, security: good, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD")
+    Holding.insert_all([ {
+      account_id: account.id, security_id: bad.id, date: Date.current,
+      qty: -5, price: 100, amount: -500, currency: "USD",
+      created_at: Time.current, updated_at: Time.current
+    } ])
+
+    top = @statement.top_holdings(limit: 5)
+
+    assert_equal %w[GOOD], top.map(&:ticker), "the corrupt row is left out, not listed at a negative weight"
+    assert_in_delta 100.0, top.first.weight, 0.01
+    assert_operator top.map(&:weight).max, :<=, 100.0
+    assert_in_delta 100.0, @statement.allocation.sum(&:weight), 0.01
+  end
+
+  test "weights never exceed 100 when cash is negative" do
+    # A margin balance or an unsettled buy makes cash negative, so the
+    # portfolio value (960) is below the holdings total (1000). Dividing by
+    # portfolio value would report the single holding at 104.17%.
+    account = create_investment_account(balance: 960, cash_balance: -40, currency: "USD")
+    security = Security.create!(ticker: "VOO", name: "Vanguard S&P 500")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "USD"
+    )
+
+    top = @statement.top_holdings(limit: 5)
+    allocation = @statement.allocation
+
+    assert_in_delta 100.0, top.first.weight, 0.01
+    assert_equal 1, allocation.size, "negative cash must not produce a cash row"
+    assert_in_delta 100.0, allocation.first.weight, 0.01
+  end
+
+  test "top_holdings and allocation report the same weight for a security" do
+    account = create_investment_account(balance: 10_000, cash_balance: 4000, currency: "USD")
+    security = Security.create!(ticker: "VOO", name: "Vanguard S&P 500")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 30, price: 200, amount: 6000, currency: "USD"
+    )
+
+    top_weight = @statement.top_holdings(limit: 1).first.weight
+    allocation = @statement.allocation
+    allocation_weight = allocation.find { |row| row.ticker == "VOO" }.weight
+
+    assert_in_delta 60.0, top_weight, 0.01
+    assert_equal top_weight, allocation_weight
+    assert_equal [ "VOO", "CASH" ], allocation.map(&:ticker)
+    assert_in_delta 40.0, allocation.last.weight, 0.01
+    assert_equal I18n.t("models.investment_statement.cash"), allocation.last.name
+    assert_nil allocation.last.security
+    assert_nil allocation.last.trend
+  end
+
+  test "allocation omits the cash row when account balances are a stale zero" do
+    account = create_investment_account(balance: 0, cash_balance: 0, currency: "USD")
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+
+    allocation = @statement.allocation
+
+    assert_equal %w[AAPL], allocation.map(&:ticker)
+    assert_in_delta 100.0, allocation.first.weight, 0.01
+  end
+
+  test "rolls up the same security held in a foreign-currency account in family currency" do
+    usd_account = create_investment_account(balance: 2000, currency: "USD")
+    eur_account = create_investment_account(balance: 1000, currency: "EUR")
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: usd_account, security: security, date: Date.current,
+      qty: 10, price: 200, amount: 2000, currency: "USD"
+    )
+    Holding.create!(
+      account: eur_account, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "EUR"
+    )
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+
+    top = @statement.top_holdings(limit: 5)
+
+    assert_equal 1, top.size
+    # 2000 USD + 1000 EUR * 1.1
+    assert_equal Money.new(3100, "USD"), top.first.amount_money
+    assert_in_delta 100.0, top.first.weight, 0.01
+  end
+
+  test "a holding in an account shared without include_in_finances is not rolled in" do
+    shared_user = users(:new_email)
+    owned = create_investment_account(balance: 1000, currency: "USD")
+    shared_excluded = create_investment_account(balance: 1000, currency: "USD")
+    owned.update!(owner: shared_user)
+    shared_excluded.share_with!(shared_user, permission: "read_only", include_in_finances: false)
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+
+    Holding.create!(
+      account: owned, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "USD"
+    )
+    Holding.create!(
+      account: shared_excluded, security: security, date: Date.current,
+      qty: 5, price: 200, amount: 1000, currency: "USD"
+    )
+
+    statement = InvestmentStatement.new(@family, user: shared_user)
+    top = statement.top_holdings(limit: 5)
+
+    assert_equal 1, top.size
+    assert_equal Money.new(1000, "USD"), top.first.amount_money,
+      "the excluded shared account's holding must not be summed into the user's row"
   end
 
   test "allocation weights sum to 100% with mixed currencies" do
@@ -222,6 +480,146 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_in_delta 5.0, trend.percent, 0.1
   end
 
+  test "value_series sums the per-account balance series on every date of the period" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: 5.days.ago.to_date)
+
+    usd = create_investment_account(balance: 1000, currency: "USD")
+    eur = create_investment_account(balance: 500, currency: "EUR")
+    closed = create_investment_account(balance: 300, currency: "USD")
+
+    create_balance(usd, date: 12.days.ago.to_date, amount: 1000)
+    create_balance(usd, date: 7.days.ago.to_date, amount: 1200)
+    create_balance(eur, date: 12.days.ago.to_date, amount: 500, currency: "EUR")
+    create_balance(closed, date: 12.days.ago.to_date, amount: 300)
+
+    closed.update!(status: "disabled", disabled_at: 7.days.ago)
+
+    (12.days.ago.to_date..Date.current).each do |date|
+      ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: date, rate: 1.2)
+    end
+
+    scope = @statement.historical_scope
+    assert_equal 3, scope.account_ids.size
+
+    # Expected windows are derived here, independently of HistoricalScope, so
+    # this asserts the cut-off as well as the summation.
+    expected_windows = { closed.id => closed.disabled_at.to_date - 1.day }
+
+    expected = Hash.new(0)
+    [ usd.id, eur.id, closed.id ].each do |account_id|
+      series = Balance::ChartSeriesBuilder.new(
+        account_ids: [ account_id ],
+        account_active_until_dates: expected_windows.slice(account_id),
+        currency: "USD",
+        period: period,
+        favorable_direction: "up"
+      ).balance_series
+
+      series.values.each { |v| expected[v.date] += v.value.amount }
+    end
+
+    actual = @statement.value_series(period: period)
+
+    assert_equal expected.keys.sort, actual.values.map(&:date).sort
+    actual.values.each do |value|
+      assert_in_delta expected[value.date], value.value.amount, 0.001,
+        "portfolio value on #{value.date} should equal the sum of the per-account series"
+    end
+  end
+
+  test "a disabled account stops contributing to value_series after its cut-off date" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    open_account = create_investment_account(balance: 1000, currency: "USD")
+    closed = create_investment_account(balance: 300, currency: "USD")
+
+    create_balance(open_account, date: 12.days.ago.to_date, amount: 1000)
+    create_balance(closed, date: 12.days.ago.to_date, amount: 300)
+
+    closed.update!(status: "disabled", disabled_at: 7.days.ago)
+    cutoff = 8.days.ago.to_date
+
+    by_date = @statement.value_series(period: period).values.index_by(&:date)
+
+    assert_in_delta 1300, by_date[cutoff].value.amount, 0.001,
+      "on the cut-off date the disabled account still counts"
+    assert_in_delta 1000, by_date[cutoff + 1.day].value.amount, 0.001,
+      "after the cut-off date the disabled account no longer counts"
+    assert_in_delta 1000, by_date[Date.current].value.amount, 0.001
+  end
+
+  test "value_series memoizes the builder per period on the instance" do
+    create_investment_account(balance: 1000, currency: "USD")
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = Series.new(
+      start_date: period.start_date, end_date: period.end_date,
+      interval: period.interval, values: [], favorable_direction: "up"
+    )
+    builder = stub(balance_series: series)
+    Balance::ChartSeriesBuilder.expects(:new).once.returns(builder)
+
+    assert_same series, @statement.value_series(period: period)
+    assert_same series, @statement.value_series(period: period)
+  end
+
+  test "holdings_value_series delegates to the builder's holdings balance series" do
+    create_investment_account(balance: 1000, currency: "USD")
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = Series.new(
+      start_date: period.start_date, end_date: period.end_date,
+      interval: period.interval, values: [], favorable_direction: "up"
+    )
+    builder = mock
+    builder.expects(:holdings_balance_series).once.returns(series)
+    Balance::ChartSeriesBuilder.expects(:new).once.returns(builder)
+
+    assert_same series, @statement.holdings_value_series(period: period)
+  end
+
+  test "gains_series delegates to the builder's gains series" do
+    create_investment_account(balance: 1000, currency: "USD")
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = Series.new(
+      start_date: period.start_date, end_date: period.end_date,
+      interval: period.interval, values: [], favorable_direction: "up"
+    )
+    builder = mock
+    builder.expects(:gains_series).once.returns(series)
+    Balance::ChartSeriesBuilder.expects(:new).once.returns(builder)
+
+    assert_same series, @statement.gains_series(period: period)
+  end
+
+  test "value_series is historical where portfolio_value is live, so a closed account diverges" do
+    # The series is charted from the historical scope, so a disabled broker
+    # keeps its balance up to its cut-off; portfolio_value only sees visible
+    # accounts and drops it immediately.
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: 5.days.ago.to_date)
+
+    open_account = create_investment_account(balance: 1000, currency: "USD")
+    closed = create_investment_account(balance: 300, currency: "USD")
+
+    create_balance(open_account, date: 12.days.ago.to_date, amount: 1000)
+    create_balance(closed, date: 12.days.ago.to_date, amount: 300)
+
+    closed.update!(status: "disabled", disabled_at: 2.days.ago)
+
+    assert_equal 1000, @statement.portfolio_value
+    assert_in_delta 1300, @statement.value_series(period: period).values.last.value.amount, 0.001
+  end
+
+  test "value_series returns a zero series when there are no investment accounts" do
+    period = Period.custom(start_date: 10.days.ago.to_date, end_date: Date.current)
+
+    series = @statement.value_series(period: period)
+
+    assert_predicate series.values, :any?
+    assert series.values.all? { |v| v.value.amount.zero? }
+  end
+
   test "totals skips cache when there are no investment accounts" do
     Rails.cache.expects(:fetch).never
 
@@ -258,7 +656,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     aggregate_queries = queries.grep(/SUM\(CASE WHEN trades\.qty > 0/)
     assert_equal 1, aggregate_queries.size
-    assert_includes aggregate_queries.first, "FROM entries JOIN trades"
+    assert_includes aggregate_queries.first, "FROM entries LEFT JOIN trades"
     assert_includes aggregate_queries.first, "entries.entryable_type = 'Trade'"
     assert_includes aggregate_queries.first, "entries.account_id IN"
     assert_includes aggregate_queries.first, "entries.excluded = false"
@@ -266,6 +664,115 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     # account_ids is pre-scoped to the family's visible accounts, so the
     # aggregate trusts that input and no longer joins back to accounts.
     assert_no_match(/JOIN accounts/, aggregate_queries.first)
+  end
+
+  test "totals aggregate dividend and interest income from income trades" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 50, date: period.start_date)
+    create_income_trade(account: account, label: "Dividend", amount: 25, date: period.start_date + 1.day)
+    create_income_trade(account: account, label: "Interest", amount: 10, date: period.start_date)
+    # Outside the period, must not be counted
+    create_income_trade(account: account, label: "Dividend", amount: 999, date: period.start_date - 1.day)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(75, "USD"), totals.dividends
+    assert_equal Money.new(10, "USD"), totals.interest
+    assert_equal Money.new(85, "USD"), totals.total_income
+  end
+
+  test "income trades are not counted as contributions or withdrawals" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_trade(account: account, qty: 2, amount: 120, date: period.start_date)
+    create_income_trade(account: account, label: "Dividend", amount: 50, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    # qty: 0 keeps income out of both direction branches
+    assert_equal Money.new(120, "USD"), totals.contributions
+    assert_equal Money.new(0, "USD"), totals.withdrawals
+    assert_equal Money.new(50, "USD"), totals.dividends
+  end
+
+  test "a buy relabeled to Dividend is counted as income only, not also as a contribution" do
+    # The activity-label quick editor permits changing the label on its own and
+    # leaves qty untouched, so an income-labeled trade can carry qty > 0. It must
+    # not land in both the direction bucket and the income bucket.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    trade_entry = create_trade(account: account, qty: 2, amount: 120, date: period.start_date)
+    trade_entry.trade.update!(investment_activity_label: "Dividend")
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(0, "USD"), totals.contributions
+    assert_equal Money.new(120, "USD"), totals.dividends
+    assert_equal Money.new(120, "USD"), totals.total_income
+  end
+
+  test "a sell relabeled to Interest is counted as income only, not also as a withdrawal" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    trade_entry = create_trade(account: account, qty: -1, amount: -40, date: period.start_date)
+    trade_entry.trade.update!(investment_activity_label: "Interest")
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(0, "USD"), totals.withdrawals
+    assert_equal Money.new(40, "USD"), totals.interest
+  end
+
+  test "labeled non-income trades still count by direction" do
+    # Only Dividend/Interest are excluded from the direction buckets; Buy, Sell
+    # and Reinvestment keep their existing contribution/withdrawal treatment.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    buy = create_trade(account: account, qty: 2, amount: 120, date: period.start_date)
+    buy.trade.update!(investment_activity_label: "Buy")
+    reinvest = create_trade(account: account, qty: 1, amount: 30, date: period.start_date)
+    reinvest.trade.update!(investment_activity_label: "Reinvestment")
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(150, "USD"), totals.contributions
+    # Reinvestment is deliberately not folded into dividend income; doing so
+    # would require removing it from contributions too.
+    assert_equal Money.new(0, "USD"), totals.dividends
+  end
+
+  test "totals convert foreign-currency dividends into family currency" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500, currency: "EUR")
+
+    ExchangeRate.create!(
+      from_currency: "EUR",
+      to_currency: "USD",
+      date: period.start_date,
+      rate: 1.1
+    )
+
+    create_income_trade(account: account, label: "Dividend", amount: 100, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(110, "USD"), totals.dividends
+  end
+
+  test "total_dividends and total_interest expose all-time income" do
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 40, date: 2.years.ago.to_date)
+    create_income_trade(account: account, label: "Interest", amount: 5, date: Date.current)
+
+    assert_equal 40, @statement.total_dividends
+    assert_equal 5, @statement.total_interest
   end
 
   test "current_holdings memoizes so repeated dashboard-style calls issue a single query" do
@@ -300,6 +807,292 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "the investment_accounts lookup backing current_holdings should only run once, even for the empty case"
   end
 
+  test "contributions and withdrawals are the cash the trade entry records" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    # Trade::CreateForm shape: amount = qty * price + fee = 1005, the cash out.
+    create_portfolio_trade(account: account, qty: 10, price: 100, fee: 5, date: period.start_date)
+    # Kraken / Binance-spot shape: amount = qty * price = 1000, fee reported
+    # separately, so the cash out was 1005 and the entry records 1000.
+    create_portfolio_trade(account: account, qty: 10, price: 100, fee: 5, date: period.start_date, fee_in_amount: false)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(2005, "USD"), totals.contributions
+    assert_equal Money.new(10, "USD"), totals.fees
+  end
+
+  test "a stale, zero or foreign-currency price cannot move contributions or withdrawals" do
+    # Each of these shapes broke an earlier version of this aggregation that
+    # measured the cash against qty * price: a price far above the amount
+    # doubled a contribution, a price that rounds to zero erased a sale, and a
+    # sell whose quantity is already net of its fee (Binance P2P) had the fee
+    # charged twice. The cash on the entry is the only figure reported now.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    # A buy whose stored price is stale (or quoted in another currency).
+    create_portfolio_trade(account: account, qty: 10, price: 200, fee: 0, date: period.start_date, fee_in_amount: false)
+      .update!(amount: 1000)
+    # A sale of a sub-1e-10 crypto: trades.price is numeric(19,10), so the
+    # price stores as 0 while the cash is real.
+    create_portfolio_trade(account: account, qty: -100_000_000_000, price: 0, fee: 0, date: period.start_date, fee_in_amount: false)
+      .update!(amount: -1000)
+    # Binance P2P sell: amount is the gross fiat, qty is already net of the
+    # crypto fee, so qty * price is the amount less the fee.
+    create_portfolio_trade(account: account, qty: -99, price: 10, fee: 10, date: period.start_date, fee_in_amount: false)
+      .update!(amount: -1000)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(1000, "USD"), totals.contributions, "a stale price must not inflate the contribution"
+    assert_equal Money.new(2000, "USD"), totals.withdrawals, "neither sale may shrink or vanish"
+    assert_equal Money.new(10, "USD"), totals.fees
+  end
+
+  test "fees sum Fee-labelled entries and transfer fee legs alongside trades.fee" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    checking = @family.accounts.create!(name: "Checking", balance: 5000, currency: "USD", accountable: Depository.new)
+
+    create_portfolio_trade(account: account, qty: 1, price: 100, fee: 2, date: period.start_date)
+    # IBKR / Questrade commission: a Fee-labelled Transaction
+    create_labelled_transaction(account: account, label: "Fee", amount: 1.5, date: period.start_date)
+    # A Fee-labelled trade counts its amount, not its (zero) fee column
+    create_portfolio_trade(account: account, qty: 0, price: 0, label: "Fee", date: period.start_date).update!(amount: 9.95)
+    # The fee leg of a transfer into the account, which lands in the source account (not counted here)
+    create_linked_transfer(family: @family, from: checking, to: account, amount: 300, date: period.start_date, source_fee_amount: 4)
+    # An unrelated deposit and buy-labelled cash movement contribute nothing to fees
+    create_labelled_transaction(account: account, label: "Contribution", amount: -300, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(13.45, "USD"), totals.fees
+    # The buy's amount is 100 + 2 fee, the cash that left; the fee is inside
+    # the contribution and in `fees`, which is what P21 says of a writer that
+    # folds its fee in.
+    assert_equal Money.new(102, "USD"), totals.contributions
+    assert_equal 2, totals.trades_count
+    assert_equal 13.45, @statement.total_fees
+  end
+
+  test "dividends and interest count the transaction shapes providers write" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 50, date: period.start_date)
+    create_income_transaction(account: account, label: "Dividend", amount: 12.5, date: period.start_date, extra_shape: :flat)
+    create_income_transaction(account: account, label: "Interest", amount: 4, date: period.start_date, extra_shape: :none)
+    # PlaidAccount::Investments::TransactionsProcessor writes a dividend as
+    # a qty-0 trade with amount 0 * price, so its cash is not recoverable
+    # here (its `price` is a per-share figure, not the payment). It is
+    # income with amount 0 until jaysbeekay/sure#123 fixes the processor; the 62.5 below
+    # deliberately excludes it.
+    create_plaid_dividend_trade(account: account, date: period.start_date)
+    # Pending income is not counted until it posts
+    create_labelled_transaction(account: account, label: "Dividend", amount: -99, date: period.start_date, extra: { "plaid" => { "pending" => true } })
+    # A labelled transaction outside the period is not counted
+    create_income_transaction(account: account, label: "Dividend", amount: 999, date: period.start_date - 1.day, extra_shape: :flat)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(62.5, "USD"), totals.dividends
+    assert_equal Money.new(4, "USD"), totals.interest
+    assert_equal Money.new(66.5, "USD"), totals.total_income
+    assert_equal Money.new(0, "USD"), totals.contributions
+  end
+
+  # The classifier reads a pending flag without casting it: `::boolean` raises
+  # on a value PostgreSQL cannot parse ("maybe") and disagrees with ActiveModel
+  # on one it can ("no"). Totals used the cast, so a single such flag aborted
+  # the family's whole aggregation -- and every page that reads it -- while the
+  # classifier answered the same entry without complaint.
+  test "totals read a non-boolean pending flag the way the flow classifier does" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    entries = { "maybe" => -11, "no" => -13, "false" => -17, "0" => -19 }.map do |flag, amount|
+      create_labelled_transaction(account: account, label: "Dividend", amount: amount, date: period.start_date,
+                                  extra: { "plaid" => { "pending" => flag } })
+    end
+
+    totals = @statement.totals(period: period)
+
+    classifier = Portfolio::FlowClassifier.new(scope_account_ids: [ account.id ])
+    posted = entries.select { |entry| classifier.classify(entry.reload) == :income }
+    assert_equal Money.new(36, "USD"), totals.dividends, "\"false\" and \"0\" have posted; \"maybe\" and \"no\" are pending"
+    assert_equal posted.sum { |entry| entry.amount.abs }, totals.dividends.amount
+  end
+
+  # "Never also its fee column" guards a double count. When the amount is zero
+  # the column is the only record of the fee, and reading the amount alone
+  # dropped it from the total.
+  test "a Fee-labelled trade with no amount counts its fee column, and never both" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_portfolio_trade(account: account, qty: 0, price: 0, label: "Fee", fee: 7, fee_in_amount: false, date: period.start_date)
+    create_portfolio_trade(account: account, qty: 0, price: 0, label: "Fee", fee: 5, fee_in_amount: true, date: period.start_date)
+
+    assert_equal Money.new(12, "USD"), @statement.totals(period: period).fees
+  end
+
+  test "totals read their income and fee labels from the flow classifier" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    create_portfolio_trade(account: account, qty: 2, price: 60, label: "Other", date: period.start_date)
+
+    assert_equal Money.new(120, "USD"), @statement.totals(period: period).contributions
+
+    # Widen the classifier's income set and the same trade leaves the
+    # contribution bucket without Totals being edited.
+    Portfolio::FlowClassifier.stubs(:labels_for).with(:income).returns([ "Dividend", "Interest", "Other" ])
+    Portfolio::FlowClassifier.stubs(:labels_for).with(:fee).returns([ "Fee" ])
+
+    assert_equal Money.new(0, "USD"), InvestmentStatement.new(@family, user: nil).totals(period: period).contributions
+  end
+
+  test "the income buckets cover every income label the classifier knows" do
+    assert_equal %w[Dividend Interest], Portfolio::FlowClassifier.labels_for(:income),
+      "Totals splits income into dividends and interest by literal label; a new income label needs its own bucket there"
+  end
+
+  test "totals cache key carries the v4 aggregation version" do
+    create_investment_account(balance: 500)
+    seen_keys = []
+    Rails.cache.stubs(:fetch).with { |*args| seen_keys << Array(args.first); true }.returns(
+      { contributions: 0, withdrawals: 0, dividends: 0, interest: 0, fees: 0, trades_count: 0 }
+    )
+
+    @statement.totals(period: Period.current_month)
+
+    assert_equal 1, seen_keys.size
+    assert_includes seen_keys.first, "totals_query/v4"
+  end
+
+  test "series cache key changes when a share is revoked" do
+    shared_user = users(:new_email)
+    account = create_investment_account(balance: 1000)
+    share = account.share_with!(shared_user, permission: "read_only", include_in_finances: true)
+    period = Period.last_30_days
+
+    before = InvestmentStatement.new(@family, user: shared_user).send(:series_cache_key, :value, period)
+    share.destroy!
+    after = InvestmentStatement.new(@family, user: shared_user).send(:series_cache_key, :value, period)
+
+    assert_not_equal before, after, "a revoked share must not keep serving the series it was part of"
+  end
+
+  test "gains series cache key changes when a holding's cost basis is edited by hand" do
+    account = create_investment_account(balance: 1000)
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+    holding = Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    period = Period.last_30_days
+
+    gains_before = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+    value_before = InvestmentStatement.new(@family).send(:series_cache_key, :value, period)
+
+    # HoldingsController#update writes the holding alone: no sync completes
+    # and the account row is untouched, so the family key does not move.
+    travel 1.second do
+      holding.set_manual_cost_basis!(90)
+    end
+
+    gains_after = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+    value_after = InvestmentStatement.new(@family).send(:series_cache_key, :value, period)
+
+    assert_not_equal gains_before, gains_after, "a cost-basis edit must not keep serving the gains built before it"
+    assert_equal value_before, value_after, "the value series reads balances, not holdings, and keeps its key"
+  end
+
+  test "gains series cache key changes when a holding is deleted" do
+    account = create_investment_account(balance: 1000)
+    security = Security.create!(ticker: "AAPL", name: "Apple")
+    holding = Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    period = Period.last_30_days
+
+    before = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+    holding.destroy!
+    after = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
+
+    assert_not_equal before, after
+  end
+
+  test "a security whose holdings carry no value is omitted from top_holdings and allocation" do
+    account = create_investment_account(balance: 1000, cash_balance: 0, currency: "USD")
+    priced = Security.create!(ticker: "AAPL", name: "Apple")
+    unpriced = Security.create!(ticker: "NOPX", name: "Not Yet Priced")
+
+    Holding.create!(
+      account: account, security: priced, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    # A position with no price yet: qty is real, amount is 0.
+    Holding.create!(
+      account: account, security: unpriced, date: Date.current,
+      qty: 10, price: 0, amount: 0, currency: "USD"
+    )
+
+    assert_equal %w[AAPL], @statement.top_holdings(limit: 5).map(&:ticker)
+    assert_equal %w[AAPL], @statement.allocation.map(&:ticker)
+    assert_in_delta 100.0, @statement.allocation.sum(&:weight), 0.01
+  end
+
+  test "a rolled-up return is measured over the holdings whose cost basis is known" do
+    ira = create_investment_account(balance: 1000, currency: "USD")
+    taxable = create_investment_account(balance: 2000, currency: "USD")
+    aapl = Security.create!(ticker: "AAPL", name: "Apple")
+    msft = Security.create!(ticker: "MSFT", name: "Microsoft")
+
+    Holding.create!(
+      account: ira, security: aapl, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD",
+      cost_basis: 80, cost_basis_locked: true
+    )
+    # Same security, no stored cost basis and no trades: avg_cost is nil.
+    Holding.create!(
+      account: taxable, security: aapl, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    Holding.create!(
+      account: taxable, security: msft, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+
+    aapl_row, msft_row = @statement.top_holdings(limit: 2)
+
+    assert_equal "AAPL", aapl_row.ticker
+    assert_equal Money.new(2000, "USD"), aapl_row.amount_money, "the amount counts every holding"
+    assert_equal Money.new(1000, "USD"), aapl_row.trend.current, "the return covers only the holding with a known cost"
+    assert_equal Money.new(800, "USD"), aapl_row.trend.previous
+    assert_in_delta 25.0, aapl_row.trend.percent, 0.01
+
+    assert_equal "MSFT", msft_row.ticker
+    assert_nil msft_row.trend, "no known cost basis, no return"
+  end
+
+  test "allocation issues no per-holding trade queries when cost basis is stored" do
+    account = create_investment_account(balance: 3000, currency: "USD")
+    3.times do |i|
+      Holding.create!(
+        account: account, security: Security.create!(ticker: "STK#{i}", name: "Stock #{i}"),
+        date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD",
+        cost_basis: 90, cost_basis_locked: true
+      )
+    end
+
+    queries = capture_sql_queries { @statement.allocation }
+
+    assert_equal 3, @statement.allocation.size
+    assert_empty queries.grep(/FROM "trades"/), "Holding#trend must read the stored cost basis, not fall back to trades"
+  end
+
   private
     def create_investment_account(balance:, cash_balance: 0, currency: "USD")
       @family.accounts.create!(
@@ -310,6 +1103,18 @@ class InvestmentStatementTest < ActiveSupport::TestCase
         accountable: Investment.new
       )
     end
+
+    # end_balance is a stored virtual column; with no flows, start_non_cash_balance
+    # drives it (matching the period_return_trend tests above).
+    def create_balance(account, date:, amount:, currency: "USD")
+      account.balances.create!(
+        date: date,
+        balance: amount,
+        currency: currency,
+        start_non_cash_balance: amount
+      )
+    end
+
 
     def create_trade(account:, qty:, amount:, date:)
       account.entries.create!(

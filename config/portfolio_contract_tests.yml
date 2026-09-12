@@ -1,0 +1,178 @@
+# Which test demonstrates each row of docs/portfolio/methodology.md.
+#
+# The methodology document is where a decision about what a portfolio figure
+# means is written down; this file is how the build knows the decision still
+# has evidence. `portfolio:verify_contract_coverage` fails when a row here
+# names a test that does not exist, when the document and this file disagree
+# about the test class, or when the rows stop running P1..Pn without gaps.
+#
+# A row may cite tests in more than one class; list one entry per class.
+P1:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - top_holdings rolls up the same security across accounts
+      - rolls up the same security held in a foreign-currency account in family currency
+P2:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - top_holdings and allocation report the same weight for a security
+      - weights never exceed 100 when cash is negative
+      - top_holdings still lists positions when portfolio_value is stale zero
+P3:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - allocation rolls up duplicate securities and weights sum to 100%
+      - allocation omits the cash row when account balances are a stale zero
+P4:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a holding in an account shared without include_in_finances is not rolled in
+P5:
+  - file: test/models/investment_statement/historical_scope_test.rb
+    class: InvestmentStatement::HistoricalScopeTest
+    tests:
+      - includes disabled investment accounts and excludes other types and excluded accounts
+      - includes draft investment accounts
+      - with a user, an account shared without include_in_finances is out of scope
+P6:
+  - file: test/models/investment_statement/historical_scope_test.rb
+    class: InvestmentStatement::HistoricalScopeTest
+    tests:
+      - active_until_dates covers only disabled accounts, cut off the day before disabling
+      - a disabled account without disabled_at is cut off the day before it was last updated
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a disabled account stops contributing to value_series after its cut-off date
+P7:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - value_series sums the per-account balance series on every date of the period
+      - value_series returns a zero series when there are no investment accounts
+P8:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - value_series is historical where portfolio_value is live, so a closed account diverges
+P9:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - scope_account_ids is required
+      - a linked transfer is internal at family scope and external at account scope
+P10:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - a Dividend income trade is income
+      - a Dividend transaction carrying the security id in extra is income
+      - a Plaid-shaped zero-amount Dividend trade is income
+      - Interest is income whether stored as a trade or a transaction
+P11:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - a Fee label is a fee whether stored as a trade or a transaction
+      - the fee leg of a linked transfer is a fee
+P12:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - Buy, Sell and Reinvestment trades are internal
+P13:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - Sweep In, Sweep Out and Exchange are internal at both scopes
+P14:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - Contribution and Withdrawal labels are external in the direction of the money
+      - direction follows the trade quantity sign or the transaction amount sign
+P15:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - an investment contribution from outside the scope is an external inflow
+      - a transfer-kind transaction with no linked counterpart is external by sign
+P16:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - a security transfer is internal only when its opposite leg is in scope
+P17:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - an unlabelled or Other trade is internal
+      - an unlabelled standard transaction is external by sign
+P18:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - excluded entries, pending transactions and valuations are not classified
+P19:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - every activity label has a rule
+P20:
+  - file: test/models/portfolio/flow_classifier_test.rb
+    class: Portfolio::FlowClassifierTest
+    tests:
+      - the SQL form agrees with the Ruby form on every corpus entry at both scopes
+      - the SQL form only binds the scope ids and never interpolates entry data
+      - a pending flag that is not a boolean is read the same way by both forms
+P21:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - contributions and withdrawals are the cash the trade entry records
+P22:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a stale, zero or foreign-currency price cannot move contributions or withdrawals
+P23:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - fees sum Fee-labelled entries and transfer fee legs alongside trades.fee
+      - a Fee-labelled trade with no amount counts its fee column, and never both
+P24:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - dividends and interest count the transaction shapes providers write
+      - totals aggregate dividend and interest income from income trades
+      - totals convert foreign-currency dividends into family currency
+P25:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - totals read their income and fee labels from the flow classifier
+      - the income buckets cover every income label the classifier knows
+      - a buy relabeled to Dividend is counted as income only, not also as a contribution
+      - totals read a non-boolean pending flag the way the flow classifier does
+P26:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - totals cache key carries the v4 aggregation version
+P27:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a security whose holdings carry no value is omitted from top_holdings and allocation
+      - a holding with a negative value cannot push another security's weight over 100
+P28:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - a rolled-up return is measured over the holdings whose cost basis is known
