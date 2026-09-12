@@ -8,13 +8,13 @@
     <%= helpers.icon("chevron-down", size: "sm") %>
   <% end %>
 
-  <% periods.each do |period| %>
+  <% items.each do |key, label| %>
     <% menu.with_item(
          variant: :link,
-         text: period.label_short,
-         href: href_for(period.key),
+         text: label,
+         href: href_for(key),
          frame: frame,
-         selected: selected?(period.key)
+         selected: selected?(key)
        ) %>
   <% end %>
 <% end %>
