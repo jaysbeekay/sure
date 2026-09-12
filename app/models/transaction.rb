@@ -101,6 +101,7 @@ class Transaction < ApplicationRecord
   # ActiveModel::Type::Boolean casts to false, plus "" (which it casts to nil).
   # Any other present value is pending, as #pending? decides.
   PENDING_FLAG_FALSE_VALUES = (ActiveModel::Type::Boolean::FALSE_VALUES.grep(String) + [ "" ]).uniq.freeze
+  PENDING_FLAG_TYPE = ActiveModel::Type::Boolean.new.freeze
 
   # SQL that is true when any provider flags the row pending: the decision
   # #pending? takes in Ruby. Every SQL pending filter is built from this one.
@@ -119,21 +120,28 @@ class Transaction < ApplicationRecord
   # because FALSE_VALUES is a Set keyed by eql? and 0.0 is not eql? to 0. The
   # parity test carries the case.
   def self.pending_sql(table_alias = "transactions")
-    false_values = PENDING_FLAG_FALSE_VALUES.map { |value| "'#{value.gsub("'", "''")}'" }.join(", ")
+    quoted_table = connection.quote_table_name(table_alias)
+    false_values = pending_flag_false_values_sql
 
     PENDING_PROVIDERS
-      .map { |provider| "COALESCE(#{table_alias}.extra -> '#{provider}' ->> 'pending', '') NOT IN (#{false_values})" }
+      .map do |provider|
+        "COALESCE(#{quoted_table}.extra -> #{connection.quote(provider)} ->> #{connection.quote("pending")}, #{connection.quote("")}) NOT IN (#{false_values})"
+      end
       .join(" OR ")
+  end
+
+  def self.pending_flag_false_values_sql
+    @pending_flag_false_values_sql ||= PENDING_FLAG_FALSE_VALUES.map { |value| connection.quote(value) }.join(", ").freeze
+  end
+
+  def self.pending_check_sql
+    @pending_check_sql ||= pending_sql("t").freeze
   end
 
   # The negation of pending_sql, for queries that must leave pending rows out.
   def self.not_pending_sql(table_alias = "transactions")
     "NOT (#{pending_sql(table_alias)})"
   end
-
-  # Pre-computed SQL fragment for subqueries that check if a transaction (aliased as "t") is pending.
-  # Stored as a constant so static analysis can verify it contains no user input.
-  PENDING_CHECK_SQL = pending_sql("t").freeze
 
   # Pending transaction scopes - filter based on provider pending flags in extra JSONB
   # Works with any provider that stores pending status in extra["provider_name"]["pending"]
@@ -184,7 +192,7 @@ class Transaction < ApplicationRecord
       # provider. Skip it, as pending_sql does, rather than let Hash#dig raise
       # and the rescue below hide every other provider's flag.
       provider_data = extra_data[provider]
-      provider_data.is_a?(Hash) && ActiveModel::Type::Boolean.new.cast(provider_data["pending"])
+      provider_data.is_a?(Hash) && PENDING_FLAG_TYPE.cast(provider_data["pending"])
     end
   rescue StandardError
     false

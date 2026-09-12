@@ -155,6 +155,18 @@ class TransactionTest < ActiveSupport::TestCase
     end
   end
 
+  test "pending SQL quotes the table alias and JSON keys" do
+    connection = ActiveRecord::Base.connection
+    table_alias = "pending alias"
+    sql = Transaction.pending_sql(table_alias)
+
+    assert_includes sql, "#{connection.quote_table_name(table_alias)}.extra"
+    assert_includes sql, "-> #{connection.quote(Transaction::PENDING_PROVIDERS.first)} ->> #{connection.quote('pending')}"
+    false_values = Transaction::PENDING_FLAG_FALSE_VALUES.map { |value| connection.quote(value) }.join(", ")
+    assert_includes sql, "NOT IN (#{false_values})"
+    assert_not_includes sql, "#{table_alias}.extra"
+  end
+
   # A provider key holding something other than an object says nothing about
   # that provider, and must not stop another provider's flag from counting.
   # SQL reads NULL for it and moves on; pending? used to raise inside
@@ -382,7 +394,7 @@ class TransactionTest < ActiveSupport::TestCase
         "Transaction.pending" => Transaction.pending.exists?(transaction.id),
         "Transaction.excluding_pending" => !Transaction.excluding_pending.exists?(transaction.id),
         "Entry.pending" => Entry.pending.exists?(entry_id),
-        "Entry.excluding_pending (PENDING_CHECK_SQL)" => !Entry.excluding_pending.exists?(entry_id),
+        "Entry.excluding_pending (pending_check_sql)" => !Entry.excluding_pending.exists?(entry_id),
         "Transaction.pending_providers_sql" => posted_row.nil?
       }
     end
