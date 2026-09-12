@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_04_201444) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_08_145118) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1313,9 +1313,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_04_201444) do
     t.decimal "interest_rate", precision: 10, scale: 3
     t.jsonb "locked_attributes", default: {}
     t.string "rate_type"
+    t.date "start_date"
     t.string "subtype"
     t.integer "term_months"
     t.datetime "updated_at", null: false
+    t.jsonb "variable_rate_schedule", default: {}, null: false
   end
 
   create_table "lunchflow_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
