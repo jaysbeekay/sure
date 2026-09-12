@@ -128,7 +128,7 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal({ "2026-04-01" => "8.25" }, loan.variable_rate_schedule)
   end
 
-  test "blank and unparseable rows are kept out of the schedule without raising" do
+  test "incomplete and unparseable rows are captured while valid rows are parsed" do
     loan = build_loan(rate_type: "variable")
 
     loan.rate_changes = [
@@ -139,6 +139,11 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     ]
 
     assert_equal({ "2026-05-01" => "7.5" }, loan.variable_rate_schedule)
+    assert_equal [
+      { effective_date: "", rate: "7.5" },
+      { effective_date: "2026-04-01", rate: "" },
+      { effective_date: "not a date", rate: "7.5" }
+    ], loan.invalid_rate_changes
   end
 
   # The earlier version of this test never created a valuation, so

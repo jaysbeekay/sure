@@ -455,6 +455,52 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal name_before, @account.name, "the attribute update must roll back with the failed lock"
   end
 
+  test "a successful balance update saves the other submitted values" do
+    balance_before = @account.reload.balance
+    updated_balance = balance_before - 10_000
+
+    patch loan_path(@account), params: { account: {
+      name: "Updated loan name",
+      balance: updated_balance,
+      accountable_attributes: { id: @account.loan.id, interest_rate: "7.25" }
+    } }
+
+    assert_redirected_to account_path(@account)
+    assert_equal updated_balance, @account.reload.balance
+    assert_equal "Updated loan name", @account.name
+    assert_equal BigDecimal("7.25"), @account.loan.reload.interest_rate
+  end
+
+  # CodeRabbit on we-promise/sure#3473: a failed balance result exits before
+  # the ordinary update path, so the 422 form must still receive the other
+  # values the user submitted.
+  test "a failed balance update keeps the other submitted values in the form" do
+    balance_before = @account.reload.balance
+    name_before = @account.name
+    rate_before = @account.loan.interest_rate
+    failed_balance = Account::CurrentBalanceManager::Result.new(
+      success?: false, changes_made?: false, error: "Balance update failed"
+    )
+    Account.any_instance.stubs(:set_current_balance).returns(failed_balance)
+
+    assert_no_difference "Entry.count" do
+      patch loan_path(@account), params: { account: {
+        name: "Unsaved loan name",
+        notes: "Unsaved loan notes",
+        balance: balance_before - 10_000,
+        accountable_attributes: { id: @account.loan.id, interest_rate: "7.25" }
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "input[name='account[name]'][value='Unsaved loan name']", count: 1
+    assert_select "input[name='account[accountable_attributes][interest_rate]'][value='7.25']", count: 1
+    assert_match "Balance update failed", response.body
+    assert_equal balance_before, @account.reload.balance
+    assert_equal name_before, @account.name
+    assert_equal rate_before, @account.loan.reload.interest_rate
+  end
+
   # CodeRabbit on we-promise/sure#3473: `loans/new` renders the method
   # selector when `step=method_select`, which reads `@provider_configs`; the
   # rescue path must set it up as `new` does.
