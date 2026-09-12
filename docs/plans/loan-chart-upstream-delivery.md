@@ -3,16 +3,17 @@
 **Tracker:** [#100](https://github.com/jaysbeekay/sure/issues/100) (the single open issue on this fork)
 · **Delivery vehicle:** [#107](https://github.com/jaysbeekay/sure/issues/107)
 · **Upstream issues:** we-promise/sure#3295 (engine + variable rates), we-promise/sure#3332 (projection + chart)
-· **Written:** 2026-09-08 · **Updated:** 2026-09-11
+· **Written:** 2026-09-08 · **Updated:** 2026-09-12
 
-> **Status 2026-09-11.** we-promise/sure#2984 merged on 2026-09-09 (`6c1c8eeec`), and Path A of §8
-> was carried out that day. Both upstream pull requests are **open and not merged**:
+> **Status 2026-09-12.** we-promise/sure#2984 merged on 2026-09-09 (`6c1c8eeec`), and Path A of §8
+> was carried out that day. Both upstream pull requests are **open, in draft, and not merged**:
 >
-> - PR-1, **we-promise/sure#3473**, is **a draft again**: it went back to draft on 2026-09-11, and a
->   maintainer's changes-requested review from 2026-09-09 (add demo data, and screenshots) still
->   stands. The demo data and screenshots went up on 2026-09-11. That day a maintainer also merged
->   upstream `main` into the branch from the PR page, which the next rebuild superseded.
-> - PR-2, **we-promise/sure#3474**, is out of draft, still carrying PR-1's commit.
+> - PR-1, **we-promise/sure#3473**, remains in draft with **changes requested**. The maintainer's
+>   2026-09-09 request asked for demo data and screenshots; both were posted on 2026-09-11. The
+>   current review decision is still changes requested. A maintainer also merged upstream `main`
+>   into the PR branch on 2026-09-11; the next rebuild supersedes that branch state.
+> - PR-2, **we-promise/sure#3474**, remains in draft and awaits review; it still carries PR-1's
+>   commit.
 >
 > we-promise/sure#3296 is closed with the comment §8 specifies; #3332's body is Appendix A.
 > Where each branch is *right now* is not recorded here; §1 says how to read it.
@@ -138,9 +139,8 @@ Develop on the two existing PR branches, not on the candidate:
 - PR-1 work → `feat/loan-amortisation-engine` (PR #109, base `base/upstream-2984`)
 - PR-2 work → `feat/mvp-payoff-chart` (PR #111, base `feat/loan-amortisation-engine`)
 
-Both PRs are open on the fork, out of draft since their review rounds began, and are **never
-merged**. #109's base is the frozen `base/upstream-2984`: merging it would move that base to
-#109's head and leave PR-1's squash in §5 empty. #111's base is #109's branch: merging it would put
+Both PRs are open on the fork, out of draft, and are **never merged**. #109's base is the frozen
+`base/upstream-2984`: merging it would move that base to #109's head and leave PR-1's squash in §5 empty. #111's base is #109's branch: merging it would put
 PR-2 inside PR-1. Their exit criteria (§6.3, §7.6) gate the upstream PRs, not a fork merge. CI,
 cubic, Codacy and CodeRabbit run there. The candidate is rebuilt from their heads (§5) only when
 both are ready, and is what gets pushed upstream. When #3473 and #3474 merge upstream, or close,
@@ -153,58 +153,150 @@ not run on drafts or on non-default base branches.
 Never push a candidate that was not rebuilt from the reviewed heads. Since 2026-09-09 the base
 is upstream `main` itself (#2984 is on it), so the vendored merge `a0a4627a` is gone from the
 recipe; `origin/base/upstream-2984` survives only as the diff base for PR-1's squash. This is
-the sequence that produced `73a7368f` / `50960942`, with the apply checks and expected-head
-leases added on 2026-09-11 after review:
+the sequence that produced `73a7368f` / `50960942`, updated on 2026-09-12 to stop on apply,
+validation, or remote-head failures:
 
 ```bash
-git fetch origin && git fetch upstream main
-# Record the heads the three pushes at the end are allowed to replace, NOW, after §1's "Keeping
-# the two sides in step" check and before anything is rebuilt. A commit that lands on any of them
-# while the rebuild runs then refuses the push instead of vanishing.
-read -r CANDIDATE PR1 PR2 <<< "$(git ls-remote origin refs/heads/mvp/upstream-candidate refs/heads/upstream/loan-amortisation-engine refs/heads/upstream/loan-balance-chart | awk '{print $1}' | tr '\n' ' ')"
-git checkout -B mvp/upstream-candidate upstream/main
-# commit 1: PR-1, squashed. Without --reject, `git apply` is all-or-nothing: if upstream `main`
-# has moved under these files it applies nothing, exits non-zero and leaves the tree clean.
-# Do not add --reject to force it, and do NOT merge upstream `main` into #109/#111 to catch up:
-# the patch is diffed from the frozen base, which upstream `main` differs from in hundreds of
-# files, so after that merge the patch carries all of them and fails worse. Retry with --3way
-# (the commented line below), which merges each file against its base blob and marks only real
-# conflicts. Once upstream has added a migration, expect exactly one: the version line of
-# db/schema.rb; PR-1's two loan columns merge cleanly (observed 2026-09-11). Keep the LATER
-# version, `git add db/schema.rb`, and check `git diff upstream/main -- db/schema.rb` shows only
-# the two columns (plus the version line if PR-1's migration is the newer). Any other conflicted
-# file is new drift: `git reset --hard` and investigate before going on.
-git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index
-# on failure: git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index --3way
+set -euo pipefail
+
+test "$(git remote get-url upstream)" = "https://github.com/we-promise/sure.git"
+git fetch origin
+git fetch upstream main
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  echo "Refusing to rebuild in a dirty worktree; use a clean disposable worktree." >&2
+  exit 1
+fi
+
+for ref in origin/base/upstream-2984 origin/feat/loan-amortisation-engine origin/feat/mvp-payoff-chart upstream/main; do
+  git rev-parse --verify "$ref^{commit}" >/dev/null
+done
+
+expected_remote_head() {
+  local ref sha
+  ref="$1"
+  sha="$(git ls-remote --refs origin "$ref" | awk 'NR == 1 { print $1 }')"
+  if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Expected exactly one existing remote head for $ref; found '$sha'." >&2
+    return 1
+  fi
+  printf '%s' "$sha"
+}
+
+# Capture exact remote heads now; the leases below refuse to overwrite a later commit.
+CANDIDATE="$(expected_remote_head refs/heads/mvp/upstream-candidate)"
+PR1="$(expected_remote_head refs/heads/upstream/loan-amortisation-engine)"
+PR2="$(expected_remote_head refs/heads/upstream/loan-balance-chart)"
+
+git checkout --detach upstream/main
+# Commit 1: PR-1, squashed. Try a normal apply, then a three-way apply. Any
+# unresolved conflict stops here; compare it with current upstream/main before resolving.
+if git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index; then
+  :
+else
+  git diff --binary origin/base/upstream-2984 origin/feat/loan-amortisation-engine | git apply --index --3way
+fi
+if [[ -n "$(git ls-files --unmerged)" ]]; then
+  echo "PR-1 apply left unmerged paths; resolve and verify them before continuing." >&2
+  exit 1
+fi
+git diff --cached --check
 git commit -m "feat(loans): amortisation engine and variable-rate loans
 
 Fixes we-promise/sure#3295"
-# commit 2: PR-2, squashed. Exactly one hunk is expected to be rejected, in chart.html.erb
-# (upstream #2733): --reject applies everything else, writes that hunk to a .rej file and exits
-# 1. Any other exit status, or any other .rej file, is new drift: undo the partial apply with
-# `git reset --hard && git clean -fd` (back to commit 1) and investigate before going on.
-git diff --binary origin/feat/loan-amortisation-engine origin/feat/mvp-payoff-chart | git apply --index --reject; echo "apply exit $? (expect 1)"
-git ls-files --others --exclude-standard | grep '\.rej$'   # expect app/components/UI/account/chart.html.erb.rej alone
-rm app/components/UI/account/chart.html.erb.rej            # before `git add -A` below, which would commit it
+PR1_COMMIT="$(git rev-parse HEAD)"
+# Commit 2: exactly one rejected hunk is expected: upstream #2733 added the
+# selectable attribute to the existing chart. Reject files and hunk count are checked.
+EXPECTED_REJECT="app/components/UI/account/chart.html.erb.rej"
+if git diff --binary origin/feat/loan-amortisation-engine origin/feat/mvp-payoff-chart | git apply --index --reject; then
+  apply_status=0
+else
+  apply_status=$?
+fi
+untracked="$(git ls-files --others --exclude-standard)"
+if [[ "$apply_status" -eq 0 ]]; then
+  if [[ -n "$untracked" ]]; then
+    echo "PR-2 apply created unexpected untracked files: $untracked" >&2
+    exit 1
+  fi
+elif [[ "$apply_status" -eq 1 ]]; then
+  if [[ "$untracked" != "$EXPECTED_REJECT" || ! -f "$EXPECTED_REJECT" ]]; then
+    echo "PR-2 apply rejected unexpected files: $untracked" >&2
+    exit 1
+  fi
+  hunk_count="$(grep -c '^@@' "$EXPECTED_REJECT" || true)"
+  if [[ "$hunk_count" -ne 1 ]]; then
+    echo "Expected exactly one rejected chart hunk; found $hunk_count." >&2
+    exit 1
+  fi
+  rm "$EXPECTED_REJECT"
+else
+  echo "PR-2 apply failed with status $apply_status." >&2
+  exit "$apply_status"
+fi
+
 git show origin/feat/mvp-payoff-chart:app/components/UI/account/chart.html.erb > app/components/UI/account/chart.html.erb
-# then add `data-time-series-chart-selectable-value="true"` to the fallback <div> in the else branch, and:
-git add -A && git commit -m "feat(loans): payoff projection and the loan balance chart
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("app/components/UI/account/chart.html.erb")
+source = path.read_text()
+original = '''          data-controller="time-series-chart"
+          data-time-series-chart-data-value='''
+with_selectable = '''          data-controller="time-series-chart"
+          data-time-series-chart-selectable-value="true"
+          data-time-series-chart-data-value='''
+if source.count(with_selectable) == 1:
+    pass
+elif source.count(original) == 1 and "data-time-series-chart-selectable-value" not in source:
+    source = source.replace(original, with_selectable, 1)
+else:
+    raise SystemExit("Expected one unmodified time-series chart block; refusing an ambiguous edit.")
+path.write_text(source)
+PY
+if [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+  echo "Unexpected untracked files remain before commit." >&2
+  exit 1
+fi
+git add -A
+git diff --cached --check
+git commit -m "feat(loans): payoff projection and the loan balance chart
 
 Fixes we-promise/sure#3332"
+PR2_COMMIT="$(git rev-parse HEAD)"
+
+test "$(git rev-parse HEAD^)" = "$PR1_COMMIT"
+test "$(git rev-list --count upstream/main..HEAD)" -eq 2
+test -z "$(git status --porcelain --untracked-files=all)"
+git diff --check upstream/main...HEAD
+
 # PR-1 changes AccountableResource#update, the edit action every account type shares, so every
 # account type's controller test runs; the demo generator seeds loans, and the Plaid liability
 # processors write loan terms.
 bin/rails test test/models/loan test/models/loan_test.rb test/models/demo/generator_test.rb test/models/plaid_account/liabilities test/controllers/{credit_cards,cryptos,depositories,investments,loans,other_assets,other_liabilities,properties,vehicles,accounts}_controller_test.rb test/components/UI/account test/i18n_test.rb
 DISABLE_PARALLELIZATION=true bin/rails test test/system/loan_payoff_chart_test.rb
-bin/rubocop && bundle exec erb_lint ./app/**/*.erb && npm run lint && bin/brakeman --no-pager
-# A bare --force-with-lease protects nothing here: it compares against the remote-tracking ref
-# that the fetch above just refreshed, so it never refuses. Each push names the head it expects
-# to replace, captured at the top of this recipe, so a commit that arrived since (as a
-# maintainer's merge of `main` did on #3473 on 2026-09-11) refuses the push instead of vanishing.
-git push --force-with-lease=refs/heads/mvp/upstream-candidate:$CANDIDATE origin mvp/upstream-candidate
-git push --force-with-lease=refs/heads/upstream/loan-amortisation-engine:$PR1 origin HEAD~1:refs/heads/upstream/loan-amortisation-engine   # #3473
-git push --force-with-lease=refs/heads/upstream/loan-balance-chart:$PR2 origin HEAD:refs/heads/upstream/loan-balance-chart                 # #3474
+bin/rubocop
+bundle exec erb_lint ./app/**/*.erb
+npm run lint
+bin/brakeman --no-pager
+test -z "$(git status --porcelain --untracked-files=all)"
+
+# A failed check exits under `set -euo pipefail`. Push all three refs atomically;
+# a lease mismatch or rejected destination leaves the candidate stack untouched.
+git push --atomic \
+  --force-with-lease=refs/heads/mvp/upstream-candidate:"$CANDIDATE" \
+  --force-with-lease=refs/heads/upstream/loan-amortisation-engine:"$PR1" \
+  --force-with-lease=refs/heads/upstream/loan-balance-chart:"$PR2" \
+  origin \
+  HEAD:refs/heads/mvp/upstream-candidate \
+  "$PR1_COMMIT":refs/heads/upstream/loan-amortisation-engine \
+  "$PR2_COMMIT":refs/heads/upstream/loan-balance-chart
 ```
+
+The recipe also verifies the intended two-commit stack and clean worktree immediately before
+validation, then runs `git diff --check upstream/main...HEAD`. A schema conflict or unexpected
+patch drift requires a reviewed resolution in the disposable worktree before restarting the
+sequence. The recipe never uses `git clean`; it removes only the exact `.rej` artifact after
+verifying its path and single rejected hunk.
 
 Fixes for upstream review findings go to the fork PR branches first (#109, then merged into
 #111), with their observed-to-fail tests, and reach upstream through this rebuild; the reply on
