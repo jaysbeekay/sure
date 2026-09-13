@@ -1,11 +1,11 @@
 # Loan chart: upstream delivery brief
 
-**Tracker:** [#100](https://github.com/jaysbeekay/sure/issues/100) (the single open issue on this fork)
+**Tracker:** [#100](https://github.com/jaysbeekay/sure/issues/100)
 · **Delivery vehicle:** [#107](https://github.com/jaysbeekay/sure/issues/107)
 · **Upstream issues:** we-promise/sure#3295 (engine + variable rates), we-promise/sure#3332 (projection + chart)
-· **Written:** 2026-09-08 · **Updated:** 2026-09-12
+· **Written:** 2026-09-08 · **Updated:** 2026-09-13
 
-> **Status 2026-09-12.** we-promise/sure#2984 merged on 2026-09-09 (`6c1c8eeec`), and Path A of §8
+> **Status 2026-09-13.** we-promise/sure#2984 merged on 2026-09-09 (`6c1c8eeec`), and Path A of §8
 > was carried out that day. Both upstream pull requests are **open, in draft, and not merged**:
 >
 > - PR-1, **we-promise/sure#3473**, remains in draft with **changes requested**. The maintainer's
@@ -108,9 +108,9 @@ The 11 files: `app/components/UI/account_page.rb`, `app/models/loan.rb`,
 with `base/upstream-2984`, never with this fork's `main`, whose loan files are the fork's own engine
 and differ by design.
 
-PR-1 opened as we-promise/sure#3473 and PR-2 as we-promise/sure#3474 (as a draft). #3474 has been
-out of draft since; #3473 went back to draft on 2026-09-11 under the maintainer's changes-requested
-review. we-promise/sure#3296 is closed. The one conflict between the PR-2
+PR-1 opened as we-promise/sure#3473 and PR-2 as we-promise/sure#3474 (as a draft). Both remain
+drafts: #3474 awaits review, and #3473 has had changes requested since 2026-09-11. we-promise/sure#3296
+is closed. The one conflict between the PR-2
 branch and upstream `main` is `app/components/UI/account/chart.html.erb`, where upstream #2733
 added `data-time-series-chart-selectable-value="true"` to the block PR-2 moves into its `else`
 branch; the rebuild carries the attribute into that branch.
@@ -448,8 +448,8 @@ Not touched: `time_series_chart_controller.js`, `Period`, `Account::Chartable`,
 > **Executed 2026-09-09 via Path A.** #2984 had merged, so the candidate was rebuilt on upstream
 > `main` (§5) and PR-1 opened as we-promise/sure#3473 from `upstream/loan-amortisation-engine`;
 > PR-2 opened as a draft, we-promise/sure#3474, from `upstream/loan-balance-chart`, with its
-> body stating that its diff includes PR-1's commit until #3473 merges. #3474 has been out of
-> draft since; #3473 went back to draft on 2026-09-11. #3296 closed with the comment below. The
+> body stating that its diff includes PR-1's commit until #3473 merges. #3474 remains a draft;
+> #3473 remains a draft with changes requested since 2026-09-11. #3296 closed with the comment below. The
 > text that follows is kept as the rationale;
 > where it says to wait for PR-1 before opening PR-2, see "Exception taken" at the end of this
 > section.
