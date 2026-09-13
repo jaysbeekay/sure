@@ -163,7 +163,7 @@ class UpItem::ImporterTest < ActiveSupport::TestCase
       @account.entries
         .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
         .where(source: "up")
-        .where("(transactions.extra -> 'up' ->> 'pending')::boolean = true")
+        .where(Transaction.pending_sql("transactions", providers: %w[up]))
     end
 
     def held_transaction(id:, amount:, date: "2026-01-15T00:00:00+11:00")

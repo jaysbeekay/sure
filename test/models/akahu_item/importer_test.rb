@@ -244,7 +244,7 @@ class AkahuItem::ImporterTest < ActiveSupport::TestCase
       @account.entries
         .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
         .where(source: "akahu")
-        .where("(transactions.extra -> 'akahu' ->> 'pending')::boolean = true")
+        .where(Transaction.pending_sql("transactions", providers: %w[akahu]))
     end
 
     def reflag(entry, flag)
