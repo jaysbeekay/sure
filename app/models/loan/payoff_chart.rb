@@ -82,7 +82,7 @@ class Loan
         # the not-converged notice can quote.
         balloon: projection.applicable? && !projection.converged? ? projection.balloon_amount.amount.to_f : nil,
         labels: labels,
-        aria_description: aria_description
+        aria_description: aria_description(actual: series[:actual])
       }
     end
 
@@ -201,13 +201,23 @@ class Loan
       end
 
       # Every series the chart draws is named here, with its payoff date.
-      def aria_description
-        I18n.t(
+      def aria_description(actual:)
+        description = I18n.t(
           "UI.account.chart.loan.aria_description",
           current_balance: projection.current_balance.format,
           scheduled_payoff_date: long_date(schedule.payoff_date, I18n.t("loans.tabs.overview.unknown")),
           projected_payoff_date: long_date(projection.payoff_date, I18n.t("UI.account.chart.loan.no_payoff"))
         )
+
+        actual_start_date = actual.first && Date.iso8601(actual.first[:date])
+        if actual_start_date && actual_start_date > domain_start
+          description = [ description, I18n.t(
+            "UI.account.chart.loan.aria_actual_history_starts",
+            date: I18n.l(actual_start_date, format: :long)
+          ) ].join(" ")
+        end
+
+        description
       end
 
       def long_date(date, fallback)

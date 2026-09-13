@@ -187,6 +187,33 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_includes payload[:aria_description], projection.current_balance.format
     assert_includes payload[:aria_description], I18n.l(schedule.payoff_date, format: :long)
     assert_includes payload[:aria_description], I18n.l(projection.payoff_date, format: :long)
+    assert_not_includes payload[:aria_description], I18n.t(
+      "UI.account.chart.loan.aria_actual_history_starts",
+      date: I18n.l(loan.origination_date, format: :long)
+    )
+  end
+
+  test "the accessible description dates recorded history when it starts after origination" do
+    loan = on_contract_loan
+    first_recorded_date = loan.origination_date >> 6
+    loan.account.balances.where(date: ...first_recorded_date).delete_all
+
+    payload = Loan::PayoffChart.new(loan.reload, as_of: @today).payload
+
+    assert_equal first_recorded_date.iso8601, payload[:actual].first[:date]
+    assert_includes payload[:aria_description], I18n.t(
+      "UI.account.chart.loan.aria_actual_history_starts",
+      date: I18n.l(first_recorded_date, format: :long)
+    )
+  end
+
+  test "German loan chart translations cover the English chart keys and windows" do
+    english = I18n.t("UI.account.chart.loan", locale: :en)
+    german = I18n.t("UI.account.chart.loan", locale: :de)
+
+    assert_equal english.keys.sort, german.keys.sort
+    assert_equal english.fetch(:windows).keys.sort, german.fetch(:windows).keys.sort
+    assert_equal "10J", I18n.t("UI.account.chart.loan.windows.last_10_years", locale: :de)
   end
 
   # A borrower too far behind has no payoff date. The description must say so

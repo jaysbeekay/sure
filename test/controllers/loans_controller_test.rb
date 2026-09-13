@@ -193,7 +193,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # loses what the user typed between submit and redisplay and never tells them
   # which row went.
   test "a half-filled rate change is rejected rather than silently dropped" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     patch loan_path(@account), params: {
       account: { accountable_attributes: {
@@ -215,7 +216,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # sentinel the PATCH carries no rate_changes key at all, nested assignment
   # never calls the writer, and the removed rows stay persisted.
   test "submitting only the blank sentinel clears the schedule" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     # The sentinel is a bare `rate_changes[]=` with no value, which Rack parses
     # as "" and strong parameters drop, so the writer receives an empty array.
@@ -298,7 +300,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # without `Loan#changed_for_autosave?` the account saved with a 302 and the
   # typo'd row vanished.
   test "an invalid row is rejected even when nothing else on the loan changed" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     patch loan_path(@account), params: { account: { accountable_attributes: {
       id: @account.loan.id, rate_type: "variable",
@@ -316,7 +319,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # Before this, `rate_change_rows` was empty for a fixed loan, the revealed
   # section was empty, and saving sent only the sentinel, which cleared them.
   test "a fixed loan's retained rate changes survive switching to variable and saving" do
-    @account.loan.update!(rate_type: "fixed", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "fixed", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     get edit_loan_path(@account)
 
@@ -339,7 +343,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # `disabled` used to be applied only by Stimulus, so without JavaScript the
   # sentinel submitted and the writer read it as "remove them all".
   test "the edit form of a fixed loan disables the whole rate-change section server-side" do
-    @account.loan.update!(rate_type: "fixed", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "fixed", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     get edit_loan_path(@account)
 
@@ -354,7 +359,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "a variable loan's edit form enables the rate-change section server-side" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     get edit_loan_path(@account)
 
@@ -382,7 +388,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # as Additional details does, and the loan's fields keep the form's spacing
   # instead of stacking flush against each other.
   test "the rate changes sit in a collapsed disclosure and the loan fields are spaced" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     get edit_loan_path(@account)
 
@@ -572,7 +579,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # valuation and the account's cached balance) before the loan's validation
   # ran, so a rejected form had committed half of itself.
   test "a rejected update does not persist the balance change submitted with it" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
     balance_before = @account.reload.balance
 
     assert_no_difference "Entry.count" do
@@ -667,7 +675,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "the rate-change controls are design-system buttons" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     get edit_loan_path(@account)
 
@@ -681,7 +690,8 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # template, so each label wraps its input rather than pointing at an id that
   # every cloned row would repeat.
   test "each rate-change input is a labelled form field without an id" do
-    @account.loan.update!(rate_type: "variable", variable_rate_schedule: { "2026-04-01" => "7.25" })
+    @account.loan.update!(rate_type: "variable", start_date: Date.new(2026, 1, 1),
+                          variable_rate_schedule: { "2026-04-01" => "7.25" })
 
     get edit_loan_path(@account)
 

@@ -129,6 +129,7 @@ de:
         loan:
           actual: "Erfasster Saldo"
           aria_description: "Kreditsaldo-Diagramm. Erfasster Saldo %{current_balance}. Ursprünglich geplante Tilgung %{scheduled_payoff_date}. Voraussichtliche Tilgung ab dem heutigen Saldo %{projected_payoff_date}."
+          aria_actual_history_starts: "Die erfasste Saldenhistorie beginnt am %{date}."
           interest_added: "Zusätzliche Zinsen"
           interest_saved: "Eingesparte Zinsen"
           legend: "Diagrammreihen"
