@@ -821,14 +821,20 @@ class InvestmentStatement
     # Callers that need return trends should call combined_holding_trend only
     # for rows they will render (e.g. after top_holdings applies its limit).
     #
-    # A security whose holdings do not sum to a positive value is left out
-    # rather than listed at weight 0 or at a negative weight (methodology
-    # P27). Zero is a position with no price yet. Negative is corrupt data:
-    # Holding validates qty, price and amount as non-negative, but
-    # Holding::Materializer writes through upsert_all, which does not run
+    # Only holding rows with a positive value count, and a security left with
+    # none is omitted rather than listed at weight 0 or at a negative weight
+    # (methodology P27). Zero is a position with no price yet. Negative is
+    # corrupt data: Holding validates qty, price and amount as non-negative,
+    # but Holding::Materializer writes through upsert_all, which does not run
     # validations, so an over-sell can land one. Keeping it out is what makes
     # the weight denominator a real ceiling -- with a negative row in the sum,
     # holdings_total falls below the largest row and its weight goes over 100.
+    #
+    # The filter is per row, not on the netted total: current_holdings is
+    # DISTINCT ON (account_id, security_id), so one security held in two
+    # accounts yields two rows, and a negative row in one would otherwise net
+    # against the good row in the other. The filtered rows are returned so
+    # the trend excludes the bad row too.
     #
     # Memoized: top_holdings and allocation both start here, and the
     # grouping and FX conversion need only run once per instance.
@@ -836,11 +842,15 @@ class InvestmentStatement
       @holdings_rolled_up_by_security ||= holdings_with_avg_costs
         .group_by(&:security_id)
         .filter_map do |_security_id, holdings|
-          security = holdings.first.security
-          value = holdings.sum { |h| convert_to_family_currency(h.amount, h.currency) }
-          next unless value.positive?
+          positive_holdings = holdings.select do |holding|
+            convert_to_family_currency(holding.amount, holding.currency).positive?
+          end
+          next if positive_holdings.empty?
 
-          [ security, value, holdings ]
+          security = positive_holdings.first.security
+          value = positive_holdings.sum { |h| convert_to_family_currency(h.amount, h.currency) }
+
+          [ security, value, positive_holdings ]
         end
         .sort_by { |_, value, _| -value }
     end

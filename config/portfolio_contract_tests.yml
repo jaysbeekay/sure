@@ -171,6 +171,7 @@ P27:
     tests:
       - a security whose holdings carry no value is omitted from top_holdings and allocation
       - a holding with a negative value cannot push another security's weight over 100
+      - a negative row does not net against the same security held in another account
 P28:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest

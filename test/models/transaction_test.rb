@@ -155,6 +155,43 @@ class TransactionTest < ActiveSupport::TestCase
     end
   end
 
+  test "SQL false values stay in sync with ActiveModel boolean casting" do
+    expected_false_values = Set.new(ActiveModel::Type::Boolean::FALSE_VALUES.grep(String)).add("")
+
+    assert_equal expected_false_values, Transaction::PENDING_FLAG_FALSE_VALUES.to_set
+  end
+
+  test "provider-specific SQL only considers the requested pending namespaces" do
+    account = families(:empty).accounts.create! name: "Provider pending scope", balance: 0,
+      currency: "USD", accountable: Depository.new
+    akahu_pending = create_transaction(account: account, amount: 10).entryable
+    akahu_pending.update!(extra: { "akahu" => { "pending" => "maybe" } })
+    akahu_false = create_transaction(account: account, amount: 11).entryable
+    akahu_false.update!(extra: { "akahu" => { "pending" => "off" } })
+    other_provider = create_transaction(account: account, amount: 12).entryable
+    other_provider.update!(extra: { "simplefin" => { "pending" => true } })
+
+    matches = Transaction.where(Transaction.pending_sql("transactions", providers: [ :akahu ]))
+
+    assert_equal [ akahu_pending.id ], matches.pluck(:id)
+    assert_equal [ akahu_pending.id ], Transaction.where(
+      Transaction.pending_sql("transactions", providers: [ "akahu", "unsupported" ])
+    ).pluck(:id)
+    assert_empty Transaction.where(Transaction.pending_sql("transactions", providers: [])).pluck(:id)
+  end
+
+  test "pending SQL quotes the table alias and JSON keys" do
+    connection = ActiveRecord::Base.connection
+    table_alias = "pending alias"
+    sql = Transaction.pending_sql(table_alias)
+
+    assert_includes sql, "#{connection.quote_table_name(table_alias)}.extra"
+    assert_includes sql, "-> #{connection.quote(Transaction::PENDING_PROVIDERS.first)} ->> #{connection.quote('pending')}"
+    false_values = Transaction::PENDING_FLAG_FALSE_VALUES.map { |value| connection.quote(value) }.join(", ")
+    assert_includes sql, "NOT IN (#{false_values})"
+    assert_not_includes sql, "#{table_alias}.extra"
+  end
+
   # A provider key holding something other than an object says nothing about
   # that provider, and must not stop another provider's flag from counting.
   # SQL reads NULL for it and moves on; pending? used to raise inside
@@ -382,7 +419,7 @@ class TransactionTest < ActiveSupport::TestCase
         "Transaction.pending" => Transaction.pending.exists?(transaction.id),
         "Transaction.excluding_pending" => !Transaction.excluding_pending.exists?(transaction.id),
         "Entry.pending" => Entry.pending.exists?(entry_id),
-        "Entry.excluding_pending (PENDING_CHECK_SQL)" => !Entry.excluding_pending.exists?(entry_id),
+        "Entry.excluding_pending (pending_check_sql)" => !Entry.excluding_pending.exists?(entry_id),
         "Transaction.pending_providers_sql" => posted_row.nil?
       }
     end
