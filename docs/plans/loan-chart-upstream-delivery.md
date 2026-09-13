@@ -536,8 +536,9 @@ own PR and its own cost):
   `amortization_schedule.payment_in_force(as_of:)` (new; first `display_rows` row after `as_of`),
   nil past maturity; `UI::Loan::RateChangeTable` reads before/after repayments and the balance at
   the effective date from `display_rows`, drops its `:reamortize` projection and offset netting;
-  `test/models/loan/current_minimum_payment_test.rb` rewritten (the #79 lender-letter oracle is
-  reinterpreted as the schedule's row for that date, with the reason in the test);
+  `test/models/loan/current_minimum_payment_test.rb` rewritten (the lender-letter oracle from
+  [PR #79](https://github.com/jaysbeekay/sure/pull/79) is reinterpreted as the schedule's row for
+  that date, with the reason in the test);
   `test/components/UI/loan/rate_change_table_test.rb`'s six projection/offset tests rewritten
 - Delete `PayoffProjection` `:reamortize` and `Loan#interest_bearing_balance` once unreferenced
 - `amortizations_read_guard_test` stays green throughout
