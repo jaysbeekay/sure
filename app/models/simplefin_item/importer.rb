@@ -1330,10 +1330,7 @@ class SimplefinItem::Importer
         .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
         .where(excluded: false)
         .where("entries.date < ?", 8.days.ago.to_date)
-        .where(<<~SQL.squish)
-          (transactions.extra -> 'simplefin' ->> 'pending')::boolean = true
-          OR (transactions.extra -> 'plaid' ->> 'pending')::boolean = true
-        SQL
+        .where(Transaction.pending_sql("transactions", providers: %w[simplefin plaid]))
         .where(<<~SQL.squish)
           transactions.extra -> 'potential_posted_match' IS NULL
         SQL
