@@ -85,7 +85,26 @@ class SimplefinItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 1_000, depository.cash_balance
   end
 
+  test "stale unmatched tracking handles malformed and provider-specific pending flags" do
+    account = @family.accounts.create!(name: "Stale pending", balance: 0, currency: "USD", accountable: Depository.new)
+    create_pending_entry(account, "simplefin_maybe", "simplefin", "maybe", 10)
+    create_pending_entry(account, "simplefin_false", "simplefin", "off", 11)
+    create_pending_entry(account, "lunchflow_pending", "lunchflow", true, 12)
+
+    @importer.send(:track_stale_unmatched_pending, account)
+
+    assert_equal 1, @importer.send(:stats)["stale_unmatched_pending"]
+    assert_empty @importer.send(:stats).fetch("reconciliation_errors", [])
+  end
+
   private
+
+    def create_pending_entry(account, name, provider, pending, amount)
+      account.entries.create!(
+        name: name, date: 10.days.ago.to_date, amount: amount, currency: "USD",
+        entryable: Transaction.new(extra: { provider => { "pending" => pending } })
+      )
+    end
 
     def create_simplefin_account(account_id, name, account_type, current_balance)
       @item.simplefin_accounts.create!(

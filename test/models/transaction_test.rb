@@ -155,6 +155,31 @@ class TransactionTest < ActiveSupport::TestCase
     end
   end
 
+  test "SQL false values stay in sync with ActiveModel boolean casting" do
+    expected_false_values = Set.new(ActiveModel::Type::Boolean::FALSE_VALUES.grep(String)).add("")
+
+    assert_equal expected_false_values, Transaction::PENDING_FLAG_FALSE_VALUES.to_set
+  end
+
+  test "provider-specific SQL only considers the requested pending namespaces" do
+    account = families(:empty).accounts.create! name: "Provider pending scope", balance: 0,
+      currency: "USD", accountable: Depository.new
+    akahu_pending = create_transaction(account: account, amount: 10).entryable
+    akahu_pending.update!(extra: { "akahu" => { "pending" => "maybe" } })
+    akahu_false = create_transaction(account: account, amount: 11).entryable
+    akahu_false.update!(extra: { "akahu" => { "pending" => "off" } })
+    other_provider = create_transaction(account: account, amount: 12).entryable
+    other_provider.update!(extra: { "simplefin" => { "pending" => true } })
+
+    matches = Transaction.where(Transaction.pending_sql("transactions", providers: [ :akahu ]))
+
+    assert_equal [ akahu_pending.id ], matches.pluck(:id)
+    assert_equal [ akahu_pending.id ], Transaction.where(
+      Transaction.pending_sql("transactions", providers: [ "akahu", "unsupported" ])
+    ).pluck(:id)
+    assert_empty Transaction.where(Transaction.pending_sql("transactions", providers: [])).pluck(:id)
+  end
+
   test "pending SQL quotes the table alias and JSON keys" do
     connection = ActiveRecord::Base.connection
     table_alias = "pending alias"

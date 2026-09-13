@@ -103,8 +103,8 @@ class Transaction < ApplicationRecord
   PENDING_FLAG_FALSE_VALUES = (ActiveModel::Type::Boolean::FALSE_VALUES.grep(String) + [ "" ]).uniq.freeze
   PENDING_FLAG_TYPE = ActiveModel::Type::Boolean.new.freeze
 
-  # SQL that is true when any provider flags the row pending: the decision
-  # #pending? takes in Ruby. Every SQL pending filter is built from this one.
+  # Canonical reusable SQL form of the pending? decision. Callers that inspect
+  # only provider namespaces they own can pass that subset in `providers:`.
   #
   # Deliberately not `(... ->> 'pending')::boolean`. PostgreSQL raises
   # PG::InvalidTextRepresentation on a value it cannot parse ("maybe"), which
@@ -119,11 +119,13 @@ class Transaction < ApplicationRecord
   # A JSON number 0.0 renders as '0.0' and is pending here; #pending? agrees,
   # because FALSE_VALUES is a Set keyed by eql? and 0.0 is not eql? to 0. The
   # parity test carries the case.
-  def self.pending_sql(table_alias = "transactions")
+  def self.pending_sql(table_alias = "transactions", providers: PENDING_PROVIDERS)
     quoted_table = connection.quote_table_name(table_alias)
     false_values = pending_flag_false_values_sql
+    selected_providers = Array(providers).map(&:to_s).uniq & PENDING_PROVIDERS
+    return "FALSE" if selected_providers.empty?
 
-    PENDING_PROVIDERS
+    selected_providers
       .map do |provider|
         "COALESCE(#{quoted_table}.extra -> #{connection.quote(provider)} ->> #{connection.quote("pending")}, #{connection.quote("")}) NOT IN (#{false_values})"
       end
@@ -144,8 +146,8 @@ class Transaction < ApplicationRecord
   end
 
   # The negation of pending_sql, for queries that must leave pending rows out.
-  def self.not_pending_sql(table_alias = "transactions")
-    "NOT (#{pending_sql(table_alias)})"
+  def self.not_pending_sql(table_alias = "transactions", providers: PENDING_PROVIDERS)
+    "NOT (#{pending_sql(table_alias, providers: providers)})"
   end
 
   # Pending transaction scopes - filter based on provider pending flags in extra JSONB
@@ -156,8 +158,8 @@ class Transaction < ApplicationRecord
 
   # SQL snippet for raw queries that must exclude pending transactions.
   # Use in income statements, balance sheets, and raw analytics.
-  def self.pending_providers_sql(table_alias = "t")
-    "AND #{not_pending_sql(table_alias)}"
+  def self.pending_providers_sql(table_alias = "t", providers: PENDING_PROVIDERS)
+    "AND #{not_pending_sql(table_alias, providers: providers)}"
   end
 
   # Family-scoped query for Enrichable#clear_ai_cache
