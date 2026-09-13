@@ -52,6 +52,7 @@ class LoanTest < ActiveSupport::TestCase
       currency: "USD",
       accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "variable")
 
+    assert_equal account, account.loan.account, "validating a Loan before attaching its Account must not cache a missing association"
     assert account.loan.amortizable?
     assert_not_nil account.loan.amortization_schedule
     assert_nil account.loan.monthly_payment
