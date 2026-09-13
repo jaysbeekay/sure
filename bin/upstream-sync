@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Open the weekly pull request that brings we-promise/sure main into this
+# fork's main. Creates sync/upstream-<date> from origin/main, merges
+# upstream/main into it, pushes, and opens the fork PR. Conflicts stop it
+# with the branch left for you to resolve.
+#
+# See docs/llm-guides/upstream-delivery.md.
+set -euo pipefail
+
+git remote get-url upstream >/dev/null 2>&1 || git remote add upstream https://github.com/we-promise/sure.git
+git fetch --no-tags upstream main
+git fetch --no-tags origin main
+
+behind="$(git rev-list --count origin/main..upstream/main)"
+if [ "$behind" -eq 0 ]; then
+  echo "main already carries every commit on upstream/main."; exit 0
+fi
+
+branch="sync/upstream-$(date +%Y-%m-%d)"
+git checkout -q -B "$branch" origin/main
+echo "$branch: merging $behind upstream commit(s) ($(git rev-parse --short origin/main) <- $(git rev-parse --short upstream/main))"
+git merge --no-edit upstream/main || {
+  echo; echo "upstream-sync: conflicts. Resolve them, commit, 'git push -u origin $branch', then open the PR against main." >&2; exit 1; }
+
+git push -q -u origin "$branch"
+gh pr create --repo "$(git remote get-url origin | sed -E 's#^.*github\.com[:/]##; s#\.git$##')" --base main --head "$branch" \
+  --title "Sync main with we-promise/sure ($(git rev-parse --short upstream/main))" \
+  --body "$(printf 'Merges %s commit(s) from we-promise/sure main up to %s.\n\nRebase open up/* delivery branches with bin/upstream-rebase once this merges.' "$behind" "$(git rev-parse --short upstream/main)")"

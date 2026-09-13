@@ -101,9 +101,10 @@ class Transaction < ApplicationRecord
   # ActiveModel::Type::Boolean casts to false, plus "" (which it casts to nil).
   # Any other present value is pending, as #pending? decides.
   PENDING_FLAG_FALSE_VALUES = (ActiveModel::Type::Boolean::FALSE_VALUES.grep(String) + [ "" ]).uniq.freeze
+  PENDING_FLAG_TYPE = ActiveModel::Type::Boolean.new.freeze
 
-  # SQL that is true when any provider flags the row pending: the decision
-  # #pending? takes in Ruby. Every SQL pending filter is built from this one.
+  # Canonical reusable SQL form of the pending? decision. Callers that inspect
+  # only provider namespaces they own can pass that subset in `providers:`.
   #
   # Deliberately not `(... ->> 'pending')::boolean`. PostgreSQL raises
   # PG::InvalidTextRepresentation on a value it cannot parse ("maybe"), which
@@ -115,39 +116,39 @@ class Transaction < ApplicationRecord
   # COALESCE maps a missing flag or JSON null to "", a false value, so no
   # provider's term is ever NULL and NOT (...) is exact.
   #
-  # One known gap: a JSON number 0.0 is pending here ('0.0') but not to
-  # #pending? (0.0 == 0). No provider writes one.
-  #
-  # +providers+ narrows the check to some of PENDING_PROVIDERS, for reads that
-  # act only on their own provider's flag. The names are interpolated, so any
-  # other name is rejected rather than quoted.
+  # A JSON number 0.0 renders as '0.0' and is pending here; #pending? agrees,
+  # because FALSE_VALUES is a Set keyed by eql? and 0.0 is not eql? to 0. The
+  # parity test carries the case.
   def self.pending_sql(table_alias = "transactions", providers: PENDING_PROVIDERS)
-    false_values = PENDING_FLAG_FALSE_VALUES.map { |value| "'#{value.gsub("'", "''")}'" }.join(", ")
+    quoted_table = connection.quote_table_name(table_alias)
+    false_values = pending_flag_false_values_sql
+    selected_providers = Array(providers).map(&:to_s).uniq & PENDING_PROVIDERS
+    return "FALSE" if selected_providers.empty?
 
-    pending_flag_providers(providers)
-      .map { |provider| "COALESCE(#{table_alias}.extra -> '#{provider}' ->> 'pending', '') NOT IN (#{false_values})" }
+    selected_providers
+      .map do |provider|
+        "COALESCE(#{quoted_table}.extra -> #{connection.quote(provider)} ->> #{connection.quote("pending")}, #{connection.quote("")}) NOT IN (#{false_values})"
+      end
       .join(" OR ")
+      .then { |predicate| "(#{predicate})" }
+  end
+
+  def self.pending_flag_false_values_sql
+    @pending_flag_false_values_sql ||= PENDING_FLAG_FALSE_VALUES.map { |value| connection.quote(value) }.join(", ").freeze
+  end
+
+  # A fixed-alias fragment for correlated SQL. Keep it as a constant so static
+  # analysis can verify that the raw SQL is built only from provider constants.
+  PENDING_CHECK_SQL = pending_sql("t").freeze
+
+  def self.pending_check_sql
+    PENDING_CHECK_SQL
   end
 
   # The negation of pending_sql, for queries that must leave pending rows out.
   def self.not_pending_sql(table_alias = "transactions", providers: PENDING_PROVIDERS)
     "NOT (#{pending_sql(table_alias, providers: providers)})"
   end
-
-  def self.pending_flag_providers(providers)
-    providers = Array(providers).map(&:to_s)
-    raise ArgumentError, "at least one pending provider is required" if providers.empty?
-
-    unknown = providers - PENDING_PROVIDERS
-    raise ArgumentError, "unknown pending provider: #{unknown.join(", ")}" if unknown.any?
-
-    providers
-  end
-  private_class_method :pending_flag_providers
-
-  # Pre-computed SQL fragment for subqueries that check if a transaction (aliased as "t") is pending.
-  # Stored as a constant so static analysis can verify it contains no user input.
-  PENDING_CHECK_SQL = pending_sql("t").freeze
 
   # Pending transaction scopes - filter based on provider pending flags in extra JSONB
   # Works with any provider that stores pending status in extra["provider_name"]["pending"]
@@ -157,8 +158,8 @@ class Transaction < ApplicationRecord
 
   # SQL snippet for raw queries that must exclude pending transactions.
   # Use in income statements, balance sheets, and raw analytics.
-  def self.pending_providers_sql(table_alias = "t")
-    "AND #{not_pending_sql(table_alias)}"
+  def self.pending_providers_sql(table_alias = "t", providers: PENDING_PROVIDERS)
+    "AND #{not_pending_sql(table_alias, providers: providers)}"
   end
 
   # Family-scoped query for Enrichable#clear_ai_cache
@@ -198,7 +199,7 @@ class Transaction < ApplicationRecord
       # provider. Skip it, as pending_sql does, rather than let Hash#dig raise
       # and the rescue below hide every other provider's flag.
       provider_data = extra_data[provider]
-      provider_data.is_a?(Hash) && ActiveModel::Type::Boolean.new.cast(provider_data["pending"])
+      provider_data.is_a?(Hash) && PENDING_FLAG_TYPE.cast(provider_data["pending"])
     end
   rescue StandardError
     false

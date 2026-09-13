@@ -131,7 +131,7 @@ class TransactionTest < ActiveSupport::TestCase
   test "every SQL pending predicate agrees with pending? on any stored flag" do
     account = families(:empty).accounts.create! name: "Pending parity", balance: 0, currency: "USD", accountable: Depository.new
 
-    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", 1, 0 ].each do |flag|
+    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", 1, 0, 0.0 ].each do |flag|
       transaction = create_transaction(account: account, amount: 10).entryable
       transaction.update!(extra: { "plaid" => { "pending" => flag } })
 
@@ -153,6 +153,60 @@ class TransactionTest < ActiveSupport::TestCase
     sql_pending_answers(transaction).each do |form, answer|
       assert answer, "#{form} should call a \"maybe\" flag pending, as pending? does"
     end
+  end
+
+  test "SQL false values stay in sync with ActiveModel boolean casting" do
+    expected_false_values = Set.new(ActiveModel::Type::Boolean::FALSE_VALUES.grep(String)).add("")
+
+    assert_equal expected_false_values, Transaction::PENDING_FLAG_FALSE_VALUES.to_set
+  end
+
+  test "provider-specific SQL only considers the requested pending namespaces" do
+    account = families(:empty).accounts.create! name: "Provider pending scope", balance: 0,
+      currency: "USD", accountable: Depository.new
+    akahu_pending = create_transaction(account: account, amount: 10).entryable
+    akahu_pending.update!(extra: { "akahu" => { "pending" => "maybe" } })
+    akahu_false = create_transaction(account: account, amount: 11).entryable
+    akahu_false.update!(extra: { "akahu" => { "pending" => "off" } })
+    other_provider = create_transaction(account: account, amount: 12).entryable
+    other_provider.update!(extra: { "simplefin" => { "pending" => true } })
+
+    matches = Transaction.where(Transaction.pending_sql("transactions", providers: [ :akahu ]))
+
+    assert_equal [ akahu_pending.id ], matches.pluck(:id)
+    assert_equal [ akahu_pending.id ], Transaction.where(
+      Transaction.pending_sql("transactions", providers: [ "akahu", "unsupported" ])
+    ).pluck(:id)
+    assert_empty Transaction.where(Transaction.pending_sql("transactions", providers: [])).pluck(:id)
+  end
+
+  # Narrowed to some providers, the SQL is the same rule applied to those
+  # providers' flags only: another provider's flag must not leak in.
+  test "pending_sql for a provider subset agrees with pending? on that provider's flag alone" do
+    account = families(:empty).accounts.create! name: "Pending subset", balance: 0, currency: "USD", accountable: Depository.new
+
+    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", "maybe", 1, 0 ].each do |flag|
+      transaction = create_transaction(account: account, amount: 10).entryable
+      transaction.update!(extra: { "up" => { "pending" => flag }, "plaid" => { "pending" => true } })
+      expected = Transaction.new(extra: { "up" => { "pending" => flag } }).pending?
+
+      assert_equal expected, Transaction.where(Transaction.pending_sql(providers: %w[up])).exists?(transaction.id),
+        "pending_sql(providers: up) disagrees with pending? on #{flag.inspect}"
+      assert_equal !expected, Transaction.where(Transaction.not_pending_sql(providers: %w[up])).exists?(transaction.id),
+        "not_pending_sql(providers: up) disagrees with pending? on #{flag.inspect}"
+    end
+  end
+
+  test "pending SQL quotes the table alias and JSON keys" do
+    connection = ActiveRecord::Base.connection
+    table_alias = "pending alias"
+    sql = Transaction.pending_sql(table_alias)
+
+    assert_includes sql, "#{connection.quote_table_name(table_alias)}.extra"
+    assert_includes sql, "-> #{connection.quote(Transaction::PENDING_PROVIDERS.first)} ->> #{connection.quote('pending')}"
+    false_values = Transaction::PENDING_FLAG_FALSE_VALUES.map { |value| connection.quote(value) }.join(", ")
+    assert_includes sql, "NOT IN (#{false_values})"
+    assert_not_includes sql, "#{table_alias}.extra"
   end
 
   # A provider key holding something other than an object says nothing about
@@ -183,31 +237,6 @@ class TransactionTest < ActiveSupport::TestCase
     create_transaction(account: account, amount: 10).entryable.update!(extra: { "plaid" => { "pending" => "maybe" } })
 
     assert_equal [ posted.id ], pending_entry.entryable.pending_duplicate_candidates.map(&:id)
-  end
-
-  # Narrowed to some providers, the SQL is the same rule applied to those
-  # providers' flags only: another provider's flag must not leak in.
-  test "pending_sql for a provider subset agrees with pending? on that provider's flag alone" do
-    account = families(:empty).accounts.create! name: "Pending subset", balance: 0, currency: "USD", accountable: Depository.new
-
-    [ true, false, nil, "true", "false", "no", "False", "Off", " false", "", "0", "1", "t", "f", "maybe", 1, 0 ].each do |flag|
-      transaction = create_transaction(account: account, amount: 10).entryable
-      transaction.update!(extra: { "up" => { "pending" => flag }, "plaid" => { "pending" => true } })
-      expected = Transaction.new(extra: { "up" => { "pending" => flag } }).pending?
-
-      assert_equal expected, Transaction.where(Transaction.pending_sql(providers: %w[up])).exists?(transaction.id),
-        "pending_sql(providers: up) disagrees with pending? on #{flag.inspect}"
-      assert_equal !expected, Transaction.where(Transaction.not_pending_sql(providers: %w[up])).exists?(transaction.id),
-        "not_pending_sql(providers: up) disagrees with pending? on #{flag.inspect}"
-    end
-  end
-
-  test "pending_sql rejects providers it has no pending flag for" do
-    error = assert_raises(ArgumentError) { Transaction.pending_sql(providers: %w[up monzo]) }
-    assert_match(/unknown pending provider.*monzo/i, error.message)
-
-    error = assert_raises(ArgumentError) { Transaction.not_pending_sql(providers: []) }
-    assert_match(/at least one pending provider/i, error.message)
   end
 
   test "investment_contribution is a valid kind" do
@@ -407,7 +436,7 @@ class TransactionTest < ActiveSupport::TestCase
         "Transaction.pending" => Transaction.pending.exists?(transaction.id),
         "Transaction.excluding_pending" => !Transaction.excluding_pending.exists?(transaction.id),
         "Entry.pending" => Entry.pending.exists?(entry_id),
-        "Entry.excluding_pending (PENDING_CHECK_SQL)" => !Entry.excluding_pending.exists?(entry_id),
+        "Entry.excluding_pending (pending_check_sql)" => !Entry.excluding_pending.exists?(entry_id),
         "Transaction.pending_providers_sql" => posted_row.nil?
       }
     end

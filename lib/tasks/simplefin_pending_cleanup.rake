@@ -82,14 +82,11 @@ namespace :simplefin do
     puts "Date window: #{date_window} days (forward only)"
     puts ""
 
-    # The direction bug only ever excluded entries carrying these providers' flags
-    restore_providers = %w[simplefin plaid]
-
     # Find all EXCLUDED pending transactions (these may have been wrongly excluded)
     excluded_pending = Entry.joins(
       "INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'"
     ).where(excluded: true)
-     .where(Transaction.pending_sql(providers: restore_providers))
+     .where(Transaction.pending_sql("transactions", providers: %w[simplefin plaid]))
 
     puts "Found #{excluded_pending.count} excluded pending transactions to evaluate"
     puts ""
@@ -105,7 +102,7 @@ namespace :simplefin do
         .where(currency: pending_entry.currency)
         .where(amount: pending_entry.amount)
         .where(date: pending_entry.date..(pending_entry.date + date_window.days))
-        .where(Transaction.not_pending_sql(providers: restore_providers))
+        .where(Transaction.not_pending_sql("transactions", providers: %w[simplefin plaid]))
         .exists?
 
       unless valid_match
