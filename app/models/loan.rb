@@ -84,10 +84,21 @@ class Loan < ApplicationRecord
 
   private def rate_changes_precede_origination?
     return false unless variable_rate_type?
-    return false unless start_date.present? || account.present?
+    rate_changes = variable_rates
+    return false if rate_changes.empty?
 
-    loan_origination_date = origination_date
-    loan_origination_date.present? && variable_rates.any? { |date, _rate| date < loan_origination_date }
+    loan_origination_date = start_date
+    unless loan_origination_date.present?
+      # Do not call `account` here. Loan validations can run before a separate
+      # Account is attached; caching that missing has_one result leaves the
+      # later persisted Loan unable to see its Account through the association.
+      loan_account = association(:account).target || association(:account).scope.first
+      return false unless loan_account
+
+      loan_origination_date = loan_account.first_valuation&.date || loan_account.opening_anchor_date
+    end
+
+    loan_origination_date.present? && rate_changes.any? { |date, _rate| date < loan_origination_date }
   end
 
   # Whether this loan's rate can move over its life. The one place the answer
