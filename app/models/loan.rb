@@ -78,6 +78,18 @@ class Loan < ApplicationRecord
     end
   end
 
+  private def rate_changes_must_not_precede_origination
+    errors.add(:base, :rate_change_before_origination) if rate_changes_precede_origination?
+  end
+
+  private def rate_changes_precede_origination?
+    return false unless variable_rate_type?
+    return false unless start_date.present? || account.present?
+
+    loan_origination_date = origination_date
+    loan_origination_date.present? && variable_rates.any? { |date, _rate| date < loan_origination_date }
+  end
+
   # Whether this loan's rate can move over its life. The one place the answer
   # is defined -- callers must not compare rate_type to a string. Anything
   # non-blank that is not "fixed" counts, so a provider's own vocabulary is
@@ -110,6 +122,7 @@ class Loan < ApplicationRecord
   attr_reader :invalid_rate_changes
 
   validate :rate_changes_must_be_parseable
+  validate :rate_changes_must_not_precede_origination
 
   # Assembles variable_rate_schedule from the form's rows.
   #
@@ -166,7 +179,7 @@ class Loan < ApplicationRecord
   # without this the account saved, the typo'd row vanished, and the
   # validation above only fired when some other field happened to change.
   def changed_for_autosave?
-    super || invalid_rate_changes.present?
+    super || invalid_rate_changes.present? || rate_changes_precede_origination?
   end
 
   # Form rows, in a shape the form can render without parsing anything.

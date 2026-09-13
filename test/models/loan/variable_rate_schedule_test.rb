@@ -93,6 +93,25 @@ class Loan::VariableRateScheduleTest < ActiveSupport::TestCase
     assert_equal BigDecimal("9.5"), loan.current_variable_rate(Date.new(2026, 7, 1))
   end
 
+  test "a rate change before origination is rejected but one on origination is accepted" do
+    origination = Date.new(2026, 1, 1)
+    loan = build_loan(rate_type: "variable", start_date: origination)
+
+    loan.rate_changes = [ { effective_date: "2025-12-31", rate: "7.25" } ]
+
+    assert_not loan.valid?
+    assert loan.errors.of_kind?(:base, :rate_change_before_origination)
+    assert_equal [ { effective_date: "2025-12-31", rate: "7.25" } ], loan.rate_change_rows,
+      "the invalid row remains available to redisplay"
+
+    loan.errors.clear
+    loan.rate_changes = [ { effective_date: origination.iso8601, rate: "7.25" } ]
+
+    assert loan.valid?
+    assert_empty loan.errors
+    assert_equal BigDecimal("7.25"), loan.current_variable_rate(origination)
+  end
+
   # One reader of the column. `RateResolver` used to re-parse what
   # `variable_rates` had already sorted by, so the two read paths returned
   # different types for the same rows, and a parsing fix could land in one

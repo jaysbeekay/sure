@@ -36,6 +36,35 @@ class Loan::SimulatorTest < ActiveSupport::TestCase
     end
   end
 
+  test "a one-period loan at a positive rate settles principal and interest together" do
+    result = Loan::Simulator.new(
+      starting_balance: 1_000,
+      accrual_start_date: Date.new(2026, 1, 1),
+      payment_schedule: [ Date.new(2026, 2, 1) ],
+      accrual_rate_for: ->(_date) { 12 },
+      currency_precision: 2
+    ).run
+
+    assert_equal BigDecimal("1010"), result.payments.first[:payment_amount]
+    assert_equal BigDecimal("0"), result.payments.first[:ending_balance]
+  end
+
+  test "a 360-period zero-rate loan remains outstanding before its final payment" do
+    schedule = (1..360).map { |month| Date.new(2026, 1, 1) >> month }
+    result = Loan::Simulator.new(
+      starting_balance: 360_000,
+      accrual_start_date: Date.new(2026, 1, 1),
+      payment_schedule: schedule,
+      accrual_rate_for: ->(_date) { 0 },
+      currency_precision: 2
+    ).run
+
+    assert_equal BigDecimal("180000"), result.payments[179][:ending_balance],
+      "the 180th payment must not trigger early settlement at a zero rate"
+    assert_equal BigDecimal("0"), result.payments.last[:ending_balance]
+    assert_equal 360, result.payment_count
+  end
+
   # THE behaviour this engine exists for, and the one #2984's single-rate loop
   # cannot express. Asserted here rather than in #104 because it is a property
   # of the simulator, not of how a Loan stores its rates.
