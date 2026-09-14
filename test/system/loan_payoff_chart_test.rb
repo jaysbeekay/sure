@@ -131,6 +131,73 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
     end
   end
 
+  # Codex on we-promise/sure#3474: d3's default time ticks print English month
+  # names, so a German page showed a German tooltip over an English axis. A
+  # one-year window ticks by month; each month tick must read as the browser's
+  # own German short month, and never as d3's English month name.
+  test "the axis labels its month ticks in the user's locale" do
+    @user.update!(locale: "de")
+
+    travel_to TODAY do
+      account = on_contract_loan_account
+
+      visit account_path(account, period: "last_365_days")
+      find("[data-controller='loan-payoff-chart'] svg path[data-series='scheduled']")
+      ticks = page.evaluate_script(<<~JS)
+        Array.from(document.querySelectorAll("[data-controller='loan-payoff-chart'] svg g[transform^='translate(0,'] g.tick"))
+          .map((tick) => tick.__data__)
+          .filter((date) => date.getDate() === 1 && date.getMonth() !== 0)
+          .map((date) => ({
+            label: Array.from(document.querySelectorAll("[data-controller='loan-payoff-chart'] svg g[transform^='translate(0,'] g.tick"))
+              .find((tick) => tick.__data__.getTime() === date.getTime()).textContent,
+            german: new Intl.DateTimeFormat("de", { month: "short" }).format(date),
+            english: new Intl.DateTimeFormat("en", { month: "long" }).format(date),
+          }))
+      JS
+
+      assert ticks.any?, "a one-year window must have month ticks, or this asserts nothing"
+      ticks.each do |tick|
+        assert_equal tick["german"], tick["label"], "a month tick must be labelled in German"
+        assert_not_equal tick["english"], tick["label"], "d3's English month name must not leak through"
+      end
+    end
+  end
+
+  # Codex on we-promise/sure#3474: the heading showed the cursor's own month
+  # while every row showed the nearest point's balance, so a cursor just before
+  # a payment date named one month over the next payment's figures. The pointer
+  # now snaps to the payment dates, as the keyboard does.
+  test "a pointer just before a payment date heads the tooltip with that payment's month" do
+    travel_to TODAY do
+      account = on_contract_loan_account
+      payload = Loan::PayoffChart.new(account.loan, as_of: TODAY, period: all_time_period).payload
+      dates = payload[:scheduled].map { |point| Date.iso8601(point[:date]) }
+      payment = dates.each_cons(2).map(&:last).find { |date| (date - 2).month != date.month && date - 2 > dates.first }
+      assert payment, "the schedule must have a payment date two days into a new month, or this asserts nothing"
+      cursor = payment - 2
+
+      visit account_path(account, period: "all_time")
+      find("[data-controller='loan-payoff-chart'] svg path[data-series='scheduled']")
+      heading = page.evaluate_script(<<~JS)
+        (() => {
+          const at = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).getTime(); };
+          const start = at("#{payload[:domain_start]}");
+          const finish = at("#{payload[:domain_end]}");
+          const rect = document.querySelector("[data-controller='loan-payoff-chart'] svg rect[style*='cursor']");
+          const box = rect.getBoundingClientRect();
+          const clientX = box.left + ((at("#{cursor.iso8601}") - start) / (finish - start)) * box.width;
+          rect.dispatchEvent(new PointerEvent("pointermove", { clientX, clientY: box.top + box.height / 2, bubbles: true }));
+          return document.querySelector("[data-controller='loan-payoff-chart'] div.chart-tooltip").firstElementChild.textContent;
+        })()
+      JS
+
+      expected = page.evaluate_script("new Intl.DateTimeFormat('#{payload[:locale]}', { month: 'short', year: 'numeric' }).format(new Date(#{payment.year}, #{payment.month - 1}, 1))")
+      cursor_month = page.evaluate_script("new Intl.DateTimeFormat('#{payload[:locale]}', { month: 'short', year: 'numeric' }).format(new Date(#{cursor.year}, #{cursor.month - 1}, 1))")
+      assert_not_equal expected, cursor_month, "the cursor must sit in a different month from the payment, or this asserts nothing"
+      assert_equal expected, heading, "the heading must name the payment whose figures the tooltip shows"
+    end
+  end
+
   private
     def assert_series_painted
       SERIES.each do |key|

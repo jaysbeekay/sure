@@ -204,6 +204,24 @@ export default class extends Controller {
       .y1((d) => y(d.balance))
       .curve(d3.curveMonotoneX);
 
+    // The request's locale travels in the payload: the layout hard-codes
+    // lang="en", so the document cannot say. d3's default time ticks print
+    // English month names, so the x-axis formats its own: the same choice of
+    // unit as d3's (a year on 1 January, a month on the 1st, a day otherwise),
+    // in that locale.
+    const locale = data.locale || undefined;
+    const tickYear = new Intl.DateTimeFormat(locale, { year: "numeric" });
+    const tickMonth = new Intl.DateTimeFormat(locale, { month: "short" });
+    const tickDay = new Intl.DateTimeFormat(locale, {
+      day: "numeric",
+      month: "short",
+    });
+    const timeTick = (date) => {
+      if (d3.timeMonth(date) < date) return tickDay.format(date);
+      if (d3.timeYear(date) < date) return tickMonth.format(date);
+      return tickYear.format(date);
+    };
+
     // Axes first, so the series draw over them. Text in currentColor: the
     // container carries the text token, so the axis follows the theme.
     const styleAxis = (g) => {
@@ -222,6 +240,7 @@ export default class extends Controller {
         d3
           .axisBottom(x)
           .ticks(Math.max(2, Math.floor(width / 140)))
+          .tickFormat(timeTick)
           .tickSizeOuter(0),
       )
       .call(styleAxis);
@@ -420,25 +439,10 @@ export default class extends Controller {
       splitAt(width - margin.right);
     };
 
-    svg
-      .append("rect")
-      .attr("x", margin.left)
-      .attr("y", margin.top)
-      .attr("width", Math.max(0, width - margin.left - margin.right))
-      .attr("height", Math.max(0, height - margin.top - margin.bottom))
-      .style("fill", "transparent")
-      .style("cursor", "crosshair")
-      .on("pointermove", (event) => {
-        announce(false);
-        const [px] = d3.pointer(event);
-        showAt(x.invert(px));
-      })
-      .on("pointerleave", hide);
-
-    // Keyboard traversal: the same nearest-point data a hover shows, stepped
-    // through the scheduled payment dates in the window (G6). The recorded
+    // The dates the tooltip stops at: the scheduled payment dates in the window
+    // (G6), or every plotted date when there is no schedule in it. The recorded
     // line's own points are weekly and would otherwise repeat the same month
-    // several times over. Arrow keys move, Home/End jump, Escape clears.
+    // several times over.
     const scheduledDates = (data.scheduled || [])
       .map((point) => parseDate(point.date))
       .filter((date) => date && date >= domainStart && date <= domainEnd);
@@ -454,6 +458,31 @@ export default class extends Controller {
     )
       .sort((a, b) => a - b)
       .map((t) => new Date(t));
+    // The pointer snaps to those dates too, so the tooltip's heading is the
+    // date its figures come from. Unsnapped, a cursor just before a payment
+    // date headed the tooltip with the month it sat in while every row showed
+    // that payment's balance.
+    const stopPoints = stops.map((date) => ({ date }));
+    const snap = (date) =>
+      stopPoints.length ? nearest(stopPoints, date).date : date;
+
+    svg
+      .append("rect")
+      .attr("x", margin.left)
+      .attr("y", margin.top)
+      .attr("width", Math.max(0, width - margin.left - margin.right))
+      .attr("height", Math.max(0, height - margin.top - margin.bottom))
+      .style("fill", "transparent")
+      .style("cursor", "crosshair")
+      .on("pointermove", (event) => {
+        announce(false);
+        const [px] = d3.pointer(event);
+        showAt(snap(x.invert(px)));
+      })
+      .on("pointerleave", hide);
+
+    // Keyboard traversal: the same stops, stepped with the arrow keys.
+    // Arrow keys move, Home/End jump, Escape clears.
     if (!stops.length) return;
 
     svg.attr("tabindex", 0);
