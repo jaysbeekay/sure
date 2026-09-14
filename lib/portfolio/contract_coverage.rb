@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "yaml"
+require "ripper"
 
 # Proves every row of the portfolio contract (docs/portfolio/methodology.md)
 # names a test that exists.
@@ -125,10 +126,42 @@ module Portfolio
 
         tests = Array(fetch!(entry, "tests", id))
         fail!("#{id}: #{class_name} lists no tests") if tests.empty?
+        declared = declared_tests(body)
         tests.each do |name|
-          next if body.include?(%(test "#{name}"))
+          next if declared.include?(name)
 
           fail!("#{id}: missing test #{name.inspect} in #{class_name} (#{relative_path})")
+        end
+      end
+
+      # The test names a class actually declares, read from the lexed token
+      # stream rather than the source text.
+      #
+      # A plain substring search accepted a name that appeared anywhere in the
+      # file, including a comment, a string or a heredoc. A test could be
+      # deleted, its name survive in prose, and this gate still report evidence
+      # that no longer ran -- the precise failure the gate exists to catch.
+      # Ripper.lex yields comments as :on_comment and heredoc bodies as string
+      # content, so neither can be mistaken for a declaration. It lexes
+      # best-effort and never raises, so a class body sliced out of a larger
+      # file is safe to pass in.
+      def declared_tests(body)
+        tokens = Ripper.lex(body)
+
+        tokens.each_with_index.filter_map do |(_, type, value, _), index|
+          next unless type == :on_ident && value == "test"
+
+          # `something.test "name"` is a method call on a receiver, not a
+          # Minitest declaration.
+          previous = tokens[0...index].reverse_each.find { |(_, token_type, _, _)| token_type != :on_sp }
+          next if previous && previous[1] == :on_period
+
+          beg, content, fin = tokens[(index + 1)..].to_a.drop_while { |(_, token_type, _, _)| token_type == :on_sp }.first(3)
+          next unless beg&.at(1) == :on_tstring_beg
+          next unless content&.at(1) == :on_tstring_content
+          next unless fin&.at(1) == :on_tstring_end
+
+          content[2]
         end
       end
 
