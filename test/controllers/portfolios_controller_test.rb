@@ -281,15 +281,32 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     # even though nothing is stored on the holding.
     unknown = Security.create!(ticker: "NOBASIS", name: "Without basis")
     Holding.create!(account: accounts(:investment), security: unknown, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    # One security, a known basis in one account and none in another: the row
+    # warns, yet still shows the average cost of the position that has one.
+    partial = Security.create!(ticker: "PARTIAL", name: "Partly known basis")
+    second_broker = accounts(:investment).family.accounts.create!(name: "Second broker", balance: 10, cash_balance: 0, currency: "USD", accountable: Investment.new)
+    Holding.create!(account: accounts(:investment), security: partial, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    Holding.create!(account: second_broker, security: partial, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
 
     get portfolio_path
     assert_response :success
 
+    row_hint = I18n.t("portfolios.holdings.missing_cost_basis_hint")
+    position_hint = I18n.t("portfolios.holdings.position_missing_cost_basis_hint")
+    eight = Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))
+
     assert_select "tr[data-portfolio-holding='NOBASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
+    assert_select "tr[data-portfolio-holding='NOBASIS'] span[title=?]", row_hint
+    assert_select "tr[data-portfolio-positions='NOBASIS'] span[title=?]", position_hint, text: "—"
     assert_select "tr[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0,
       message: "AAPL's basis is computable from its trade, so the row must not warn"
     assert_select "tr[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
-    assert_select "tr[data-portfolio-holding='BASIS']", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))}/
+    assert_select "tr[data-portfolio-holding='BASIS']", text: /#{eight}/
+
+    assert_select "tr[data-portfolio-holding='PARTIAL'] span[title=?]", row_hint
+    assert_select "tr[data-portfolio-holding='PARTIAL']", text: /#{eight}/,
+      message: "a partly known basis still shows the average cost the row hint describes"
+    assert_select "tr[data-portfolio-positions='PARTIAL'] span[title=?]", position_hint, count: 1
   end
 
   test "the page's query count is bounded and does not grow with holdings" do

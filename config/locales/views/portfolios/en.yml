@@ -52,9 +52,10 @@ en:
         value: Value
         weight: Weight
       missing_cost_basis: No cost basis
-      missing_cost_basis_hint: At least one position has no stored cost basis, so the row cannot show an average cost or a return.
+      missing_cost_basis_hint: At least one position has no known cost basis. The average cost and return cover only the positions that have one.
       no_cost_basis: no cost basis
       open_position: Open
+      position_missing_cost_basis_hint: This position has no known cost basis, so it has no average cost and is left out of the row's return.
       positions_caption: Positions in %{ticker} by account
       toggle_positions: Show positions in %{ticker}
     kpi_row:

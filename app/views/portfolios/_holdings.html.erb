@@ -127,7 +127,7 @@
                       <% if holding.avg_cost %>
                         <%= format_money(holding.avg_cost) %>
                       <% else %>
-                        <span title="<%= t("portfolios.holdings.missing_cost_basis_hint") %>">—</span>
+                        <span title="<%= t("portfolios.holdings.position_missing_cost_basis_hint") %>">—</span>
                       <% end %>
                     </td>
                     <td class="px-4 py-2 text-right text-primary privacy-sensitive"><%= format_money(holding.amount_money) %></td>

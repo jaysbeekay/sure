@@ -52,9 +52,10 @@ de:
         value: Wert
         weight: Gewichtung
       missing_cost_basis: Keine Kostenbasis
-      missing_cost_basis_hint: Mindestens eine Position hat keine gespeicherte Kostenbasis, daher kann die Zeile weder Durchschnittskosten noch eine Rendite zeigen.
+      missing_cost_basis_hint: Mindestens eine Position hat keine bekannte Kostenbasis. Durchschnittskosten und Rendite berücksichtigen nur Positionen mit bekannter Kostenbasis.
       no_cost_basis: keine Kostenbasis
       open_position: Öffnen
+      position_missing_cost_basis_hint: Diese Position hat keine bekannte Kostenbasis, daher hat sie keine Durchschnittskosten und fließt nicht in die Rendite der Zeile ein.
       positions_caption: Positionen in %{ticker} nach Konto
       toggle_positions: Positionen in %{ticker} anzeigen
     kpi_row:
