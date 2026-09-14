@@ -851,6 +851,31 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal Money.new(10, "USD"), totals.fees
   end
 
+  test "contributions and withdrawals count trades only, not external cash transactions" do
+    # Every non-trade entry below is an external flow to
+    # Portfolio::FlowClassifier (P14, P15), and the labelled ones are
+    # InvestmentFlowStatement's figures. Totals#contributions is the cash
+    # committed to buying securities, so none of them may move it: counting
+    # the 800 deposit and the 1 000 buy it funded would count that money twice.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+    checking = @family.accounts.create!(name: "Checking", balance: 5000, currency: "USD", accountable: Depository.new)
+
+    create_portfolio_trade(account: account, qty: 10, price: 100, fee: 0, date: period.start_date)
+    create_portfolio_trade(account: account, qty: -2, price: 100, fee: 0, date: period.start_date)
+    create_labelled_transaction(account: account, label: "Contribution", amount: -300, date: period.start_date)
+    create_labelled_transaction(account: account, label: "Withdrawal", amount: 50, date: period.start_date)
+    create_labelled_transaction(account: account, label: nil, kind: "investment_contribution", amount: -200, date: period.start_date)
+    create_linked_transfer(family: @family, from: checking, to: account, amount: 800, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(1000, "USD"), totals.contributions, "only the buy is a contribution"
+    assert_equal Money.new(200, "USD"), totals.withdrawals, "only the sale is a withdrawal"
+    assert_equal Money.new(0, "USD"), totals.fees
+    assert_equal 2, totals.trades_count
+  end
+
   test "fees sum Fee-labelled entries and transfer fee legs alongside trades.fee" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
     account = create_investment_account(balance: 500)

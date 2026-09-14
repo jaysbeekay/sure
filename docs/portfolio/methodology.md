@@ -61,6 +61,7 @@ issue jaysbeekay/sure#119).
 | P26 | The totals cache key carries the aggregation version (`totals_query/v4`), bumped whenever the meaning of a column changes, so a deploy never serves the previous shape from Redis. | `InvestmentStatementTest` "totals cache key carries the v4 aggregation version" | I4 |
 | P27 | Only current holding rows with a *positive* family-currency value count towards a security, and a security with none is omitted from `top_holdings` and `allocation`. Zero is a position with no price yet. Negative is corrupt data — `Holding` validates its amounts as non-negative but `Holding::Materializer` writes through `upsert_all`, which skips validations — and keeping it out is what makes P2's denominator a real ceiling: inside the sum it drags `holdings_total` below the largest row and takes that row's weight over 100. The filter is per row, not on the security's netted total, so a negative row in one account never nets against the same security held in another, in either the amount or the trend (as we-promise/sure#2927's `d2b608d`). | `InvestmentStatementTest` "a security whose holdings carry no value is omitted from top_holdings and allocation", "a holding with a negative value cannot push another security's weight over 100", "a negative row does not net against the same security held in another account" | jaysbeekay/sure#120 Blocker 3, review round 3; jaysbeekay/sure#133 final-line review |
 | P28 | The return (`trend`) of a rolled-up row is measured over the holdings of that security whose cost basis is known (`Holding#trend` non-nil): the current value and the cost of those holdings only, in family currency. The row's `amount` still counts every holding. With no known cost basis the trend is nil and readers show no return. | `InvestmentStatementTest` "a rolled-up return is measured over the holdings whose cost basis is known" | jaysbeekay/sure#133 review |
+| P29 | `Totals#contributions` and `#withdrawals` count trades only: the cash a buy committed and a sale released (P21). Cash that entered or left the scope without a trade adds nothing to them, although the classifier calls it an external flow (P14, P15): a Contribution- or Withdrawal-labelled Transaction, an unlabelled `investment_contribution` Transaction, the inflow leg of a linked Transfer. Those are other figures. Labelled external cash is `InvestmentFlowStatement#period_totals` (the Reports flows card), and every external flow at a scope is `Portfolio::FlowClassifier`, which returns (jaysbeekay/sure#121) and contribution rooms (jaysbeekay/sure#128) read. Folding either into these buckets would count a deposit and the buy it funded twice. It is also the meaning upstream's Reports investment card has always shown. | `InvestmentStatementTest` "contributions and withdrawals count trades only, not external cash transactions" | jaysbeekay/sure#133 gatekeeper review |
 | P30 | Every hub series (`value_series`, `holdings_value_series`, `gains_series`) is trimmed to the first date all linked accounts in the scope have provider history for, the way the account charts are (`Balance::LinkedInvestmentSeriesNormalizer`), so the balance rows before a broker's first snapshot are not charted as a portfolio appearing from zero. The start comes from provider-sourced entries and provider holdings, so an account with neither imposes none; an unlinked account that carries imported entries with a `source` does contribute one, because `Balance::LinkedInvestmentSeriesNormalizer`'s multi-account form reads the rows rather than the account's linked flag (the account charts' single-account form checks the flag first). | `InvestmentStatementTest` "value_series does not chart leading zeros before a linked account's first supported history"; `Balance::LinkedInvestmentSeriesNormalizerTest` "trim_to_supported_history drops the points before the common supported start" | jaysbeekay/sure#120 finding 3 |
 | P31 | The previous snapshot of every current holding is loaded in one query (`previous_holdings`), and `day_change` and the per-holding day change are computed from it, so a page listing every position issues no query per row. The comparison is the same as `Holding#day_change`: the latest row for the same account, security and currency dated before the current one. | `InvestmentStatementTest` "previous_holdings loads the prior snapshot of every holding in one query" | jaysbeekay/sure#120 finding 4 |
 | P32 | The hub's holdings table (`holdings_table_rows(sort:, dir:)`) is the P1 roll-up with per-account positions. Cost basis and unrealised P&L cover the positions whose `Holding#avg_cost` answers, the same partial-credit rule as P28 and the unrealised-gains KPI, so the table never hides a return the KPI above it counts; a position without a known basis is left out of the return and flags the row. The fallback is preloaded (P40), so the table still issues no trades query per row. Sort keys are `value`, `weight`, `return`, `day_change`, `name` with `asc` / `desc`; anything else is `value desc`; rows without the sorted figure go last in both directions. | `InvestmentStatementTest` "holdings_table_rows measures a row's return over the positions whose cost basis is known", "holdings_table_rows sorts by a whitelisted key and puts rows without the figure last", "holdings_table_rows issues no query per holding" | jaysbeekay/sure#120 D4, finding 4 |
@@ -76,14 +77,19 @@ issue jaysbeekay/sure#119).
 ## Totals
 
 `InvestmentStatement#totals(period:)` returns contributions, withdrawals,
-dividends, interest, fees and a trade count for the period. The invariant the
-fee rows protect: **no fee is inside contributions or withdrawals and also
-inside fees**. For a manual buy of 10 × 100 with a 5 fee, contributions are
-1 000 and fees 5, and their sum is the 1 005 that left the account.
+dividends, interest, fees and a trade count for the period.
 
-Contributions and withdrawals remain trades-only, as before this change;
-labelled Contribution / Withdrawal transactions are the cash-flow figures of
-`InvestmentFlowStatement`, a different question.
+Contributions and withdrawals are trades only (P29): the cash each buy or sale
+entry records, not money deposited into or withdrawn from the account. A
+deposit is an external flow, answered by `InvestmentFlowStatement` for
+labelled transactions and by `Portfolio::FlowClassifier` for every shape.
+
+`fees` is reported beside contributions, never subtracted from them (P21). For
+a manual buy of 10 × 100 with a 5 fee, `Trade::CreateForm` records 1 005, so
+contributions are 1 005 and fees 5; the same buy from a writer that records
+1 000 (Kraken, Binance spot) gives contributions 1 000 and fees 5. Nothing on
+the entry says which writer it came from, so the two cannot be reconciled to
+cash out for every provider.
 
 ## Flow classes
 
