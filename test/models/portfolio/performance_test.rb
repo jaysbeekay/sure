@@ -154,6 +154,43 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_empty result.index_series
   end
 
+  # Regression: the key was built from family, user, accounts and period only,
+  # so two instances whose rows genuinely differ shared one cache entry and
+  # whichever ran first decided what both saw.
+  test "cache key distinguishes different account cut off dates" do
+    build_textbook_case
+    period = Period.custom(start_date: @day_one, end_date: @day_two)
+
+    without_cutoff = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ], period: period
+    )
+    with_cutoff = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ], period: period,
+      active_until_dates: { @account.id => @day_one }
+    )
+
+    refute_equal without_cutoff.daily_returns.rows.last.value_close,
+                 with_cutoff.daily_returns.rows.last.value_close,
+                 "the fixture must produce different data, or this proves nothing"
+    refute_equal without_cutoff.cache_key, with_cutoff.cache_key
+  end
+
+  test "cache key distinguishes different flow scopes" do
+    build_textbook_case
+    period = Period.custom(start_date: @day_one, end_date: @day_two)
+    other = create_portfolio_account(family: @family)
+
+    narrow = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ], period: period
+    )
+    wide = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ], period: period,
+      scope_account_ids: [ @account.id, other.id ]
+    )
+
+    refute_equal narrow.cache_key, wide.cache_key
+  end
+
   test "an empty scope reports nothing rather than raising" do
     result = performance(account_ids: [])
 

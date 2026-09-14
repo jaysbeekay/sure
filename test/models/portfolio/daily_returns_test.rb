@@ -142,6 +142,53 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
                  "the account is closed on day two and must contribute nothing"
   end
 
+  # Regression: an empty foreign-currency account contributes nothing to any
+  # figure, so it must not blank the portfolio. The flag was previously raised
+  # for any in-scope account whose currency lacked a rate, whether or not it
+  # held a balance, so adding an unsynced account suppressed every ratio for
+  # every other account too.
+  test "an unsynced foreign account holding no balance does not flag a missing rate" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_100, market_flow: 100
+    empty_gbp = create_portfolio_account(family: @family, currency: "GBP")
+
+    returns = daily_returns(account_ids: [ @account.id, empty_gbp.id ])
+
+    refute returns.rate_missing?, "an account with no balances cannot be missing a conversion"
+    assert_in_delta 0.10, returns.returns.last.last.to_f, 0.000001
+  end
+
+  # Regression: components used to be read from the carried-forward balance row,
+  # so a day with no row of its own re-reported the previous day's market flow.
+  # Over a gap that multiplied the market driver by the gap's length.
+  test "a carried forward balance does not repeat its market flow on later days" do
+    day_three = @day_two + 1.day
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
+    # No rows for day two or day three: the balance is carried forward.
+
+    rows = daily_returns(end_date: day_three).rows
+
+    assert_equal BigDecimal("100"), rows.first.market
+    assert_equal BigDecimal("0"), rows.second.market, "the gap must not re-earn day one's gain"
+    assert_equal BigDecimal("0"), rows.third.market
+  end
+
+  # An entry whose `excluded` column is NULL rather than false: Ruby reads it as
+  # a live flow, and a bare `excluded = false` in SQL evaluates to NULL and
+  # drops the row. Left unaligned, the deposit vanishes from the denominator and
+  # inflates the day's return.
+  test "an entry with a null excluded flag is still counted as a flow" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, cash_flow: 500
+    entry = deposit(account: @account, date: @day_two, amount: 500)
+    entry.update_column(:excluded, nil)
+
+    assert_nil entry.reload.excluded
+    assert_equal BigDecimal("500"), daily_returns.rows.last.external_flow
+    assert_in_delta 0.0, daily_returns.returns.last.last.to_f, 0.000001,
+                    "the deposit explains the whole move, so the day returned nothing"
+  end
+
   test "returns are empty without accounts" do
     returns = Portfolio::DailyReturns.new(
       account_ids: [],

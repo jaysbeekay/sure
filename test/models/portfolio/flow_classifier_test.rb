@@ -81,6 +81,48 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
     assert_equal :external, classifier.classify(inbound)
   end
 
+  # Only the (inflow, outflow) PAIR is uniquely indexed, so the database permits
+  # one transaction to be the inflow of one transfer and the outflow of another;
+  # the model's two per-column uniqueness validations are bypassed by any writer
+  # that skips validation. Joining `transfers` with an OR matched both rows and
+  # duplicated the entry, doubling every amount summed from it. The counterpart
+  # is resolved through a LATERAL that returns at most one row instead.
+  test "a doubly linked transaction is counted once rather than duplicated" do
+    create_transfer(from_account: @checking, to_account: @brokerage, amount: 1_000, date: @date)
+    inbound = @brokerage.entries.order(:created_at).last
+
+    # Link the same transaction into a second transfer, as an unvalidated writer
+    # could. `save(validate: false)` is the point of the test.
+    second = Transfer.new(
+      inflow_transaction: Transaction.create!(kind: "funds_movement"),
+      outflow_transaction: inbound.entryable
+    )
+    second.save!(validate: false)
+
+    assert_equal 2, Transfer.where(
+      "inflow_transaction_id = :id OR outflow_transaction_id = :id", id: inbound.entryable_id
+    ).count, "the fixture must really be doubly linked, or this proves nothing"
+
+    rows = ActiveRecord::Base.connection.select_all(
+      ActiveRecord::Base.sanitize_sql_array([
+        <<~SQL, { entry_ids: [ inbound.id ], scope_account_ids: [ @brokerage.id ] }
+          SELECT entries.id, #{Portfolio::FlowClassifier.sql_case(
+            entries: "entries", trades: "flow_trades",
+            transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
+          )} AS flow_class
+          FROM entries
+          #{Portfolio::FlowClassifier.sql_joins(
+            entries: "entries", trades: "flow_trades",
+            transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
+          )}
+          WHERE entries.id = ANY(array[:entry_ids]::uuid[])
+        SQL
+      ])
+    ).to_a
+
+    assert_equal 1, rows.size, "the entry must appear once, or its amount is summed twice"
+  end
+
   test "rejects an unsafe sql alias" do
     assert_raises Portfolio::FlowClassifier::UnsafeAliasError do
       Portfolio::FlowClassifier.sql_case(entries: "entries; DROP TABLE users --")
@@ -136,6 +178,14 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
       excluded.update!(excluded: true)
       entries << excluded
 
+      # `entries.excluded` is nullable, so NULL is a third state. Ruby reads it
+      # as falsy and SQL's bare `excluded = false` evaluates to NULL, which
+      # drops the row -- the two must be made to agree, and this is the corpus
+      # entry that proves it.
+      null_excluded = deposit(account: @brokerage, date: @date, amount: 7)
+      null_excluded.update_column(:excluded, nil)
+      entries << null_excluded.reload
+
       entries
     end
 
@@ -148,8 +198,7 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
         FROM entries
         #{Portfolio::FlowClassifier.sql_joins(
           entries: "entries", trades: "flow_trades",
-          transactions: "flow_transactions", counterpart: "flow_counterpart_entries",
-          transfers: "flow_transfers"
+          transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
         )}
         WHERE entries.id = ANY(array[:entry_ids]::uuid[])
       SQL

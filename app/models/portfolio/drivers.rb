@@ -19,10 +19,16 @@
 # `revaluations`, and Portfolio::ReturnScope tells the UI which label an account
 # has earned.
 #
-# R11: `fx_effect` is a RESIDUAL, not an independent measurement -- the part of
-# the family-currency change that the account-currency components do not
-# explain. Defining it that way is what makes R12 exact, and it means fx_effect
-# also absorbs sub-cent rounding. It is zero for a single-currency family.
+# R11: `fx_effect` is MEASURED, not inferred. Portfolio::DailyReturns computes
+# it per day as the closing local balance times that day's rate change, and the
+# local components are converted at the previous day's rate, so the two halves
+# add up to the day's change by construction rather than by definition.
+#
+# An earlier version defined fx_effect as the residual of R12's own equation.
+# That made `reconciles?` a tautology -- it could not return false, so the
+# contract's most important row was guarded by an assertion that could not
+# fail, and a portfolio whose value moved for no recorded reason reported the
+# whole move as currency movement. `unexplained` now carries that gap openly.
 class Portfolio::Drivers
   attr_reader :daily_returns
 
@@ -72,9 +78,21 @@ class Portfolio::Drivers
     @revaluations ||= sum(:revaluations)
   end
 
-  # R11: the residual.
+  # R11: measured per day from the rate change, not inferred.
   def fx_effect
-    @fx_effect ||= change - (external_net + income - fees + market + revaluations)
+    @fx_effect ||= sum(:fx_effect)
+  end
+
+  # What the named components do not account for. Expected to be zero, and a
+  # real assertion because nothing defines it to be.
+  #
+  # It is non-zero when the portfolio's COMPOSITION changed rather than its
+  # value: an account whose first balance row falls inside the period brings an
+  # opening position that no driver describes, and an account leaving takes one
+  # away. Surfacing that is the honest answer -- the alternative is to fold it
+  # into whichever component is defined last and call the books balanced.
+  def unexplained
+    @unexplained ||= change - (external_net + income - fees + market + revaluations + fx_effect)
   end
 
   # For an account whose scope is :valuation_tracked, the market move lives in
@@ -94,13 +112,16 @@ class Portfolio::Drivers
       fees: fees,
       market: market,
       revaluations: revaluations,
-      fx_effect: fx_effect
+      fx_effect: fx_effect,
+      unexplained: unexplained
     }
   end
 
-  # R12, as an assertion callers and tests can make cheaply.
+  # R12. A real check: `unexplained` is measured independently of the components
+  # it is compared against, so this returns false when the decomposition does
+  # not hold.
   def reconciles?(tolerance: BigDecimal("0.01"))
-    ((external_net + income - fees + market + revaluations + fx_effect) - change).abs <= tolerance
+    unexplained.abs <= tolerance
   end
 
   private

@@ -102,6 +102,37 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
     assert eur_drivers.fx_effect.positive?, "a strengthening rate is a gain to this family"
   end
 
+  # Regression, and the reason `reconciles?` is worth asserting at all. When
+  # fx_effect was defined as the residual of R12's own equation, this returned
+  # true for any input whatsoever: every component could be zero while the value
+  # moved, and the books still "balanced". Now fx_effect is measured from the
+  # rate change, so an unexplained move is reported as one.
+  test "reconciles is falsifiable and reports an unexplained move" do
+    # A single-currency account whose first balance row falls inside the period:
+    # it arrives holding 1,000 that no driver describes.
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+
+    drivers = drivers_for
+
+    assert_equal BigDecimal("0"), drivers.fx_effect,
+                 "a family with one currency has no currency movement to report"
+    assert_equal BigDecimal("1000"), drivers.unexplained
+    refute drivers.reconciles?, "an arriving position is not explained, and must not be dressed up as one"
+  end
+
+  test "an ordinary period leaves nothing unexplained" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
+    lay_balance account: @account, date: @day_two, opening: 1_100, closing: 2_150,
+                cash_flow: 1_000, market_flow: 50
+
+    deposit account: @account, date: @day_two, amount: 1_000
+
+    drivers = drivers_for
+
+    assert_equal BigDecimal("0"), drivers.unexplained
+    assert drivers.reconciles?
+  end
+
   test "an empty scope reports zeroes rather than raising" do
     drivers = drivers_for(account_ids: [])
 

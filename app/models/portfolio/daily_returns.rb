@@ -1,7 +1,7 @@
 # The daily return series a set of accounts produced over a period, in the
 # family's currency.
 #
-# Implements rows R1, R2, R6 and R13 of docs/portfolio/returns-contract.md.
+# Implements rows R1, R2, R6, R11 and R13 of docs/portfolio/returns-contract.md.
 #
 # Division of labour (contract §Scope): the database does the joining, windowing
 # and FX -- what it is good at -- and returns raw components. The arithmetic that
@@ -12,12 +12,24 @@
 # The query is always DAILY regardless of what interval a chart eventually
 # displays (R3): chaining at a coarser interval silently changes the answer
 # whenever a flow lands mid-interval.
+#
+# CURRENCY DECOMPOSITION (R11). Each day's change in family-currency value is
+# split exactly:
+#
+#   ΔV(t) = r(t-1)·ΔA(t)  +  A_end(t)·Δr(t)
+#           \___local___/    \____fx_____/
+#
+# so every local component (flows, market, revaluations) is converted at the
+# PREVIOUS day's rate and the fx term is the closing local balance times the
+# rate change. That identity is what lets Portfolio::Drivers report a genuine
+# `unexplained` residual instead of defining one away.
 class Portfolio::DailyReturns
   # One day. `r` is nil until #returns computes it, so a caller reading rows
   # directly cannot mistake a raw component for a return.
   Row = Data.define(
     :date, :value_open, :value_close, :external_flow,
-    :income, :fees, :market, :revaluations, :rate_missing, :suppressed
+    :income, :fees, :market, :revaluations, :fx_effect,
+    :rate_missing, :suppressed
   ) do
     def denominator
       value_open + external_flow
@@ -26,6 +38,19 @@ class Portfolio::DailyReturns
     # R6: zero or negative denominators are suppressed rather than inverted.
     def computable?
       denominator.positive?
+    end
+
+    def change
+      value_close - value_open
+    end
+
+    # What the named components do not account for. Zero for an ordinary day;
+    # non-zero when the portfolio's composition changed in a way no driver
+    # describes -- an account entering or leaving the scope mid-period carries
+    # its opening position in here rather than being silently attributed to
+    # currency movement.
+    def unexplained
+      change - (external_flow + income - fees + market + revaluations + fx_effect)
     end
   end
 
@@ -58,8 +83,8 @@ class Portfolio::DailyReturns
 
         # R1: the opening value is the previous day's close. On the first day of
         # the period there is no previous row, so the balance row's own
-        # start_balance is used -- which is the prior day's close by
-        # construction (balances.start_balance == the previous end_balance).
+        # start_balance is used -- converted at the previous day's rate, which is
+        # what makes it equal to the prior close by construction.
         value_open = previous_close || decimal(raw["value_open"])
         previous_close = value_close
 
@@ -75,6 +100,7 @@ class Portfolio::DailyReturns
           fees: decimal(raw["fees"]),
           market: decimal(raw["market"]),
           revaluations: decimal(raw["revaluations"]),
+          fx_effect: decimal(raw["fx_effect"]),
           rate_missing: raw["rate_missing"] == true,
           suppressed: !denominator.positive?
         )
@@ -102,9 +128,10 @@ class Portfolio::DailyReturns
     rows.select(&:suppressed)
   end
 
-  # R13. True when any account's currency had no rate to the family currency on
-  # any day of the period. The caller suppresses the figure; it must never fall
-  # back to a parity conversion.
+  # R13. True when an account that actually held a balance had no rate to the
+  # family currency. Scoped to contributing accounts deliberately: an empty
+  # foreign account a user has added but not yet synced contributes nothing to
+  # any figure, and must not blank the whole portfolio's performance.
   def rate_missing?
     rows.any?(&:rate_missing)
   end
@@ -167,18 +194,28 @@ class Portfolio::DailyReturns
             -- and Crypto are always assets, so this is an identity here; it is
             -- applied anyway so the expression matches the chart series builder
             -- and cannot silently invert if the scope ever widens.
-            COALESCE(SUM(lb.end_balance   * lb.flows_factor * er.rate), 0) AS value_close,
-            COALESCE(SUM(lb.start_balance * lb.flows_factor * er.rate), 0) AS value_open,
-            COALESCE(SUM(lb.net_market_flows * lb.flows_factor * er.rate), 0) AS market,
-            COALESCE(SUM((lb.cash_adjustments + lb.non_cash_adjustments)
-                         * lb.flows_factor * er.rate), 0) AS revaluations,
-            BOOL_OR(sa.id IS NOT NULL AND sa.currency <> :target_currency AND er.rate IS NULL) AS rate_missing
+            COALESCE(SUM(lb.end_balance * lb.flows_factor * er.rate), 0) AS value_close,
+            COALESCE(SUM(lb.start_balance * lb.flows_factor * prev_er.rate), 0) AS value_open,
+            -- Components come from a balance row dated EXACTLY on this day, not
+            -- from the carried-forward one. LOCF is right for a level and wrong
+            -- for a flow: re-reading yesterday's net_market_flows on every day
+            -- of a gap would multiply the market driver by the gap's length.
+            COALESCE(SUM(tb.net_market_flows * tb.flows_factor * prev_er.rate), 0) AS market,
+            COALESCE(SUM((tb.cash_adjustments + tb.non_cash_adjustments)
+                         * tb.flows_factor * prev_er.rate), 0) AS revaluations,
+            -- The fx half of the identity in this class's header comment,
+            -- measured rather than inferred: the closing local balance times the
+            -- day's rate change. Zero when the account's currency is the
+            -- family's, because both rates are then exactly 1.
+            COALESCE(SUM(lb.end_balance * lb.flows_factor * (er.rate - prev_er.rate)), 0) AS fx_effect,
+            BOOL_OR(lb.end_balance IS NOT NULL
+                    AND sa.currency <> :target_currency
+                    AND er.rate IS NULL) AS rate_missing
           FROM dates d
           LEFT JOIN scoped_accounts sa
             ON sa.active_until_date IS NULL OR d.date <= sa.active_until_date
           LEFT JOIN LATERAL (
-            SELECT b.end_balance, b.start_balance, b.net_market_flows,
-                   b.cash_adjustments, b.non_cash_adjustments, b.flows_factor
+            SELECT b.end_balance, b.start_balance, b.flows_factor
             FROM balances b
             WHERE b.account_id = sa.id
               AND b.currency = sa.currency
@@ -187,22 +224,19 @@ class Portfolio::DailyReturns
             LIMIT 1
           ) lb ON TRUE
           LEFT JOIN LATERAL (
-            SELECT CASE
-              WHEN sa.currency = :target_currency THEN 1::numeric
-              ELSE COALESCE(
-                (SELECT r.rate FROM exchange_rates r
-                  WHERE r.from_currency = sa.currency
-                    AND r.to_currency = :target_currency
-                    AND r.date <= d.date
-                  ORDER BY r.date DESC LIMIT 1),
-                (SELECT r.rate FROM exchange_rates r
-                  WHERE r.from_currency = sa.currency
-                    AND r.to_currency = :target_currency
-                    AND r.date > d.date
-                  ORDER BY r.date ASC LIMIT 1)
-              )
-            END AS rate
+            SELECT b.net_market_flows, b.cash_adjustments, b.non_cash_adjustments, b.flows_factor
+            FROM balances b
+            WHERE b.account_id = sa.id
+              AND b.currency = sa.currency
+              AND b.date = d.date
+            LIMIT 1
+          ) tb ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT #{rate_lookup('sa.currency', 'd.date')} AS rate
           ) er ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT #{rate_lookup('sa.currency', "d.date - 1")} AS rate
+          ) prev_er ON TRUE
           GROUP BY d.date
         ),
         flows_by_date AS (
@@ -217,27 +251,22 @@ class Portfolio::DailyReturns
           FROM entries
           JOIN accounts entry_accounts ON entry_accounts.id = entries.account_id
           #{flow_class_joins}
+          -- Converted at the PREVIOUS day's rate, because a start-of-day flow
+          -- joins the opening capital, which is itself valued at that rate.
+          -- Mixing rates here is what would leave a residual in `unexplained`.
           LEFT JOIN LATERAL (
-            SELECT CASE
-              WHEN COALESCE(entries.currency, entry_accounts.currency) = :target_currency THEN 1::numeric
-              ELSE COALESCE(
-                (SELECT r.rate FROM exchange_rates r
-                  WHERE r.from_currency = COALESCE(entries.currency, entry_accounts.currency)
-                    AND r.to_currency = :target_currency
-                    AND r.date <= entries.date
-                  ORDER BY r.date DESC LIMIT 1),
-                (SELECT r.rate FROM exchange_rates r
-                  WHERE r.from_currency = COALESCE(entries.currency, entry_accounts.currency)
-                    AND r.to_currency = :target_currency
-                    AND r.date > entries.date
-                  ORDER BY r.date ASC LIMIT 1),
-                1::numeric
-              )
-            END AS rate
+            SELECT COALESCE(
+              #{rate_lookup('COALESCE(entries.currency, entry_accounts.currency)', 'entries.date - 1')},
+              1::numeric
+            ) AS rate
           ) fx ON TRUE
           WHERE entries.account_id = ANY(array[:account_ids]::uuid[])
             AND entries.date BETWEEN :start_date AND :end_date
-            AND entries.excluded = false
+            -- COALESCE because entries.excluded is nullable: a bare
+            -- `excluded = false` evaluates to NULL for such a row and drops it
+            -- from the aggregation, while Portfolio::FlowClassifier treats the
+            -- same row as a live flow. The two must agree.
+            AND COALESCE(entries.excluded, false) = false
           GROUP BY entries.date
         )
         SELECT
@@ -246,6 +275,7 @@ class Portfolio::DailyReturns
           b.value_open,
           b.market,
           b.revaluations,
+          b.fx_effect,
           b.rate_missing,
           COALESCE(f.external_flow, 0) AS external_flow,
           COALESCE(f.income, 0) AS income,
@@ -253,6 +283,31 @@ class Portfolio::DailyReturns
         FROM balances_by_date b
         LEFT JOIN flows_by_date f ON f.date = b.date
         ORDER BY b.date
+      SQL
+    end
+
+    # Carry the last known rate forward, then fall back to the earliest one
+    # ahead. Both halves matter: without the first a weekend converts at parity,
+    # and without the second an account that predates the family's rate history
+    # does. Returns NULL when the pair has no rate at all, which is what R13
+    # surfaces.
+    def rate_lookup(currency_expression, date_expression)
+      <<~SQL.squish
+        CASE
+          WHEN #{currency_expression} = :target_currency THEN 1::numeric
+          ELSE COALESCE(
+            (SELECT r.rate FROM exchange_rates r
+              WHERE r.from_currency = #{currency_expression}
+                AND r.to_currency = :target_currency
+                AND r.date <= #{date_expression}
+              ORDER BY r.date DESC LIMIT 1),
+            (SELECT r.rate FROM exchange_rates r
+              WHERE r.from_currency = #{currency_expression}
+                AND r.to_currency = :target_currency
+                AND r.date > #{date_expression}
+              ORDER BY r.date ASC LIMIT 1)
+          )
+        END
       SQL
     end
 
@@ -266,8 +321,7 @@ class Portfolio::DailyReturns
     def flow_class_joins
       @flow_class_joins ||= Portfolio::FlowClassifier.sql_joins(
         entries: "entries", trades: "flow_trades",
-        transactions: "flow_transactions", counterpart: "flow_counterpart_entries",
-        transfers: "flow_transfers"
+        transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
       )
     end
 end

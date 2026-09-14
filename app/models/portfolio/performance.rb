@@ -105,11 +105,22 @@ class Portfolio::Performance
     )
   end
 
+  # Every constructor argument that can change a figure has to be in here.
+  # `active_until_dates` and `scope_account_ids` are easy to forget because
+  # neither is passed today, but both change the underlying rows materially --
+  # a cut-off date drops an account's later history entirely -- so omitting them
+  # would let the first caller to use them read another caller's cached answer.
   def cache_key
     family.build_cache_key(
       [
         "portfolio_performance", CACHE_VERSION, user&.id,
-        Digest::MD5.hexdigest(account_ids.sort.join(",")),
+        Digest::MD5.hexdigest(
+          [
+            account_ids.sort.join(","),
+            Array(scope_account_ids).map(&:to_s).sort.join(","),
+            active_until_dates.to_a.map { |id, date| "#{id}:#{date.to_date.iso8601}" }.sort.join(",")
+          ].join("|")
+        ),
         period.start_date, period.end_date
       ].compact.join("_"),
       invalidate_on_data_updates: true

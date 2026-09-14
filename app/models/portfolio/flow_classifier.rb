@@ -86,7 +86,7 @@ class Portfolio::FlowClassifier
 
       <<~SQL.squish
         CASE
-          WHEN #{e}.excluded THEN 'internal'
+          WHEN COALESCE(#{e}.excluded, false) THEN 'internal'
           WHEN #{e}.entryable_type = 'Trade'
                AND #{tr}.investment_activity_label IN (#{quoted_list(INCOME_LABELS)}) THEN 'income'
           WHEN #{e}.entryable_type = 'Trade'
@@ -106,26 +106,41 @@ class Portfolio::FlowClassifier
     end
 
     # The joins `sql_case` expects. Kept beside it so the two cannot drift.
-    def sql_joins(entries: "entries", trades: "trades", transactions: "transactions", counterpart: "counterpart_entries", transfers: "flow_transfers")
+    #
+    # The counterpart is resolved through a LATERAL that returns AT MOST ONE
+    # ROW. A plain `LEFT JOIN transfers ON inflow = tx.id OR outflow = tx.id`
+    # reads more naturally but can match twice: only the (inflow, outflow) PAIR
+    # carries a unique index, so a transaction that is the inflow of one
+    # transfer and the outflow of another -- which the two per-column
+    # uniqueness validations do not prevent at the database level, and which any
+    # writer bypassing validations can create -- would duplicate the entries row
+    # and double every amount summed from it.
+    def sql_joins(entries: "entries", trades: "trades", transactions: "transactions", counterpart: "counterpart_entries")
       e = safe_alias!(entries)
       tr = safe_alias!(trades)
       tx = safe_alias!(transactions)
       ce = safe_alias!(counterpart)
-      tf = safe_alias!(transfers)
 
       <<~SQL.squish
         LEFT JOIN trades #{tr}
           ON #{e}.entryable_type = 'Trade' AND #{e}.entryable_id = #{tr}.id
         LEFT JOIN transactions #{tx}
           ON #{e}.entryable_type = 'Transaction' AND #{e}.entryable_id = #{tx}.id
-        LEFT JOIN transfers #{tf}
-          ON #{tf}.inflow_transaction_id = #{tx}.id OR #{tf}.outflow_transaction_id = #{tx}.id
-        LEFT JOIN entries #{ce}
-          ON #{ce}.entryable_type = 'Transaction'
-         AND #{ce}.entryable_id = CASE
-               WHEN #{tf}.inflow_transaction_id = #{tx}.id THEN #{tf}.outflow_transaction_id
-               ELSE #{tf}.inflow_transaction_id
-             END
+        LEFT JOIN LATERAL (
+          SELECT counterpart_entry.account_id
+          FROM transfers transfer_link
+          JOIN entries counterpart_entry
+            ON counterpart_entry.entryable_type = 'Transaction'
+           AND counterpart_entry.entryable_id = CASE
+                 WHEN transfer_link.inflow_transaction_id = #{tx}.id
+                 THEN transfer_link.outflow_transaction_id
+                 ELSE transfer_link.inflow_transaction_id
+               END
+          WHERE #{tx}.id IS NOT NULL
+            AND (transfer_link.inflow_transaction_id = #{tx}.id
+                 OR transfer_link.outflow_transaction_id = #{tx}.id)
+          LIMIT 1
+        ) #{ce} ON TRUE
       SQL
     end
 
