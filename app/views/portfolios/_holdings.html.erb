@@ -119,7 +119,7 @@
                 <% row.positions.each do |holding| %>
                   <tr>
                     <td class="px-4 py-2 text-primary truncate"><%= holding.account.name %></td>
-                    <td class="px-4 py-2 text-right text-secondary privacy-sensitive"><%= format_quantity(holding.qty, exact: holding.account.crypto?) %></td>
+                    <td class="px-4 py-2 text-right text-secondary privacy-sensitive"><%= format_quantity(holding.qty, exact: holding.security.crypto?) %></td>
                     <td class="px-4 py-2 text-right text-secondary privacy-sensitive">
                       <%# avg_cost, not the raw column: the statement preloads
                           the trade-history fallback for every holding, so a

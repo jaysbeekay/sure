@@ -126,7 +126,7 @@ class Balance::LinkedInvestmentSeriesNormalizer
       start_date: trimmed_values.first.date,
       end_date: series.end_date,
       interval: series.interval,
-      values: trimmed_values,
+      values: self.class.flatten_first_trend(trimmed_values),
       favorable_direction: series.favorable_direction
     )
   end

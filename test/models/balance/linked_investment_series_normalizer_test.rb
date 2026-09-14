@@ -64,4 +64,35 @@ class Balance::LinkedInvestmentSeriesNormalizerTest < ActiveSupport::TestCase
     manual = families(:empty).accounts.create!(name: "Manual", balance: 0, currency: "USD", accountable: Investment.new)
     assert_same series, Balance::LinkedInvestmentSeriesNormalizer.trim_to_supported_history(series, account_ids: [ manual.id ])
   end
+
+  # The per-account chart trims through #normalize rather than through
+  # .trim_to_supported_history, so the flatten above has to be asserted on
+  # this path too. Without it the two charts state different invariants for
+  # the same trimmed series: the first tooltip on the account page reports a
+  # move against a point the chart no longer draws.
+  test "normalize flattens the trend of the point that survives the trim" do
+    account = families(:empty).accounts.create!(name: "Linked Investment", balance: 0, currency: "USD", accountable: Investment.new)
+    account.stubs(:linked?).returns(true)
+    account.entries.create!(date: 3.days.ago.to_date, name: "Deposit", amount: -100, currency: "USD", source: "plaid", entryable: Transaction.new)
+    values = (0..5).map do |offset|
+      date = 5.days.ago.to_date + offset
+      Series::Value.new(
+        date: date,
+        date_formatted: date.to_s,
+        value: Money.new(offset, "USD"),
+        trend: Trend.new(current: Money.new(offset, "USD"), previous: Money.new([ offset - 1, 0 ].max, "USD"), favorable_direction: "up")
+      )
+    end
+    series = Series.new(start_date: values.first.date, end_date: values.last.date, interval: "1 day", values: values, favorable_direction: "up")
+
+    normalized = Balance::LinkedInvestmentSeriesNormalizer.new(account: account, series: series).normalize
+
+    assert_equal 3.days.ago.to_date, normalized.start_date
+    assert_equal 4, normalized.values.size
+    assert_equal normalized.values.first.value, normalized.values.first.trend.previous
+    assert normalized.values.first.trend.direction.flat?
+
+    # The points after it keep the trend they were built with.
+    assert_equal Money.new(2, "USD"), normalized.values.second.trend.previous
+  end
 end

@@ -618,17 +618,10 @@ class InvestmentStatement
 
     CASH_TICKER = "CASH".freeze
 
-    # The one denominator every weight is measured against: the larger of the
-    # live portfolio value (account balances, cash included) and the holdings
-    # total.
-    #
-    # Portfolio value is the right denominator -- a security's weight is its
-    # share of everything the user holds, cash included -- but it is
-    # Account#balance, which can lag the holdings (stale zero after a sync)
-    # or fall below them (negative cash from margin or an unsettled buy).
-    # Dividing by it in either case reports a weight over 100. The holdings
-    # total is a floor that keeps every weight at or below 100; when it wins,
-    # the residual cash is zero or negative and #allocation shows no cash row.
+    # Builds one rolled-up row of the holdings table for `security`: the summed
+    # quantity across `positions`, its average cost and unrealised return over
+    # the positions whose basis is known, and its weight against the caller's
+    # `total` -- which is chosen by #weight_denominator, not here.
     def build_holdings_table_row(security, value, positions, total)
       qty = positions.sum(&:qty)
 
@@ -816,6 +809,17 @@ class InvestmentStatement
         end
     end
 
+    # The one denominator every weight is measured against: the larger of the
+    # live portfolio value (account balances, cash included) and the holdings
+    # total.
+    #
+    # Portfolio value is the right denominator -- a security's weight is its
+    # share of everything the user holds, cash included -- but it is
+    # Account#balance, which can lag the holdings (stale zero after a sync)
+    # or fall below them (negative cash from margin or an unsettled buy).
+    # Dividing by it in either case reports a weight over 100. The holdings
+    # total is a floor that keeps every weight at or below 100; when it wins,
+    # the residual cash is zero or negative and #allocation shows no cash row.
     def weight_denominator(rolled_up)
       holdings_total = rolled_up.sum { |_, value, _| value }
       [ portfolio_value, holdings_total ].max
