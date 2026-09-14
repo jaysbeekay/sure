@@ -189,6 +189,11 @@ class Loan < ApplicationRecord
   # typo'd one leaves `variable_rate_schedule` equal to its stored value, so
   # without this the account saved, the typo'd row vanished, and the
   # validation above only fired when some other field happened to change.
+  #
+  # Autosave asks this on every save of the parent Account. The origination
+  # check can load the Account and its first valuation, but only for a variable
+  # loan that has recorded rate changes and no start date; every other loan
+  # answers from its own attributes.
   def changed_for_autosave?
     super || invalid_rate_changes.present? || rate_changes_precede_origination?
   end
