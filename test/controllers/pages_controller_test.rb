@@ -348,7 +348,70 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-breadcrumbs]", text: /Feedback/
   end
 
+  test "dashboard rolls up a security held in two investment accounts into one holdings row" do
+    create_second_aapl_account(qty: 20, price: 215)
+
+    statement = InvestmentStatement.new(@family, user: @user)
+    assert_equal 2, statement.current_holdings.count { |h| h.security_id == securities(:aapl).id }
+
+    row = statement.top_holdings.find { |h| h.ticker == "AAPL" }
+    assert_not_nil row
+    # holdings(:one) 10 @ $215 in accounts(:investment) + 20 @ $215 in the new account
+    assert_equal 6450, row.amount_money.amount
+
+    get root_path
+    assert_response :ok
+
+    aapl_rows = dashboard_holding_rows.select { |tr| tr.css("p.truncate").text.strip == "AAPL" }
+    assert_equal 1, aapl_rows.size, "AAPL is held in two accounts but must render as one rolled-up row"
+
+    cells = aapl_rows.first.css("td")
+    assert_equal ApplicationController.helpers.number_to_percentage(row.weight, precision: 1), cells[1].text.strip
+    assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
+  end
+
+  test "dashboard top holdings table omits the allocation cash row" do
+    statement = InvestmentStatement.new(@family, user: @user)
+    assert statement.allocation.any?(&:cash?), "fixture family should have a residual cash allocation row"
+
+    get root_path
+    assert_response :ok
+
+    tickers = dashboard_holding_rows.map { |tr| tr.css("p.truncate").text.strip }
+    assert_includes tickers, "AAPL"
+    assert_not_includes tickers, "CASH"
+  end
+
   private
+    # Second investment account holding the same security as
+    # accounts(:investment), so top_holdings has something to roll up.
+    def create_second_aapl_account(qty:, price:)
+      account = @family.accounts.create!(
+        owner: @user,
+        name: "Second Brokerage",
+        balance: 8000,
+        cash_balance: 3700,
+        currency: "USD",
+        accountable: Investment.new
+      )
+
+      Holding.create!(
+        account: account,
+        security: securities(:aapl),
+        date: Date.current,
+        qty: qty,
+        price: price,
+        amount: qty * price,
+        currency: "USD"
+      )
+
+      account
+    end
+
+    def dashboard_holding_rows
+      css_select("#investment-summary table tbody tr")
+    end
+
     def money_flow_bars
       JSON.parse(css_select("[data-controller='bar-chart']").first["data-bar-chart-data-value"])
     end

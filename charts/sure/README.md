@@ -23,9 +23,10 @@ Official Helm chart for deploying the Sure Rails application on Kubernetes. It s
 
 - Kubernetes >= 1.25
 - Helm >= 3.10
-- For subcharts: add repositories first
+- For subcharts: the CloudNativePG operator chart is pulled from its OCI registry
+  (`oci://ghcr.io/cloudnative-pg/charts`) and needs no `helm repo add`. Add the Redis operator
+  repository first:
   ```sh
-  helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts
   helm repo add ot-helm https://ot-container-kit.github.io/helm-charts
   helm repo update
   ```

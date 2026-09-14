@@ -21,11 +21,12 @@ maintainers:
     url: https://github.com/we-promise/sure
 
 # Optional subcharts for turnkey self-hosting
-# Users must `helm repo add` the below repositories before installing this chart.
+# cloudnative-pg is pulled from its OCI registry and needs no `helm repo add`;
+# redis-operator's repository must be added before building dependencies.
 dependencies:
   - name: cloudnative-pg
     version: "~0.27"
-    repository: "https://cloudnative-pg.github.io/charts"
+    repository: "oci://ghcr.io/cloudnative-pg/charts"
     condition: cnpg.enabled
   - name: redis-operator
     alias: redisOperator

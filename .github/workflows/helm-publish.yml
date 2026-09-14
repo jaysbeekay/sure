@@ -88,7 +88,6 @@ jobs:
 
       - name: Add Helm repositories
         run: |
-          helm repo add cloudnative-pg https://cloudnative-pg.github.io/charts
           helm repo add ot-helm https://ot-container-kit.github.io/helm-charts
           helm repo update
 
