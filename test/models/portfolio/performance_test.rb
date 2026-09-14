@@ -198,6 +198,64 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_nil result.twr
   end
 
+  # R16 at the scope level. The account's value moved by revaluation only, so
+  # nothing records what was paid in. Over a year an XIRR of its opening and
+  # closing values solves to 20%, a figure the records do not support.
+  test "mwr is withheld when an account in the scope is valuation tracked" do
+    start_date = Date.new(2026, 1, 1)
+    end_date = Date.new(2026, 12, 31)
+    lay_balance account: @account, date: start_date, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: end_date, opening: 1_000, closing: 1_200, revaluation: 200
+
+    result = performance(start_date: start_date, end_date: end_date)
+
+    assert_in_delta 0.20, result.twr.to_f, 0.000001, "the value return is still reportable"
+    assert_nil result.mwr
+  end
+
+  # The gate must not overreach: an account with no balances in the period
+  # contributes nothing, so it cannot make the scope's flows unknown.
+  test "an account with no balances in the period does not withhold mwr" do
+    start_date = Date.new(2026, 1, 1)
+    mid_date = Date.new(2026, 7, 2)
+    end_date = Date.new(2026, 12, 31)
+    lay_balance account: @account, date: start_date, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: mid_date, opening: 1_000, closing: 2_000, cash_flow: 1_000
+    lay_balance account: @account, date: end_date, opening: 2_000, closing: 2_200, market_flow: 200
+    deposit account: @account, date: mid_date, amount: 1_000
+    empty = create_portfolio_account(family: @family)
+
+    result = performance(account_ids: [ @account.id, empty.id ], start_date: start_date, end_date: end_date)
+
+    assert_in_delta 0.1346, result.mwr.to_f, 0.002
+  end
+
+  # A single day: the opening and closing values fall on the same date, so no
+  # time passes and no annual rate exists. Newton would otherwise return its
+  # 10% starting guess as the answer.
+  test "a one day period has no money weighted return" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    buy_trade account: @account, date: @day_one, qty: 1, price: 10
+
+    result = performance(start_date: @day_one, end_date: @day_one)
+
+    assert_nil result.mwr
+  end
+
+  # An omitted scope means "the accounts themselves"; an explicit empty scope
+  # means nothing is inside, so every transfer is external. Those are different
+  # figures and must not share a cache entry.
+  test "cache key distinguishes an omitted flow scope from an empty one" do
+    period = Period.custom(start_date: @day_one, end_date: @day_two)
+
+    omitted = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period)
+    empty = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period, scope_account_ids: [])
+    explicit = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period, scope_account_ids: [ @account.id ])
+
+    refute_equal omitted.cache_key, empty.cache_key
+    assert_equal omitted.cache_key, explicit.cache_key, "the same effective scope may share an entry"
+  end
+
   private
     def build_textbook_case
       lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100

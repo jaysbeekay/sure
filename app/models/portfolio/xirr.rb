@@ -25,6 +25,11 @@ class Portfolio::Xirr
   # Neither method reached the tolerance inside the iteration cap.
   class ConvergenceError < StandardError; end
 
+  # Every flow falls on the same date, so no time passes and no annual rate
+  # exists. Without this check the present value is the same at every rate,
+  # and Newton returns its starting guess of 10% as if it had solved.
+  class NoDurationError < StandardError; end
+
   Flow = Data.define(:date, :amount)
 
   DAYS_PER_YEAR = 365.0
@@ -56,6 +61,7 @@ class Portfolio::Xirr
   # The annualised money-weighted rate as a BigDecimal (0.0725 == 7.25%).
   def rate
     raise NoSignChangeError, "cash flows never change sign" unless sign_change?
+    raise NoDurationError, "cash flows all fall on one date" if flows.map(&:date).uniq.one?
 
     result = newton_rate || bisection_rate
     raise ConvergenceError, "XIRR did not converge" if result.nil?
@@ -66,7 +72,7 @@ class Portfolio::Xirr
   # Non-raising variant for render paths: returns nil where #rate would raise.
   def self.rate_or_nil(flows)
     rate(flows)
-  rescue NoSignChangeError, ConvergenceError
+  rescue NoSignChangeError, NoDurationError, ConvergenceError
     nil
   end
 

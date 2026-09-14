@@ -270,7 +270,11 @@ class InvestmentStatement
   # surface should follow net worth here is issue #119's open decision D2; when
   # it is settled this is the one place that changes, and `active_until_dates`
   # is already plumbed through Portfolio::DailyReturns for it.
-  def performance(period: Period.current_month)
+  #
+  # The default period is the family's month, which starts on its custom
+  # month-start day when it has one (`Period.current_month_for`), as the
+  # period picker's default does.
+  def performance(period: Period.current_month_for(family))
     Portfolio::Performance.new(
       family: family,
       account_ids: investment_account_ids,
@@ -282,9 +286,9 @@ class InvestmentStatement
   # What return method each account's data can support, keyed by account id.
   # Callers must not quote a figure an account's scope does not support -- see
   # contract rows R15 and R16.
-  def return_scopes(period: Period.current_month)
-    investment_accounts.to_a.index_with do |account|
-      Portfolio::ReturnScope.new(account: account, period: period)
+  def return_scopes(period: Period.current_month_for(family))
+    investment_accounts.to_a.to_h do |account|
+      [ account.id, Portfolio::ReturnScope.new(account: account, period: period) ]
     end
   end
 

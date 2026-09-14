@@ -15,7 +15,10 @@ class Portfolio::Performance
   # Bumped when the meaning of a cached figure changes, so warm caches stop
   # serving the old interpretation (the pattern upstream #3350 used for
   # totals_query/v2).
-  CACHE_VERSION = "v1".freeze
+  #
+  # v2: the money-weighted return is withheld when any contributing account
+  # cannot support one (R16), and flows follow the rate and cut-off rules.
+  CACHE_VERSION = "v2".freeze
 
   # R5: the balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention
@@ -111,6 +114,10 @@ class Portfolio::Performance
   # a cut-off date drops an account's later history entirely -- so omitting them
   # would let the first caller to use them read another caller's cached answer.
   #
+  # The flow scope is keyed as DailyReturns resolves it, not as it was passed:
+  # an omitted scope means "the accounts themselves" while an explicit `[]`
+  # means "nothing is inside", and those classify transfers differently.
+  #
   # The digest only shortens the key; nothing depends on it being secret.
   # SHA-256 rather than MD5 so code scanning does not flag account ids fed to a
   # broken hash.
@@ -121,7 +128,7 @@ class Portfolio::Performance
         Digest::SHA256.hexdigest(
           [
             account_ids.sort.join(","),
-            Array(scope_account_ids).map(&:to_s).sort.join(","),
+            "scope:" + daily_returns.scope_account_ids.sort.join(","),
             active_until_dates.to_a.map { |id, date| "#{id}:#{date.to_date.iso8601}" }.sort.join(",")
           ].join("|")
         ),
@@ -152,7 +159,7 @@ class Portfolio::Performance
       {
         twr: chained,
         annualized_twr: annualize(chained),
-        mwr: rate_missing ? nil : money_weighted(rows),
+        mwr: rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows),
         volatility: rate_missing ? nil : annualized_volatility(returns),
         max_drawdown: rate_missing ? nil : drawdown(returns),
         index_series: rate_missing ? [] : rebased_index(returns),
@@ -182,6 +189,22 @@ class Portfolio::Performance
       return nil if growth <= 0
 
       BigDecimal(((growth**(1.0 / years)) - 1).to_s)
+    end
+
+    # R15 and R16 applied to the whole scope. A money-weighted return over
+    # several accounts is only as good as the flows of every account in it:
+    # a valuation-tracked account's flows are unknown, and an account with one
+    # day of history has no opening position to measure from, so either one
+    # withholds the figure. An account with no balance rows in the period
+    # contributes nothing and does not block it, the same rule R13 applies to
+    # rates. A period of fewer than two days has no duration to annualise.
+    def money_weighted_supported?(rows)
+      return false if rows.size < 2
+
+      Account.where(id: account_ids).to_a.all? do |account|
+        scope = Portfolio::ReturnScope.new(account: account, period: period)
+        scope.balance_days.zero? || scope.supports_money_weighted_return?
+      end
     end
 
     # R8. The opening value is the investor's first outlay, every external flow

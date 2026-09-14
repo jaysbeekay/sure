@@ -300,6 +300,32 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "the investment_accounts lookup backing current_holdings should only run once, even for the empty case"
   end
 
+  # A family whose month starts on the 15th: on 20 March its month runs from
+  # 15 March, not 1 March. The two portfolio entry points must default to that
+  # month, as the period picker does.
+  test "performance and return_scopes default to the family's custom month" do
+    @family.update!(month_start_day: 15)
+    account = create_investment_account(balance: 1000)
+
+    travel_to Date.new(2026, 3, 20) do
+      expected = Period.current_month_for(@family)
+      assert_equal Date.new(2026, 3, 15), expected.start_date, "the fixture must use a custom month, or this proves nothing"
+
+      assert_equal expected.start_date, @statement.performance.period.start_date
+      assert_equal expected.start_date, @statement.return_scopes.fetch(account.id).period.start_date
+    end
+  end
+
+  # Documented as keyed by account id; callers look scopes up by id.
+  test "return_scopes is keyed by account id" do
+    account = create_investment_account(balance: 1000)
+
+    scopes = @statement.return_scopes(period: Period.last_30_days)
+
+    assert_equal [ account.id ], scopes.keys
+    assert_instance_of Portfolio::ReturnScope, scopes.fetch(account.id)
+  end
+
   private
     def create_investment_account(balance:, cash_balance: 0, currency: "USD")
       @family.accounts.create!(

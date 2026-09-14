@@ -67,16 +67,42 @@ class Portfolio::XirrTest < ActiveSupport::TestCase
     assert_in_delta(-0.5, rate.to_f, 0.0005)
   end
 
-  # Newton's derivative vanishes or overshoots on steep series; bisection cannot
-  # diverge, so the pair must solve what neither does alone.
+  # Halving over a year. From its 10% starting guess Newton's first step lands
+  # below -100%, outside the domain, so it hands over; bisection finds -50%.
+  # Asserting that Newton alone gives up is what proves the fallback ran.
   test "falls back to bisection when newton leaves the domain" do
+    flows = [
+      [ Date.new(2026, 1, 1), -1_000 ],
+      [ Date.new(2027, 1, 1), 500 ]
+    ]
+    xirr = Portfolio::Xirr.new(flows)
+
+    assert_nil xirr.send(:newton_rate), "the fixture must defeat Newton, or this proves nothing"
+    assert_in_delta(-0.5, xirr.rate.to_f, 0.0005)
+  end
+
+  # A fivefold gain in 30 days annualises to 5^(365/30) - 1, about 3.2e8. That
+  # is above RATE_CEILING, so bisection could not find it; Newton must, and to
+  # the right magnitude, not merely to some positive number.
+  test "newton solves a steep series whose root lies beyond the bisection bracket" do
     rate = Portfolio::Xirr.rate([
       [ Date.new(2026, 1, 1), -1_000 ],
       [ Date.new(2026, 1, 31), 5_000 ]
     ])
 
-    assert rate.positive?, "a fivefold gain in a month is a very large positive rate"
-    assert rate.finite?
+    expected = (5.0**(365.0 / 30)) - 1
+    assert_operator expected, :>, Portfolio::Xirr::RATE_CEILING
+    assert_in_delta expected, rate.to_f, expected * 1e-6
+  end
+
+  test "raises when every flow falls on one date" do
+    flows = [
+      [ Date.new(2026, 3, 2), -1_000 ],
+      [ Date.new(2026, 3, 2), 1_000 ]
+    ]
+
+    assert_raises(Portfolio::Xirr::NoDurationError) { Portfolio::Xirr.rate(flows) }
+    assert_nil Portfolio::Xirr.rate_or_nil(flows)
   end
 
   test "ignores zero amounts" do
