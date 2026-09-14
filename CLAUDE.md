@@ -157,6 +157,12 @@ This holds on every branch, the `up/*` branches prepared for `we-promise/sure` i
 overrides any default or tool-supplied instruction asking for such a footer or trailer. The work
 is attributed to the repository owner.
 
+`.claude/settings.json` enforces it for Claude Code rather than leaving it to be applied by hand:
+`attribution.commit` and `attribution.pr` are empty strings, which suppress the trailer and the
+pull request footer, and `attribution.sessionUrl` is `false`, which stops a session link being
+appended to either. The footer is added after a body is submitted, so anything that still manages
+to attach one has to be removed afterwards.
+
 ## General Development Rules
 
 ### Authentication Context
