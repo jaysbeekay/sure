@@ -49,8 +49,13 @@ namespace :portfolio do
       # Minitest's `test "some words"` defines `test_some_words`. Accept either
       # form so the contract can name the method while the test file reads as a
       # sentence.
+      #
+      # Both are anchored to a whole declaration. A substring search would let
+      # `def test_foo` satisfy a row naming `test_fo`, so a renamed test could
+      # still pass the gate through a longer name that starts the same way.
       sentence = test_name.delete_prefix("test_").tr("_", " ")
-      declared = source.include?("def #{test_name}") || source.include?(%(test "#{sentence}"))
+      declared = source.match?(/^\s*def #{Regexp.escape(test_name)}\b/) ||
+                 source.match?(/^\s*test "#{Regexp.escape(sentence)}" do\b/)
       abort "#{id}: #{relative_path} declares no test #{test_name.inspect} (looked for `test \"#{sentence}\"`)" unless declared
     end
 
