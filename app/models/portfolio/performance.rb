@@ -110,11 +110,15 @@ class Portfolio::Performance
   # neither is passed today, but both change the underlying rows materially --
   # a cut-off date drops an account's later history entirely -- so omitting them
   # would let the first caller to use them read another caller's cached answer.
+  #
+  # The digest only shortens the key; nothing depends on it being secret.
+  # SHA-256 rather than MD5 so code scanning does not flag account ids fed to a
+  # broken hash.
   def cache_key
     family.build_cache_key(
       [
         "portfolio_performance", CACHE_VERSION, user&.id,
-        Digest::MD5.hexdigest(
+        Digest::SHA256.hexdigest(
           [
             account_ids.sort.join(","),
             Array(scope_account_ids).map(&:to_s).sort.join(","),
