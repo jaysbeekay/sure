@@ -56,8 +56,13 @@ class AccountTest < ActiveSupport::TestCase
       ).owner
     end
 
-    assert_equal "admin", owners.first.role
-    assert_equal owners.first, owners.last
+    # `id` breaks the tie, so the winner is the tied admin with the lowest id.
+    # Asserting only that the two calls agree would pass without the
+    # tie-breaker whenever the database returned the same tied row twice.
+    expected_owner = family.users.where(role: "admin").order(:id).first
+
+    assert_equal expected_owner, owners.first
+    assert_equal expected_owner, owners.last
   end
 
   test "create_and_sync calls sync_later by default" do
