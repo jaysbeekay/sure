@@ -628,4 +628,71 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_match I18n.t("reports.investment_performance.sells_count", count: 1), response.body
     assert_no_match(/#{Regexp.escape(I18n.t("reports.investment_performance.sells_count", count: 2))}/, response.body)
   end
+
+  test "index top holdings rolls up a security held in two investment accounts into one row" do
+    create_second_aapl_account(qty: 20, price: 215)
+
+    statement = InvestmentStatement.new(@family, user: @user)
+    assert_equal 2, statement.current_holdings.count { |h| h.security_id == securities(:aapl).id }
+
+    row = statement.top_holdings.find { |h| h.ticker == "AAPL" }
+    assert_not_nil row
+    # holdings(:one) 10 @ $215 in accounts(:investment) + 20 @ $215 in the new account
+    assert_equal 6450, row.amount_money.amount
+
+    get reports_path
+    assert_response :ok
+
+    rows = css_select("[data-section-key='investment_performance'] table tbody tr")
+    aapl_rows = rows.select { |tr| tr.css("td p.font-medium.text-primary").text.strip == "AAPL" }
+    assert_equal 1, aapl_rows.size, "AAPL is held in two accounts but must render as one rolled-up row"
+
+    cells = aapl_rows.first.css("td")
+    assert_equal ApplicationController.helpers.number_to_percentage(row.weight, precision: 1), cells[1].text.strip
+    assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
+  end
+
+  test "print top holdings rolls up a security held in two investment accounts into one row" do
+    create_second_aapl_account(qty: 20, price: 215)
+
+    row = InvestmentStatement.new(@family, user: @user).top_holdings.find { |h| h.ticker == "AAPL" }
+    assert_not_nil row
+    assert_equal 6450, row.amount_money.amount
+
+    get print_reports_path
+    assert_response :ok
+
+    aapl_rows = css_select("table tbody tr").select { |tr| tr.at_css("td strong")&.text&.strip == "AAPL" }
+    assert_equal 1, aapl_rows.size, "AAPL is held in two accounts but must render as one rolled-up row"
+
+    cells = aapl_rows.first.css("td")
+    assert_equal ApplicationController.helpers.number_to_percentage(row.weight, precision: 1), cells[1].text.strip
+    assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
+  end
+
+  private
+    # Second investment account holding the same security as
+    # accounts(:investment), so top_holdings has something to roll up.
+    def create_second_aapl_account(qty:, price:)
+      account = @family.accounts.create!(
+        owner: @user,
+        name: "Second Brokerage",
+        balance: 8000,
+        cash_balance: 3700,
+        currency: "USD",
+        accountable: Investment.new
+      )
+
+      Holding.create!(
+        account: account,
+        security: securities(:aapl),
+        date: Date.current,
+        qty: qty,
+        price: price,
+        amount: qty * price,
+        currency: "USD"
+      )
+
+      account
+    end
 end
