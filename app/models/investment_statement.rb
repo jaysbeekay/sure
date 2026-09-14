@@ -166,7 +166,7 @@ class InvestmentStatement
   # Every security the family holds as one row, with its positions across
   # accounts, sorted for the portfolio hub's table. Built from
   # current_holdings and previous_holdings only: no per-row lookups, so the
-  # query count does not grow with the number of holdings (P28, P30).
+  # query count does not grow with the number of holdings (P28, P31).
   #
   # Cost basis and unrealised P&L come from the stored cost_basis of every
   # position (locked, or positive); a position without one leaves both

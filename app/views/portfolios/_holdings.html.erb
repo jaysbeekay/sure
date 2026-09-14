@@ -2,7 +2,7 @@
 
 <%#
   One row per security across every account (P1), sorted by the statement
-  (P29). Every figure on a row comes from HoldingsTableRow: nothing here
+  (P32). Every figure on a row comes from HoldingsTableRow: nothing here
   calls Holding#avg_cost, #trend or #day_change, each of which issues a
   query per holding, so the page's query count does not grow with rows.
   A summary row reveals its per-account positions (D3), each with the
