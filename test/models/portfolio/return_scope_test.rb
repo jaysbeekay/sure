@@ -74,6 +74,43 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     refute scope.supports_money_weighted_return?
   end
 
+  # F9: an excluded trade is not a record of anything, so it cannot make the
+  # account's flows known.
+  test "an excluded trade does not make an account trade tracked" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_100, market_flow: 100
+    buy_trade(account: @account, date: @day_two, qty: 1, price: 10).update!(excluded: true)
+
+    scope = Portfolio::ReturnScope.new(account: @account, period: @period)
+
+    assert scope.valuation_tracked?
+    refute scope.supports_money_weighted_return?
+  end
+
+  # Trades and valuations are read up to the end of the period, so transfers
+  # must be too: a deposit made before the period is still a known flow.
+  test "a transfer before the period still marks the account trade tracked" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_100, market_flow: 100
+    deposit account: @account, date: @day_one - 10.days, amount: 1_000
+
+    scope = Portfolio::ReturnScope.new(account: @account, period: @period)
+
+    assert scope.trade_tracked?
+  end
+
+  # `entries.excluded` is nullable and F9 reads NULL as live. A bare
+  # `excluded = false` drops such a row.
+  test "a deposit with a null excluded flag is a known flow" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, cash_flow: 500
+    deposit(account: @account, date: @day_two, amount: 500).update_column(:excluded, nil)
+
+    scope = Portfolio::ReturnScope.new(account: @account, period: @period)
+
+    assert scope.trade_tracked?
+  end
+
   private
     def create_valuation_entry(date:, amount:)
       @account.entries.create!(

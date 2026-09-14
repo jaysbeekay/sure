@@ -115,6 +115,12 @@ class Portfolio::FlowClassifier
     # uniqueness validations do not prevent at the database level, and which any
     # writer bypassing validations can create -- would duplicate the entries row
     # and double every amount summed from it.
+    #
+    # The LATERAL orders inflow links first because the Ruby form looks the
+    # inflow link up first; without an order, LIMIT 1 takes whichever row the
+    # plan reaches first and the two forms can pick different counterparts.
+    # (No SQL comments inside: the heredoc is squished onto one line, so a
+    # `--` would swallow everything after it.)
     def sql_joins(entries: "entries", trades: "trades", transactions: "transactions", counterpart: "counterpart_entries")
       e = safe_alias!(entries)
       tr = safe_alias!(trades)
@@ -139,6 +145,7 @@ class Portfolio::FlowClassifier
           WHERE #{tx}.id IS NOT NULL
             AND (transfer_link.inflow_transaction_id = #{tx}.id
                  OR transfer_link.outflow_transaction_id = #{tx}.id)
+          ORDER BY CASE WHEN transfer_link.inflow_transaction_id = #{tx}.id THEN 0 ELSE 1 END
           LIMIT 1
         ) #{ce} ON TRUE
       SQL
@@ -191,6 +198,10 @@ class Portfolio::FlowClassifier
       :external
     end
 
+    # Two or three queries per call. That is fine for tests and for one entry,
+    # and wrong over an account's history: callers classifying many entries
+    # use `.sql_case` (Portfolio::DailyReturns, Portfolio::ReturnScope), which
+    # the parity test holds to the same answer.
     def transfer_counterpart_account_id(transaction)
       return nil if transaction.nil?
 

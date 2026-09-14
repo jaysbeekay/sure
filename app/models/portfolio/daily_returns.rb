@@ -128,8 +128,9 @@ class Portfolio::DailyReturns
     rows.select(&:suppressed)
   end
 
-  # R13. True when an account that actually held a balance had no rate to the
-  # family currency. Scoped to contributing accounts deliberately: an empty
+  # R13. True when an account that actually held a balance, or a flow that
+  # feeds a figure, had no rate to the family currency. Scoped to contributing
+  # accounts deliberately: an empty
   # foreign account a user has added but not yet synced contributes nothing to
   # any figure, and must not blank the whole portfolio's performance.
   def rate_missing?
@@ -247,21 +248,31 @@ class Portfolio::DailyReturns
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'income'
                               THEN -entries.amount * fx.rate ELSE 0 END), 0) AS income,
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'fee'
-                              THEN  entries.amount * fx.rate ELSE 0 END), 0) AS fees
+                              THEN  entries.amount * fx.rate ELSE 0 END), 0) AS fees,
+            -- R13 applies to flows as it does to balances: a flow in a currency
+            -- with no rate is flagged, never converted at parity. Only the
+            -- classes that feed a figure count; an internal trade in an
+            -- unconvertible currency moves nothing we sum.
+            COALESCE(BOOL_OR(fx.rate IS NULL
+                             AND #{flow_class_sql} IN ('external', 'income', 'fee')), false) AS flow_rate_missing
           FROM entries
           JOIN accounts entry_accounts ON entry_accounts.id = entries.account_id
+          -- The same active-until window the balances use: a flow dated after
+          -- an account stopped contributing value must not enter the
+          -- denominator of a day that account is no longer part of.
+          LEFT JOIN account_windows flow_windows ON flow_windows.account_id = entries.account_id
           #{flow_class_joins}
           -- Converted at the PREVIOUS day's rate, because a start-of-day flow
           -- joins the opening capital, which is itself valued at that rate.
           -- Mixing rates here is what would leave a residual in `unexplained`.
+          -- NULL when the pair has no rate: the amount then drops out of every
+          -- sum and flow_rate_missing says so.
           LEFT JOIN LATERAL (
-            SELECT COALESCE(
-              #{rate_lookup('COALESCE(entries.currency, entry_accounts.currency)', 'entries.date - 1')},
-              1::numeric
-            ) AS rate
+            SELECT #{rate_lookup('COALESCE(entries.currency, entry_accounts.currency)', 'entries.date - 1')} AS rate
           ) fx ON TRUE
           WHERE entries.account_id = ANY(array[:account_ids]::uuid[])
             AND entries.date BETWEEN :start_date AND :end_date
+            AND (flow_windows.active_until_date IS NULL OR entries.date <= flow_windows.active_until_date)
             -- COALESCE because entries.excluded is nullable: a bare
             -- `excluded = false` evaluates to NULL for such a row and drops it
             -- from the aggregation, while Portfolio::FlowClassifier treats the
@@ -276,7 +287,7 @@ class Portfolio::DailyReturns
           b.market,
           b.revaluations,
           b.fx_effect,
-          b.rate_missing,
+          (b.rate_missing OR COALESCE(f.flow_rate_missing, false)) AS rate_missing,
           COALESCE(f.external_flow, 0) AS external_flow,
           COALESCE(f.income, 0) AS income,
           COALESCE(f.fees, 0) AS fees

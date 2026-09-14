@@ -64,33 +64,68 @@ class Portfolio::ReturnScope
     valuation_tracked? ? "value_return" : "time_weighted_return"
   end
 
+  # Balance rows in the account's currency inside the period. Public so a
+  # caller weighing several accounts can tell one that holds nothing in the
+  # period (no rows, nothing to withhold) from one with a single day (R15).
+  def balance_days
+    @balance_days ||= account.balances
+      .where(currency: account.currency, date: period.date_range)
+      .count
+  end
+
   private
-    def balance_days
-      @balance_days ||= account.balances
-        .where(currency: account.currency, date: period.date_range)
-        .count
+    # Every tracking check reads the same records: the account's live entries
+    # up to the end of the period. Live means F9's rule, and `entries.excluded`
+    # is nullable, so NULL counts as live through COALESCE. History before the
+    # period counts, because flows known from earlier are still known inside
+    # it.
+    def live_entries_through_period_end
+      account.entries
+        .where("COALESCE(entries.excluded, false) = false")
+        .where("entries.date <= ?", period.end_date)
     end
 
     def trades?
       return @trades if defined?(@trades)
-      @trades = account.entries.where(entryable_type: "Trade").where("entries.date <= ?", period.end_date).exists?
+      @trades = live_entries_through_period_end.where(entryable_type: "Trade").exists?
     end
 
     # A transfer in or out is as good as a trade for knowing the flows.
+    #
+    # One query through the classifier's SQL form rather than the Ruby form per
+    # entry: the Ruby form looks up transfers and counterparts row by row, which
+    # over an account's whole history is a round trip per transaction. The two
+    # forms are held to agree by the classifier's parity test.
     def external_transactions?
       return @external_transactions if defined?(@external_transactions)
 
-      classifier = Portfolio::FlowClassifier.new(scope_account_ids: [ account.id ])
+      aliases = {
+        entries: "entries", trades: "flow_trades",
+        transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
+      }
+      sql = <<~SQL
+        SELECT EXISTS (
+          SELECT 1
+          FROM entries
+          #{Portfolio::FlowClassifier.sql_joins(**aliases)}
+          WHERE entries.account_id = :account_id
+            AND entries.entryable_type = 'Transaction'
+            AND entries.date <= :end_date
+            AND COALESCE(entries.excluded, false) = false
+            AND #{Portfolio::FlowClassifier.sql_case(**aliases)} = 'external'
+        )
+      SQL
 
-      @external_transactions = account.entries
-        .where(entryable_type: "Transaction", date: period.date_range)
-        .where(excluded: false)
-        .includes(:entryable)
-        .any? { |entry| classifier.external?(entry) }
+      value = ActiveRecord::Base.connection.select_value(
+        ActiveRecord::Base.sanitize_sql_array([
+          sql, { account_id: account.id, end_date: period.end_date, scope_account_ids: [ account.id ] }
+        ])
+      )
+      @external_transactions = ActiveModel::Type::Boolean.new.cast(value) == true
     end
 
     def valuations?
       return @valuations if defined?(@valuations)
-      @valuations = account.entries.where(entryable_type: "Valuation").where("entries.date <= ?", period.end_date).exists?
+      @valuations = live_entries_through_period_end.where(entryable_type: "Valuation").exists?
     end
 end

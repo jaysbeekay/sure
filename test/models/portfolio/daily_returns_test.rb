@@ -189,6 +189,37 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
                     "the deposit explains the whole move, so the day returned nothing"
   end
 
+  # R13 for flows. The account is in the family's currency and its balances
+  # convert, but the deposit was recorded in euros and no EUR rate exists.
+  # Converting it at parity would put 500 into the denominator as 500 dollars.
+  test "a foreign currency flow with no rate is flagged rather than converted at parity" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, cash_flow: 500
+    deposit account: @account, date: @day_two, amount: 500, currency: "EUR"
+
+    returns = daily_returns
+
+    assert returns.rate_missing?, "an unconvertible flow must be flagged"
+    refute_equal BigDecimal("500"), returns.rows.last.external_flow,
+                 "the flow must not be converted at parity"
+  end
+
+  # The balances stop at the cut-off date; the flows must stop with them, or a
+  # deposit lands in the denominator of a day the account is no longer in.
+  test "a flow after an account's cut off date is not counted" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    deposit account: @account, date: @day_two, amount: 500
+
+    returns = Portfolio::DailyReturns.new(
+      account_ids: [ @account.id ],
+      currency: @family.currency,
+      period: Period.custom(start_date: @day_one, end_date: @day_two),
+      active_until_dates: { @account.id => @day_one }
+    )
+
+    assert_equal BigDecimal("0"), returns.rows.last.external_flow
+  end
+
   test "returns are empty without accounts" do
     returns = Portfolio::DailyReturns.new(
       account_ids: [],

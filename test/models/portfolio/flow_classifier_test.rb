@@ -123,6 +123,30 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
     assert_equal 1, rows.size, "the entry must appear once, or its amount is summed twice"
   end
 
+  # A transaction that is the inflow of one transfer and the outflow of
+  # another, as an unvalidated writer can leave it. The Ruby form looks up
+  # the inflow link first; the SQL form must reach the same counterpart. The
+  # outflow link is written first, so an unordered LIMIT 1 would find it.
+  test "a doubly linked transaction resolves to the inflow counterpart in both forms" do
+    brokerage_leg = deposit(account: @brokerage, date: @date, amount: 300)
+    isa_leg = @isa.entries.create!(
+      name: "To brokerage", date: @date, amount: 300, currency: "USD",
+      entryable: Transaction.new(kind: "funds_movement")
+    )
+    checking_leg = @checking.entries.create!(
+      name: "To brokerage", date: @date, amount: 300, currency: "USD",
+      entryable: Transaction.new(kind: "funds_movement")
+    )
+    Transfer.new(inflow_transaction: isa_leg.entryable, outflow_transaction: brokerage_leg.entryable).save!(validate: false)
+    Transfer.new(inflow_transaction: brokerage_leg.entryable, outflow_transaction: checking_leg.entryable).save!(validate: false)
+
+    scope_ids = [ @brokerage.id, @isa.id ]
+
+    assert_equal :external, Portfolio::FlowClassifier.new(scope_account_ids: scope_ids).classify(brokerage_leg),
+                 "the inflow link's counterpart is the checking account, outside the scope"
+    assert_equal "external", sql_classifications([ brokerage_leg.id ], scope_ids).fetch(brokerage_leg.id)
+  end
+
   test "rejects an unsafe sql alias" do
     assert_raises Portfolio::FlowClassifier::UnsafeAliasError do
       Portfolio::FlowClassifier.sql_case(entries: "entries; DROP TABLE users --")
