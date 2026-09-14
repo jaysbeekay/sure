@@ -177,3 +177,8 @@ P28:
     class: InvestmentStatementTest
     tests:
       - a rolled-up return is measured over the holdings whose cost basis is known
+P29:
+  - file: test/models/investment_statement_test.rb
+    class: InvestmentStatementTest
+    tests:
+      - contributions and withdrawals count trades only, not external cash transactions

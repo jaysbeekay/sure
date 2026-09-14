@@ -61,6 +61,12 @@ class InvestmentStatement::Totals
     # fee in, that fee is inside the contribution and in `fees`, so the two
     # do not add up to cash out for every provider.
     #
+    # Only trades feed contributions and withdrawals (P29). A deposit (a
+    # Contribution-labelled or investment_contribution Transaction, or a
+    # linked Transfer's inflow leg) is an external flow to
+    # Portfolio::FlowClassifier and InvestmentFlowStatement; counting it here
+    # too would count the deposit and the buy it funded twice.
+    #
     # Income is by label, whether the provider stored it as a qty-0 Trade or
     # as a Transaction: the same labels Portfolio::FlowClassifier calls
     # income, read from it so the two cannot drift. Fees are the Fee-labelled
