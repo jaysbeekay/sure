@@ -1,0 +1,232 @@
+# The performance metric surface for a set of accounts over a period.
+#
+# Implements contract rows R3, R4, R5, R8 and R14. A value object in the shape
+# of Loan::SimulationResult: constructed with its boundaries, computes once,
+# answers questions.
+#
+# CACHING (R14). The key comes from Family#build_cache_key with
+# `invalidate_on_data_updates: true`, which folds in `latest_sync_completed_at`.
+# `entries_cache_version` -- the key the rest of InvestmentStatement uses -- is
+# NOT sufficient here: it is `entries.count` plus `entries.maximum(:updated_at)`,
+# and a daily price sync changes holdings and therefore balances while touching
+# no entry at all. Returns cached on it would stay stale until the user next
+# edited a transaction.
+class Portfolio::Performance
+  # Bumped when the meaning of a cached figure changes, so warm caches stop
+  # serving the old interpretation (the pattern upstream #3350 used for
+  # totals_query/v2).
+  CACHE_VERSION = "v1".freeze
+
+  # R5: the balance rows are calendar daily, so the series includes weekends and
+  # holidays as structural zeros. Annualising that by the trading-day convention
+  # (252) would overstate the result; the calendar year is the honest divisor
+  # for a calendar-daily series.
+  TRADING_PERIODS_PER_YEAR = 365
+
+  # R4: annualising anything shorter produces a number nobody should be shown.
+  MIN_DAYS_FOR_ANNUALISATION = 365
+
+  attr_reader :family, :account_ids, :period, :user, :active_until_dates, :scope_account_ids
+
+  def initialize(family:, account_ids:, period:, user: nil, active_until_dates: {}, scope_account_ids: nil)
+    @family = family
+    @account_ids = Array(account_ids).compact.map(&:to_s)
+    @period = period
+    @user = user
+    @active_until_dates = active_until_dates || {}
+    @scope_account_ids = scope_account_ids
+  end
+
+  # R3. Chained daily returns, as a BigDecimal fraction (0.21 == 21%).
+  # nil when there is nothing to report or a rate is missing (R13).
+  def time_weighted_return
+    metrics[:twr]
+  end
+  alias_method :twr, :time_weighted_return
+
+  # R4. nil below MIN_DAYS_FOR_ANNUALISATION.
+  def annualized_time_weighted_return
+    metrics[:annualized_twr]
+  end
+  alias_method :annualized_twr, :annualized_time_weighted_return
+
+  # R8. nil when the scope cannot support it, or XIRR could not solve.
+  def money_weighted_return
+    metrics[:mwr]
+  end
+  alias_method :mwr, :money_weighted_return
+
+  # R5. Annualised standard deviation of daily returns.
+  def volatility
+    metrics[:volatility]
+  end
+
+  # Largest peak-to-trough fall of the chained index, as a positive fraction.
+  def max_drawdown
+    metrics[:max_drawdown]
+  end
+
+  # [[date, index], ...] rebased so the first point is 100. This is the
+  # flow-adjusted series a chart plots: it removes the effect of deposits, so it
+  # can be laid beside a benchmark (#124) without the shapes disagreeing purely
+  # because money went in.
+  def index_series
+    metrics[:index_series]
+  end
+
+  def drivers
+    metrics[:drivers]
+  end
+
+  # R13. True when a currency pair had no rate anywhere in the period, in which
+  # case every return figure is nil and the UI must say why rather than showing
+  # a parity-converted number.
+  def rate_missing?
+    metrics[:rate_missing]
+  end
+
+  # R6. Days whose denominator was zero or negative.
+  def suppressed_dates
+    metrics[:suppressed_dates]
+  end
+
+  def any?
+    account_ids.any? && metrics[:day_count] > 0
+  end
+
+  # Exposed for tests and for callers that want the raw series.
+  def daily_returns
+    @daily_returns ||= Portfolio::DailyReturns.new(
+      account_ids: account_ids,
+      currency: family.currency,
+      period: period,
+      active_until_dates: active_until_dates,
+      scope_account_ids: scope_account_ids
+    )
+  end
+
+  def cache_key
+    family.build_cache_key(
+      [
+        "portfolio_performance", CACHE_VERSION, user&.id,
+        Digest::MD5.hexdigest(account_ids.sort.join(",")),
+        period.start_date, period.end_date
+      ].compact.join("_"),
+      invalidate_on_data_updates: true
+    )
+  end
+
+  private
+    def metrics
+      @metrics ||= Rails.cache.fetch(cache_key) { compute }
+    end
+
+    def compute
+      rows = daily_returns.rows
+      returns = daily_returns.returns
+      rate_missing = daily_returns.rate_missing?
+
+      drivers = Portfolio::Drivers.new(daily_returns)
+
+      # R13: a missing rate makes every ratio unsafe, so the figures are
+      # withheld. The drivers are still reported -- they are money, and the
+      # caller can see which part is unexplained -- but nothing is expressed as
+      # a percentage of a value we could not convert.
+      chained = rate_missing ? nil : chain(returns)
+
+      {
+        twr: chained,
+        annualized_twr: annualize(chained),
+        mwr: rate_missing ? nil : money_weighted(rows),
+        volatility: rate_missing ? nil : annualized_volatility(returns),
+        max_drawdown: rate_missing ? nil : drawdown(returns),
+        index_series: rate_missing ? [] : rebased_index(returns),
+        drivers: drivers.to_h,
+        rate_missing: rate_missing,
+        suppressed_dates: rows.select(&:suppressed).map(&:date),
+        day_count: rows.size
+      }
+    end
+
+    # R3.
+    def chain(returns)
+      return nil if returns.empty?
+
+      returns.reduce(BigDecimal(1)) { |acc, (_date, r)| acc * (1 + r) } - 1
+    end
+
+    # R4.
+    def annualize(chained)
+      return nil if chained.nil?
+      return nil if period.days < MIN_DAYS_FOR_ANNUALISATION
+
+      years = period.days / 365.0
+      growth = (1 + chained).to_f
+      # A total loss leaves nothing to annualise; the root of a negative is not
+      # a return.
+      return nil if growth <= 0
+
+      BigDecimal(((growth**(1.0 / years)) - 1).to_s)
+    end
+
+    # R8. The opening value is the investor's first outlay, every external flow
+    # follows, and the closing value is what they could walk away with.
+    def money_weighted(rows)
+      return nil if rows.empty?
+
+      opening = rows.first.value_open
+      closing = rows.last.value_close
+
+      flows = []
+      flows << Portfolio::Xirr::Flow.new(date: rows.first.date, amount: -opening) unless opening.zero?
+
+      rows.each do |row|
+        next if row.external_flow.zero?
+        flows << Portfolio::Xirr::Flow.new(date: row.date, amount: -row.external_flow)
+      end
+
+      flows << Portfolio::Xirr::Flow.new(date: rows.last.date, amount: closing) unless closing.zero?
+
+      Portfolio::Xirr.rate_or_nil(flows)
+    end
+
+    # R5.
+    def annualized_volatility(returns)
+      values = returns.map { |(_date, r)| r.to_f }
+      return nil if values.size < 2
+
+      mean = values.sum / values.size
+      variance = values.sum { |v| (v - mean)**2 } / (values.size - 1)
+      return nil if variance.negative?
+
+      BigDecimal((Math.sqrt(variance) * Math.sqrt(TRADING_PERIODS_PER_YEAR)).to_s)
+    end
+
+    def drawdown(returns)
+      return nil if returns.empty?
+
+      peak = BigDecimal(1)
+      level = BigDecimal(1)
+      worst = BigDecimal(0)
+
+      returns.each do |(_date, r)|
+        level *= (1 + r)
+        peak = level if level > peak
+        next unless peak.positive?
+
+        fall = (peak - level) / peak
+        worst = fall if fall > worst
+      end
+
+      worst
+    end
+
+    def rebased_index(returns)
+      level = BigDecimal(100)
+
+      returns.map do |(date, r)|
+        level *= (1 + r)
+        [ date, level ]
+      end
+    end
+end

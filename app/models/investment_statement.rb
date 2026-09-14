@@ -256,6 +256,38 @@ class InvestmentStatement
     )
   end
 
+  # Time- and money-weighted returns, volatility, drawdown and the drivers
+  # breakdown for the family's investment accounts over `period`.
+  #
+  # See docs/portfolio/returns-contract.md, which is normative for every figure
+  # this returns. The engine is read-only and cached, so it is safe from a GET.
+  #
+  # ACCOUNT SCOPE. This uses the same account set as the rest of the statement
+  # (visible, included in reports, included in this user's finances). A closed
+  # account therefore drops out of the series entirely rather than contributing
+  # its history up to its closing date -- the behaviour the net-worth series
+  # gets from BalanceSheet::HistoricalAccountScope. Whether the portfolio
+  # surface should follow net worth here is issue #119's open decision D2; when
+  # it is settled this is the one place that changes, and `active_until_dates`
+  # is already plumbed through Portfolio::DailyReturns for it.
+  def performance(period: Period.current_month)
+    Portfolio::Performance.new(
+      family: family,
+      account_ids: investment_account_ids,
+      period: period,
+      user: user
+    )
+  end
+
+  # What return method each account's data can support, keyed by account id.
+  # Callers must not quote a figure an account's scope does not support -- see
+  # contract rows R15 and R16.
+  def return_scopes(period: Period.current_month)
+    investment_accounts.to_a.index_with do |account|
+      Portfolio::ReturnScope.new(account: account, period: period)
+    end
+  end
+
   # Investment accounts
   def investment_accounts
     @investment_accounts ||= begin
