@@ -1018,7 +1018,6 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     period = Period.last_30_days
 
     gains_before = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
-    value_before = InvestmentStatement.new(@family).send(:series_cache_key, :value, period)
 
     # HoldingsController#update writes the holding alone: no sync completes
     # and the account row is untouched, so the family key does not move.
@@ -1027,10 +1026,12 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     end
 
     gains_after = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
-    value_after = InvestmentStatement.new(@family).send(:series_cache_key, :value, period)
 
+    # The value series used to keep its key here, because it reads balances.
+    # It no longer does: every series is trimmed by provider holdings (P30),
+    # so every key carries the holdings version, and a manual cost-basis
+    # edit, rare and made by hand, costs the value charts one cache miss.
     assert_not_equal gains_before, gains_after, "a cost-basis edit must not keep serving the gains built before it"
-    assert_equal value_before, value_after, "the value series reads balances, not holdings, and keeps its key"
   end
 
   test "gains series cache key changes when a holding is deleted" do
@@ -1047,6 +1048,28 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     after = InvestmentStatement.new(@family).send(:series_cache_key, :gains, period)
 
     assert_not_equal before, after
+  end
+
+  test "every series cache key changes when a holding is deleted" do
+    # Every series is trimmed to the supported-history start, which provider
+    # holdings decide (P30), so the value and holdings-value charts depend on
+    # holding rows too, not only the gains series.
+    account = create_investment_account(balance: 1000)
+    security = Security.create!(ticker: "MSFT", name: "Microsoft")
+    holding = Holding.create!(
+      account: account, security: security, date: Date.current,
+      qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+    period = Period.last_30_days
+    kinds = %i[value holdings_value gains]
+
+    before = kinds.index_with { |kind| InvestmentStatement.new(@family).send(:series_cache_key, kind, period) }
+    holding.destroy!
+    after = kinds.index_with { |kind| InvestmentStatement.new(@family).send(:series_cache_key, kind, period) }
+
+    kinds.each do |kind|
+      assert_not_equal before[kind], after[kind], "the #{kind} series must not keep its pre-deletion start date"
+    end
   end
 
   test "a security whose holdings carry no value is omitted from top_holdings and allocation" do

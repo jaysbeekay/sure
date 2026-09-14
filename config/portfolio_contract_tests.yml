@@ -187,6 +187,7 @@ P30:
     class: InvestmentStatementTest
     tests:
       - value_series does not chart leading zeros before a linked account's first supported history
+      - every series cache key changes when a holding is deleted
   - file: test/models/balance/linked_investment_series_normalizer_test.rb
     class: Balance::LinkedInvestmentSeriesNormalizerTest
     tests:

@@ -505,16 +505,18 @@ class InvestmentStatement
     #   neither maximum(:updated_at) nor accounts.updated_at, and a key built
     #   from those alone would keep serving a series that still counts the
     #   revoked account.
-    # - holdings (gains only): the gains series reads holdings.cost_basis,
+    # - holdings (every kind): the gains series reads holdings.cost_basis,
     #   which a manual cost-basis edit, an unlock or a security remap
-    #   rewrites in place. The value series read balances, which only a
-    #   sync rewrites, so they do not pay for the extra queries.
+    #   rewrites in place. Every series is also trimmed to the supported
+    #   history start (P30), which provider holdings' dates and securities
+    #   decide, so deleting or remapping a holding can move the value and
+    #   holdings-value charts' first date without a sync.
     def series_cache_key(kind, period)
       key = [
         "investment_statement_#{kind}_series",
         user&.id,
         shares_version,
-        (holdings_version if kind == :gains),
+        holdings_version,
         period.start_date,
         period.end_date
       ].compact.join("_")
@@ -535,7 +537,7 @@ class InvestmentStatement
 
     # Count plus latest timestamp over the holdings the series can read, so a
     # cost-basis edit, unlock or remap (rows rewritten in place) and a
-    # deletion (a row gone, timestamps unchanged) each move the gains key.
+    # deletion (a row gone, timestamps unchanged) each move every series key.
     def holdings_version
       @holdings_version ||= begin
         holdings = Holding.where(account_id: historical_scope.account_ids)
