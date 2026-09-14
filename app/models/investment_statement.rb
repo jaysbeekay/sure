@@ -576,9 +576,12 @@ class InvestmentStatement
       @all_time_totals ||= totals(period: Period.all_time)
     end
 
-    # fees is stated separately from contributions and withdrawals: a buy's
-    # contribution is the cost of the securities and its fee is in fees, so
-    # contributions + fees is the cash that left for a purchase.
+    # fees is stated separately from contributions and withdrawals rather than
+    # subtracted out of them. Whether a contribution already contains its fee
+    # is a property of the writer -- Trade::CreateForm and Binance P2P fold it
+    # into entries.amount, Kraken and Binance spot do not -- so the two are not
+    # additive for every provider. P21 states this; the reasoning is in
+    # InvestmentStatement::Totals.
     PeriodTotals = Data.define(:contributions, :withdrawals, :dividends, :interest, :fees, :trades_count, :currency) do
       def net_flow
         contributions - withdrawals

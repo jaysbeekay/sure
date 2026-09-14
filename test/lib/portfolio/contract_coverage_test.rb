@@ -115,6 +115,31 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/missing test "belongs to beta" in AlphaTest/, error.message)
   end
 
+  # The gate's whole job is to prove a cited test still runs. A substring
+  # search over the source accepted a name that had survived only in prose, so
+  # a deleted test could keep verifying. Each non-executable shape gets its own
+  # case, and the genuine declaration is asserted too, so the check cannot pass
+  # by having simply become stricter than the evidence it must accept.
+  test "a test name that survives only in a comment is not evidence" do
+    write_prose_contract("only in a comment")
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { rooted_coverage.verify! }
+    assert_match(/missing test "only in a comment" in ProseTest/, error.message)
+  end
+
+  test "a test name that survives only in a heredoc is not evidence" do
+    write_prose_contract("only in a heredoc")
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { rooted_coverage.verify! }
+    assert_match(/missing test "only in a heredoc" in ProseTest/, error.message)
+  end
+
+  test "a declaration beside that prose is still evidence" do
+    write_prose_contract("really declared")
+
+    assert_equal 1, rooted_coverage.verify!
+  end
+
   test "a manifest entry missing a required key is a contract error, not a KeyError" do
     write_contract(<<~MD)
       | P1 | first | `Portfolio::FlowClassifierTest` "a Dividend income trade is income" | - |
@@ -155,6 +180,41 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
 
     def entry(*tests, class_name: "Portfolio::FlowClassifierTest")
       { "file" => @test_file, "class" => class_name, "tests" => tests }
+    end
+
+    # One class whose only executable declaration is "really declared"; the two
+    # other names appear solely in a comment and a heredoc.
+    def write_prose_test_file
+      File.write(File.join(@dir, "prose_test.rb"), <<~'RUBY')
+        class ProseTest < ActiveSupport::TestCase
+          # Deleted for now: test "only in a comment" do
+          def fixture
+            <<~SQL
+              test "only in a heredoc" do
+            SQL
+          end
+
+          test "really declared" do
+          end
+        end
+      RUBY
+    end
+
+    # Points the single contract row and the manifest at the same name, so a
+    # failure can only come from the declaration check.
+    def write_prose_contract(name)
+      write_prose_test_file
+      write_contract("| P1 | first | `ProseTest` \"#{name}\" | - |\n")
+      write_manifest("P1" => [ { "file" => "prose_test.rb", "class" => "ProseTest", "tests" => [ name ] } ])
+    end
+
+    # Resolves test files against the temporary directory rather than the app.
+    def rooted_coverage
+      Portfolio::ContractCoverage.new(
+        contract_path: File.join(@dir, "methodology.md"),
+        manifest_path: File.join(@dir, "manifest.yml"),
+        root: @dir
+      )
     end
 
     def write_contract(body)
