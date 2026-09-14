@@ -124,6 +124,14 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     end
   end
 
+  # WINDOWS is looked up by the saved Period key. A key that is not a real
+  # Period key would never match, and that window would silently show the
+  # whole life instead.
+  test "every loan window is a shared period key" do
+    assert_empty Loan::PayoffChart::WINDOWS.keys - Period::PERIODS.keys,
+      "loan chart windows must use Period::PERIODS keys"
+  end
+
   # Overlapping the schedule IS the on-track picture; the projection is not
   # withheld for agreeing with the contract.
   test "the projection is drawn when it overlaps the schedule and withheld only when it cannot run" do

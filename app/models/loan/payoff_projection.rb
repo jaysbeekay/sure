@@ -27,6 +27,10 @@ class Loan
 
     # False when there is nothing to project: no schedule, nothing left to owe,
     # no payments remaining, or no repayment to hold.
+    #
+    # `&&` binds tighter than `||`, so the trailing `|| false` applies to the
+    # whole chain. It turns the nil that `contracted_payment&.positive?` gives for
+    # a missing payment into false, so callers always get a boolean.
     def applicable?
       schedule.present? &&
         current_balance.amount.positive? &&

@@ -28,6 +28,11 @@ class Loan
     # today to where the window ends: M the first month, 90D the first ninety
     # days, YTD origination to today, 1Y, 5Y and 10Y the first years. All has no
     # end and shows the whole life.
+    #
+    # Only these keys are loan windows. Any other Period key, including one added
+    # to Period::PERIODS later, shows the whole life, because the picker's choice
+    # is shared with every account page. A test keeps these keys a subset of
+    # Period::PERIODS so a renamed period cannot silently stop matching.
     WINDOWS = {
       "current_month" => ->(start, _as_of) { start >> 1 },
       "last_90_days" => ->(start, _as_of) { start + 90 },
