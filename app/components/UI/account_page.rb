@@ -7,12 +7,16 @@ class UI::AccountPage < ApplicationComponent
   # `loan_chart` is the Loan::PayoffChart payload the controller built for a
   # loan account, nil for every other type and for a loan with no schedule.
   # `as_of` is the page's one reference date, captured by the controller.
+  # `loan_projection` is the projection the controller already built for the
+  # chart, so the Schedule tab's forecast card does not simulate it again.
   def initialize(account:, chart_view: nil, chart_period: nil, loan_chart: nil, as_of: Date.current, active_tab: nil,
-                 statement_coverage: nil, statements: [], reconciliation_statuses: {}, can_manage_statements: false)
+                 statement_coverage: nil, statements: [], reconciliation_statuses: {}, can_manage_statements: false,
+                 loan_projection: nil)
     @account = account
     @chart_view = chart_view
     @chart_period = chart_period
     @loan_chart = loan_chart
+    @loan_projection = loan_projection
     @as_of = as_of
     @active_tab = active_tab
     @statement_coverage = statement_coverage
@@ -79,6 +83,12 @@ class UI::AccountPage < ApplicationComponent
     @fx_coverage_start_date = result
   end
 
+  # The controller's projection when it built one; otherwise built here, once
+  # per render, for callers that construct the page without it.
+  def loan_projection
+    @loan_projection ||= account.loan.payoff_projection(as_of: as_of)
+  end
+
   def tab_content_for(tab)
     case tab
     when :activity
@@ -94,7 +104,7 @@ class UI::AccountPage < ApplicationComponent
       # Accountable is responsible for implementing the partial in the correct folder
       render "#{account.accountable_type.downcase.pluralize}/tabs/#{tab}", account: account
     when :schedule
-      render "loans/tabs/schedule", account: account, as_of: as_of
+      render "loans/tabs/schedule", account: account, as_of: as_of, projection: loan_projection
     when :statements
       render_statement_tab
     end

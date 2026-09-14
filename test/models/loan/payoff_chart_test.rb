@@ -224,6 +224,16 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_equal "10J", I18n.t("UI.account.chart.loan.windows.last_10_years", locale: :de)
   end
 
+  # The chart controller sets aria-roledescription from labels.interactive_chart
+  # and falls back to English when the payload does not carry it.
+  test "the payload carries a localized interactive chart role description" do
+    english = Loan::PayoffChart.new(on_contract_loan, as_of: @today).payload
+    assert_equal "interactive chart", english[:labels][:interactive_chart]
+
+    german = I18n.with_locale(:de) { Loan::PayoffChart.new(on_contract_loan, as_of: @today).payload }
+    assert_equal "interaktives Diagramm", german[:labels][:interactive_chart]
+  end
+
   # A borrower too far behind has no payoff date. The description must say so
   # rather than interpolating a bare nil into a sentence.
   test "the description says so when the contract no longer pays the loan off" do

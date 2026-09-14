@@ -92,7 +92,11 @@ class AccountsController < ApplicationController
     # activity feed's `entries` frame (its pagination) renders the whole page
     # and keeps one frame, so building it there was a full simulation per page
     # turn for nothing. Same reasoning as the statements-frame return above.
-    @loan_chart = loan_payoff_chart(@account, as_of: @as_of, period: @period) if chart_card_requested?
+    #
+    # The chart and the Schedule tab's forecast card read the same projection,
+    # so it is built once here and handed to both.
+    @loan_projection = @account.loan.payoff_projection(as_of: @as_of) if @account.accountable.is_a?(Loan)
+    @loan_chart = loan_payoff_chart(@account, as_of: @as_of, period: @period, projection: @loan_projection) if chart_card_requested?
 
     per_page = safe_per_page(stored_per_page_default)
     store_per_page!(per_page) if params[:per_page].present?
@@ -332,10 +336,10 @@ class AccountsController < ApplicationController
     # nil is what the component already takes as "no chart", and the account
     # page then renders exactly as it did before the chart existed. Reported,
     # because a loan silently losing its chart is a bug someone has to see.
-    def loan_payoff_chart(account, as_of:, period:)
+    def loan_payoff_chart(account, as_of:, period:, projection: nil)
       return nil unless account.accountable.is_a?(Loan)
 
-      Loan::PayoffChart.new(account.loan, as_of: as_of, period: period).payload
+      Loan::PayoffChart.new(account.loan, as_of: as_of, period: period, projection: projection).payload
     rescue StandardError => e
       Rails.logger.error("Loan payoff chart failed for account #{account.id}: #{e.class} - #{e.message}")
       Sentry.capture_exception(e) { |scope| scope.set_tags(record_type: "Account", record_id: account.id) } if defined?(Sentry)

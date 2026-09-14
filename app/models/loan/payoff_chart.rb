@@ -48,10 +48,13 @@ class Loan
       WINDOWS.keys.map { |key| [ key, I18n.t("UI.account.chart.loan.windows.#{key}") ] }
     end
 
-    def initialize(loan, as_of: Date.current, period: nil)
+    # `projection` lets a caller that also shows the forecast elsewhere on the
+    # page build it once; it must be the loan's projection for this `as_of`.
+    def initialize(loan, as_of: Date.current, period: nil, projection: nil)
       @loan = loan
       @as_of = as_of
       @period = period
+      @projection = projection
     end
 
     # nil when there is nothing to draw. The page falls back to the plain
@@ -200,9 +203,14 @@ class Loan
         inside >= 2 || (dates.first < domain_start && dates.last > domain_end)
       end
 
+      # The chart controller reads `interactive_chart` for the SVG's
+      # aria-roledescription; without it every locale gets its English default.
       def labels
         SERIES.index_with { |key| I18n.t("UI.account.chart.loan.#{key}") }
-          .merge(today: I18n.t("UI.account.chart.loan.today"))
+          .merge(
+            today: I18n.t("UI.account.chart.loan.today"),
+            interactive_chart: I18n.t("UI.account.chart.loan.interactive_chart")
+          )
       end
 
       # Every series the chart draws is named here, with its payoff date.
