@@ -15,14 +15,31 @@ class PortfolioTaskTest < ActiveSupport::TestCase
     assert_empty doubled, "these tasks have been defined more than once: #{doubled.join(', ')}"
   end
 
-  test "contract coverage task verifies every methodology row against an existing test" do
+  # Both counts rather than one number: the task's job is to run BOTH gates, and
+  # a bare \d+ would still pass if one of them silently stopped being called.
+  test "contract coverage task verifies the methodology and returns contracts against existing tests" do
     output, = capture_io { Rake::Task["portfolio:verify_contract_coverage"].invoke }
 
-    assert_match(/Verified \d+ portfolio contract rows against existing tests/, output)
+    assert_match(/Verified \d+ methodology and \d+ returns contract rows against existing tests/, output)
   end
 
   test "contract coverage task aborts with the first problem found" do
     Portfolio::ContractCoverage.any_instance.stubs(:verify!).raises(Portfolio::ContractCoverage::Error, "P7: missing test \"gone\"")
+
+    error = assert_raises(SystemExit) do
+      capture_io { Rake::Task["portfolio:verify_contract_coverage"].invoke }
+    end
+
+    assert_not error.success?
+  end
+
+  # The returns gate must abort the same way. Its Error is an alias of
+  # ContractCoverage::Error so one rescue covers both; if that alias were ever
+  # replaced by a separate class, the task would crash with a backtrace instead
+  # of reporting the row, and only this test would notice.
+  test "contract coverage task aborts on a returns-contract problem too" do
+    Portfolio::ReturnsContractCoverage.any_instance
+      .stubs(:verify!).raises(Portfolio::ReturnsContractCoverage::Error, "R7: missing test \"gone\"")
 
     error = assert_raises(SystemExit) do
       capture_io { Rake::Task["portfolio:verify_contract_coverage"].invoke }
