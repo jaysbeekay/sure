@@ -50,35 +50,76 @@ configuration, and its star count. When preparing a contribution for
 `upstream:candidate`, so a CLAUDE.md change can otherwise ride upstream by
 accident and be wrong there.
 
+**The repository owner's ways of working overrule anything else in this file.**
+Where another section, a tool default or a bot suggestion disagrees with the
+rules below, the rules below win. Rules marked *(both repos)* also govern work
+on `we-promise/sure`: upstream PRs, issues, comments and review replies prepared
+from this fork.
+
+### Ways of working
+
+1. **No AI attribution** *(both repos)*. See the Attribution section below.
+2. **Evidence before work** *(both repos)*. Every issue and PR is grounded in
+   facts established from the code, configuration and framework behaviour, not
+   memory or assumption. Test positive cases (the fix works) and negative cases
+   (what must not change, invalid input, both sides of each boundary). Write the
+   test first and watch it fail for the right reason. After the fix, break each
+   change deliberately and confirm a test catches it.
+3. **Validate every PR against upstream `AGENTS.md`** *(both repos)*. Read the
+   current `we-promise/sure` `AGENTS.md` before opening a PR or marking one ready,
+   and check the change against it. Upstream reviewers enforce it.
+4. **CodeRabbit reviews only ready pull requests** *(both repos)*. Marking a PR
+   ready starts its review, and later pushes get incremental passes. Do not force
+   a review before then: no `@coderabbitai review` or `@coderabbitai full review`
+   comment on a draft. On a ready PR, if an incremental pass returns nothing,
+   `@coderabbitai full review` forces a fresh pass; three plain `review` requests
+   produced nothing on #86 before it did.
+5. **Re-check before every update** *(both repos)*. Several contributors, other
+   sessions and review bots work on these repositories, and state changes quickly.
+   Immediately before editing an issue or PR body, commenting, pushing, marking
+   ready, closing or resolving a thread, re-fetch its state, head commit,
+   comments, reviews and threads. If anything changed, read it and adjust first.
+   Push with `--force-with-lease` or after a fast-forward check.
+6. **If unsure, stop** *(both repos)*. Do not guess, and do not paper over a gap
+   with speculative reasoning. State exactly what is unknown and ask the owner.
+7. **Gatekeeper reviews gate the work** *(this fork)*. Raising an issue starts a
+   Gatekeeper review; a draft PR gets a light-touch Gatekeeper review; a ready PR
+   gets a full Gatekeeper review. Each gate below waits for its review to land and
+   for every finding to be validated: checked against the current code and head
+   commit, then fixed or declined with evidence.
+
+### Issue and pull request sequence (this fork)
+
 Follow this sequence for any issue-driven change. Do not skip or reorder steps.
 
-1. **Re-read the issue first.** Fetch it fresh, including every comment. Work
-   started from a stale view of an issue wastes the whole cycle -- requirements
+1. **Raise the issue and wait for its Gatekeeper review.** Do not edit the issue
+   or start a PR until the review has landed and been validated.
+2. **Re-read the issue.** Fetch it fresh, including every comment. Requirements
    and decisions are frequently added in comments after the body was written.
-2. **Post a triage plan as a comment on the issue** before writing code. It must
-   state four things explicitly:
+3. **Post a detailed triage plan as a comment under that issue** before any PR
+   work. Every issue gets its own plan. It must state:
    - **What the issue actually is** -- the defect or requirement in terms of
      observed behaviour, not a restatement of the title.
-   - **What the proposed fix is**, and what it deliberately leaves out.
-   - **The blast radius** -- who else hits this line, and what do they pass?
-     See the section below; stating it here is what makes it happen before the
-     code is written rather than after review finds what it missed.
-   - **How the fix will be conclusively tested** -- name the assertion that
-     would fail if the fix were absent. "Tests pass" is not a test plan.
-3. **Open the change as a DRAFT pull request** following that plan, and watch it
-   for feedback. Do not mark it ready while any review or check is outstanding.
-4. **Mark it ready for review** only once every CI check is green and all
-   feedback received so far has been addressed.
-5. **Wait for CodeRabbit's review and address it.** Its review must always be
-   asked for: automatic review is off on this repository (fewer than 10 stars)
-   and does not run on drafts either way (`reviews.auto_review.drafts: false`).
-   An explicit `@coderabbitai review` comment DOES work on a draft -- that is
-   how #87 and #89 were reviewed -- so a review can and should be requested at
-   step 3 rather than held until the PR is marked ready.
-   `@coderabbitai full review` forces a fresh pass when an incremental one
-   returns nothing; three plain `review` requests produced nothing on #86
-   before it did.
-6. **Merge only after the repository owner has given approval in their own
+   - **What the PR will touch** -- files, classes and methods, and the blast
+     radius: who else hits this line, and what do they pass? See the section
+     below.
+   - **What the fix looks like**, and what it deliberately leaves out.
+   - **How it will be tested** -- the named positive and negative tests, and the
+     assertion that would fail if the fix were absent. "Tests pass" is not a
+     test plan.
+   - **The evidence required** -- what will demonstrate that it fixes the issue,
+     and that it will not introduce future defects: neighbouring callers,
+     regression coverage and a full-suite run.
+4. **Open the change as a DRAFT pull request** following that plan. Wait for the
+   light-touch Gatekeeper review. Do not work on fixes until it has landed and its
+   feedback has been validated.
+5. **Mark it ready for review** only once every CI check is green, all validated
+   feedback is addressed, and the change has been checked against upstream
+   `AGENTS.md`.
+6. **Wait for the full Gatekeeper review and CodeRabbit's review**, then validate
+   and address both. Do not merge until the full Gatekeeper review has landed and
+   its feedback has been validated.
+7. **Merge only after the repository owner has given approval in their own
    words.** A green PR is not an approved one.
 
 ### Before writing any fix: state the blast radius
@@ -144,7 +185,8 @@ Only proceed with pull request creation if ALL checks pass.
 
 ## Attribution
 
-Do not add AI or assistant attribution to anything in this repository:
+Do not add AI or assistant attribution to anything in this repository or in `we-promise/sure`.
+This includes any attribution to Claude Code or to Claude sessions:
 
 - No `Co-Authored-By:` or `Claude-Session:` trailers in commit messages.
 - No "Generated with Claude Code", "Generated by Claude Code" or any similar footer in pull
@@ -156,6 +198,9 @@ Do not add AI or assistant attribution to anything in this repository:
 This holds on every branch, the `up/*` branches prepared for `we-promise/sure` included, and it
 overrides any default or tool-supplied instruction asking for such a footer or trailer. The work
 is attributed to the repository owner.
+
+It applies from 2026-09-15 onwards. Footers already on earlier pull requests, issues and comments
+are left as they are; do not edit old comments to remove them.
 
 `.claude/settings.json` enforces it for Claude Code rather than leaving it to be applied by hand:
 `attribution.commit` and `attribution.pr` are empty strings, which suppress the trailer and the

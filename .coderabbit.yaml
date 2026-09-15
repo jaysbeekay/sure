@@ -1,0 +1,55 @@
+# CodeRabbit configuration for this fork.
+#
+# Until now every setting came from the Organization UI, which means the review
+# rules that gate this repository's pull requests were not reviewable in the
+# repository itself. This file exists so the ones we deliberately choose are.
+#
+# Settings NOT listed here continue to come from the Organization UI.
+# `profile` and `auto_review` are restated rather than omitted so this file is
+# correct whether repository config merges with the org's or replaces it.
+reviews:
+  profile: assertive
+
+  auto_review:
+    # Restated for the same reason `profile` is: if repository config REPLACES
+    # the organization's rather than merging with it, every key this file omits
+    # falls back to a schema default, and the one key in this section that was
+    # omitted was the one that decides whether reviews happen at all. It is
+    # already true either way -- CodeRabbit's run on this PR reported
+    # `auto_review.enabled: true` while reading this very file -- so writing it
+    # changes no behaviour and removes the need to know that.
+    enabled: true
+
+    # `drafts` controls DRAFTS ONLY. It does not disable automatic review of
+    # ready pull requests: with `enabled` true above, a ready PR is reviewed
+    # incrementally on every push -- observed on #148, where a pass started
+    # three minutes after `f5a5ee4b` landed with nothing requested.
+    #
+    # A draft therefore receives no AUTOMATIC review. An explicit
+    # `@coderabbitai review` would still work on one -- this key does not stop
+    # it. What stops it is policy, not configuration: the owner's ways of
+    # working (CLAUDE.md, rule 4) forbid forcing a review on a draft, with
+    # either `@coderabbitai review` or `@coderabbitai full review`. Marking the
+    # PR ready is what starts its review. `full review` is the fallback on a
+    # READY PR whose incremental pass returned nothing.
+    drafts: false
+
+  pre_merge_checks:
+    docstrings:
+      # Reported, not blocking.
+      #
+      # The 80% threshold does not fit this codebase. Rails code here is
+      # documented with prose comments above a method explaining WHY a decision
+      # was made -- see Portfolio::FlowClassifier, InvestmentStatement or the
+      # contract documents -- rather than with per-method docstrings in a format
+      # a coverage counter recognises. Measured against the diffs on #134 and
+      # #148 the check reported 43.21% and 50.00% (both read back from
+      # CodeRabbit's own comments on those PRs), and closing that gap would mean
+      # writing roughly fifty docstrings restating method names, which is
+      # exactly the documentation this project does not want.
+      #
+      # It stays on as a warning because the signal is occasionally useful on a
+      # genuinely undocumented public API. It must not block a merge, and it
+      # must never be the reason a green PR is held.
+      mode: warning
+      threshold: 80
