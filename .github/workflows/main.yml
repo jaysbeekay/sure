@@ -38,7 +38,9 @@ jobs:
           # Strip the "@codebot" trigger word, leave the actual instruction
           COMMAND=$(echo "$COMMENT_BODY" | sed -E 's/^@codebot[[:space:]]*//')
 
-          jq -n \
+          # printf (not `> payload.json`) so no trailing newline is added —
+          # the signing step must hash the exact bytes curl will send.
+          printf '%s' "$(jq -cn \
             --arg event "codebot_trigger" \
             --arg repo "${{ github.repository }}" \
             --argjson issue_number "${{ github.event.issue.number }}" \
@@ -60,13 +62,23 @@ jobs:
                 command: $command
               },
               triggered_at: $triggered_at
-            }' > payload.json
+            }')" > payload.json
 
           echo "Payload built:"
           cat payload.json
 
-      - name: Send curated event to Hermes
+      - name: Sign and send curated event to Hermes
+        env:
+          CODEBOT_SECRET: ${{ secrets.CODEBOT_SECRET }}
         run: |
+          # payload.json was written with printf (no trailing newline) so the
+          # bytes we hash below are byte-for-byte identical to what curl sends.
+          TIMESTAMP=$(date +%s)
+          BODY=$(cat payload.json)
+          SIGNATURE=$(printf '%s.%s' "$TIMESTAMP" "$BODY" \
+            | openssl dgst -sha256 -hmac "$CODEBOT_SECRET" -r \
+            | awk '{print $1}')
+
           curl \
             --fail \
             --silent \
@@ -76,6 +88,8 @@ jobs:
             --max-time 300 \
             -X POST \
             -H "Content-Type: application/json" \
-            -H "X-CodeBot-Secret: ${{ secrets.CODEBOT_SECRET }}" \
+            -H "X-Webhook-Signature-V2: $SIGNATURE" \
+            -H "X-Webhook-Timestamp: $TIMESTAMP" \
+            -H "X-Request-ID: codebot-${{ github.event.comment.id }}" \
             --data-binary @payload.json \
             "${{ secrets.AI_WEBHOOK_URL }}"
