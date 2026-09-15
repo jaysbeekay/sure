@@ -25,11 +25,13 @@ reviews:
     # incrementally on every push -- observed on #148, where a pass started
     # three minutes after `f5a5ee4b` landed with nothing requested.
     #
-    # A draft therefore gets no review at all, and that is the intent. The
-    # owner's ways of working (CLAUDE.md, rule 4) forbid forcing one: no
-    # `@coderabbitai review` and no `@coderabbitai full review` on a draft.
-    # Marking the PR ready is what starts its review. `full review` is the
-    # fallback on a READY PR whose incremental pass returned nothing.
+    # A draft therefore receives no AUTOMATIC review. An explicit
+    # `@coderabbitai review` would still work on one -- this key does not stop
+    # it. What stops it is policy, not configuration: the owner's ways of
+    # working (CLAUDE.md, rule 4) forbid forcing a review on a draft, with
+    # either `@coderabbitai review` or `@coderabbitai full review`. Marking the
+    # PR ready is what starts its review. `full review` is the fallback on a
+    # READY PR whose incremental pass returned nothing.
     drafts: false
 
   pre_merge_checks:
