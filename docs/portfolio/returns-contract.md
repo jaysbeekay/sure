@@ -1,0 +1,110 @@
+# Portfolio returns calculation contract
+
+Status: draft for engineering and product sign-off. This document is the decision record for
+issue #121 (the performance engine). It is normative for `Portfolio::DailyReturns`,
+`Portfolio::Performance`, `Portfolio::Drivers` and `Portfolio::FlowClassifier`; implementation
+must not silently choose a different interpretation.
+
+Modelled on `docs/loans/calculation-contract.md`, and enforced the same way:
+`bin/rails portfolio:verify_contract_coverage` fails when a row below names a test that does not
+exist, so a row cannot quietly lose its evidence.
+
+## Scope and invariants
+
+- All monetary arithmetic uses `BigDecimal` until the display boundary. Returns are ratios and
+  are never rounded in the model layer. The one exception is `Portfolio::Xirr` (R9).
+- An account cut off by `active_until_dates` stops contributing on the day after its cut-off date,
+  for balances and flows alike, and the balance it carries out that day is a composition outflow
+  (R17). An account whose first balance row falls inside the period brings its opening value in as
+  a composition inflow (R17).
+- Every entry point takes its reference date as an argument (`period:` / `as_of:`). No method
+  reads `Date.current` in a body that already has a date. This is the fork's most-repeated defect
+  class (loan epic #79, #83, #86, #89).
+- The engine reads `balances`, which the balance calculators write one row per **calendar** day
+  per account. `end_balance(t-1) == start_balance(t)` by construction, so no self-join is needed
+  to find an opening value.
+- The engine never writes. It is safe to call from a GET.
+
+## Contract decisions
+
+| ID | Decision | Demonstrating test |
+| --- | --- | --- |
+| R1 | **Flow timing is start-of-day.** The daily return is `r_t = V_end(t) / (V_open(t) + F_t) - 1`, where `V_open(t)` is the previous day's closing value in family currency and `F_t` is the day's net external flow plus any composition flow: the value an account brought into or carried out of the scope that day (R17). This matches how `balances` composes a day (`start + flows + adjustments = end`) and needs no weighting factor. Other tools default to other conventions, so the UI must disclose this one. | `Portfolio::DailyReturnsTest#test_start_of_day_flow_convention_places_the_flow_in_the_denominator` |
+| R2 | **Returns are quoted in the family's currency, so exchange-rate movement is part of the return.** A consolidated portfolio return is the return the family actually experienced. `Portfolio::Drivers#fx_effect` attributes that part separately, but it is inside the return, not excluded from it. | `Portfolio::DailyReturnsTest#test_exchange_rate_movement_alone_produces_a_return` |
+| R3 | **Time-weighted return chains daily returns:** `TWR = Π(1 + r_t) - 1` over every day in the period. Chaining is always daily regardless of the interval a chart displays; chaining at a coarser interval silently changes the answer whenever a flow lands mid-interval. | `Portfolio::PerformanceTest#test_twr_matches_the_hand_computed_textbook_case` |
+| R4 | **Annualisation applies only to periods of 365 days or more.** `annualized_twr` returns nil below that. Annualising a good week produces a number no one should be shown. | `Portfolio::PerformanceTest#test_annualized_twr_is_nil_for_periods_under_a_year` |
+| R5 | **Volatility is the standard deviation of calendar-daily returns, annualised by √365.** The balance rows are calendar daily, so roughly three days in ten are structural zeros (weekends, holidays). Annualising that series by √252 — the trading-day convention — overstates the result. No day is dropped; the basis is disclosed in the UI. | `Portfolio::PerformanceTest#test_volatility_annualises_calendar_daily_returns_by_sqrt_365` |
+| R6 | **A day whose denominator `V_open + F_t` is zero or negative contributes a return of zero and is recorded as suppressed.** A fully withdrawn account would otherwise divide by zero, and a negative denominator would invert the sign of a real gain. Suppressed days are surfaced, not hidden. | `Portfolio::DailyReturnsTest#test_a_non_positive_denominator_suppresses_the_day_rather_than_inverting_it` |
+| R7 | **Returns are net of fees.** A fee reduces `end_balance` on the day it is charged, so it is already inside the return. `Portfolio::Drivers#fees` reports the magnitude separately so it can be seen, and the UI says "net of fees". | `Portfolio::DriversTest#test_fees_reduce_the_return_and_are_reported_separately` |
+| R8 | **Money-weighted return is the XIRR of the external flows plus the terminal value**, with the opening value as the first (negative) flow. Composition flows (R17) are cash flows in the same series: value an account brings into the scope is invested, and value it carries out is withdrawn. It answers a different question from R3 and the two are never added or averaged. | `Portfolio::PerformanceTest#test_mwr_differs_from_twr_when_flows_are_unevenly_timed` |
+| R9 | **`Portfolio::Xirr` uses Newton–Raphson with a bisection fallback** over a bracketed range, with capped iterations. It is the one exception to `BigDecimal`: the fractional exponent `(1 + r) ** (days / 365)` has no practical `BigDecimal` form, so amounts are converted to `Float` once on the way in, the iteration runs in `Float`, and the rate comes back as a `BigDecimal`. There is no significant-digit guarantee: `Float` carries about fifteen digits, but the solver's stopping rules bound absolute error, not relative error. Measured, ordinary flows solve through Newton to within about 1e-12 of the true rate, and the bisection fallback to within about 1e-9 (its bracket stops narrowing below `TOLERANCE`). The largest error observed was about 7e-7, on flows of 0.0001 currency units. A figure shown as a percentage to two decimal places needs an absolute error below 5e-5. It raises `NoSignChangeError` when the flows never change sign, `NoDurationError` when every flow falls on one date (no time passes, so no annual rate exists), and `ConvergenceError` when neither method converges inside the cap. Callers render "not available" rather than a guess. Convergence uses one absolute tolerance, `TOLERANCE = 1e-9`, for two different quantities: the rate step (dimensionless) and the present-value residual (in the flows' currency units). Newton stops when the residual is below it; a step below it is accepted only if the residual at that step is also below it, and otherwise Newton hands over to bisection, so a stalled guess is never reported as a solution. Bisection stops when either the residual or the bracket width falls below it. The residual threshold is deliberately not scaled to the size of the flows: scaling loosens what the solver accepts, and the steep-series test pins a root near 3.19e8 to one part per million, where a larger accepted residual maps to a large rate error. At large magnitudes an absolute 1e-9 residual can be out of reach in `Float` (a 10% year on a billion leaves about 1.2e-7); Newton then hands over and bisection still returns the rate. | `Portfolio::XirrTest#test_raises_when_the_series_never_changes_sign` |
+| R10 | **The market driver reads `balances.net_market_flows`, which is only populated for trade-tracked accounts on days without a valuation.** When a valuation overrides the balance, the whole move lands in `cash_adjustments` / `non_cash_adjustments`. Those are reported as a separate `revaluations` driver, and `Portfolio::ReturnScope` tells the UI which label the account earns. A drivers table that read only `net_market_flows` would report zero market return for every manually valued account. | `Portfolio::DriversTest#test_a_valuation_tracked_account_reports_its_move_as_revaluations_not_market` |
+| R11 | **`fx_effect` is measured, not inferred.** Each day's change splits exactly as `ΔV = r(t-1)·ΔA + A_end·Δr`, so every local component (flows, market, revaluations) is converted at the PREVIOUS day's rate and the currency term is the closing local balance times the day's rate change. For a single-currency family both rates are 1 and it is zero. An earlier draft defined it as the residual of R12's own equation, which made R12 unfalsifiable and reported any unexplained move as currency movement. | `Portfolio::DriversTest#test_fx_effect_carries_a_rate_only_move_and_market_stays_zero` |
+| R12 | **The drivers reconcile, and failing to reconcile is reportable.** `unexplained = change - (external_net + composition + income - fees + market + revaluations + fx_effect)` is expected to be zero to the cent, and `#reconciles?` tests that. Because every term is measured independently (R11), this is a real assertion rather than an identity. An account entering or leaving the scope is described by the `composition` driver (R17), so `unexplained` stays zero for it; `unexplained` is non-zero only when value moved for a reason no driver records, and that is surfaced rather than folded into another component. | `Portfolio::DriversTest#test_drivers_reconcile_to_the_period_change_for_every_account_shape` |
+| R13 | **Exchange rates are carried forward, then backward.** For each date the engine takes the most recent rate on or before it, falling back to the earliest rate after it. A pair with no rate anywhere is flagged `rate_missing` and the affected figure is suppressed. New code must never convert at parity through `COALESCE(rate, 1)`; `InvestmentStatement#period_return_trend` does that today and is the pattern not to copy. The flag is raised only for accounts that actually held a balance, and for flows that feed a figure (external, income, fee) in a currency with no rate. Such a flow is left out of every sum, never converted at parity. An empty foreign-currency account a user has added but not yet synced contributes nothing, and must not blank every other account's performance. | `Portfolio::DailyReturnsTest#test_a_currency_pair_with_no_rate_is_flagged_rather_than_converted_at_parity` |
+| R14 | **Cached figures key on `Family#build_cache_key(invalidate_on_data_updates: true)`**, which folds in `latest_sync_completed_at`, and on the family's currency, because every figure is converted into it (R2) and `Family#build_cache_key` does not include it: a family that changes currency must not be served figures converted into the previous one. `entries_cache_version` is not sufficient: a daily price sync changes holdings and balances and touches no entry, so returns cached on it would be stale until the user next edited a transaction. | `Portfolio::PerformanceTest#test_cache_key_changes_when_a_price_sync_completes_without_touching_entries` |
+| R15 | **An account with fewer than two days of balance history in the period supports no return method.** `Portfolio::ReturnScope` reports `:insufficient` and the UI shows nothing rather than a figure derived from a single point. `Portfolio::Performance` applies this to the whole scope: when any account has exactly one balance day in the period, every time-weighted figure (`twr`, `annualized_twr`, `volatility`, `max_drawdown`, `index_series`) is withheld. An account with no balance rows in the period contributes nothing and does not block it, the same carve-out R16 applies to the money-weighted return. | `Portfolio::ReturnScopeTest#test_an_account_with_one_balance_day_is_insufficient` |
+| R16 | **A valuation-tracked account is offered a value return only, never a money-weighted return.** Without trade or transfer records the external flows are unknown, so an XIRR over them would be a fabrication. `Portfolio::Performance` applies this to the whole scope: the money-weighted return is withheld when any account holding a balance in the period is valuation-tracked or insufficient (R15), and when the period is shorter than two days. The tracking checks read live entries (F9, `COALESCE(excluded, false)`) up to the end of the period, so flows known from before the period still count. | `Portfolio::ReturnScopeTest#test_a_valuation_tracked_account_does_not_support_money_weighted_return` |
+| R17 | **A change in what the scope contains is a flow, not a return.** An account whose first balance row falls inside the period, after its first day, brings that row's `start_balance` into the scope on that date. An account passing its `active_until_date` carries its closing balance out on the day after. Both are converted at the previous day's rate (R11), join the day's start-of-day capital as a composition flow (R1), are cash flows in the money-weighted series (R8), and are reported by `Portfolio::Drivers#composition` (R12). The rest of the scope's return on that day is kept, and an account arriving or leaving empty carries zero. An account whose first balance row is the period's first day is not an arrival, because its opening value is already in `V_open`. Owner decision on #121 (Option A, D5b amended), replacing the earlier suppression of the departure day. | `Portfolio::DailyReturnsTest#test_an_account_arriving_mid-period_brings_its_opening_value_as_a_composition_inflow,_not_a_return` |
+
+## Flow classification
+
+`Portfolio::FlowClassifier` is the single definition of what counts as an external flow. It is
+consumed by the returns engine and, later, by contribution-limit tracking (#128), so it takes the
+scope it is classifying for: a transfer between two accounts is **internal** to a scope that
+contains both ends and **external** to a scope that contains only one.
+
+The rows below are an index of shapes, **not** an evaluation order. `Portfolio::FlowClassifier`
+tests in this precedence, and where a row could match two of them the earlier one wins:
+
+1. excluded (F9), then non-`Trade`/`Transaction` (F14), then pending (F12) — all `NULL`;
+2. the transfer-fee leg (F13), which therefore beats a label: a `Transfer`-linked `standard` leg
+   labelled `Dividend` is a `fee`, not income;
+3. the label rules — income (F1, F4), fee (F2, F5), internal (F3), external (F11);
+4. the `Transfer` label — trades by counterpart leg (F10), transactions by counterpart entry
+   (F6, F7);
+5. any remaining `Trade` as internal (F3), any remaining transfer-kind transaction by counterpart,
+   and everything else as external (F8).
+
+The full ordering is `Portfolio::FlowClassifier#sql_case`, which is the definition this table
+describes. The methodology contract's P9-P20 cover the same classifier for the holdings surface;
+if these two ever disagree, the classifier and P-rows are right and this table is stale.
+
+| ID | Entry shape | Class | Reasoning |
+| --- | --- | --- | --- |
+| F1 | `Trade` labelled `Dividend` or `Interest` (recorded with `qty: 0` since upstream #1311) | `income` | Cash arriving from the holdings themselves is return, not contribution. Classifying it as a flow would cancel it out of the numerator and the denominator and erase the income from the return entirely. |
+| F2 | `Trade` labelled `Fee` | `fee` | Reduces the balance; reported separately under R7. |
+| F3 | `Trade` labelled `Buy`, `Sell`, `Reinvestment`, `Sweep In`, `Sweep Out`, `Exchange`, `Other`, or unlabelled | `internal` | A buy writes `cash_outflows` and `non_cash_inflows` of equal magnitude, so `end_balance` does not move. The balance data already treats these as internal and the classifier agrees with it. `Transfer` is no longer in this list — see F10. |
+| F4 | `Transaction` labelled `Dividend` or `Interest` (the shape Trading212 and SimpleFIN write, carrying `extra["security_id"]`) | `income` | The same economic event as F1 in a different storage shape. Reading only F1 would report zero income for those providers. |
+| F5 | `Transaction` labelled `Fee` | `fee` | As F2. |
+| F6 | `Transaction` belonging to a `Transfer` whose counterpart entry is **inside** the scope | `internal` | Moving money between two accounts the scope already contains changes nothing about the scope's value. |
+| F7 | `Transaction` belonging to a `Transfer` whose counterpart entry is **outside** the scope | `external_inflow` / `external_outflow` | A real contribution to, or withdrawal from, the scope. Direction follows the sign: `entries.amount < 0` is money in. |
+| F8 | Any other `Transaction` | `external_inflow` / `external_outflow` | An unlabelled deposit or withdrawal the provider did not describe. Treating it as internal would understate contributions for SimpleFIN users. |
+| F9 | Entries with `excluded = true` | ignored (`NULL`) | Consistent with `InvestmentStatement::Totals` and `InvestmentFlowStatement`. The class is `NULL`, not `internal`: nothing sums a `NULL` class, so the two are equivalent for every figure here, and `NULL` says "this entry carries no flow" rather than "its flow cancelled out". The column is nullable and a NULL reads as *not* excluded in both forms — `CASE WHEN entries.excluded` falls through on NULL, and `Entry#excluded?` is false for it. |
+| F10 | `Trade` labelled `Transfer` | `internal` when an opposite-quantity leg for the same security exists on the same date in another in-scope account; otherwise `external_inflow` / `external_outflow` by quantity sign | A position moved between two accounts the scope contains changes nothing about the scope's value; one moved in from a broker outside it is a real addition. Resolves what F3 previously recorded as a known limitation. **Surviving limitation:** a journal is written with `amount: 0` (Questrade writes `price: 0, amount: 0`), and the flow magnitude comes from the entry's cash amount, so an out-of-scope journal still contributes no flow and its arrival reads as return. Tracked in #151, pinned by `Portfolio::DailyReturnsTest` "a security journalled in from outside the scope reads as return, not flow". |
+| F11 | `Trade` or `Transaction` labelled `Contribution` or `Withdrawal` | `external_inflow` / `external_outflow` | Money the provider has explicitly described as crossing the boundary. Direction follows the trade's quantity sign or the transaction's amount sign. |
+| F12 | Pending `Transaction` (`Transaction.pending_sql`) | ignored (`NULL`) | A pending row is a provider's forecast, not a settled movement, and it is commonly rewritten or withdrawn. Counting it would put a flow in the denominator that may never post. |
+| F13 | The `kind: "standard"` leg of a `Transfer` (`transactions.transfer_id` present) | `fee` | The charge a provider attaches to a transfer, written as a third leg rather than folded into either side. |
+| F14 | Entries that are neither `Trade` nor `Transaction` — valuations | ignored (`NULL`) | A valuation restates a level; it moves no money. R12 attributes such a restatement to `revaluations`, measured from the balance row. |
+
+Sign convention throughout: `entries.amount` is negative for money entering an account and
+positive for money leaving it. `F_t` is reported with the opposite sign, so a deposit is a
+positive flow.
+
+## Known limitations
+
+These are recorded so they are not mistaken for oversights.
+
+- **Security transfers in** (F10) do not raise the denominator, because the journal entry carries
+  no cash amount, so a portfolio built by transferring positions in rather than buying them will
+  show those positions as gains. The classification itself is now correct -- an out-of-scope
+  journal is external -- but the flow magnitude is read from the entry's amount, which is zero.
+  Tracked in #151.
+- **Intraday flows** are not modelled. Every flow is treated as landing at the start of its day
+  (R1).
+- **`fx_effect` is measured per day** (R11) as the closing local balance times the day's rate
+  change, so it carries rate movement only. Any residue from converting components, including
+  rounding, lands in `unexplained` (R12), never in `fx_effect`.
+- **Provider-specific dividend gaps** persist upstream: Plaid writes cash dividends with
+  `amount: 0` (see we-promise/sure#3350), so they classify as income of zero. Fixing that is
+  #123's work, not this engine's.

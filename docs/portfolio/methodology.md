@@ -11,7 +11,9 @@ Every row of the contract table names the test that demonstrates it.
 `test/tasks/portfolio_task_test.rb`) fails when a row names a test that does
 not exist or when the document and `config/portfolio_contract_tests.yml`
 disagree, so a renamed test is a row that has lost its evidence rather than a
-silent gap.
+silent gap. The same task checks the returns contract
+(`docs/portfolio/returns-contract.md`, R1-R17) in the same pass, so both
+contracts stand or fall together.
 
 ## Scope
 
