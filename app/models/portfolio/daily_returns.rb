@@ -36,8 +36,11 @@ class Portfolio::DailyReturns
     end
 
     # R6: zero or negative denominators are suppressed rather than inverted.
+    # `suppressed` is the answer to "does this day contribute a return?" and
+    # covers more than the denominator -- a composition change is suppressed on
+    # a perfectly positive one -- so it is what #returns must consult.
     def computable?
-      denominator.positive?
+      !suppressed && denominator.positive?
     end
 
     def change
@@ -77,6 +80,7 @@ class Portfolio::DailyReturns
       return [] if account_ids.empty?
 
       previous_close = nil
+      previous_active = nil
 
       raw_rows.map do |raw|
         value_close = decimal(raw["value_close"])
@@ -87,6 +91,21 @@ class Portfolio::DailyReturns
         # what makes it equal to the prior close by construction.
         value_open = previous_close || decimal(raw["value_open"])
         previous_close = value_close
+
+        # A day an account leaves the scope is a COMPOSITION change, not a
+        # return. value_close drops the account the moment it passes its
+        # active_until_date while value_open still carries yesterday's close, so
+        # the naive ratio reads as a loss of that account's whole balance -- and
+        # with one account in the scope, exactly -100%, which #chain would then
+        # multiply the entire period's TWR by zero.
+        #
+        # Suppressing it reuses R6's mechanism: the day stays in the series so
+        # the calendar is unbroken, contributes a return of zero, and the value
+        # difference is still visible in Row#unexplained, which is where a
+        # composition change is documented to surface.
+        active_accounts = raw["active_accounts"].to_i
+        composition_changed = !previous_active.nil? && active_accounts < previous_active
+        previous_active = active_accounts
 
         external_flow = decimal(raw["external_flow"])
         denominator = value_open + external_flow
@@ -102,7 +121,7 @@ class Portfolio::DailyReturns
           revaluations: decimal(raw["revaluations"]),
           fx_effect: decimal(raw["fx_effect"]),
           rate_missing: raw["rate_missing"] == true,
-          suppressed: !denominator.positive?
+          suppressed: !denominator.positive? || composition_changed
         )
       end
     end
@@ -211,7 +230,12 @@ class Portfolio::DailyReturns
             COALESCE(SUM(lb.end_balance * lb.flows_factor * (er.rate - prev_er.rate)), 0) AS fx_effect,
             BOOL_OR(lb.end_balance IS NOT NULL
                     AND sa.currency <> :target_currency
-                    AND er.rate IS NULL) AS rate_missing
+                    AND er.rate IS NULL) AS rate_missing,
+            -- How many accounts are inside their active window on this day. A
+            -- fall means an account reached its cut-off: value_close drops it
+            -- while value_open still carries yesterday's close, which is a
+            -- composition change and not a return. See #rows.
+            COUNT(sa.id) AS active_accounts
           FROM dates d
           LEFT JOIN scoped_accounts sa
             ON sa.active_until_date IS NULL OR d.date <= sa.active_until_date
@@ -288,6 +312,7 @@ class Portfolio::DailyReturns
           b.revaluations,
           b.fx_effect,
           (b.rate_missing OR COALESCE(f.flow_rate_missing, false)) AS rate_missing,
+          b.active_accounts,
           COALESCE(f.external_flow, 0) AS external_flow,
           COALESCE(f.income, 0) AS income,
           COALESCE(f.fees, 0) AS fees

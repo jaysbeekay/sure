@@ -142,6 +142,34 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
                  "the account is closed on day two and must contribute nothing"
   end
 
+  # Regression. Asserting value_close alone was not enough: the account leaving
+  # the scope drops it from value_close while value_open still carries
+  # yesterday's close, so the ratio read -100% and #chain multiplied the whole
+  # period's TWR by zero. Closing a broker made every historical return vanish.
+  #
+  # This went live when InvestmentStatement#performance moved to the historical
+  # account scope (#119 D2) and started passing active_until_dates at all.
+  test "the day an account leaves the scope is suppressed rather than read as a total loss" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+
+    returns = Portfolio::DailyReturns.new(
+      account_ids: [ @account.id ],
+      currency: @family.currency,
+      period: Period.custom(start_date: @day_one, end_date: @day_two),
+      active_until_dates: { @account.id => @day_one }
+    )
+
+    closing_day = returns.rows.last
+    assert closing_day.suppressed, "a composition change is not a return"
+    assert_equal BigDecimal("0"), returns.returns.to_h.fetch(@day_two),
+                 "so it contributes nothing to the chain"
+
+    # The balance did not evaporate, it left the scope. R12 puts that in
+    # unexplained rather than attributing it to the market.
+    assert_equal BigDecimal("-1000"), closing_day.unexplained
+    assert_equal BigDecimal("0"), closing_day.market
+  end
+
   # Regression: an empty foreign-currency account contributes nothing to any
   # figure, so it must not blank the portfolio. The flag was previously raised
   # for any in-scope account whose currency lacked a rate, whether or not it

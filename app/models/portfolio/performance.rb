@@ -77,7 +77,8 @@ class Portfolio::Performance
     metrics[:max_drawdown]
   end
 
-  # [[date, index], ...] rebased so the first point is 100. This is the
+  # [[date, index], ...] rebased on a base of 100, where the FIRST point is the
+  # level after the first return (100 * (1 + r1)), not the base itself. This is the
   # flow-adjusted series a chart plots: it removes the effect of deposits, so it
   # can be laid beside a benchmark (#124) without the shapes disagreeing purely
   # because money went in.
@@ -122,9 +123,14 @@ class Portfolio::Performance
   # a cut-off date drops an account's later history entirely -- so omitting them
   # would let the first caller to use them read another caller's cached answer.
   #
-  # The flow scope is keyed as DailyReturns resolves it, not as it was passed:
-  # an omitted scope means "the accounts themselves" while an explicit `[]`
-  # means "nothing is inside", and those classify transfers differently.
+  # Both the flow scope and the cut-off dates are keyed as DailyReturns resolves
+  # them, not as they were passed. For the scope: an omitted one means "the
+  # accounts themselves" while an explicit `[]` means "nothing is inside", and
+  # those classify transfers differently. For the cut-offs: DailyReturns
+  # compacts them, so `{ id => nil }` is valid input meaning "no cut-off" --
+  # reading the raw hash here would call `nil.to_date` and raise before a single
+  # metric was computed, and a key-type difference would key two identical
+  # scopes differently.
   #
   # The digest only shortens the key; nothing depends on it being secret.
   # SHA-256 rather than MD5 so code scanning does not flag account ids fed to a
@@ -137,7 +143,7 @@ class Portfolio::Performance
           [
             account_ids.sort.join(","),
             "scope:" + daily_returns.scope_account_ids.sort.join(","),
-            active_until_dates.to_a.map { |id, date| "#{id}:#{date.to_date.iso8601}" }.sort.join(",")
+            daily_returns.active_until_dates.map { |id, date| "#{id}:#{date.to_date.iso8601}" }.sort.join(",")
           ].join("|")
         ),
         period.start_date, period.end_date

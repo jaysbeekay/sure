@@ -127,7 +127,10 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_in_delta 0.25, result.max_drawdown.to_f, 0.000001
   end
 
-  test "the index series is rebased to one hundred" do
+  # The name matters: the series is rebased ON a base of 100, and its first point
+  # is the level AFTER the first return. There is no 100 in the output, which is
+  # why the assertions below start at 110.
+  test "the index series is rebased on a base of one hundred and starts after the first return" do
     build_textbook_case
 
     series = performance.index_series
@@ -135,6 +138,8 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_equal 2, series.size
     assert_in_delta 110.0, series.first.last.to_f, 0.000001
     assert_in_delta 121.0, series.last.last.to_f, 0.000001
+    refute_in_delta 100.0, series.first.last.to_f, 0.000001,
+                    "the base itself is not a point in the series"
   end
 
   # R13 carried through to the metric surface: a figure that could not be
@@ -254,6 +259,23 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
 
     refute_equal omitted.cache_key, empty.cache_key
     assert_equal omitted.cache_key, explicit.cache_key, "the same effective scope may share an entry"
+  end
+
+  # Regression. DailyReturns compacts active_until_dates, so `{ id => nil }` is
+  # valid input meaning "no cut-off". The cache key read the RAW hash and called
+  # nil.to_date on it, raising NoMethodError before any metric was computed --
+  # and a cache key is on the path of every figure, so nothing would have worked.
+  test "a nil cut off date is a key, not a crash" do
+    period = Period.custom(start_date: @day_one, end_date: @day_two)
+
+    nil_cutoff = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ], period: period,
+      active_until_dates: { @account.id => nil }
+    )
+    none = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period)
+
+    assert_equal none.cache_key, nil_cutoff.cache_key,
+                 "a nil cut-off means no cut-off, so it is the same scope and may share an entry"
   end
 
   private

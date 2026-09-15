@@ -51,17 +51,38 @@ consumed by the returns engine and, later, by contribution-limit tracking (#128)
 scope it is classifying for: a transfer between two accounts is **internal** to a scope that
 contains both ends and **external** to a scope that contains only one.
 
+The rows below are an index of shapes, **not** an evaluation order. `Portfolio::FlowClassifier`
+tests in this precedence, and where a row could match two of them the earlier one wins:
+
+1. excluded (F9), then non-`Trade`/`Transaction` (F14), then pending (F12) — all `NULL`;
+2. the transfer-fee leg (F13), which therefore beats a label: a `Transfer`-linked `standard` leg
+   labelled `Dividend` is a `fee`, not income;
+3. the label rules — income (F1, F4), fee (F2, F5), internal (F3), external (F11);
+4. the `Transfer` label — trades by counterpart leg (F10), transactions by counterpart entry
+   (F6, F7);
+5. any remaining `Trade` as internal (F3), any remaining transfer-kind transaction by counterpart,
+   and everything else as external (F8).
+
+The full ordering is `Portfolio::FlowClassifier#sql_case`, which is the definition this table
+describes. The methodology contract's P9-P20 cover the same classifier for the holdings surface;
+if these two ever disagree, the classifier and P-rows are right and this table is stale.
+
 | ID | Entry shape | Class | Reasoning |
 | --- | --- | --- | --- |
 | F1 | `Trade` labelled `Dividend` or `Interest` (recorded with `qty: 0` since upstream #1311) | `income` | Cash arriving from the holdings themselves is return, not contribution. Classifying it as a flow would cancel it out of the numerator and the denominator and erase the income from the return entirely. |
 | F2 | `Trade` labelled `Fee` | `fee` | Reduces the balance; reported separately under R7. |
-| F3 | Any other `Trade` — `Buy`, `Sell`, `Reinvestment`, `Sweep In`, `Sweep Out`, `Transfer`, `Exchange`, `Other`, unlabelled | `internal` | A buy writes `cash_outflows` and `non_cash_inflows` of equal magnitude, so `end_balance` does not move. The balance data already treats these as internal and the classifier agrees with it. **Known limitation:** a security transferred in from an outside broker and recorded as a `Transfer` trade is treated as internal, so it does not raise the denominator. Recorded here rather than silently; see #3220 for the label ambiguity behind it. |
+| F3 | `Trade` labelled `Buy`, `Sell`, `Reinvestment`, `Sweep In`, `Sweep Out`, `Exchange`, `Other`, or unlabelled | `internal` | A buy writes `cash_outflows` and `non_cash_inflows` of equal magnitude, so `end_balance` does not move. The balance data already treats these as internal and the classifier agrees with it. `Transfer` is no longer in this list — see F10. |
 | F4 | `Transaction` labelled `Dividend` or `Interest` (the shape Trading212 and SimpleFIN write, carrying `extra["security_id"]`) | `income` | The same economic event as F1 in a different storage shape. Reading only F1 would report zero income for those providers. |
 | F5 | `Transaction` labelled `Fee` | `fee` | As F2. |
 | F6 | `Transaction` belonging to a `Transfer` whose counterpart entry is **inside** the scope | `internal` | Moving money between two accounts the scope already contains changes nothing about the scope's value. |
-| F7 | `Transaction` belonging to a `Transfer` whose counterpart entry is **outside** the scope | `external` | A real contribution to, or withdrawal from, the scope. Direction follows the sign: `entries.amount < 0` is money in. |
-| F8 | Any other `Transaction` | `external` | An unlabelled deposit or withdrawal the provider did not describe. Treating it as internal would understate contributions for SimpleFIN users. |
-| F9 | Entries with `excluded = true` | ignored | Consistent with `InvestmentStatement::Totals` and `InvestmentFlowStatement`. The column is nullable, so both forms read it through `COALESCE(excluded, false)`: a bare `excluded = false` evaluates to NULL for such a row and silently drops it from the aggregation while the Ruby form treats it as a live flow. |
+| F7 | `Transaction` belonging to a `Transfer` whose counterpart entry is **outside** the scope | `external_inflow` / `external_outflow` | A real contribution to, or withdrawal from, the scope. Direction follows the sign: `entries.amount < 0` is money in. |
+| F8 | Any other `Transaction` | `external_inflow` / `external_outflow` | An unlabelled deposit or withdrawal the provider did not describe. Treating it as internal would understate contributions for SimpleFIN users. |
+| F9 | Entries with `excluded = true` | ignored (`NULL`) | Consistent with `InvestmentStatement::Totals` and `InvestmentFlowStatement`. The class is `NULL`, not `internal`: nothing sums a `NULL` class, so the two are equivalent for every figure here, and `NULL` says "this entry carries no flow" rather than "its flow cancelled out". The column is nullable and a NULL reads as *not* excluded in both forms — `CASE WHEN entries.excluded` falls through on NULL, and `Entry#excluded?` is false for it. |
+| F10 | `Trade` labelled `Transfer` | `internal` when an opposite-quantity leg for the same security exists on the same date in another in-scope account; otherwise `external_inflow` / `external_outflow` by quantity sign | A position moved between two accounts the scope contains changes nothing about the scope's value; one moved in from a broker outside it is a real addition. Resolves what F3 previously recorded as a known limitation. **Surviving limitation:** a journal is written with `amount: 0` (Questrade writes `price: 0, amount: 0`), and the flow magnitude comes from the entry's cash amount, so an out-of-scope journal still contributes no flow and its arrival reads as return. Tracked in #151, pinned by `Portfolio::DailyReturnsTest` "a security journalled in from outside the scope reads as return, not flow". |
+| F11 | `Trade` or `Transaction` labelled `Contribution` or `Withdrawal` | `external_inflow` / `external_outflow` | Money the provider has explicitly described as crossing the boundary. Direction follows the trade's quantity sign or the transaction's amount sign. |
+| F12 | Pending `Transaction` (`Transaction.pending_sql`) | ignored (`NULL`) | A pending row is a provider's forecast, not a settled movement, and it is commonly rewritten or withdrawn. Counting it would put a flow in the denominator that may never post. |
+| F13 | The `kind: "standard"` leg of a `Transfer` (`transactions.transfer_id` present) | `fee` | The charge a provider attaches to a transfer, written as a third leg rather than folded into either side. |
+| F14 | Entries that are neither `Trade` nor `Transaction` — valuations | ignored (`NULL`) | A valuation restates a level; it moves no money. R12 attributes such a restatement to `revaluations`, measured from the balance row. |
 
 Sign convention throughout: `entries.amount` is negative for money entering an account and
 positive for money leaving it. `F_t` is reported with the opposite sign, so a deposit is a
