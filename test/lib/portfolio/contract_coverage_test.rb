@@ -212,14 +212,20 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/missing test "in the nested class" in ShapeTest/, error.message)
   end
 
-  # ShapeTest is found inside the module (its own constant path reads
-  # ShapeTest), so the rejection is the sibling's test being excluded, not a
-  # missing class: the direct declaration beside it still verifies.
+  # The cited ShapeTest is the top-level one, so its own declaration verifies
+  # and the rejections below are exclusions, not a missing class. A class
+  # matches on its full lexical path: `module Wrapper; class ShapeTest` is
+  # Wrapper::ShapeTest and is not the cited ShapeTest, so neither it nor its
+  # sibling can stand in as evidence.
   test "a test in an indented sibling class is not evidence" do
     source = <<~RUBY
+      class ShapeTest < ActiveSupport::TestCase
+        test "direct in ShapeTest"
+      end
+
       module Wrapper
         class ShapeTest < ActiveSupport::TestCase
-          test "direct in ShapeTest"
+          test "in the namespaced twin"
         end
 
         class SiblingTest < ActiveSupport::TestCase
@@ -232,6 +238,39 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
 
     error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "in the sibling").verify! }
     assert_match(/missing test "in the sibling" in ShapeTest/, error.message)
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "in the namespaced twin").verify! }
+    assert_match(/missing test "in the namespaced twin" in ShapeTest/, error.message)
+  end
+
+  # A class is matched on its full lexical path, so a cited top-level name
+  # cannot be satisfied by a same-named class nested inside anything else.
+  # Without this the enclosing scope was ignored: `module Wrapper; class
+  # ShapeTest` read as ShapeTest and answered for the cited top-level class.
+  # Both nesting forms are asserted because each extends the path separately.
+  test "a test in a nested class of the same name is not evidence" do
+    source = <<~RUBY
+      class ShapeTest < ActiveSupport::TestCase
+      end
+
+      module Wrapper
+        class ShapeTest < ActiveSupport::TestCase
+          test "declared inside Wrapper"
+        end
+      end
+
+      class OuterTest < ActiveSupport::TestCase
+        class ShapeTest < ActiveSupport::TestCase
+          test "declared inside OuterTest"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "declared inside Wrapper").verify! }
+    assert_match(/missing test "declared inside Wrapper" in ShapeTest/, error.message)
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "declared inside OuterTest").verify! }
+    assert_match(/missing test "declared inside OuterTest" in ShapeTest/, error.message)
   end
 
   # Decided in #152's triage plan: a contract row cites a literal declaration a
