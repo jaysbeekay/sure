@@ -80,7 +80,6 @@ class Portfolio::DailyReturns
       return [] if account_ids.empty?
 
       previous_close = nil
-      previous_active = nil
 
       raw_rows.map do |raw|
         value_close = decimal(raw["value_close"])
@@ -99,13 +98,18 @@ class Portfolio::DailyReturns
         # with one account in the scope, exactly -100%, which #chain would then
         # multiply the entire period's TWR by zero.
         #
+        # The signal is the VALUE that left, not a count of accounts that left.
+        # A count falls whenever any in-scope account passes its cut-off, an
+        # account holding nothing included, and suppressing that day would throw
+        # away a real return earned by everything else in the scope. Zero value
+        # leaving changes nothing about the ratio, so it is not a composition
+        # change. See departures_by_date in #query.
+        #
         # Suppressing it reuses R6's mechanism: the day stays in the series so
         # the calendar is unbroken, contributes a return of zero, and the value
         # difference is still visible in Row#unexplained, which is where a
         # composition change is documented to surface.
-        active_accounts = raw["active_accounts"].to_i
-        composition_changed = !previous_active.nil? && active_accounts < previous_active
-        previous_active = active_accounts
+        composition_changed = !decimal(raw["departed_magnitude"]).zero?
 
         external_flow = decimal(raw["external_flow"])
         denominator = value_open + external_flow
@@ -207,6 +211,47 @@ class Portfolio::DailyReturns
           LEFT JOIN account_windows ON account_windows.account_id = accounts.id
           WHERE accounts.id = ANY(array[:account_ids]::uuid[])
         ),
+        -- The value an account carried OUT of the scope, keyed by the day after
+        -- its cut-off -- the first day value_close excludes it while value_open
+        -- still carries yesterday's close. Measured, not counted: a count of
+        -- in-window accounts falls when an account with no balance rows at all
+        -- reaches its cut-off, and suppressing that day would zero a real
+        -- return earned by every other account in the scope.
+        --
+        -- Cut-offs landing on the period's first day are excluded: value_open is
+        -- read from the query itself there, and it already excludes an account
+        -- that was out of window before the period began, so there is no
+        -- fabricated drop to suppress.
+        --
+        -- A departure whose rate is missing sums to NULL and therefore reads as
+        -- zero here. That is safe rather than silent: the account was in window
+        -- the day before, so the same missing rate has already raised
+        -- Row#rate_missing and R13 withholds every ratio.
+        --
+        -- Absolute, because the figure is only ever read as a yes/no: two
+        -- accounts leaving on the same day carrying opposite-signed balances
+        -- would net to zero and hide a composition change that did happen.
+        departures_by_date AS (
+          SELECT
+            (sa.active_until_date + 1)::date AS date,
+            COALESCE(SUM(ABS(lb.end_balance * lb.flows_factor * er.rate)), 0) AS departed_magnitude
+          FROM scoped_accounts sa
+          LEFT JOIN LATERAL (
+            SELECT b.end_balance, b.flows_factor
+            FROM balances b
+            WHERE b.account_id = sa.id
+              AND b.currency = sa.currency
+              AND b.date <= sa.active_until_date
+            ORDER BY b.date DESC
+            LIMIT 1
+          ) lb ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT #{rate_lookup('sa.currency', 'sa.active_until_date')} AS rate
+          ) er ON TRUE
+          WHERE sa.active_until_date IS NOT NULL
+            AND sa.active_until_date >= DATE :start_date
+          GROUP BY sa.active_until_date
+        ),
         balances_by_date AS (
           SELECT
             d.date,
@@ -240,12 +285,7 @@ class Portfolio::DailyReturns
             COALESCE(SUM(lb.end_balance * lb.flows_factor * (er.rate - prev_er.rate)), 0) AS fx_effect,
             BOOL_OR(lb.end_balance IS NOT NULL
                     AND sa.currency <> :target_currency
-                    AND er.rate IS NULL) AS rate_missing,
-            -- How many accounts are inside their active window on this day. A
-            -- fall means an account reached its cut-off: value_close drops it
-            -- while value_open still carries yesterday's close, which is a
-            -- composition change and not a return. See #rows.
-            COUNT(sa.id) AS active_accounts
+                    AND er.rate IS NULL) AS rate_missing
           FROM dates d
           LEFT JOIN scoped_accounts sa
             ON sa.active_until_date IS NULL OR d.date <= sa.active_until_date
@@ -322,12 +362,13 @@ class Portfolio::DailyReturns
           b.revaluations,
           b.fx_effect,
           (b.rate_missing OR COALESCE(f.flow_rate_missing, false)) AS rate_missing,
-          b.active_accounts,
+          COALESCE(dep.departed_magnitude, 0) AS departed_magnitude,
           COALESCE(f.external_flow, 0) AS external_flow,
           COALESCE(f.income, 0) AS income,
           COALESCE(f.fees, 0) AS fees
         FROM balances_by_date b
         LEFT JOIN flows_by_date f ON f.date = b.date
+        LEFT JOIN departures_by_date dep ON dep.date = b.date
         ORDER BY b.date
       SQL
     end

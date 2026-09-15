@@ -127,10 +127,14 @@ class Portfolio::Performance
   # them, not as they were passed. For the scope: an omitted one means "the
   # accounts themselves" while an explicit `[]` means "nothing is inside", and
   # those classify transfers differently. For the cut-offs: DailyReturns
-  # compacts them, so `{ id => nil }` is valid input meaning "no cut-off" --
-  # reading the raw hash here would call `nil.to_date` and raise before a single
-  # metric was computed, and a key-type difference would key two identical
-  # scopes differently.
+  # compacts them and normalises each value to an ISO8601 string, so
+  # `{ id => nil }` is valid input meaning "no cut-off" and has to key
+  # identically to an omitted hash -- which it does only after that compaction,
+  # and a key-type difference would key two identical scopes differently.
+  #
+  # Nothing is converted here for the same reason: the resolved values are
+  # already the strings DailyReturns keyed its own query on, so a `to_date`
+  # round trip would only re-parse them.
   #
   # The digest only shortens the key; nothing depends on it being secret.
   # SHA-256 rather than MD5 so code scanning does not flag account ids fed to a
@@ -143,7 +147,7 @@ class Portfolio::Performance
           [
             account_ids.sort.join(","),
             "scope:" + daily_returns.scope_account_ids.sort.join(","),
-            daily_returns.active_until_dates.map { |id, date| "#{id}:#{date.to_date.iso8601}" }.sort.join(",")
+            daily_returns.active_until_dates.map { |id, date| "#{id}:#{date}" }.sort.join(",")
           ].join("|")
         ),
         period.start_date, period.end_date

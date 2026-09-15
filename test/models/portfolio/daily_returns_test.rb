@@ -170,6 +170,35 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     assert_equal BigDecimal("0"), closing_day.market
   end
 
+  # Regression for the other half of the same rule. The composition signal was
+  # a COUNT of in-window accounts, which falls when ANY account passes its
+  # cut-off -- including one that never held anything. A broker connected, never
+  # funded and later disabled therefore suppressed a real day for every other
+  # account in the portfolio, and #chain multiplied that day in as a zero.
+  #
+  # Nothing left the scope, so nothing is suppressed: the signal is now the
+  # VALUE that departed, measured by departures_by_date, not a headcount.
+  test "an empty account reaching its cut off leaves a performing account's day intact" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_100, market_flow: 100
+
+    never_funded = create_portfolio_account(family: @family)
+
+    returns = Portfolio::DailyReturns.new(
+      account_ids: [ @account.id, never_funded.id ],
+      currency: @family.currency,
+      period: Period.custom(start_date: @day_one, end_date: @day_two),
+      active_until_dates: { never_funded.id => @day_one }
+    )
+
+    closing_day = returns.rows.last
+
+    assert_not closing_day.suppressed,
+               "an account that held nothing took nothing with it when it closed"
+    assert_in_delta 0.10, returns.returns.to_h.fetch(@day_two).to_f, 0.000001,
+                    "the performing account's day survives the other one's cut-off"
+  end
+
   # Regression: an empty foreign-currency account contributes nothing to any
   # figure, so it must not blank the portfolio. The flag was previously raised
   # for any in-scope account whose currency lacked a rate, whether or not it
