@@ -11,10 +11,19 @@ reviews:
   profile: assertive
 
   auto_review:
-    # This key controls DRAFTS ONLY. It does not disable automatic review of
-    # ready pull requests: `auto_review.enabled` resolves to true, and a ready
-    # PR is reviewed incrementally on every push -- observed on #148, where a
-    # pass started three minutes after `f5a5ee4b` landed with nothing requested.
+    # Restated for the same reason `profile` is: if repository config REPLACES
+    # the organization's rather than merging with it, every key this file omits
+    # falls back to a schema default, and the one key in this section that was
+    # omitted was the one that decides whether reviews happen at all. It is
+    # already true either way -- CodeRabbit's run on this PR reported
+    # `auto_review.enabled: true` while reading this very file -- so writing it
+    # changes no behaviour and removes the need to know that.
+    enabled: true
+
+    # `drafts` controls DRAFTS ONLY. It does not disable automatic review of
+    # ready pull requests: with `enabled` true above, a ready PR is reviewed
+    # incrementally on every push -- observed on #148, where a pass started
+    # three minutes after `f5a5ee4b` landed with nothing requested.
     #
     # So the rule is: a draft is reviewed only when asked, with
     # `@coderabbitai review`; `@coderabbitai full review` forces a whole-PR pass
