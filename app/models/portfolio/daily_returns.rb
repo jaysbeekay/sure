@@ -1,7 +1,7 @@
 # The daily return series a set of accounts produced over a period, in the
 # family's currency.
 #
-# Implements rows R1, R2, R6, R11 and R13 of docs/portfolio/returns-contract.md.
+# Implements rows R1, R2, R6, R11, R13 and R17 of docs/portfolio/returns-contract.md.
 #
 # Division of labour (contract §Scope): the database does the joining, windowing
 # and FX -- what it is good at -- and returns raw components. The arithmetic that
@@ -27,18 +27,20 @@ class Portfolio::DailyReturns
   # One day. `r` is nil until #returns computes it, so a caller reading rows
   # directly cannot mistake a raw component for a return.
   Row = Data.define(
-    :date, :value_open, :value_close, :external_flow,
+    :date, :value_open, :value_close, :external_flow, :composition_flow,
     :income, :fees, :market, :revaluations, :fx_effect,
     :rate_missing, :suppressed
   ) do
+    # R1 and R17: the day's start-of-day capital is the opening value plus every
+    # flow that joined it -- external flows, and the value an account brought
+    # into or carried out of the scope.
     def denominator
-      value_open + external_flow
+      value_open + external_flow + composition_flow
     end
 
     # R6: zero or negative denominators are suppressed rather than inverted.
-    # `suppressed` is the answer to "does this day contribute a return?" and
-    # covers more than the denominator -- a composition change is suppressed on
-    # a perfectly positive one -- so it is what #returns must consult.
+    # `suppressed` is the answer to "does this day contribute a return?", so it
+    # is what #returns must consult.
     def computable?
       !suppressed && denominator.positive?
     end
@@ -47,13 +49,12 @@ class Portfolio::DailyReturns
       value_close - value_open
     end
 
-    # What the named components do not account for. Zero for an ordinary day;
-    # non-zero when the portfolio's composition changed in a way no driver
-    # describes -- an account entering or leaving the scope mid-period carries
-    # its opening position in here rather than being silently attributed to
-    # currency movement.
+    # What the named components do not account for. Zero for an ordinary day,
+    # and zero when an account enters or leaves the scope, because R17 describes
+    # that as a composition flow. Non-zero only when the value moved for a reason
+    # no driver records.
     def unexplained
-      change - (external_flow + income - fees + market + revaluations + fx_effect)
+      change - (external_flow + composition_flow + income - fees + market + revaluations + fx_effect)
     end
   end
 
@@ -91,41 +92,36 @@ class Portfolio::DailyReturns
         value_open = previous_close || decimal(raw["value_open"])
         previous_close = value_close
 
-        # A day an account leaves the scope is a COMPOSITION change, not a
-        # return. value_close drops the account the moment it passes its
-        # active_until_date while value_open still carries yesterday's close, so
-        # the naive ratio reads as a loss of that account's whole balance -- and
-        # with one account in the scope, exactly -100%, which #chain would then
-        # multiply the entire period's TWR by zero.
+        # R17: a change in what the scope CONTAINS is a flow, not a return.
         #
-        # The signal is the VALUE that left, not a count of accounts that left.
-        # A count falls whenever any in-scope account passes its cut-off, an
-        # account holding nothing included, and suppressing that day would throw
-        # away a real return earned by everything else in the scope. Zero value
-        # leaving changes nothing about the ratio, so it is not a composition
-        # change. See departures_by_date in #query.
+        # An account arriving mid-period appears in value_close with nothing in
+        # value_open, and an account passing its active_until_date drops out of
+        # value_close while value_open still carries yesterday's close. Read as a
+        # return, the first is a gain of the whole arriving balance and the
+        # second a loss of the whole departing one.
         #
-        # Suppressing it reuses R6's mechanism: the day stays in the series so
-        # the calendar is unbroken, contributes a return of zero, and the value
-        # difference is still visible in Row#unexplained, which is where a
-        # composition change is documented to surface.
-        composition_changed = !decimal(raw["departed_magnitude"]).zero?
-
+        # So both join the day's start-of-day capital, exactly as a deposit or a
+        # withdrawal would (R1): the value that arrived is added, the value that
+        # left is taken away, and the rest of the scope's genuine return that day
+        # survives. An empty account arriving or leaving carries zero and changes
+        # nothing. See arrivals_by_date and departures_by_date in #query.
+        composition_flow = decimal(raw["arrived_value"]) - decimal(raw["departed_value"])
         external_flow = decimal(raw["external_flow"])
-        denominator = value_open + external_flow
+        denominator = value_open + external_flow + composition_flow
 
         Row.new(
           date: raw["date"].to_date,
           value_open: value_open,
           value_close: value_close,
           external_flow: external_flow,
+          composition_flow: composition_flow,
           income: decimal(raw["income"]),
           fees: decimal(raw["fees"]),
           market: decimal(raw["market"]),
           revaluations: decimal(raw["revaluations"]),
           fx_effect: decimal(raw["fx_effect"]),
           rate_missing: raw["rate_missing"] == true,
-          suppressed: !denominator.positive? || composition_changed
+          suppressed: !denominator.positive?
         )
       end
     end
@@ -211,30 +207,26 @@ class Portfolio::DailyReturns
           LEFT JOIN account_windows ON account_windows.account_id = accounts.id
           WHERE accounts.id = ANY(array[:account_ids]::uuid[])
         ),
-        -- The value an account carried OUT of the scope, keyed by the day after
-        -- its cut-off -- the first day value_close excludes it while value_open
-        -- still carries yesterday's close. Measured, not counted: a count of
-        -- in-window accounts falls when an account with no balance rows at all
-        -- reaches its cut-off, and suppressing that day would zero a real
-        -- return earned by every other account in the scope.
+        -- R17: the value an account carried OUT of the scope, keyed by the day
+        -- after its cut-off -- the first day value_close excludes it while
+        -- value_open still carries yesterday's close. It is a composition
+        -- outflow on that day, so it is signed: its closing balance in family
+        -- currency, converted at the cut-off date's rate, which is the previous
+        -- day's rate relative to the departure day (R11). An account holding
+        -- nothing carries out zero and changes nothing.
         --
-        -- Cut-offs landing on the period's first day are excluded: value_open is
+        -- Cut-offs before the period's first day are excluded: value_open is
         -- read from the query itself there, and it already excludes an account
-        -- that was out of window before the period began, so there is no
-        -- fabricated drop to suppress.
+        -- that was out of window before the period began, so nothing departs.
         --
-        -- A departure whose rate is missing sums to NULL and therefore reads as
-        -- zero here. That is safe rather than silent: the account was in window
-        -- the day before, so the same missing rate has already raised
-        -- Row#rate_missing and R13 withholds every ratio.
-        --
-        -- Absolute, because the figure is only ever read as a yes/no: two
-        -- accounts leaving on the same day carrying opposite-signed balances
-        -- would net to zero and hide a composition change that did happen.
+        -- A departure whose rate is missing sums to NULL and reads as zero here.
+        -- That is safe rather than silent: the account was in window the day
+        -- before, so the same missing rate has already raised Row#rate_missing
+        -- and R13 withholds every ratio.
         departures_by_date AS (
           SELECT
             (sa.active_until_date + 1)::date AS date,
-            COALESCE(SUM(ABS(lb.end_balance * lb.flows_factor * er.rate)), 0) AS departed_magnitude
+            COALESCE(SUM(lb.end_balance * lb.flows_factor * er.rate), 0) AS departed_value
           FROM scoped_accounts sa
           LEFT JOIN LATERAL (
             SELECT b.end_balance, b.flows_factor
@@ -251,6 +243,45 @@ class Portfolio::DailyReturns
           WHERE sa.active_until_date IS NOT NULL
             AND sa.active_until_date >= DATE :start_date
           GROUP BY sa.active_until_date
+        ),
+        -- R17: the value an account brought INTO the scope, keyed by the date of
+        -- its first balance row. The balance calculators write that row with
+        -- the opening position as its start_balance -- the forward calculator
+        -- seeds from the opening anchor, the reverse calculator carries the
+        -- anchor's total, and without an anchor derives the start backwards
+        -- from the current balance -- so start_balance is the value that
+        -- arrived. It joins the day's start-of-day capital, converted at the
+        -- previous day's rate like every start-of-day flow (R11).
+        --
+        -- Only a first row AFTER the period's first day is an arrival. A first
+        -- row on the first day already reaches value_open through its own
+        -- start_balance, and counting it here as well would double it. A first
+        -- row after the account's cut-off never enters the scope.
+        --
+        -- A missing rate reads as zero here, safely: rate_lookup falls back to
+        -- the earliest rate after the date, so NULL means the pair has no rate
+        -- at all, and the arriving account's own balance has already raised
+        -- Row#rate_missing, so R13 withholds every ratio.
+        arrivals_by_date AS (
+          SELECT
+            fb.date,
+            COALESCE(SUM(fb.start_balance * fb.flows_factor * ar.rate), 0) AS arrived_value
+          FROM scoped_accounts sa
+          JOIN LATERAL (
+            SELECT b.date, b.start_balance, b.flows_factor
+            FROM balances b
+            WHERE b.account_id = sa.id
+              AND b.currency = sa.currency
+            ORDER BY b.date ASC
+            LIMIT 1
+          ) fb ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT #{rate_lookup('sa.currency', 'fb.date - 1')} AS rate
+          ) ar ON TRUE
+          WHERE fb.date > DATE :start_date
+            AND fb.date <= DATE :end_date
+            AND (sa.active_until_date IS NULL OR fb.date <= sa.active_until_date)
+          GROUP BY fb.date
         ),
         balances_by_date AS (
           SELECT
@@ -362,12 +393,14 @@ class Portfolio::DailyReturns
           b.revaluations,
           b.fx_effect,
           (b.rate_missing OR COALESCE(f.flow_rate_missing, false)) AS rate_missing,
-          COALESCE(dep.departed_magnitude, 0) AS departed_magnitude,
+          COALESCE(arr.arrived_value, 0) AS arrived_value,
+          COALESCE(dep.departed_value, 0) AS departed_value,
           COALESCE(f.external_flow, 0) AS external_flow,
           COALESCE(f.income, 0) AS income,
           COALESCE(f.fees, 0) AS fees
         FROM balances_by_date b
         LEFT JOIN flows_by_date f ON f.date = b.date
+        LEFT JOIN arrivals_by_date arr ON arr.date = b.date
         LEFT JOIN departures_by_date dep ON dep.date = b.date
         ORDER BY b.date
       SQL

@@ -278,6 +278,90 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
                  "a nil cut-off means no cut-off, so it is the same scope and may share an entry"
   end
 
+  # Option A at the metric surface. Both accounts are trade-tracked, so the
+  # money-weighted return is supported. The flat account holds 1,000 throughout;
+  # Arriving appears on day two holding 500. Nothing gained or lost value, so
+  # both returns are zero. Reading the arrival as return reported a 50% TWR and
+  # an MWR near 1e15.
+  test "twr and mwr of a flat portfolio stay zero when an account arrives" do
+    day_three = @day_two + 1.day
+    arriving = create_portfolio_account(family: @family)
+    buy_trade account: @account, date: @day_one - 30, qty: 1, price: 1
+    buy_trade account: arriving, date: @day_one - 30, qty: 1, price: 1
+    [ @day_one, @day_two, day_three ].each { |date| lay_balance account: @account, date: date, opening: 1_000, closing: 1_000 }
+    [ @day_two, day_three ].each { |date| lay_balance account: arriving, date: date, opening: 500, closing: 500 }
+
+    result = performance(account_ids: [ @account.id, arriving.id ], end_date: day_three)
+
+    assert_in_delta 0.0, result.twr.to_f, 0.000001, "money arriving in the scope is not a return"
+    assert_not_nil result.mwr, "both accounts are trade-tracked, so the figure is supported"
+    assert_in_delta 0.0, result.mwr.to_f, 0.000001
+  end
+
+  # Review 5208066665 P1b. The flat account holds 1,000; Leaving holds 10 and is
+  # cut off after day two. Nothing gained or lost value. Treating the departure
+  # as an investor loss reported an MWR of about -84% over three days.
+  test "twr and mwr of a flat portfolio stay zero when an account leaves" do
+    day_three = @day_two + 1.day
+    leaving = create_portfolio_account(family: @family)
+    buy_trade account: @account, date: @day_one - 30, qty: 1, price: 1
+    buy_trade account: leaving, date: @day_one - 30, qty: 1, price: 1
+    [ @day_one, @day_two, day_three ].each { |date| lay_balance account: @account, date: date, opening: 1_000, closing: 1_000 }
+    [ @day_one, @day_two ].each { |date| lay_balance account: leaving, date: date, opening: 10, closing: 10 }
+
+    result = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id, leaving.id ],
+      period: Period.custom(start_date: @day_one, end_date: day_three),
+      active_until_dates: { leaving.id => @day_two }
+    )
+
+    assert_in_delta 0.0, result.twr.to_f, 0.000001
+    assert_not_nil result.mwr, "both accounts are trade-tracked, so the figure is supported"
+    assert_in_delta 0.0, result.mwr.to_f, 0.000001, "money leaving the scope is not an investor loss"
+  end
+
+  # Review 5208066665 P1a, owner decision on #121. R15: an account with one day
+  # of balance history supports no return method. Performance applies that to
+  # the whole scope, as it already does for MWR: one such account withholds
+  # every time-weighted figure.
+  test "time weighted figures are withheld when an account in the scope has one balance day" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
+
+    result = performance
+
+    assert_nil result.twr, "a single balance day supports no return (was 10%)"
+    assert_nil result.annualized_twr
+    assert_nil result.volatility
+    assert_nil result.max_drawdown
+    assert_empty result.index_series
+  end
+
+  test "time weighted figures are withheld when one account among several has one balance day" do
+    one_row = create_portfolio_account(family: @family)
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_010, market_flow: 10
+    lay_balance account: one_row, date: @day_two, opening: 500, closing: 550, market_flow: 50
+
+    result = performance(account_ids: [ @account.id, one_row.id ])
+
+    assert_nil result.twr, "one unsupported account withholds the aggregate (was 56%)"
+    assert_nil result.volatility
+    assert_empty result.index_series
+  end
+
+  # The gate must not overreach, mirroring the MWR carve-out: an account with no
+  # balance rows in the period contributes nothing and cannot make the figure
+  # unsupported.
+  test "an account with no balance rows in the period does not withhold time weighted figures" do
+    empty = create_portfolio_account(family: @family)
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_010, market_flow: 10
+
+    result = performance(account_ids: [ @account.id, empty.id ])
+
+    assert_in_delta 0.01, result.twr.to_f, 0.000001
+  end
+
   private
     def build_textbook_case
       lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100

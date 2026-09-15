@@ -107,17 +107,35 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
   # true for any input whatsoever: every component could be zero while the value
   # moved, and the books still "balanced". Now fx_effect is measured from the
   # rate change, so an unexplained move is reported as one.
+  #
+  # The fixture used to be an arriving account. Under Option A (#121) an arrival
+  # is described by the composition driver, so it no longer proves anything
+  # here. This one cannot be: the account is present from the period's first
+  # day, and its day-two row opens at 1,200 after day one closed at 1,000 -- a
+  # 200 jump that no driver, composition included, describes.
   test "reconciles is falsifiable and reports an unexplained move" do
-    # A single-currency account whose first balance row falls inside the period:
-    # it arrives holding 1,000 that no driver describes.
-    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_200, closing: 1_200
 
     drivers = drivers_for
 
     assert_equal BigDecimal("0"), drivers.fx_effect,
                  "a family with one currency has no currency movement to report"
-    assert_equal BigDecimal("1000"), drivers.unexplained
-    refute drivers.reconciles?, "an arriving position is not explained, and must not be dressed up as one"
+    assert_equal BigDecimal("200"), drivers.unexplained
+    refute drivers.reconciles?, "a move nothing describes is not explained, and must not be dressed up as one"
+  end
+
+  # Option A. An arriving account's opening position is described by the
+  # composition driver, so the books balance without anything left over.
+  test "composition changes reconcile through the composition driver, leaving nothing unexplained" do
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+
+    drivers = drivers_for
+
+    assert drivers.reconciles?, "an arrival is described, not unexplained: #{drivers.to_h.inspect}"
+    assert_equal BigDecimal("0"), drivers.unexplained
+    assert_equal BigDecimal("1000"), drivers.composition
+    assert_equal BigDecimal("1000"), drivers.to_h[:composition]
   end
 
   test "an ordinary period leaves nothing unexplained" do

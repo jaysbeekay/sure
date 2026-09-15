@@ -1,8 +1,8 @@
 # The performance metric surface for a set of accounts over a period.
 #
-# Implements contract rows R3, R4, R5, R8 and R14. A value object in the shape
-# of Loan::SimulationResult: constructed with its boundaries, computes once,
-# answers questions.
+# Implements contract rows R3, R4, R5, R8, R14, R15 (applied to the whole scope)
+# and R17. A value object in the shape of Loan::SimulationResult: constructed
+# with its boundaries, computes once, answers questions.
 #
 # CACHING (R14). The key comes from Family#build_cache_key with
 # `invalidate_on_data_updates: true`, which folds in `latest_sync_completed_at`.
@@ -18,7 +18,11 @@ class Portfolio::Performance
   #
   # v2: the money-weighted return is withheld when any contributing account
   # cannot support one (R16), and flows follow the rate and cut-off rules.
-  CACHE_VERSION = "v2".freeze
+  #
+  # v3: an account entering or leaving the scope is a composition flow rather
+  # than a return (R17), and an account with a single balance day withholds the
+  # time-weighted figures (R15).
+  CACHE_VERSION = "v3".freeze
 
   # R5: the balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention
@@ -172,15 +176,19 @@ class Portfolio::Performance
       # withheld. The drivers are still reported -- they are money, and the
       # caller can see which part is unexplained -- but nothing is expressed as
       # a percentage of a value we could not convert.
-      chained = rate_missing ? nil : chain(returns)
+      #
+      # R15 applied to the whole scope: an account with a single day of balance
+      # history supports no return, so it withholds every time-weighted figure.
+      withhold_time_weighted = rate_missing || !time_weighted_supported?
+      chained = withhold_time_weighted ? nil : chain(returns)
 
       {
         twr: chained,
         annualized_twr: annualize(chained),
         mwr: rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows),
-        volatility: rate_missing ? nil : annualized_volatility(returns),
-        max_drawdown: rate_missing ? nil : drawdown(returns),
-        index_series: rate_missing ? [] : rebased_index(returns),
+        volatility: withhold_time_weighted ? nil : annualized_volatility(returns),
+        max_drawdown: withhold_time_weighted ? nil : drawdown(returns),
+        index_series: withhold_time_weighted ? [] : rebased_index(returns),
         drivers: drivers.to_h,
         rate_missing: rate_missing,
         suppressed_dates: rows.select(&:suppressed).map(&:date),
@@ -225,8 +233,20 @@ class Portfolio::Performance
       end
     end
 
-    # R8. The opening value is the investor's first outlay, every external flow
-    # follows, and the closing value is what they could walk away with.
+    # R15 applied to the whole scope for the time-weighted figures, mirroring
+    # #money_weighted_supported?: an account with exactly one day of balance
+    # history has no return to contribute, so it withholds the aggregate. An
+    # account with no balance rows in the period contributes nothing and does
+    # not block it.
+    def time_weighted_supported?
+      Account.where(id: account_ids).to_a.none? do |account|
+        Portfolio::ReturnScope.new(account: account, period: period).balance_days == 1
+      end
+    end
+
+    # R8 and R17. The opening value is the investor's first outlay; every flow
+    # follows -- external flows, and the value an account brought into or carried
+    # out of the scope -- and the closing value is what they could walk away with.
     def money_weighted(rows)
       return nil if rows.empty?
 
@@ -237,8 +257,9 @@ class Portfolio::Performance
       flows << Portfolio::Xirr::Flow.new(date: rows.first.date, amount: -opening) unless opening.zero?
 
       rows.each do |row|
-        next if row.external_flow.zero?
-        flows << Portfolio::Xirr::Flow.new(date: row.date, amount: -row.external_flow)
+        flow = row.external_flow + row.composition_flow
+        next if flow.zero?
+        flows << Portfolio::Xirr::Flow.new(date: row.date, amount: -flow)
       end
 
       flows << Portfolio::Xirr::Flow.new(date: rows.last.date, amount: closing) unless closing.zero?

@@ -149,6 +149,11 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
   #
   # This went live when InvestmentStatement#performance moved to the historical
   # account scope (#119 D2) and started passing active_until_dates at all.
+  #
+  # Owner decision on #121 (Option A, D5b amended): the value an account carries
+  # out of the scope is a composition OUTFLOW, not a zero-return day. Here the
+  # only account leaves entirely, so the denominator is 1,000 - 1,000 = 0 and R6
+  # still suppresses the day -- for the denominator, not for the departure.
   test "the day an account leaves the scope is suppressed rather than read as a total loss" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
 
@@ -160,14 +165,220 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     )
 
     closing_day = returns.rows.last
-    assert closing_day.suppressed, "a composition change is not a return"
     assert_equal BigDecimal("0"), returns.returns.to_h.fetch(@day_two),
-                 "so it contributes nothing to the chain"
+                 "a full exit contributes nothing to the chain"
+    assert closing_day.suppressed, "R6: the denominator is zero once the value has left"
 
-    # The balance did not evaporate, it left the scope. R12 puts that in
-    # unexplained rather than attributing it to the market.
-    assert_equal BigDecimal("-1000"), closing_day.unexplained
+    # The balance did not evaporate, it left the scope, and the composition
+    # outflow now describes it: nothing is left unexplained.
+    assert_equal BigDecimal("0"), closing_day.unexplained,
+                 "the value carried out is a composition flow, not an unexplained move"
+    assert_equal BigDecimal("-1000"), closing_day.composition_flow
     assert_equal BigDecimal("0"), closing_day.market
+  end
+
+  # Option A. Staying moves 1,000 -> 1,050 on day three; Leaving carries 400 out
+  # after its cut-off on day two. The only investment return in the period is
+  # Staying's 50 on 1,000:
+  #
+  #   day three: value_open 1,400, departure -400, value_close 1,050
+  #   r = 1,050 / (1,400 - 400) - 1 = 0.05
+  #
+  # Suppressing the departure day instead (the old D5b) reported 0% and threw
+  # the period's only real gain away.
+  test "an account leaving carries its value out and the day keeps the rest of the portfolio's return" do
+    day_three = @day_two + 1.day
+    leaving = create_portfolio_account(family: @family)
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: day_three, opening: 1_000, closing: 1_050, market_flow: 50
+    lay_balance account: leaving, date: @day_one, opening: 400, closing: 400
+    lay_balance account: leaving, date: @day_two, opening: 400, closing: 400
+
+    returns = Portfolio::DailyReturns.new(
+      account_ids: [ @account.id, leaving.id ],
+      currency: @family.currency,
+      period: Period.custom(start_date: @day_one, end_date: day_three),
+      active_until_dates: { leaving.id => @day_two }
+    )
+
+    assert_in_delta 0.05, returns.returns.to_h.fetch(day_three).to_f, 0.000001,
+                    "the staying account's 5% survives the other account leaving"
+    departure_day = returns.rows.last
+    assert_not departure_day.suppressed, "a departure is a flow, not a reason to drop the day"
+    assert_equal BigDecimal("-400"), departure_day.composition_flow
+    assert_equal BigDecimal("0"), departure_day.unexplained
+  end
+
+  # Option A. An account whose first balance row falls inside the period, after
+  # its first day, brings that row's opening value into the scope. The flat
+  # account holds 1,000; Arriving appears on day two holding 500:
+  #
+  #   day two: value_open 1,000, arrival +500, value_close 1,500
+  #   r = 1,500 / (1,000 + 500) - 1 = 0
+  #
+  # Reading the arrival as return reported a 50% day for a flat portfolio.
+  test "an account arriving mid-period brings its opening value as a composition inflow, not a return" do
+    arriving = create_portfolio_account(family: @family)
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+    lay_balance account: arriving, date: @day_two, opening: 500, closing: 500
+
+    returns = daily_returns(account_ids: [ @account.id, arriving.id ])
+
+    assert_in_delta 0.0, returns.returns.to_h.fetch(@day_two).to_f, 0.000001,
+                    "money arriving in the scope is not a return"
+    arrival_day = returns.rows.last
+    assert_equal BigDecimal("500"), arrival_day.composition_flow
+    assert_equal BigDecimal("0"), arrival_day.unexplained
+  end
+
+  # The same rule on rows the real forward calculator writes: a manual account
+  # whose opening anchor falls inside the period. The calculator seeds from the
+  # anchor, so the first row opens at 500 with no adjustments.
+  test "an arrival written by the forward calculator is measured from its first row's opening balance" do
+    manual = create_portfolio_account(family: @family)
+    manual.set_opening_anchor_balance(balance: 500, date: @day_two)
+    Balance::Materializer.new(manual, strategy: :forward).materialize_balances
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+
+    first_row = manual.balances.order(:date).first
+    assert_equal @day_two, first_row.date, "the fixture must arrive inside the period, or this proves nothing"
+    assert_equal BigDecimal("500"), first_row.start_balance
+
+    returns = daily_returns(account_ids: [ @account.id, manual.id ])
+
+    assert_in_delta 0.0, returns.returns.to_h.fetch(@day_two).to_f, 0.000001
+    assert_equal BigDecimal("500"), returns.rows.last.composition_flow
+  end
+
+  # The reverse calculator (linked accounts) writes the same shape with an
+  # opening anchor: the anchor day's row opens and closes at the anchor total.
+  test "an arrival written by the reverse calculator with an opening anchor is measured from its first row's opening balance" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+
+    anchored = create_portfolio_account(family: @family)
+    anchored.set_opening_anchor_balance(balance: 500, date: @day_two)
+    anchored.set_current_balance(500)
+    Balance::Materializer.new(anchored, strategy: :reverse).materialize_balances
+
+    first_row = anchored.balances.order(:date).first
+    assert_equal @day_two, first_row.date, "the fixture must arrive inside the period, or this proves nothing"
+    assert_equal BigDecimal("500"), first_row.start_balance
+
+    returns = daily_returns(account_ids: [ @account.id, anchored.id ])
+
+    assert_in_delta 0.0, returns.returns.to_h.fetch(@day_two).to_f, 0.000001, "an anchored arrival is not a return"
+    assert_equal BigDecimal("500"), returns.rows.last.composition_flow
+  end
+
+  # Without an anchor, Account::OpeningBalanceManager#opening_date is the day
+  # BEFORE the oldest entry, so a 50 deposit on day three gives a first row on
+  # day two, opening at 500 derived backwards from the current balance of 550.
+  #
+  #   day two:   arrival +500, value 1,000 -> 1,500           r = 0
+  #   day three: deposit +50,  value 1,500 -> 1,550           r = 1,550 / 1,550 - 1 = 0
+  test "an arrival written by the reverse calculator without an opening anchor is measured the same way" do
+    day_three = @day_two + 1.day
+    [ @day_one, @day_two, day_three ].each { |date| lay_balance account: @account, date: date, opening: 1_000, closing: 1_000 }
+
+    unanchored = create_portfolio_account(family: @family)
+    deposit account: unanchored, date: day_three, amount: 50
+    unanchored.set_current_balance(550)
+    Balance::Materializer.new(unanchored, strategy: :reverse).materialize_balances
+
+    first_row = unanchored.balances.order(:date).first
+    assert_equal @day_two, first_row.date, "the fixture must arrive after the period's first day, or this proves nothing"
+    assert_equal BigDecimal("500"), first_row.start_balance
+
+    returns = daily_returns(account_ids: [ @account.id, unanchored.id ], end_date: day_three)
+    by_date = returns.rows.index_by(&:date)
+
+    assert_in_delta 0.0, returns.returns.to_h.fetch(@day_two).to_f, 0.000001, "an unanchored arrival is not a return"
+    assert_in_delta 0.0, returns.returns.to_h.fetch(day_three).to_f, 0.000001, "the next day's deposit is not a return either"
+    assert_equal BigDecimal("500"), by_date.fetch(@day_two).composition_flow
+    assert_equal BigDecimal("50"), by_date.fetch(day_three).external_flow
+  end
+
+  # The arrival is the account's OPENING value, not its closing one: a gain it
+  # makes on its first day is a real return.
+  #
+  #   day two: value_open 1,000, arrival +500, value_close 1,000 + 550 = 1,550
+  #   r = 1,550 / (1,000 + 500) - 1 = 0.033333
+  test "an account arriving and gaining on its first day keeps that day's gain" do
+    arriving = create_portfolio_account(family: @family)
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+    lay_balance account: arriving, date: @day_two, opening: 500, closing: 550, market_flow: 50
+
+    returns = daily_returns(account_ids: [ @account.id, arriving.id ])
+
+    assert_in_delta 0.033333, returns.returns.to_h.fetch(@day_two).to_f, 0.000001,
+                    "the arriving account's first-day gain is a return; its opening value is not"
+    assert_equal BigDecimal("500"), returns.rows.last.composition_flow
+    assert_equal BigDecimal("0"), returns.rows.last.unexplained
+  end
+
+  # An account whose history begins only after its own cut-off never enters the
+  # scope: value_close excludes it, so counting its opening value as an arrival
+  # would put capital in the denominator that no closing value contains.
+  test "an account whose first balance row falls after its cut off never arrives" do
+    late = create_portfolio_account(family: @family)
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+    lay_balance account: late, date: @day_two, opening: 500, closing: 500
+
+    returns = Portfolio::DailyReturns.new(
+      account_ids: [ @account.id, late.id ],
+      currency: @family.currency,
+      period: Period.custom(start_date: @day_one, end_date: @day_two),
+      active_until_dates: { late.id => @day_one }
+    )
+
+    assert_in_delta 0.0, returns.returns.to_h.fetch(@day_two).to_f, 0.000001
+    assert_equal BigDecimal("0"), returns.rows.last.composition_flow
+  end
+
+  # R11 applies to an arrival as to any start-of-day flow: it is converted at the
+  # PREVIOUS day's rate, and that day's rate move on it is a real currency gain.
+  #
+  #   rates EUR->USD: day one 1.0, day two 1.2
+  #   day two: value_open 1,000 USD, arrival 500 EUR x 1.0 = 500 USD
+  #            value_close 1,000 + 500 x 1.2 = 1,600 USD
+  #   r = 1,600 / (1,000 + 500) - 1 = 0.066667
+  #   fx_effect 500 x (1.2 - 1.0) = 100, unexplained 0
+  test "a foreign currency arrival converts at the previous day's rate and reconciles" do
+    eur = create_portfolio_account(family: @family, currency: "EUR")
+    set_rate from: "EUR", to: "USD", date: @day_one, rate: 1.0
+    set_rate from: "EUR", to: "USD", date: @day_two, rate: 1.2
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+    lay_balance account: eur, date: @day_two, opening: 500, closing: 500
+
+    returns = daily_returns(account_ids: [ @account.id, eur.id ])
+    arrival_day = returns.rows.last
+
+    assert_in_delta 0.066667, returns.returns.to_h.fetch(@day_two).to_f, 0.000001,
+                    "only the rate move on the arrived capital is a return"
+    assert_equal BigDecimal("500"), arrival_day.composition_flow
+    assert_in_delta 100.0, arrival_day.fx_effect.to_f, 0.000001
+    assert_equal BigDecimal("0"), arrival_day.unexplained
+  end
+
+  # Not an arrival: an account whose first balance row is the period's first
+  # day already contributes its opening value through value_open, so counting
+  # it as a composition inflow as well would double it.
+  test "an account whose first balance row is the period's first day is not an arrival" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
+    lay_balance account: @account, date: @day_two, opening: 1_100, closing: 1_100
+
+    returns = daily_returns
+
+    assert_equal BigDecimal("1000"), returns.rows.first.value_open
+    assert_in_delta 0.10, returns.returns.first.last.to_f, 0.000001
+    assert_equal [ BigDecimal("0"), BigDecimal("0") ], returns.rows.map(&:composition_flow)
   end
 
   # Regression for the other half of the same rule. The composition signal was

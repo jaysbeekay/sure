@@ -1,10 +1,10 @@
 # Where a period's change in portfolio value came from.
 #
-# Implements contract rows R7, R10, R11 and R12.
+# Implements contract rows R7, R10, R11, R12 and R17.
 #
 # The components reconcile exactly to the period's change in value (R12):
 #
-#   external_net + income - fees + market + revaluations + fx_effect
+#   external_net + composition + income - fees + market + revaluations + fx_effect
 #     == value_close - value_open
 #
 # TWO THINGS ARE EASY TO GET WRONG HERE, and both are contract rows.
@@ -83,16 +83,23 @@ class Portfolio::Drivers
     @fx_effect ||= sum(:fx_effect)
   end
 
+  # R17: value that entered the scope (an account's opening position arriving
+  # mid-period, positive) less value that left it (an account's balance carried
+  # out at its cut-off, negative). A change in what the scope contains, not in
+  # what it is worth.
+  def composition
+    @composition ||= sum(:composition_flow)
+  end
+
   # What the named components do not account for. Expected to be zero, and a
   # real assertion because nothing defines it to be.
   #
-  # It is non-zero when the portfolio's COMPOSITION changed rather than its
-  # value: an account whose first balance row falls inside the period brings an
-  # opening position that no driver describes, and an account leaving takes one
-  # away. Surfacing that is the honest answer -- the alternative is to fold it
-  # into whichever component is defined last and call the books balanced.
+  # An account entering or leaving the scope is described by `composition`, so
+  # it no longer lands here. What is left is value that moved for a reason no
+  # driver records -- and surfacing it is still the honest answer, rather than
+  # folding it into whichever component is defined last.
   def unexplained
-    @unexplained ||= change - (external_net + income - fees + market + revaluations + fx_effect)
+    @unexplained ||= change - (external_net + composition + income - fees + market + revaluations + fx_effect)
   end
 
   # For an account whose scope is :valuation_tracked, the market move lives in
@@ -108,6 +115,7 @@ class Portfolio::Drivers
       value_close: value_close,
       change: change,
       external_net: external_net,
+      composition: composition,
       income: income,
       fees: fees,
       market: market,
