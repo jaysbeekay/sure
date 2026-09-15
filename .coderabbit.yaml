@@ -25,12 +25,11 @@ reviews:
     # incrementally on every push -- observed on #148, where a pass started
     # three minutes after `f5a5ee4b` landed with nothing requested.
     #
-    # So the rule is: a draft is reviewed only when asked, with
-    # `@coderabbitai review`; `@coderabbitai full review` forces a whole-PR pass
-    # when the incremental one has nothing left to say. CLAUDE.md step 5 states
-    # this as "automatic review is off on this repository (fewer than 10 stars)",
-    # which the behaviour above contradicts -- the drafts half of that sentence
-    # is what actually holds.
+    # A draft therefore gets no review at all, and that is the intent. The
+    # owner's ways of working (CLAUDE.md, rule 4) forbid forcing one: no
+    # `@coderabbitai review` and no `@coderabbitai full review` on a draft.
+    # Marking the PR ready is what starts its review. `full review` is the
+    # fallback on a READY PR whose incremental pass returned nothing.
     drafts: false
 
   pre_merge_checks:
