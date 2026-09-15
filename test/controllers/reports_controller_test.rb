@@ -8,6 +8,31 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     @family = @user.family
   end
 
+  # The Reports section controllers gained `url` and `preferenceKey` values so
+  # the portfolio hub can reuse them. Reports passes neither, so the page must
+  # carry no override attributes and its endpoint must still accept the
+  # original keys; otherwise the defaults have drifted from the literals.
+  test "reports sections rely on the Stimulus defaults and still post to their own endpoint" do
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-controller='reports-sortable']"
+    assert_select "[data-reports-sortable-url-value]", count: 0
+    assert_select "[data-reports-sortable-preference-key-value]", count: 0
+    assert_select "[data-reports-section-url-value]", count: 0
+    assert_select "[data-reports-section-preference-key-value]", count: 0
+
+    patch update_preferences_reports_path,
+      params: { preferences: { reports_section_order: %w[transactions_breakdown trends_insights], reports_collapsed_sections: { trends_insights: true } } },
+      as: :json
+    assert_response :ok
+
+    @user.reload
+    assert_equal %w[transactions_breakdown trends_insights], @user.reports_section_order
+    assert @user.reports_section_collapsed?("trends_insights")
+    assert_nil @user.preferences["portfolio_section_order"]
+  end
+
   test "index renders successfully" do
     get reports_path
     assert_response :ok
@@ -628,4 +653,82 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_match I18n.t("reports.investment_performance.sells_count", count: 1), response.body
     assert_no_match(/#{Regexp.escape(I18n.t("reports.investment_performance.sells_count", count: 2))}/, response.body)
   end
+
+  test "reports investment section links to the portfolio hub for preview users only" do
+    get reports_path
+    assert_response :ok
+    assert_select "[data-section-key='investment_performance'] a[href='#{portfolio_path}']", count: 0
+
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+    get reports_path
+    assert_response :ok
+    assert_select "[data-section-key='investment_performance'] a[href='#{portfolio_path}']", text: I18n.t("reports.investment_performance.view_portfolio")
+  end
+
+  test "index top holdings rolls up a security held in two investment accounts into one row" do
+    create_second_aapl_account(qty: 20, price: 215)
+
+    statement = InvestmentStatement.new(@family, user: @user)
+    assert_equal 2, statement.current_holdings.count { |h| h.security_id == securities(:aapl).id }
+
+    row = statement.top_holdings.find { |h| h.ticker == "AAPL" }
+    assert_not_nil row
+    # holdings(:one) 10 @ $215 in accounts(:investment) + 20 @ $215 in the new account
+    assert_equal 6450, row.amount_money.amount
+
+    get reports_path
+    assert_response :ok
+
+    rows = css_select("[data-section-key='investment_performance'] table tbody tr")
+    aapl_rows = rows.select { |tr| tr.css("td p.font-medium.text-primary").text.strip == "AAPL" }
+    assert_equal 1, aapl_rows.size, "AAPL is held in two accounts but must render as one rolled-up row"
+
+    cells = aapl_rows.first.css("td")
+    assert_equal ApplicationController.helpers.number_to_percentage(row.weight, precision: 1), cells[1].text.strip
+    assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
+  end
+
+  test "print top holdings rolls up a security held in two investment accounts into one row" do
+    create_second_aapl_account(qty: 20, price: 215)
+
+    row = InvestmentStatement.new(@family, user: @user).top_holdings.find { |h| h.ticker == "AAPL" }
+    assert_not_nil row
+    assert_equal 6450, row.amount_money.amount
+
+    get print_reports_path
+    assert_response :ok
+
+    aapl_rows = css_select("table tbody tr").select { |tr| tr.at_css("td strong")&.text&.strip == "AAPL" }
+    assert_equal 1, aapl_rows.size, "AAPL is held in two accounts but must render as one rolled-up row"
+
+    cells = aapl_rows.first.css("td")
+    assert_equal ApplicationController.helpers.number_to_percentage(row.weight, precision: 1), cells[1].text.strip
+    assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
+  end
+
+  private
+    # Second investment account holding the same security as
+    # accounts(:investment), so top_holdings has something to roll up.
+    def create_second_aapl_account(qty:, price:)
+      account = @family.accounts.create!(
+        owner: @user,
+        name: "Second Brokerage",
+        balance: 8000,
+        cash_balance: 3700,
+        currency: "USD",
+        accountable: Investment.new
+      )
+
+      Holding.create!(
+        account: account,
+        security: securities(:aapl),
+        date: Date.current,
+        qty: qty,
+        price: price,
+        amount: qty * price,
+        currency: "USD"
+      )
+
+      account
+    end
 end

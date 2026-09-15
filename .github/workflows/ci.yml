@@ -158,10 +158,11 @@ jobs:
       - name: Verify loan contract test traceability
         run: bin/rails loans:verify_contract_coverage
 
-      # The returns contract is only worth writing if it cannot quietly lose its
-      # evidence. Same reasoning as the loan gate above: a row naming a test that
-      # no longer exists reads exactly like a row that is covered.
-      - name: Verify portfolio returns contract test traceability
+      # Covers both portfolio contracts -- the methodology P-rows and the
+      # returns R-rows. A contract is only worth writing if it cannot quietly
+      # lose its evidence: same reasoning as the loan gate above, where a row
+      # naming a test that no longer exists reads exactly like a covered one.
+      - name: Verify portfolio contract test traceability
         run: bin/rails portfolio:verify_contract_coverage
 
       # #10 requires the daily-accrual SLO to be enforced by something that can

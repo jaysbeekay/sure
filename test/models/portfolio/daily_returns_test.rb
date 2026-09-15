@@ -232,6 +232,37 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     refute returns.any?
   end
 
+  # A security transferred in from a broker OUTSIDE the scope raises the closing
+  # value without any money crossing the boundary that the flow sum can see: the
+  # journal entry carries amount 0 (Questrade writes price: 0, amount: 0), and
+  # external_flow is amount-weighted. The arriving position therefore lands in
+  # the numerator with an unchanged denominator and reads as return.
+  #
+  # This pins the behaviour rather than endorsing it. It is NOT caught by
+  # #unexplained either, because the balance row books the arrival as a market
+  # flow, so the drivers identity still reconciles exactly. Whichever way this
+  # is eventually settled -- valuing the journal, or excluding such a day --
+  # this test is the thing that will fail and say so.
+  test "a security journalled in from outside the scope reads as return, not flow" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, market_flow: 500
+    security_journal account: @account, date: @day_two, qty: 5
+
+    second = daily_returns.rows.last
+
+    assert_equal BigDecimal("0"), second.external_flow,
+                 "a zero-amount journal contributes no flow whatever class it is given"
+    assert_equal BigDecimal("1000"), second.denominator,
+                 "so the denominator is the opening value alone"
+
+    returns = daily_returns.returns.map(&:last)
+    assert_in_delta 0.50, returns.last.to_f, 0.000001,
+                    "the whole arriving position is measured as a 50% day"
+
+    assert_equal BigDecimal("0"), second.unexplained,
+                 "and the drivers identity still reconciles, so nothing flags it"
+  end
+
   private
     def daily_returns(account_ids: [ @account.id ], start_date: @day_one, end_date: @day_two)
       Portfolio::DailyReturns.new(

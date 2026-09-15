@@ -99,26 +99,28 @@ class Portfolio::ReturnScope
     def external_transactions?
       return @external_transactions if defined?(@external_transactions)
 
-      aliases = {
-        entries: "entries", trades: "flow_trades",
-        transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
-      }
+      # The account is its own scope here: this asks whether money crossed
+      # *this* account's boundary, so a transfer to a sibling account is
+      # external from where this question is asked.
+      classifier = Portfolio::FlowClassifier.new(scope_account_ids: [ account.id ])
       sql = <<~SQL
         SELECT EXISTS (
           SELECT 1
           FROM entries
-          #{Portfolio::FlowClassifier.sql_joins(**aliases)}
+          #{classifier.sql_joins}
           WHERE entries.account_id = :account_id
             AND entries.entryable_type = 'Transaction'
             AND entries.date <= :end_date
             AND COALESCE(entries.excluded, false) = false
-            AND #{Portfolio::FlowClassifier.sql_case(**aliases)} = 'external'
+            AND #{classifier.sql_case} IN ('external_inflow', 'external_outflow')
         )
       SQL
 
+      # No :scope_account_ids bind: the classifier sanitizes the scope into its
+      # own fragment rather than leaving a placeholder for the caller to fill.
       value = ActiveRecord::Base.connection.select_value(
         ActiveRecord::Base.sanitize_sql_array([
-          sql, { account_id: account.id, end_date: period.end_date, scope_account_ids: [ account.id ] }
+          sql, { account_id: account.id, end_date: period.end_date }
         ])
       )
       @external_transactions = ActiveModel::Type::Boolean.new.cast(value) == true

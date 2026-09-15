@@ -243,7 +243,7 @@ class Portfolio::DailyReturns
         flows_by_date AS (
           SELECT
             entries.date AS date,
-            COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'external'
+            COALESCE(SUM(CASE WHEN #{flow_class_sql} IN ('external_inflow', 'external_outflow')
                               THEN -entries.amount * fx.rate ELSE 0 END), 0) AS external_flow,
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'income'
                               THEN -entries.amount * fx.rate ELSE 0 END), 0) AS income,
@@ -254,7 +254,7 @@ class Portfolio::DailyReturns
             -- classes that feed a figure count; an internal trade in an
             -- unconvertible currency moves nothing we sum.
             COALESCE(BOOL_OR(fx.rate IS NULL
-                             AND #{flow_class_sql} IN ('external', 'income', 'fee')), false) AS flow_rate_missing
+                             AND #{flow_class_sql} IN ('external_inflow', 'external_outflow', 'income', 'fee')), false) AS flow_rate_missing
           FROM entries
           JOIN accounts entry_accounts ON entry_accounts.id = entries.account_id
           -- The same active-until window the balances use: a flow dated after
@@ -322,17 +322,19 @@ class Portfolio::DailyReturns
       SQL
     end
 
+    # One classifier for both fragments, built on the scope this instance treats
+    # as "inside". Its table aliases are fixed rather than passed in; nothing in
+    # the queries above joins `trades` or `transactions` itself, so there is
+    # nothing to collide with.
+    def flow_classifier
+      @flow_classifier ||= Portfolio::FlowClassifier.new(scope_account_ids: scope_account_ids)
+    end
+
     def flow_class_sql
-      @flow_class_sql ||= Portfolio::FlowClassifier.sql_case(
-        entries: "entries", trades: "flow_trades",
-        transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
-      )
+      @flow_class_sql ||= flow_classifier.sql_case
     end
 
     def flow_class_joins
-      @flow_class_joins ||= Portfolio::FlowClassifier.sql_joins(
-        entries: "entries", trades: "flow_trades",
-        transactions: "flow_transactions", counterpart: "flow_counterpart_entries"
-      )
+      @flow_class_joins ||= flow_classifier.sql_joins
     end
 end

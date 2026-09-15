@@ -369,6 +369,44 @@ class Account::ProviderImportAdapterTest < ActiveSupport::TestCase
     assert_equal account_provider.id, holding.account_provider_id
   end
 
+  test "a composite-key collision stamps updated_at on the row it adopts" do
+    investment_account = accounts(:investment)
+    adapter = Account::ProviderImportAdapter.new(investment_account)
+    security = securities(:aapl)
+    account_provider = AccountProvider.create!(
+      account: investment_account,
+      provider: plaid_accounts(:one)
+    )
+    date = Date.today - 10.days
+
+    # An unowned row already occupies (account, security, date, currency). The
+    # provider-scoped lookups miss it, so the insert collides on the unique
+    # index and the rescue adopts the row with update_columns.
+    existing = investment_account.holdings.create!(
+      security: security, qty: 1, amount: 150, currency: "USD", date: date, price: 150
+    )
+    existing.update_columns(updated_at: 2.days.ago)
+
+    holding = adapter.import_holding(
+      security: security,
+      quantity: 10,
+      amount: 1500,
+      currency: "USD",
+      date: date,
+      price: 150,
+      source: "plaid",
+      external_id: "plaid_holding_collision",
+      account_provider_id: account_provider.id
+    )
+
+    existing.reload
+    assert_equal existing.id, holding.id
+    assert_equal 10, existing.qty
+    assert_equal account_provider.id, existing.account_provider_id
+    assert existing.updated_at > 1.minute.ago,
+      "update_columns skips the timestamp; the handler must stamp it so caches keyed on holdings.updated_at expire"
+  end
+
   test "does not delete future holdings when can_delete_holdings? returns false" do
     investment_account = accounts(:investment)
     adapter = Account::ProviderImportAdapter.new(investment_account)

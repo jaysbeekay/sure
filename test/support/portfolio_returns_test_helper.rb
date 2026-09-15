@@ -123,6 +123,26 @@ module PortfolioReturnsTestHelper
     )
   end
 
+  # A security journal: a position moved in or out of the account, written as a
+  # Transfer-labelled trade with no cash value. Questrade writes exactly this
+  # shape (QuestradeAccount::ActivitiesProcessor -- price: 0, amount: 0), and
+  # the zero amount is the point: the position moves, no money does.
+  def security_journal(account:, date:, qty:, currency: nil)
+    account.entries.create!(
+      name: "Journal",
+      date: date,
+      amount: 0,
+      currency: currency || account.currency,
+      entryable: Trade.new(
+        security: security_under_test,
+        qty: qty,
+        price: 0,
+        currency: currency || account.currency,
+        investment_activity_label: "Transfer"
+      )
+    )
+  end
+
   def set_rate(from:, to:, date:, rate:)
     ExchangeRate.find_or_create_by!(from_currency: from, to_currency: to, date: date) do |record|
       record.rate = rate
