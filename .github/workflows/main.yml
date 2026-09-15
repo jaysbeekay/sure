@@ -5,34 +5,45 @@ on:
     types:
       - created
 
+permissions:
+  contents: read
+
+concurrency:
+  group: codebot-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   codebot:
-    # Only run when:
-    # 1. Comment starts with @codeBot
-    # 2. Comment author is YOU
 
-    if: |
-      startsWith(github.event.comment.body, '@codeBot') &&
-      github.event.comment.user.login == 'jaysbeekay'
+    if: >
+      startsWith(github.event.comment.body, '@codebot') &&
+      github.event.comment.user.login == 'jaysbeekay' &&
+      github.event.comment.author_association == 'OWNER'
 
     runs-on: ubuntu-latest
-
     timeout-minutes: 5
 
     steps:
-      - name: Save GitHub event payload
-        run: |
-          echo '${{ toJson(github.event) }}' > payload.json
 
-      - name: Send request to CodeBot
+      - name: Log trigger
+        run: |
+          echo "Triggered by: ${{ github.event.comment.user.login }}"
+          echo "Repo: ${{ github.repository }}"
+          echo "Issue/PR: ${{ github.event.issue.number }}"
+
+      - name: Send event to AI
         run: |
           curl \
             --fail \
             --silent \
             --show-error \
+            --retry 3 \
+            --retry-delay 5 \
             --max-time 300 \
             -X POST \
             -H "Content-Type: application/json" \
             -H "X-CodeBot-Secret: ${{ secrets.CODEBOT_SECRET }}" \
-            --data @payload.json \
+            -H "X-GitHub-Repository: ${{ github.repository }}" \
+            -H "X-GitHub-Event: issue_comment" \
+            --data-binary @"$GITHUB_EVENT_PATH" \
             "${{ secrets.AI_WEBHOOK_URL }}"
