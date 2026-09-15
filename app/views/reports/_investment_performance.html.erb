@@ -2,6 +2,11 @@
 
 <% if investment_metrics[:has_investments] %>
   <div class="space-y-6">
+    <% if preview_features_enabled? %>
+      <div class="flex justify-end">
+        <%= link_to t("reports.investment_performance.view_portfolio"), portfolio_path, class: "text-sm text-link hover:underline", data: { turbo_frame: "_top" } %>
+      </div>
+    <% end %>
     <%# Investment Summary Cards %>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
       <%# Portfolio Value Card %>

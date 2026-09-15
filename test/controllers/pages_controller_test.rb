@@ -370,6 +370,17 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
   end
 
+  test "dashboard investment widget links to the portfolio hub for preview users only" do
+    get root_path
+    assert_response :ok
+    assert_select "#investment-summary a[href='#{portfolio_path}']", count: 0
+
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+    get root_path
+    assert_response :ok
+    assert_select "#investment-summary a[href='#{portfolio_path}']", text: I18n.t("pages.dashboard.investment_summary.view_portfolio")
+  end
+
   test "dashboard top holdings table omits the allocation cash row" do
     statement = InvestmentStatement.new(@family, user: @user)
     assert statement.allocation.any?(&:cash?), "fixture family should have a residual cash allocation row"

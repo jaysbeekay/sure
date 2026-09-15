@@ -8,6 +8,31 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     @family = @user.family
   end
 
+  # The Reports section controllers gained `url` and `preferenceKey` values so
+  # the portfolio hub can reuse them. Reports passes neither, so the page must
+  # carry no override attributes and its endpoint must still accept the
+  # original keys; otherwise the defaults have drifted from the literals.
+  test "reports sections rely on the Stimulus defaults and still post to their own endpoint" do
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-controller='reports-sortable']"
+    assert_select "[data-reports-sortable-url-value]", count: 0
+    assert_select "[data-reports-sortable-preference-key-value]", count: 0
+    assert_select "[data-reports-section-url-value]", count: 0
+    assert_select "[data-reports-section-preference-key-value]", count: 0
+
+    patch update_preferences_reports_path,
+      params: { preferences: { reports_section_order: %w[transactions_breakdown trends_insights], reports_collapsed_sections: { trends_insights: true } } },
+      as: :json
+    assert_response :ok
+
+    @user.reload
+    assert_equal %w[transactions_breakdown trends_insights], @user.reports_section_order
+    assert @user.reports_section_collapsed?("trends_insights")
+    assert_nil @user.preferences["portfolio_section_order"]
+  end
+
   test "index renders successfully" do
     get reports_path
     assert_response :ok
@@ -627,6 +652,17 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     # as one both inflates the number of sales and books a gain nobody made.
     assert_match I18n.t("reports.investment_performance.sells_count", count: 1), response.body
     assert_no_match(/#{Regexp.escape(I18n.t("reports.investment_performance.sells_count", count: 2))}/, response.body)
+  end
+
+  test "reports investment section links to the portfolio hub for preview users only" do
+    get reports_path
+    assert_response :ok
+    assert_select "[data-section-key='investment_performance'] a[href='#{portfolio_path}']", count: 0
+
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+    get reports_path
+    assert_response :ok
+    assert_select "[data-section-key='investment_performance'] a[href='#{portfolio_path}']", text: I18n.t("reports.investment_performance.view_portfolio")
   end
 
   test "index top holdings rolls up a security held in two investment accounts into one row" do

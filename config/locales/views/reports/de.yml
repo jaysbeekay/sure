@@ -111,6 +111,7 @@ de:
       no_liabilities: Keine Verbindlichkeiten
     investment_performance:
       title: Anlageperformance
+      view_portfolio: Portfolio ansehen
       portfolio_value: Portfoliowert
       total_return: Gesamtrendite
       contributions: Einlagen im Zeitraum
