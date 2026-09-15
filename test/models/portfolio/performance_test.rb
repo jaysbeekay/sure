@@ -180,6 +180,23 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     refute_equal without_cutoff.cache_key, with_cutoff.cache_key
   end
 
+  # Every figure is converted into the family's currency (R2), but
+  # Family#build_cache_key keys on the family id, the latest sync and the
+  # accounts' updated_at -- not the currency. Changing the family currency
+  # therefore left the old key in place and served figures converted into the
+  # previous currency until an unrelated sync changed it.
+  test "cache key changes when the family currency changes" do
+    build_textbook_case
+    before_key = performance.cache_key
+
+    @family.update!(currency: "EUR")
+
+    refute_equal before_key, Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ],
+      period: Period.custom(start_date: @day_one, end_date: @day_two)
+    ).cache_key, "figures converted into USD must not be served to an EUR family"
+  end
+
   test "cache key distinguishes different flow scopes" do
     build_textbook_case
     period = Period.custom(start_date: @day_one, end_date: @day_two)

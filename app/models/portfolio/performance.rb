@@ -11,6 +11,10 @@
 # and a daily price sync changes holdings and therefore balances while touching
 # no entry at all. Returns cached on it would stay stale until the user next
 # edited a transaction.
+#
+# The family currency is in the key too. Every figure is converted into it
+# (R2), and Family#build_cache_key does not include it, so a family that
+# changes currency would otherwise be served figures in the previous one.
 class Portfolio::Performance
   # Bumped when the meaning of a cached figure changes, so warm caches stop
   # serving the old interpretation (the pattern upstream #3350 used for
@@ -146,7 +150,7 @@ class Portfolio::Performance
   def cache_key
     family.build_cache_key(
       [
-        "portfolio_performance", CACHE_VERSION, user&.id,
+        "portfolio_performance", CACHE_VERSION, user&.id, family.currency,
         Digest::SHA256.hexdigest(
           [
             account_ids.sort.join(","),
