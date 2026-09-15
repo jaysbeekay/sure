@@ -81,6 +81,22 @@ class Portfolio::XirrTest < ActiveSupport::TestCase
     assert_in_delta(-0.5, xirr.rate.to_f, 0.0005)
   end
 
+  # A 10% year on a billion. Newton's steps shrink below TOLERANCE while the
+  # present-value residual, in currency units, stays near 1.2e-7: at this
+  # magnitude an absolute 1e-9 residual is out of reach in Float. A step that
+  # small means Newton stopped moving, not that it solved, so it must hand over
+  # rather than report the stalled guess; bisection then finds 10%.
+  test "newton hands a stalled step to bisection when the residual is out of reach" do
+    flows = [
+      [ Date.new(2026, 1, 1), -1_000_000_000 ],
+      [ Date.new(2027, 1, 1), 1_100_000_000 ]
+    ]
+    xirr = Portfolio::Xirr.new(flows)
+
+    assert_nil xirr.send(:newton_rate), "a small step without a small residual is not a solution"
+    assert_in_delta 0.1, xirr.rate.to_f, 0.000001
+  end
+
   # A fivefold gain in 30 days annualises to 5^(365/30) - 1, about 3.2e8. That
   # is above RATE_CEILING, so bisection could not find it; Newton must, and to
   # the right magnitude, not merely to some positive number.
