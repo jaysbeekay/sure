@@ -1,6 +1,6 @@
 # Portfolio returns calculation contract
 
-Status: draft for engineering and product sign-off. This document is the decision record for
+Status: signed off by the repository owner on 2026-09-15. D1–D6, D8 and D9 are confirmed, D5b is amended to Option A (composition flows, R17) with the R15 aggregate gate, and D7 is deferred to 2.4; see the decision records on #121 ([D1–D9](https://github.com/jaysbeekay/sure/issues/121#issuecomment-5677780796), [D5b and R15](https://github.com/jaysbeekay/sure/issues/121#issuecomment-5678035407)). This document is the decision record for
 issue #121 (the performance engine). It is normative for `Portfolio::DailyReturns`,
 `Portfolio::Performance`, `Portfolio::Drivers` and `Portfolio::FlowClassifier`; implementation
 must not silently choose a different interpretation.
