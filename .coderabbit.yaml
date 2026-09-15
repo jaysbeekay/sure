@@ -1,0 +1,36 @@
+# CodeRabbit configuration for this fork.
+#
+# Until now every setting came from the Organization UI, which means the review
+# rules that gate this repository's pull requests were not reviewable in the
+# repository itself. This file exists so the ones we deliberately choose are.
+#
+# Settings NOT listed here continue to come from the Organization UI.
+# `profile` and `auto_review` are restated rather than omitted so this file is
+# correct whether repository config merges with the org's or replaces it.
+reviews:
+  profile: assertive
+
+  auto_review:
+    # This repository has fewer than ten stars, so CodeRabbit does not review
+    # automatically, and it does not review drafts either way. Reviews are
+    # requested explicitly with `@coderabbitai review`. See CLAUDE.md.
+    drafts: false
+
+  pre_merge_checks:
+    docstrings:
+      # Reported, not blocking.
+      #
+      # The 80% threshold does not fit this codebase. Rails code here is
+      # documented with prose comments above a method explaining WHY a decision
+      # was made -- see Portfolio::FlowClassifier, InvestmentStatement or the
+      # contract documents -- rather than with per-method docstrings in a format
+      # a coverage counter recognises. Measured against the diffs on #134 and
+      # #148 the check reported 43% and 50%, and closing that gap would mean
+      # writing roughly fifty docstrings restating method names, which is
+      # exactly the documentation this project does not want.
+      #
+      # It stays on as a warning because the signal is occasionally useful on a
+      # genuinely undocumented public API. It must not block a merge, and it
+      # must never be the reason a green PR is held.
+      mode: warning
+      threshold: 80
