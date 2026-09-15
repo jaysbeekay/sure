@@ -1,0 +1,38 @@
+name: CodeBot
+
+on:
+  issue_comment:
+    types:
+      - created
+
+jobs:
+  codebot:
+    # Only run when:
+    # 1. Comment starts with @codeBot
+    # 2. Comment author is YOU
+
+    if: |
+      startsWith(github.event.comment.body, '@codeBot') &&
+      github.event.comment.user.login == 'jaysbeekay'
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 5
+
+    steps:
+      - name: Save GitHub event payload
+        run: |
+          echo '${{ toJson(github.event) }}' > payload.json
+
+      - name: Send request to CodeBot
+        run: |
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 300 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-CodeBot-Secret: ${{ secrets.CODEBOT_SECRET }}" \
+            --data @payload.json \
+            "${{ secrets.AI_WEBHOOK_URL }}"
