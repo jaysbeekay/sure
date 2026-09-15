@@ -48,6 +48,30 @@ class SimplefinItem::ImporterStaleUnmatchedPendingTest < ActiveSupport::TestCase
     assert_nil stats["stale_unmatched_pending"]
   end
 
+  # The tests above call track_stale_unmatched_pending directly, which is how
+  # the count being permanently zero in production went unnoticed: the stale
+  # exclusion runs in the same pass and flips `excluded: true` on a superset of
+  # what the count asks for. These two go through run_pending_reconciliation,
+  # the sequence import_account actually runs, so the order is under test.
+  test "the import sequence counts a stale unmatched entry before excluding it" do
+    stale_entry("simplefin" => { "pending" => true })
+
+    @importer.send(:run_pending_reconciliation, @account)
+
+    assert_equal 1, stats["stale_unmatched_pending"]
+    assert_equal 1, stats["stale_pending_excluded"]
+  end
+
+  test "the import sequence does not re-count an entry a previous sync excluded" do
+    entry = stale_entry("simplefin" => { "pending" => true })
+    entry.update!(excluded: true)
+
+    @importer.send(:run_pending_reconciliation, @account)
+
+    assert_nil stats["stale_unmatched_pending"]
+    assert_nil stats["stale_pending_excluded"]
+  end
+
   private
 
     def stale_entry(extra)
