@@ -85,7 +85,11 @@ class SimplefinItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 1_000, depository.cash_balance
   end
 
-  test "stale unmatched tracking handles malformed and provider-specific pending flags" do
+  # The count reads every provider's flag, as the stale exclusion it is paired
+  # with does (Entry.stale_pending), so a stale Lunch Flow entry is counted
+  # rather than seen by one step of the pass and ignored by the other. For the
+  # order the two run in, see SimplefinItem::Importer#run_pending_reconciliation.
+  test "stale unmatched tracking handles malformed flags and reads every provider" do
     account = @family.accounts.create!(name: "Stale pending", balance: 0, currency: "USD", accountable: Depository.new)
     create_pending_entry(account, "simplefin_maybe", "simplefin", "maybe", 10)
     create_pending_entry(account, "simplefin_false", "simplefin", "off", 11)
@@ -93,7 +97,7 @@ class SimplefinItem::ImporterTest < ActiveSupport::TestCase
 
     @importer.send(:track_stale_unmatched_pending, account)
 
-    assert_equal 1, @importer.send(:stats)["stale_unmatched_pending"]
+    assert_equal 2, @importer.send(:stats)["stale_unmatched_pending"]
     assert_empty @importer.send(:stats).fetch("reconciliation_errors", [])
   end
 

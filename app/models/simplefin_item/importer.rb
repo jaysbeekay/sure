@@ -937,9 +937,7 @@ class SimplefinItem::Importer
           # repeated scans during chunked history imports)
           unless @reconciled_account_ids.include?(acct.id)
             @reconciled_account_ids << acct.id
-            reconcile_and_track_pending_duplicates(acct)
-            exclude_and_track_stale_pending(acct)
-            track_stale_unmatched_pending(acct)
+            run_pending_reconciliation(acct)
           end
 
           # Refresh credit attributes when available-balance present
@@ -1266,6 +1264,25 @@ class SimplefinItem::Importer
       ids.group_by(&:itself).select { |_, v| v.size > 1 }.keys
     end
 
+    # The post-import pending pass for one account. The order is load-bearing,
+    # which is why it is a method rather than three calls at the call site:
+    #
+    # 1. Reconciling duplicates first is what writes `potential_posted_match`
+    #    (Entry.reconcile_pending_duplicates), which step 2 reads.
+    # 2. The unmatched count must be taken BEFORE the exclusion. Its candidates
+    #    -- stale, pending, not excluded, no posted match -- are a strict subset
+    #    of what `exclude_and_track_stale_pending` flips to `excluded: true`, so
+    #    running it afterwards reports zero for every account, always.
+    # 3. The exclusion runs last and keeps its own count.
+    #
+    # The two stats overlap by design: an entry can be both auto-excluded and
+    # flagged for manual review, which is what ProviderSyncSummary renders.
+    def run_pending_reconciliation(account)
+      reconcile_and_track_pending_duplicates(account)
+      track_stale_unmatched_pending(account)
+      exclude_and_track_stale_pending(account)
+    end
+
     # Reconcile pending transactions that have a matching posted version
     # Handles duplicates where pending and posted both exist (tip adjustments, etc.)
     def reconcile_and_track_pending_duplicates(account)
@@ -1324,13 +1341,15 @@ class SimplefinItem::Importer
     end
 
     # Track stale pending transactions that couldn't be matched (for user awareness)
-    # These are >8 days old, still pending, and have no duplicate suggestion
+    # These are >8 days old, still pending, and have no duplicate suggestion.
+    # Pending status follows Transaction.pending_sql across all providers, matching
+    # Entry#stale_pending. Runs BEFORE the exclusion -- see #run_pending_reconciliation.
     def track_stale_unmatched_pending(account)
       stale_unmatched = account.entries
         .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
         .where(excluded: false)
         .where("entries.date < ?", 8.days.ago.to_date)
-        .where(Transaction.pending_sql("transactions", providers: %w[simplefin plaid]))
+        .where(Transaction.pending_sql("transactions"))
         .where(<<~SQL.squish)
           transactions.extra -> 'potential_posted_match' IS NULL
         SQL
