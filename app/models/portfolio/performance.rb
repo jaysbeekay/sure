@@ -26,6 +26,14 @@ class Portfolio::Performance
   # for a calendar-daily series.
   TRADING_PERIODS_PER_YEAR = 365
 
+  # Calendar days per year, for turning a day count into a year fraction. The
+  # same number as TRADING_PERIODS_PER_YEAR today and deliberately a separate
+  # constant: that one counts return OBSERVATIONS, to scale a standard
+  # deviation, and this one counts DAYS. Move the series to weekly balances and
+  # the first becomes 52 while this must stay 365, so binding them together
+  # would quietly corrupt annualisation the day the interval changed.
+  DAYS_PER_YEAR = 365.0
+
   # R4: annualising anything shorter produces a number nobody should be shown.
   MIN_DAYS_FOR_ANNUALISATION = 365
 
@@ -182,7 +190,7 @@ class Portfolio::Performance
       return nil if chained.nil?
       return nil if period.days < MIN_DAYS_FOR_ANNUALISATION
 
-      years = period.days / 365.0
+      years = period.days / DAYS_PER_YEAR
       growth = (1 + chained).to_f
       # A total loss leaves nothing to annualise; the root of a negative is not
       # a return.
