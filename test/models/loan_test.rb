@@ -597,18 +597,23 @@ class LoanTest < ActiveSupport::TestCase
   # with the persisted schedule's actual next payment date for a loan whose
   # anchor day differs from today's.
   test "payoff_chart_payload's projection series start on the loan's actual next scheduled payment date" do
-    start_date = 2.years.ago.to_date.change(day: 15)
-    loan = build_chart_loan(balance: 500000, start_date: start_date)
-    loan.ensure_amortization_schedule_current!
-    loan.account.update!(balance: 450000)
+    # Pinned: if this ran on the 15th of any month, start_date's day-15
+    # anchor would coincide with Date.current.next_month, defeating the
+    # "real anchor mismatch" guard below and the point of the regression.
+    travel_to Date.new(2026, 3, 20) do
+      start_date = 2.years.ago.to_date.change(day: 15)
+      loan = build_chart_loan(balance: 500000, start_date: start_date)
+      loan.ensure_amortization_schedule_current!
+      loan.account.update!(balance: 450000)
 
-    next_scheduled_date = loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
-    assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+      next_scheduled_date = loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
+      assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
 
-    payload = loan.payoff_chart_payload
+      payload = loan.payoff_chart_payload
 
-    assert_equal next_scheduled_date.iso8601, payload[:accelerated_projection].first[:date]
-    assert_equal next_scheduled_date.iso8601, payload[:original_projection].first[:date]
+      assert_equal next_scheduled_date.iso8601, payload[:accelerated_projection].first[:date]
+      assert_equal next_scheduled_date.iso8601, payload[:original_projection].first[:date]
+    end
   end
 
   test "payoff_projection_with_extra returns a fresh projection boosted by the given amount" do
