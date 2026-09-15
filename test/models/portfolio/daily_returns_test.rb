@@ -291,6 +291,33 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
                  "and the drivers identity still reconciles, so nothing flags it"
   end
 
+  # Regression. When the period starts after the last balance row, that row is
+  # carried forward by the `lb` lateral. It was read for BOTH boundaries --
+  # value_close from its end_balance, value_open from its start_balance -- so
+  # the first day of the period re-reported a change that had already happened
+  # before the period began, and left the difference in #unexplained.
+  #
+  # Here day one moved 1,000 -> 1,100 and the period starts the day after. The
+  # portfolio does nothing in the period, so every day must return zero; reading
+  # start_balance gave the first day day-one's +10% a second time.
+  test "a balance row carried in from before the period opens at its closing level" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
+    day_three = @day_two + 1.day
+
+    rows = Portfolio::DailyReturns.new(
+      account_ids: [ @account.id ],
+      currency: @family.currency,
+      period: Period.custom(start_date: @day_two, end_date: day_three)
+    ).rows
+
+    first = rows.first
+    assert_equal BigDecimal("1100"), first.value_open,
+                 "the carried row's closing level is the opening value, not its start_balance"
+    assert_equal BigDecimal("1100"), first.value_close
+    assert_equal BigDecimal("0"), first.unexplained,
+                 "nothing happened in the period, so nothing is unexplained"
+  end
+
   private
     def daily_returns(account_ids: [ @account.id ], start_date: @day_one, end_date: @day_two)
       Portfolio::DailyReturns.new(

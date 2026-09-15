@@ -132,7 +132,16 @@ class Portfolio::Xirr
         # producing a NaN and calling it a return.
         return nil if next_rate <= RATE_FLOOR || !next_rate.finite?
 
-        return next_rate if (next_rate - rate).abs < TOLERANCE
+        # A step this small means Newton has stopped moving. That is NOT the
+        # same as having solved: on a flat or ill-conditioned stretch it can
+        # stall far from the root, and returning the rate here skipped the only
+        # check that says so. Confirm the residual, and hand over to bisection
+        # when it fails rather than reporting a stalled guess as an answer.
+        if (next_rate - rate).abs < TOLERANCE
+          return next_rate if present_value(next_rate).abs < TOLERANCE
+
+          return nil
+        end
 
         rate = next_rate
       end

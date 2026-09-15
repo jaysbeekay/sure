@@ -92,8 +92,11 @@ positive flow.
 
 These are recorded so they are not mistaken for oversights.
 
-- **Security transfers in** (F3) do not raise the denominator, so a portfolio built by
-  transferring positions in rather than buying them will show those positions as gains.
+- **Security transfers in** (F10) do not raise the denominator, because the journal entry carries
+  no cash amount, so a portfolio built by transferring positions in rather than buying them will
+  show those positions as gains. The classification itself is now correct -- an out-of-scope
+  journal is external -- but the flow magnitude is read from the entry's amount, which is zero.
+  Tracked in #151.
 - **Intraday flows** are not modelled. Every flow is treated as landing at the start of its day
   (R1).
 - **`fx_effect` is measured per day** (R11) as the closing local balance times the day's rate

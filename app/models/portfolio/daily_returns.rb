@@ -215,7 +215,17 @@ class Portfolio::DailyReturns
             -- applied anyway so the expression matches the chart series builder
             -- and cannot silently invert if the scope ever widens.
             COALESCE(SUM(lb.end_balance * lb.flows_factor * er.rate), 0) AS value_close,
-            COALESCE(SUM(lb.start_balance * lb.flows_factor * prev_er.rate), 0) AS value_open,
+            -- The opening level, which is only read for the FIRST day of the
+            -- period (#rows carries the previous close afterwards).
+            --
+            -- A row dated on this day gives its own start_balance. A row
+            -- CARRIED FORWARD from before the period is a level that was
+            -- already reached, so its END balance is the opening value here.
+            -- Reading its start_balance instead re-reported that historical
+            -- day's change as a return on the period's first day, and left the
+            -- difference in Row#unexplained.
+            COALESCE(SUM(CASE WHEN lb.date < d.date THEN lb.end_balance ELSE lb.start_balance END
+                         * lb.flows_factor * prev_er.rate), 0) AS value_open,
             -- Components come from a balance row dated EXACTLY on this day, not
             -- from the carried-forward one. LOCF is right for a level and wrong
             -- for a flow: re-reading yesterday's net_market_flows on every day
@@ -240,7 +250,7 @@ class Portfolio::DailyReturns
           LEFT JOIN scoped_accounts sa
             ON sa.active_until_date IS NULL OR d.date <= sa.active_until_date
           LEFT JOIN LATERAL (
-            SELECT b.end_balance, b.start_balance, b.flows_factor
+            SELECT b.date, b.end_balance, b.start_balance, b.flows_factor
             FROM balances b
             WHERE b.account_id = sa.id
               AND b.currency = sa.currency
