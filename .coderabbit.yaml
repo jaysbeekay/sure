@@ -11,9 +11,17 @@ reviews:
   profile: assertive
 
   auto_review:
-    # This repository has fewer than ten stars, so CodeRabbit does not review
-    # automatically, and it does not review drafts either way. Reviews are
-    # requested explicitly with `@coderabbitai review`. See CLAUDE.md.
+    # This key controls DRAFTS ONLY. It does not disable automatic review of
+    # ready pull requests: `auto_review.enabled` resolves to true, and a ready
+    # PR is reviewed incrementally on every push -- observed on #148, where a
+    # pass started three minutes after `f5a5ee4b` landed with nothing requested.
+    #
+    # So the rule is: a draft is reviewed only when asked, with
+    # `@coderabbitai review`; `@coderabbitai full review` forces a whole-PR pass
+    # when the incremental one has nothing left to say. CLAUDE.md step 5 states
+    # this as "automatic review is off on this repository (fewer than 10 stars)",
+    # which the behaviour above contradicts -- the drafts half of that sentence
+    # is what actually holds.
     drafts: false
 
   pre_merge_checks:
@@ -25,7 +33,8 @@ reviews:
       # was made -- see Portfolio::FlowClassifier, InvestmentStatement or the
       # contract documents -- rather than with per-method docstrings in a format
       # a coverage counter recognises. Measured against the diffs on #134 and
-      # #148 the check reported 43% and 50%, and closing that gap would mean
+      # #148 the check reported 43.21% and 50.00% (both read back from
+      # CodeRabbit's own comments on those PRs), and closing that gap would mean
       # writing roughly fifty docstrings restating method names, which is
       # exactly the documentation this project does not want.
       #
