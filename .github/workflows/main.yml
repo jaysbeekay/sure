@@ -31,7 +31,41 @@ jobs:
           echo "Repo: ${{ github.repository }}"
           echo "Issue/PR: ${{ github.event.issue.number }}"
 
-      - name: Send event to AI
+      - name: Build curated payload
+        id: payload
+        run: |
+          COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
+          # Strip the "@codebot" trigger word, leave the actual instruction
+          COMMAND=$(echo "$COMMENT_BODY" | sed -E 's/^@codebot[[:space:]]*//')
+
+          jq -n \
+            --arg event "codebot_trigger" \
+            --arg repo "${{ github.repository }}" \
+            --argjson issue_number "${{ github.event.issue.number }}" \
+            --argjson comment_id "${{ github.event.comment.id }}" \
+            --arg comment_url "${{ github.event.comment.html_url }}" \
+            --arg author "${{ github.event.comment.user.login }}" \
+            --arg author_association "${{ github.event.comment.author_association }}" \
+            --arg command "$COMMAND" \
+            --arg triggered_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              event: $event,
+              repository: $repo,
+              issue_number: $issue_number,
+              comment: {
+                id: $comment_id,
+                url: $comment_url,
+                author: $author,
+                author_association: $author_association,
+                command: $command
+              },
+              triggered_at: $triggered_at
+            }' > payload.json
+
+          echo "Payload built:"
+          cat payload.json
+
+      - name: Send curated event to Hermes
         run: |
           curl \
             --fail \
@@ -43,7 +77,5 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             -H "X-CodeBot-Secret: ${{ secrets.CODEBOT_SECRET }}" \
-            -H "X-GitHub-Repository: ${{ github.repository }}" \
-            -H "X-GitHub-Event: issue_comment" \
-            --data-binary @"$GITHUB_EVENT_PATH" \
+            --data-binary @payload.json \
             "${{ secrets.AI_WEBHOOK_URL }}"
