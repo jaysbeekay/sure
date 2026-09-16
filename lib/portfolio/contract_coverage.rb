@@ -68,7 +68,7 @@ module Portfolio
         own = constant_path(statement[1])
         next [] if own.nil?
 
-        path = [ namespace, own ].compact.join("::")
+        path = own.start_with?("::") ? own.delete_prefix("::") : [ namespace, own ].compact.join("::")
         matches = statement[0] == :class && path == class_name ? [ statement ] : []
         matches + class_nodes(statement, class_name, path)
       end
@@ -97,7 +97,11 @@ module Portfolio
       return unless node.is_a?(Array)
 
       case node[0]
-      when :const_ref, :top_const_ref, :var_ref then node[1][1]
+      when :const_ref, :var_ref then node[1][1]
+      # `class ::Foo` is the TOP-LEVEL Foo whatever encloses it, so the root
+      # qualifier is carried here and consumed in class_nodes rather than
+      # dropped, which would read it as a constant of the enclosing module.
+      when :top_const_ref then "::#{node[1][1]}"
       when :const_path_ref then [ constant_path(node[1]), node[2][1] ].join("::")
       end
     end
@@ -219,7 +223,7 @@ module Portfolio
 
         source = file.read
         class_name = fetch!(entry, "class", id)
-        fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless source.include?("class #{class_name} <")
+        fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless declared_textually?(source, class_name)
 
         tests = Array(fetch!(entry, "tests", id))
         fail!("#{id}: #{class_name} lists no tests") if tests.empty?
@@ -272,6 +276,13 @@ module Portfolio
 
       def row_number(id)
         id.to_s.match(ROW_ID)&.captures&.first.to_i
+      end
+
+      # A cheap "is this class even in the file" gate before the parse. Both
+      # spellings count: `class Foo <` and the root-qualified `class ::Foo <`,
+      # which declares the same constant.
+      def declared_textually?(source, class_name)
+        source.include?("class #{class_name} <") || source.include?("class ::#{class_name} <")
       end
 
       def fail!(message)

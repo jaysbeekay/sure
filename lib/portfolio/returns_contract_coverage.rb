@@ -69,7 +69,9 @@ module Portfolio
         fail!("#{id}: missing #{relative_path}") unless file.file?
 
         source = file.read
-        fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless source.include?("class #{class_name} <")
+        # `class ::Foo <` declares the same constant as `class Foo <`.
+        rooted = source.include?("class #{class_name} <") || source.include?("class ::#{class_name} <")
+        fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless rooted
 
         # Only a test the named class declares directly in its own body counts,
         # so a test in a second class, a helper method or a branch cannot stand

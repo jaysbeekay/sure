@@ -321,6 +321,40 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/missing test "inside a generated class" in ShapeTest/, error.message)
   end
 
+  # `class ::ShapeTest` inside a module defines the TOP-LEVEL ShapeTest --
+  # `Wrapper.const_defined?(:ShapeTest, false)` is false. Dropping the root
+  # qualifier while walking made the gate read it as `Wrapper::ShapeTest`,
+  # which is both halves of the bug this gate exists to prevent: it refuses
+  # the class that is really there, and answers a citation of one that is not.
+  test "a root qualified class is the top level one, whatever module encloses it" do
+    coverage = shape_coverage(<<~RUBY, "declared at the root")
+      module Wrapper
+        class ::ShapeTest < ActiveSupport::TestCase
+          test "declared at the root" do
+          end
+        end
+      end
+    RUBY
+
+    assert_equal 1, coverage.verify!, "ShapeTest is declared, at the root"
+  end
+
+  test "a root qualified class does not answer for the enclosing module's namespace" do
+    File.write(File.join(@dir, "shape_test.rb"), <<~RUBY)
+      module Wrapper
+        class ::ShapeTest < ActiveSupport::TestCase
+          test "declared at the root" do
+          end
+        end
+      end
+    RUBY
+    write_contract("| P1 | first | `Wrapper::ShapeTest` \"declared at the root\" | - |\n")
+    write_manifest("P1" => [ { "file" => "shape_test.rb", "class" => "Wrapper::ShapeTest", "tests" => [ "declared at the root" ] } ])
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { rooted_coverage.verify! }
+    assert_match(/Wrapper::ShapeTest is not declared/, error.message)
+  end
+
   test "a test file that does not parse is a contract error" do
     coverage = shape_coverage(<<~RUBY, "declared before the syntax error")
       class ShapeTest < ActiveSupport::TestCase
