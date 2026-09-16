@@ -25,7 +25,7 @@
         <%= t("portfolios.realized_gains.gains") %>
       </span>
       <span class="flex items-center gap-1.5 text-xs text-secondary">
-        <span class="w-2 h-2 rounded-full bg-destructive"></span>
+        <span class="w-2 h-2 rounded-full bg-subdued"></span>
         <%= t("portfolios.realized_gains.losses") %>
       </span>
     </div>
@@ -35,10 +35,7 @@
       data-bar-chart-data-value="<%= bars.to_json %>"
       data-bar-chart-currency-value="<%= statement.family.currency %>"
       data-bar-chart-income-label-value="<%= t("portfolios.realized_gains.gains") %>"
-      data-bar-chart-expense-label-value="<%= t("portfolios.realized_gains.losses") %>"
-      data-bar-chart-positive-key-value="gains"
-      data-bar-chart-negative-key-value="losses"
-      data-bar-chart-palette-value="profit">
+      data-bar-chart-expense-label-value="<%= t("portfolios.realized_gains.losses") %>">
     </div>
   <% end %>
 

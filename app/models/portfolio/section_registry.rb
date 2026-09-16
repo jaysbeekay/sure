@@ -155,9 +155,16 @@ class Portfolio::SectionRegistry
 
     # The bar payload, built here rather than in the partial so the view only
     # formats, and rather than on Portfolio::RealizedGains so that model stays
-    # free of presentation. Same shape and the same two labels
-    # PagesController#build_money_flow_data passes, including the short-label
-    # fallback for locales where "%b %Y" is not short.
+    # free of presentation. Same shape PagesController#build_money_flow_data
+    # passes, including the short-label fallback for locales where "%b %Y" is
+    # not short.
+    #
+    # `income` and `expense` are bar_chart_controller's wire format, not a
+    # claim about what these figures are: the two series are positional, and
+    # the labels the reader actually sees are passed separately as "Gains" and
+    # "Losses". An earlier revision renamed the keys by generalising that
+    # controller; the generalisation is not worth the blast radius on a widget
+    # the dashboard also renders, so the payload speaks its format instead.
     #
     # Losses are already a positive magnitude on the bucket, which is what the
     # chart's scale expects; `net` carries the sign for the figures beside it.
@@ -167,8 +174,8 @@ class Portfolio::SectionRegistry
           date: bucket.month,
           label: I18n.l(bucket.month, format: :short_month_year),
           short_label: I18n.l(bucket.month, format: "%b"),
-          gains: bucket.gains.to_f.round(2),
-          losses: bucket.losses.to_f.round(2)
+          income: bucket.gains.to_f.round(2),
+          expense: bucket.losses.to_f.round(2)
         }
       end
     end
