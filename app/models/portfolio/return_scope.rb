@@ -24,10 +24,114 @@ class Portfolio::ReturnScope
 
   attr_reader :account, :period
 
-  def initialize(account:, period:)
+  # `resolved` carries the four inputs when a caller has already fetched them
+  # for a set of accounts. Everything below still derives `kind` from those four
+  # by the same rules, so the batch path cannot mean something different from
+  # the lazy one -- it only skips the fetching. Built directly, the instance
+  # queries for each input as before.
+  def initialize(account:, period:, resolved: nil)
     @account = account
     @period = period
+
+    return if resolved.nil?
+
+    @balance_days = resolved.fetch(:balance_days)
+    @trades = resolved.fetch(:trades)
+    @valuations = resolved.fetch(:valuations)
+    @external_transactions = resolved.fetch(:external_transactions)
   end
+
+  # Eligibility for a set of accounts in three round trips rather than up to
+  # four per account, keyed by account id.
+  #
+  # Accepts account records (InvestmentStatement passes its historical scope,
+  # which includes closed and disabled accounts) or anything that responds to
+  # #to_a with them.
+  def self.resolve_all(accounts:, period:)
+    records = accounts.to_a
+    return {} if records.empty?
+
+    days = balance_days_by_account(records, period)
+    kinds = live_entry_kinds_by_account(records, period)
+    external = external_transaction_account_ids(records, period)
+
+    records.to_h do |account|
+      resolved = {
+        # An account with no rows in the period gets no GROUP BY row. It must
+        # default to zero rather than go missing: `balance_days.zero?` is a
+        # load-bearing case at both Performance call sites, where it means
+        # "holds nothing here, so it neither contributes nor withholds".
+        balance_days: days.fetch(account.id, 0),
+        trades: kinds.include?([ account.id, "Trade" ]),
+        valuations: kinds.include?([ account.id, "Valuation" ]),
+        external_transactions: external.include?(account.id)
+      }
+
+      [ account.id, new(account: account, period: period, resolved: resolved) ]
+    end
+  end
+
+  # Balance rows are counted in each account's OWN currency, as the instance
+  # does. Grouping over `balances` alone would count every currency the account
+  # holds, so the account is joined and the currencies compared.
+  def self.balance_days_by_account(records, period)
+    Balance
+      .joins(:account)
+      .where(account_id: records.map(&:id), date: period.date_range)
+      .where("balances.currency = accounts.currency")
+      .group(:account_id)
+      .count
+  end
+  private_class_method :balance_days_by_account
+
+  # trades? and valuations? read the same rows, so one query answers both.
+  def self.live_entry_kinds_by_account(records, period)
+    Entry
+      .where(account_id: records.map(&:id), entryable_type: %w[Trade Valuation])
+      .where("COALESCE(entries.excluded, false) = false")
+      .where("entries.date <= ?", period.end_date)
+      .distinct
+      .pluck(:account_id, :entryable_type)
+      .to_set
+  end
+  private_class_method :live_entry_kinds_by_account
+
+  # One round trip, but one fragment per account: each account has to be its
+  # OWN classifier scope, exactly as the instance builds it. Classifying the
+  # whole set together would make a transfer between two accounts in the set
+  # `internal`, and an account whose only external flow is a transfer to a
+  # sibling would fall from TRADE_TRACKED to VALUATION_TRACKED -- R16 would
+  # then withhold a money-weighted return it should quote. FlowClassifier bakes
+  # its scope into a fixed ARRAY literal, so the scope cannot vary per row.
+  def self.external_transaction_account_ids(records, period)
+    connection = ActiveRecord::Base.connection
+    quoted_end_date = connection.quote(period.end_date)
+
+    fragments = records.map do |account|
+      classifier = Portfolio::FlowClassifier.new(scope_account_ids: [ account.id ])
+      quoted_id = connection.quote(account.id)
+
+      # Values are quoted rather than bound: sanitize_sql_array would scan the
+      # classifier's finished CASE for `:name` placeholders, and the CASE
+      # carries every label literal.
+      <<~SQL
+        SELECT #{quoted_id} AS account_id
+        WHERE EXISTS (
+          SELECT 1
+          FROM entries
+          #{classifier.sql_joins}
+          WHERE entries.account_id = #{quoted_id}
+            AND entries.entryable_type = 'Transaction'
+            AND entries.date <= #{quoted_end_date}
+            AND COALESCE(entries.excluded, false) = false
+            AND #{classifier.sql_case} IN ('external_inflow', 'external_outflow')
+        )
+      SQL
+    end
+
+    connection.select_values(fragments.join(" UNION ALL ")).to_set
+  end
+  private_class_method :external_transaction_account_ids
 
   def kind
     @kind ||= begin
