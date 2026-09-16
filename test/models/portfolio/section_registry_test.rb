@@ -9,10 +9,10 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     @statement = InvestmentStatement.new(@family, user: @user)
   end
 
-  test "registers the six built-in sections with their partials and locals" do
+  test "registers the built-in sections with their partials and locals" do
     sections = registry.sections
 
-    assert_equal %w[kpis value_chart holdings accounts allocation data_quality], sections.map { |s| s[:key] }
+    assert_equal %w[kpis value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
     assert_equal %w[portfolios/kpi_row portfolios/value_chart], sections.first(2).map { |s| s[:partial] }
     assert sections.all? { |s| s[:collapsible] }
 
@@ -68,7 +68,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "orders sections by the user's saved order, appending anything it omits" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis])
 
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -84,7 +84,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "ignores keys in the saved order that no longer exist" do
     @user.update_section_preferences("portfolio", order: %w[gone value_chart])
 
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -101,7 +101,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     sections = registry(extra_sections: [ stub ]).sections
 
     assert_equal "stub", sections.last[:key]
-    assert_equal 7, sections.size
+    assert_equal 8, sections.size
   end
 
   test "a saved order can place an extra section among the built-ins" do
@@ -109,11 +109,49 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
              locals: {}, visible: true, collapsible: true }
     @user.update_section_preferences("portfolio", order: %w[stub kpis])
 
-    assert_equal %w[stub kpis value_chart holdings accounts allocation data_quality],
+    assert_equal %w[stub kpis value_chart realized_gains holdings accounts allocation data_quality],
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 
+  # The bar chart's axis tick is `short_label`. Bare "%b" prints two identical
+  # "Mar" ticks when a range spans more than one calendar year, so the year is
+  # carried only when it has to be -- inside one year the bare month is what
+  # fits the axis.
+  test "axis ticks carry the year only when the buckets span more than one" do
+    account = accounts(:investment)
+    within_one_year = [ Date.new(2026, 3, 10), Date.new(2026, 5, 12) ]
+    across_two = [ Date.new(2025, 3, 10), Date.new(2026, 3, 10) ]
+
+    (within_one_year + across_two).uniq.each do |date|
+      Holding.create!(account: account, security: securities(:aapl), date: date, qty: 10,
+                      price: 150, amount: 1_500, currency: "USD",
+                      cost_basis: 100, cost_basis_locked: true)
+    end
+
+    within_one_year.each { |date| sell_on(account, date) }
+    @period = Period.custom(start_date: Date.new(2026, 1, 1), end_date: Date.new(2026, 12, 31))
+    assert_equal %w[Mar May], bars.map { |bar| bar[:short_label] },
+                 "one calendar year needs no year on the tick"
+
+    across_two.each { |date| sell_on(account, date) }
+    @period = Period.custom(start_date: Date.new(2025, 1, 1), end_date: Date.new(2026, 12, 31))
+    assert_equal [ "Mar 25", "Mar 26", "May 26" ], bars.map { |bar| bar[:short_label] },
+                 "two Marches in one chart have to be told apart"
+  end
+
   private
+    def bars
+      registry.sections.find { |section| section[:key] == "realized_gains" }[:locals][:bars]
+    end
+
+    def sell_on(account, date)
+      account.entries.create!(
+        name: "Sell", date: date, amount: BigDecimal(300), currency: "USD",
+        entryable: Trade.new(security: securities(:aapl), qty: -2, price: 150,
+                             currency: "USD", investment_activity_label: "Sell")
+      )
+    end
+
     def registry(extra_sections: [])
       @as_of = Date.current
       Portfolio::SectionRegistry.new(

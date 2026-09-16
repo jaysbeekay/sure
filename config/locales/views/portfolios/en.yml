@@ -68,12 +68,30 @@ en:
       period_return: Period return
       unrealized_pnl: Unrealised P&L
       value: Value
+    realized_gains:
+      excluded:
+        missing_cost_basis:
+          one: 1 disposal has no known cost basis and is left out.
+          other: "%{count} disposals have no known cost basis and are left out."
+        missing_exchange_rate:
+          one: 1 disposal has no exchange rate for its trade date and is left out.
+          other: "%{count} disposals have no exchange rate for their trade date and are left out."
+        mixed_currency:
+          one: 1 disposal is priced in a currency its holding is not valued in and is left out.
+          other: "%{count} disposals are priced in a currency their holdings are not valued in and are left out."
+      excluded_title: Some disposals are not counted
+      gains: Gains
+      losses: Losses
+      summary:
+        one: 1 disposal in %{period}
+        other: "%{count} disposals in %{period}"
     sections:
       accounts: Accounts
       allocation: Allocation
       data_quality: Data quality
       holdings: Holdings
       kpis: Overview
+      realized_gains: Realised P&L
       value_chart: Portfolio value
     show:
       drag_to_reorder: Drag to reorder section

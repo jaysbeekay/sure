@@ -66,6 +66,65 @@ class Holding < ApplicationRecord
     calculate_avg_cost
   end
 
+  # The rule Holding#avg_cost applies to a stored basis before it falls
+  # back to trades: locked values are trusted even at zero, unlocked ones
+  # only when positive.
+  def self.stored_cost_basis?(holding)
+    holding.cost_basis.present? && (holding.cost_basis_locked? || holding.cost_basis.positive?)
+  end
+
+  # One query for the fallback Holding#calculate_avg_cost would run per
+  # holding: the weighted average of buy trades on or before the holding's
+  # date, converted to the account currency at each trade's date, unknown
+  # (nil) when any of those trades is a Transfer or when there are none.
+  # The SQL mirrors #calculate_avg_cost line for line; the parity test in
+  # InvestmentStatementTest holds them together.
+  def self.preload_avg_costs(holdings)
+    pending = holdings.reject { |holding| stored_cost_basis?(holding) }
+    return if pending.empty?
+
+    rows = ActiveRecord::Base.connection.select_all(
+      ActiveRecord::Base.sanitize_sql_array([
+        <<~SQL.squish,
+          SELECT cur.id AS holding_id,
+            BOOL_OR(trades.investment_activity_label = :transfer_label) AS has_transfer,
+            SUM(CASE WHEN trades.investment_activity_label IS DISTINCT FROM :transfer_label
+              THEN trades.price * trades.qty * COALESCE(exchange_rates.rate, 1) ELSE 0 END) AS total_cost,
+            SUM(CASE WHEN trades.investment_activity_label IS DISTINCT FROM :transfer_label
+              THEN trades.qty ELSE 0 END) AS total_qty
+          FROM holdings cur
+          JOIN accounts ON accounts.id = cur.account_id
+          JOIN entries ON entries.account_id = cur.account_id
+            AND entries.entryable_type = 'Trade'
+            AND entries.date <= cur.date
+          JOIN trades ON trades.id = entries.entryable_id
+            AND trades.security_id = cur.security_id
+            AND trades.qty > 0
+          LEFT JOIN exchange_rates ON (
+            exchange_rates.date = entries.date
+            AND exchange_rates.from_currency = trades.currency
+            AND exchange_rates.to_currency = accounts.currency
+          )
+          WHERE cur.id IN (:holding_ids)
+          GROUP BY cur.id
+        SQL
+        { holding_ids: pending.map(&:id), transfer_label: Trade::TRANSFER_LABEL }
+      ])
+    ).index_by { |row| row["holding_id"] }
+
+    pending.each do |holding|
+      row = rows[holding.id]
+      total_qty = row && row["total_qty"]&.to_d
+      value = if row.nil? || row["has_transfer"] || total_qty.nil? || total_qty <= 0
+        nil
+      else
+        Money.new(row["total_cost"].to_d / total_qty, holding.currency)
+      end
+      holding.preload_avg_cost(value)
+    end
+  end
+  private_class_method :stored_cost_basis?
+
   def preload_avg_cost(value)
     @preloaded_avg_cost = value
   end

@@ -123,6 +123,44 @@ module PortfolioReturnsTestHelper
     )
   end
 
+  # A disposal. Mirrors buy_trade with a negative qty, which is the whole
+  # difficulty this shape creates: a security journal (below) is written the
+  # same way and only the label tells them apart.
+  def sell_trade(account:, date:, qty:, price:, currency: nil, label: "Sell", security: nil)
+    account.entries.create!(
+      name: "Sell",
+      date: date,
+      amount: BigDecimal((-qty.abs * price).to_s),
+      currency: currency || account.currency,
+      entryable: Trade.new(
+        security: security || security_under_test,
+        qty: -qty.abs,
+        price: price,
+        currency: currency || account.currency,
+        investment_activity_label: label
+      )
+    )
+  end
+
+  # A holdings snapshot carrying an explicit cost basis, so a test's expected
+  # gain is hand-computable: Holding#avg_cost returns the stored cost_basis as
+  # the per-share average whenever it is positive or locked, without falling
+  # back to deriving one from trades.
+  #
+  # `cost_basis: nil` is the "cannot be determined" case -- with no buy trades
+  # behind it, calculate_avg_cost has nothing to average and returns nil.
+  def holding_snapshot(account:, date:, qty:, price:, cost_basis:, security: nil)
+    account.holdings.create!(
+      security: security || security_under_test,
+      date: date,
+      qty: qty,
+      price: price,
+      amount: BigDecimal((qty * price).to_s),
+      currency: account.currency,
+      cost_basis: cost_basis
+    )
+  end
+
   # A security journal: a position moved in or out of the account, written as a
   # Transfer-labelled trade with no cash value. Questrade writes exactly this
   # shape (QuestradeAccount::ActivitiesProcessor -- price: 0, amount: 0), and

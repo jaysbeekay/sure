@@ -20,7 +20,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[kpis value_chart holdings accounts allocation data_quality].freeze
+  KEYS = %w[kpis value_chart realized_gains holdings accounts allocation data_quality].freeze
 
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
@@ -84,6 +84,17 @@ class Portfolio::SectionRegistry
           visible: true,
           collapsible: true
         },
+        # Hidden when nothing was realised in the period: a P&L timeline with no
+        # disposals in it is an empty chart, not a finding, and the section
+        # chrome around it would read as one.
+        {
+          key: "realized_gains",
+          title: "portfolios.sections.realized_gains",
+          partial: "portfolios/realized_gains",
+          locals: shared_locals.merge(realized: realized_gains, bars: realized_gains_bars),
+          visible: realized_gains.any?,
+          collapsible: true
+        },
         {
           key: "holdings",
           title: "portfolios.sections.holdings",
@@ -136,6 +147,45 @@ class Portfolio::SectionRegistry
 
     def holdings_rows
       @holdings_rows ||= statement.holdings_table_rows(sort: sort, dir: dir)
+    end
+
+    def realized_gains
+      @realized_gains ||= statement.realized_gains(period: period)
+    end
+
+    # The bar payload, built here rather than in the partial so the view only
+    # formats, and rather than on Portfolio::RealizedGains so that model stays
+    # free of presentation. Same shape PagesController#build_money_flow_data
+    # passes, including the short-label fallback for locales where "%b %Y" is
+    # not short.
+    #
+    # `income` and `expense` are bar_chart_controller's wire format, not a
+    # claim about what these figures are: the two series are positional, and
+    # the labels the reader actually sees are passed separately as "Gains" and
+    # "Losses". An earlier revision renamed the keys by generalising that
+    # controller; the generalisation is not worth the blast radius on a widget
+    # the dashboard also renders, so the payload speaks its format instead.
+    #
+    # Losses are already a positive magnitude on the bucket, which is what the
+    # chart's scale expects; `net` carries the sign for the figures beside it.
+    # `short_label` is the axis tick, and "%b" drops the year. Over a range
+    # that spans more than one calendar year that prints two identical "Mar"
+    # ticks for different months, so the year is carried once the buckets
+    # cover more than one. Inside a single year it stays bare, which is what
+    # fits the axis.
+    def realized_gains_bars
+      buckets = realized_gains.buckets
+      short_format = buckets.map { |bucket| bucket.month.year }.uniq.size > 1 ? "%b %y" : "%b"
+
+      @realized_gains_bars ||= buckets.map do |bucket|
+        {
+          date: bucket.month,
+          label: I18n.l(bucket.month, format: :short_month_year),
+          short_label: I18n.l(bucket.month, format: short_format),
+          income: bucket.gains.to_f.round(2),
+          expense: bucket.losses.to_f.round(2)
+        }
+      end
     end
 
     def allocation_segments

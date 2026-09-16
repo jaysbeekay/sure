@@ -223,7 +223,7 @@ P35:
       - orders sections by the user's saved order, appending anything it omits
       - ignores keys in the saved order that no longer exist
       - appends extra sections after the built-ins
-      - registers the six built-in sections with their partials and locals
+      - registers the built-in sections with their partials and locals
 P36:
   - file: test/controllers/portfolios_controller_test.rb
     class: PortfoliosControllerTest
@@ -267,3 +267,19 @@ P40:
     class: InvestmentStatementTest
     tests:
       - average costs are preloaded in one query and agree with Holding#calculate_avg_cost
+P41:
+  - file: test/models/portfolio/realized_gains_test.rb
+    class: Portfolio::RealizedGainsTest
+    tests:
+      - a sale is bucketed in the month it was crystallised
+      - a transfer out is not a realised sale
+      - a foreign currency sale converts at its own trade date
+      - a sale with no exchange rate for its trade date is excluded and counted
+      - a sale with no determinable cost basis is excluded and counted
+      - a disposal below cost is a loss, reported as a magnitude with a negative net
+      - a disposal after an account's cut-off date does not count
+      - the query count does not grow with disposals against holdings with no stored basis
+  - file: test/controllers/portfolios_controller_test.rb
+    class: PortfoliosControllerTest
+    tests:
+      - the realised gains section renders its total, summary and exclusion alert

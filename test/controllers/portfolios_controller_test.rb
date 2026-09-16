@@ -400,6 +400,40 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
   PORTFOLIO_QUERY_CEILING = 60 # measured 54, see the ceiling test
 
+  # The section hides itself on every fixture family, so nothing rendered this
+  # partial and CI green said nothing about it. One measurable disposal and one
+  # that cannot be measured exercise both halves: the signed total and summary,
+  # and the exclusion alert that stops an unmeasurable sale being folded in as
+  # a zero.
+  test "the realised gains section renders its total, summary and exclusion alert" do
+    account = accounts(:investment)
+    sold_on = 5.days.ago.to_date
+    period = Period.last_30_days
+
+    Holding.create!(account: account, security: securities(:aapl), date: sold_on,
+                    qty: 10, price: 150, amount: 1_500, currency: "USD",
+                    cost_basis: 100, cost_basis_locked: true)
+    sell(account: account, security: securities(:aapl), date: sold_on, qty: 2, price: 150)
+
+    unmeasurable = Security.create!(ticker: "NOBASIS#{SecureRandom.hex(3).upcase}", name: "No basis")
+    Holding.create!(account: account, security: unmeasurable, date: sold_on,
+                    qty: 4, price: 50, amount: 200, currency: "USD")
+    sell(account: account, security: unmeasurable, date: sold_on, qty: 1, price: 50)
+
+    get portfolio_path(period: "last_30_days")
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "realized_gains", count: 1
+    assert_select "#portfolio-realized-gains" do
+      # 2 shares bought at 100, sold at 150.
+      assert_select "p", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(100, @family.currency)))}/
+    end
+    assert_match I18n.t("portfolios.realized_gains.summary", count: 1, period: period.label), response.body
+    assert_match I18n.t("portfolios.realized_gains.excluded_title"), response.body
+    assert_match I18n.t("portfolios.realized_gains.excluded.missing_cost_basis", count: 1), response.body
+    assert_select "[data-controller=?]", "bar-chart"
+  end
+
   private
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
@@ -413,6 +447,14 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
         date = days_ago.days.ago.to_date
         account.balances.create!(date: date, balance: 10_000 + days_ago, cash_balance: 5_000, currency: "USD")
       end
+    end
+
+    def sell(account:, security:, date:, qty:, price:)
+      account.entries.create!(
+        name: "Sell", date: date, amount: BigDecimal((qty * price).to_s), currency: "USD",
+        entryable: Trade.new(security: security, qty: -qty.abs, price: price,
+                             currency: "USD", investment_activity_label: "Sell")
+      )
     end
 
     def create_second_aapl_account(qty:, price:)

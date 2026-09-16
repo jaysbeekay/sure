@@ -94,6 +94,21 @@ class Trade < ApplicationRecord
     Trend.new(current: current_value, previous: cost_basis)
   end
 
+  # Set by callers that list many sell trades, so calculate_realized_gain_loss
+  # reads one preloaded set per account instead of querying holdings per trade.
+  # An empty array is authoritative (see the `defined?` check below): it means
+  # "preloaded, and there are none", not "not preloaded".
+  #
+  # Clearing the memo is the point of writing this out rather than using
+  # attr_writer: realized_gain_loss caches on first call, so a trade measured
+  # before its holdings arrived would keep returning the figure it derived
+  # without them. Callers are meant to preload first, but a public writer that
+  # silently ignores a later assignment is a trap.
+  def preloaded_holdings=(value)
+    @preloaded_holdings = value
+    remove_instance_variable(:@realized_gain_loss) if defined?(@realized_gain_loss)
+  end
+
   # Calculates realized gain/loss for sell trades based on avg_cost at time of sale
   # Returns nil for buy trades or when cost basis cannot be determined
   def realized_gain_loss
