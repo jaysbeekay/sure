@@ -538,9 +538,11 @@ class ReportsController < ApplicationController
         .order(date: :desc)
         .group_by(&:account_id)
 
-      # Inject preloaded holdings into trades for realized_gain_loss calculation
+      # Inject preloaded holdings into trades for realized_gain_loss calculation.
+      # Through the writer, not instance_variable_set: the writer also clears
+      # any memoised realized_gain_loss, which is the whole reason it exists.
       sell_trades.each do |trade|
-        trade.instance_variable_set(:@preloaded_holdings, holdings_by_account[trade.entry.account_id] || [])
+        trade.preloaded_holdings = holdings_by_account[trade.entry.account_id] || []
       end
 
       trades_by_treatment = sell_trades.group_by { |t| t.entry.account.tax_treatment || :taxable }

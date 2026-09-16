@@ -113,7 +113,45 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 
+  # The bar chart's axis tick is `short_label`. Bare "%b" prints two identical
+  # "Mar" ticks when a range spans more than one calendar year, so the year is
+  # carried only when it has to be -- inside one year the bare month is what
+  # fits the axis.
+  test "axis ticks carry the year only when the buckets span more than one" do
+    account = accounts(:investment)
+    within_one_year = [ Date.new(2026, 3, 10), Date.new(2026, 5, 12) ]
+    across_two = [ Date.new(2025, 3, 10), Date.new(2026, 3, 10) ]
+
+    (within_one_year + across_two).uniq.each do |date|
+      Holding.create!(account: account, security: securities(:aapl), date: date, qty: 10,
+                      price: 150, amount: 1_500, currency: "USD",
+                      cost_basis: 100, cost_basis_locked: true)
+    end
+
+    within_one_year.each { |date| sell_on(account, date) }
+    @period = Period.custom(start_date: Date.new(2026, 1, 1), end_date: Date.new(2026, 12, 31))
+    assert_equal %w[Mar May], bars.map { |bar| bar[:short_label] },
+                 "one calendar year needs no year on the tick"
+
+    across_two.each { |date| sell_on(account, date) }
+    @period = Period.custom(start_date: Date.new(2025, 1, 1), end_date: Date.new(2026, 12, 31))
+    assert_equal [ "Mar 25", "Mar 26", "May 26" ], bars.map { |bar| bar[:short_label] },
+                 "two Marches in one chart have to be told apart"
+  end
+
   private
+    def bars
+      registry.sections.find { |section| section[:key] == "realized_gains" }[:locals][:bars]
+    end
+
+    def sell_on(account, date)
+      account.entries.create!(
+        name: "Sell", date: date, amount: BigDecimal(300), currency: "USD",
+        entryable: Trade.new(security: securities(:aapl), qty: -2, price: 150,
+                             currency: "USD", investment_activity_label: "Sell")
+      )
+    end
+
     def registry(extra_sections: [])
       @as_of = Date.current
       Portfolio::SectionRegistry.new(

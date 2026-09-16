@@ -1,6 +1,8 @@
 require "test_helper"
 
 class TradeTest < ActiveSupport::TestCase
+  include PortfolioReturnsTestHelper
+
   test "build_name generates buy trade name" do
     name = Trade.build_name("buy", 10, "AAPL")
     assert_equal "Buy 10.0 shares of AAPL", name
@@ -153,6 +155,26 @@ class TradeTest < ActiveSupport::TestCase
     end
 
     # The two lists are deliberately different; this fails if one is ever
+    # realized_gain_loss memoises on first call, so a trade measured before its
+    # holdings arrived would keep the figure it derived without them. The writer
+    # clears that memo; attr_writer would not, and the stale figure would stand.
+    test "assigning preloaded holdings re-derives a realised figure already taken" do
+      family = families(:empty)
+      account = create_portfolio_account(family: family)
+      sell = sell_trade(account: account, date: Date.new(2026, 3, 10), qty: 2, price: 150).entryable
+
+      sell.preloaded_holdings = []
+      assert_nil sell.realized_gain_loss, "no holding means no basis, so no figure"
+
+      sell.preloaded_holdings = [ account.holdings.create!(
+        security: security_under_test, date: Date.new(2026, 3, 10), qty: 5, price: 150,
+        amount: BigDecimal(750), currency: account.currency, cost_basis: 100
+      ) ]
+
+      assert_equal BigDecimal(100), sell.realized_gain_loss.value.amount,
+                   "the second assignment must be read, not swallowed by the memo"
+    end
+
     # aliased back onto the other.
     test "a trade does not borrow the cash list" do
       assert_includes Transaction::INTERNAL_MOVEMENT_LABELS, "Exchange"

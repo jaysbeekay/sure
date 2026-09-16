@@ -168,12 +168,20 @@ class Portfolio::SectionRegistry
     #
     # Losses are already a positive magnitude on the bucket, which is what the
     # chart's scale expects; `net` carries the sign for the figures beside it.
+    # `short_label` is the axis tick, and "%b" drops the year. Over a range
+    # that spans more than one calendar year that prints two identical "Mar"
+    # ticks for different months, so the year is carried once the buckets
+    # cover more than one. Inside a single year it stays bare, which is what
+    # fits the axis.
     def realized_gains_bars
-      @realized_gains_bars ||= realized_gains.buckets.map do |bucket|
+      buckets = realized_gains.buckets
+      short_format = buckets.map { |bucket| bucket.month.year }.uniq.size > 1 ? "%b %y" : "%b"
+
+      @realized_gains_bars ||= buckets.map do |bucket|
         {
           date: bucket.month,
           label: I18n.l(bucket.month, format: :short_month_year),
-          short_label: I18n.l(bucket.month, format: "%b"),
+          short_label: I18n.l(bucket.month, format: short_format),
           income: bucket.gains.to_f.round(2),
           expense: bucket.losses.to_f.round(2)
         }
