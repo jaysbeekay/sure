@@ -34,35 +34,27 @@ jobs:
       - name: Build curated payload
         id: payload
         run: |
-          COMMENT_BODY=$(jq -r '.comment.body' "$GITHUB_EVENT_PATH")
-          # Strip the "@codebot" trigger word, leave the actual instruction
-          COMMAND=$(echo "$COMMENT_BODY" | sed -E 's/^@codebot[[:space:]]*//')
-
           # printf (not `> payload.json`) so no trailing newline is added —
           # the signing step must hash the exact bytes curl will send.
-          printf '%s' "$(jq -cn \
-            --arg event "codebot_trigger" \
-            --arg repo "${{ github.repository }}" \
-            --argjson issue_number "${{ github.event.issue.number }}" \
-            --argjson comment_id "${{ github.event.comment.id }}" \
-            --arg comment_url "${{ github.event.comment.html_url }}" \
-            --arg author "${{ github.event.comment.user.login }}" \
-            --arg author_association "${{ github.event.comment.author_association }}" \
-            --arg command "$COMMAND" \
-            --arg triggered_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              event: $event,
-              repository: $repo,
-              issue_number: $issue_number,
-              comment: {
-                id: $comment_id,
-                url: $comment_url,
-                author: $author,
-                author_association: $author_association,
-                command: $command
-              },
-              triggered_at: $triggered_at
-            }')" > payload.json
+          # Shape mirrors GitHub's native issue_comment webhook payload
+          # (nested repository.full_name / issue.number / issue.title /
+          # issue.user.login / issue.pull_request / comment.body /
+          # comment.user.login) because that's what the Hermes route's
+          # prompt template and skills (pr-gatekeeper, qa-issue-review)
+          # actually expect via {dot.notation}.
+          printf '%s' "$(jq -c '{
+            event_type: "codebot_trigger",
+            repository: { full_name: .repository.full_name },
+            issue: ( .issue
+                     | {number, title, user: {login: .user.login}}
+                     + (if has("pull_request") then {pull_request: .pull_request} else {} end) ),
+            comment: {
+              body: .comment.body,
+              user: { login: .comment.user.login },
+              html_url: .comment.html_url,
+              author_association: .comment.author_association
+            }
+          }' "$GITHUB_EVENT_PATH")" > payload.json
 
           echo "Payload built:"
           cat payload.json
