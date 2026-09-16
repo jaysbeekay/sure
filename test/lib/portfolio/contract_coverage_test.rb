@@ -289,6 +289,38 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/missing test "generated" in ShapeTest/, error.message)
   end
 
+  # The three tests above put the `test` call in a place that does not
+  # necessarily run. These two put the *class declaration* there instead: the
+  # cited class is only ever declared under a dead branch or inside a block, so
+  # at load time no ShapeTest exists to hold the test that is cited.
+  test "a class declared in a branch that never runs is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside a dead class")
+      if false
+        class ShapeTest < ActiveSupport::TestCase
+          test "inside a dead class" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside a dead class" in ShapeTest/, error.message)
+  end
+
+  test "a class declared inside a block is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside a generated class")
+      [ 1 ].each do |_n|
+        class ShapeTest < ActiveSupport::TestCase
+          test "inside a generated class" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside a generated class" in ShapeTest/, error.message)
+  end
+
   test "a test file that does not parse is a contract error" do
     coverage = shape_coverage(<<~RUBY, "declared before the syntax error")
       class ShapeTest < ActiveSupport::TestCase

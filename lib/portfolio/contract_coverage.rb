@@ -54,13 +54,43 @@ module Portfolio
     # the node's own name alone let a cited top-level `FooTest` be answered by a
     # `FooTest` declared inside any module, which is a different class and a
     # false positive of exactly the kind this check exists to reject.
+    #
+    # Only a declaration that is a statement of the program, or of a lexical
+    # class or module body, is read. Recursing into every child instead let a
+    # `class ShapeTest` under `if false`, or inside a block, answer a citation
+    # even though nothing defines that class at load time -- the same hole the
+    # `test` call itself was closed against above, one level up.
     def self.class_nodes(node, class_name, namespace = nil)
+      lexical_statements(node).flat_map do |statement|
+        next [] unless statement.is_a?(Array)
+        next [] unless statement[0] == :class || statement[0] == :module
+
+        own = constant_path(statement[1])
+        next [] if own.nil?
+
+        path = [ namespace, own ].compact.join("::")
+        matches = statement[0] == :class && path == class_name ? [ statement ] : []
+        matches + class_nodes(statement, class_name, path)
+      end
+    end
+
+    # The statements a program, class or module body holds directly. A
+    # `bodystmt` is [:bodystmt, statements, rescue, else, ensure]; only the
+    # statements are lexical children of the declaration.
+    def self.lexical_statements(node)
       return [] unless node.is_a?(Array)
 
-      own = node[0] == :class || node[0] == :module ? constant_path(node[1]) : nil
-      path = own.nil? ? namespace : [ namespace, own ].compact.join("::")
-      matches = node[0] == :class && !own.nil? && path == class_name ? [ node ] : []
-      matches + node.flat_map { |child| class_nodes(child, class_name, path) }
+      body =
+        case node[0]
+        when :program then node[1]
+        when :class   then node[3]
+        when :module  then node[2]
+        end
+
+      return Array(body) if node[0] == :program
+      return [] unless body.is_a?(Array) && body[0] == :bodystmt
+
+      Array(body[1])
     end
 
     def self.constant_path(node)
