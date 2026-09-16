@@ -379,6 +379,42 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_in_delta 0.01, result.twr.to_f, 0.000001
   end
 
+  # R4 applied to R8. The same flows read annually give 603.36 -- 60,336% --
+  # for a gain of a few percent over two days, which is an extrapolation of the
+  # period, not a figure the assets earned. GIPS is explicit that a return for a
+  # period under a year must not be annualised. The deposit is dated before the
+  # period so the account is trade-tracked without adding an in-period flow.
+  test "the money weighted return is the return over the period, not annualised" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_035.714286, market_flow: 35.714286
+    deposit account: @account, date: @day_one - 10.days, amount: 1_000
+
+    result = performance
+
+    assert_in_delta 0.035714, result.mwr.to_f, 0.00001,
+                    "the figure is the 3.5714% the period returned, not its annualisation"
+    assert_nil result.annualized_mwr,
+               "R4: a period under a year has no annualised money-weighted return"
+  end
+
+  # The other side of the boundary: at a year or more the annualised figure is
+  # reported, and it is the annual rate the same flows have always produced.
+  test "the annualised money weighted return is reported at a year or more" do
+    start_date = Date.new(2026, 1, 1)
+    mid_date = Date.new(2026, 7, 2)
+    end_date = Date.new(2026, 12, 31)
+
+    lay_balance account: @account, date: start_date, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: mid_date, opening: 1_000, closing: 2_000, cash_flow: 1_000
+    lay_balance account: @account, date: end_date, opening: 2_000, closing: 2_200, market_flow: 200
+    deposit account: @account, date: mid_date, amount: 1_000
+
+    result = performance(start_date: start_date, end_date: end_date)
+
+    assert_not_nil result.annualized_mwr, "365 days reaches MIN_DAYS_FOR_ANNUALISATION"
+    assert_in_delta 0.1346, result.annualized_mwr.to_f, 0.002
+  end
+
   private
     def build_textbook_case
       lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
