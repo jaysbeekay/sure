@@ -380,17 +380,22 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
   end
 
   # Eligibility used to cost up to four queries per account, and both supported?
-  # methods paid it separately on the same uncached path. The assertion is the
-  # count, not "it is faster": resolving five accounts one at a time takes at
-  # least six queries and grows with every account added.
+  # methods paid it separately on the same uncached path. The property is that
+  # the count does not grow with the account count, so that is what is asserted
+  # rather than a number I have to keep in my head: three resolution queries
+  # plus the Account load the call site has always done.
   test "eligibility for many accounts is resolved in a fixed number of queries" do
-    accounts = 5.times.map { build_valuation_tracked_account }
-    subject = performance(account_ids: accounts.map(&:id))
+    few = performance(account_ids: 2.times.map { build_valuation_tracked_account }.map(&:id))
+    many = performance(account_ids: 6.times.map { build_valuation_tracked_account }.map(&:id))
 
-    queries = capture_sql_queries { subject.send(:return_scopes) }
+    few_queries = capture_sql_queries { few.send(:return_scopes) }
+    many_queries = capture_sql_queries { many.send(:return_scopes) }
 
-    assert_operator queries.size, :<=, 3,
-                    "expected three resolution queries regardless of account count, got #{queries.size}"
+    assert_equal few_queries.size, many_queries.size,
+                 "resolution must not grow with the account count: 2 accounts took " \
+                 "#{few_queries.size}, 6 took #{many_queries.size}"
+    assert_operator many_queries.size, :<=, 4,
+                    "expected the account load plus three resolution queries, got #{many_queries.size}"
   end
 
   # The second call site. It reads only balance_days, so it cost 1 + N rather
@@ -402,7 +407,7 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     first = capture_sql_queries { subject.send(:time_weighted_supported?) }
     second = capture_sql_queries { subject.send(:time_weighted_supported?) }
 
-    assert_operator first.size, :<=, 3
+    assert_operator first.size, :<=, 4
     assert_empty second, "the resolution is memoised, so the second read asks nothing"
   end
 
