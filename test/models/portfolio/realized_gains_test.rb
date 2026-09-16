@@ -149,6 +149,24 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal few, many, "2 disposals and 6 must cost the same number of queries"
   end
 
+  # The test above seeds a stored cost_basis, which is the path that never
+  # falls back. A provider-synced holding commonly carries nil, and then
+  # Holding#avg_cost runs #calculate_avg_cost -- account, security, exists?
+  # and pick. Those repeat per distinct security, not per disposal, so the
+  # fixture has to vary the security or it measures nothing: before
+  # Holding.preload_avg_costs was wired in, this read 9 queries against 21.
+  test "the query count does not grow with disposals against holdings with no stored basis" do
+    seed_unpriced_disposals(2)
+    few = capture_sql_queries { measure_fully(build_gains) }.size
+
+    seed_unpriced_disposals(4)
+    many = capture_sql_queries { measure_fully(build_gains) }.size
+
+    assert_equal 6, build_gains.trade_count, "the fixture must actually grow, or this proves nothing"
+    assert_equal BigDecimal(300), build_gains.net, "and the basis must still be computed, not skipped"
+    assert_equal few, many, "2 disposals over 2 securities and 6 over 6 must cost the same"
+  end
+
   # A disabled account stops contributing on its cut-off date, exactly as it
   # stops contributing to the value chart and to the daily returns.
   test "a disposal after an account's cut-off date does not count" do
@@ -187,6 +205,25 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
       gains.buckets
       gains.excluded_trades
       gains.net
+    end
+
+    # n securities, each with a nil-basis snapshot, a buy at 100 and one sale
+    # at 150 -- so every disposal needs the trade-derived basis, and each needs
+    # its own row in it.
+    def seed_unpriced_disposals(count)
+      count.times do |i|
+        security = Security.create!(ticker: "RG#{i}#{SecureRandom.hex(4)}", name: "Unpriced #{i}")
+        @account.holdings.create!(
+          security: security, date: @march, qty: 20, price: 150,
+          amount: BigDecimal(3_000), currency: @account.currency, cost_basis: nil
+        )
+        @account.entries.create!(
+          name: "Buy", date: Date.new(2026, 1, 8), amount: BigDecimal(2_000), currency: @account.currency,
+          entryable: Trade.new(security: security, qty: 20, price: 100,
+                               currency: @account.currency, investment_activity_label: "Buy")
+        )
+        sell_trade account: @account, date: @march, qty: 1, price: 150, security: security
+      end
     end
 
     def create_portfolio_security_for_loss

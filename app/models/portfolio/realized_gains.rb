@@ -187,18 +187,31 @@ class Portfolio::RealizedGains
       cutoff.present? && trade.entry.date > cutoff
     end
 
-    # One grouped query for every account involved, handed to each trade, so
-    # Trade#realized_gain_loss never falls back to its own per-trade holdings
-    # lookup. Without this the query count grows with the number of disposals.
+    # Two queries for every account involved, handed to each trade, so
+    # Trade#realized_gain_loss never falls back to its own lookups.
+    #
+    # The holdings query alone is not enough. A holding with no stored
+    # cost_basis -- the common provider-synced case -- sends Holding#avg_cost
+    # into #calculate_avg_cost, which asks three more questions per holding.
+    # Measured over distinct securities that is 9 queries for 2 disposals and
+    # 21 for 6. Holding.preload_avg_costs answers all of them in the one
+    # grouped query P40 was written for, so the count stays flat.
+    #
+    # Scoped to the securities actually sold: loading every daily snapshot of
+    # every security the account has ever held, to read the few that were
+    # disposed of, is work the period does not need.
     def preload_holdings(trades)
       return if trades.empty?
 
       ids = trades.map { |trade| trade.entry.account_id }.uniq
-      by_account = Holding
-        .where(account_id: ids)
+      holdings = Holding
+        .where(account_id: ids, security_id: trades.map(&:security_id).uniq)
         .where("date <= ?", period.date_range.end)
         .order(date: :desc)
-        .group_by(&:account_id)
+        .to_a
+
+      Holding.preload_avg_costs(holdings)
+      by_account = holdings.group_by(&:account_id)
 
       trades.each do |trade|
         trade.preloaded_holdings = by_account[trade.entry.account_id] || []
