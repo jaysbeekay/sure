@@ -223,7 +223,7 @@ P35:
       - orders sections by the user's saved order, appending anything it omits
       - ignores keys in the saved order that no longer exist
       - appends extra sections after the built-ins
-      - registers the six built-in sections with their partials and locals
+      - registers the built-in sections with their partials and locals
 P36:
   - file: test/controllers/portfolios_controller_test.rb
     class: PortfoliosControllerTest

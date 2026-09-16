@@ -9,7 +9,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     @statement = InvestmentStatement.new(@family, user: @user)
   end
 
-  test "registers the seven built-in sections with their partials and locals" do
+  test "registers the built-in sections with their partials and locals" do
     sections = registry.sections
 
     assert_equal %w[kpis value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
