@@ -170,7 +170,337 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/P1: Portfolio::MissingTest is not declared/, error.message)
   end
 
+  # #152: only a `test` the named class declares directly in its own body is
+  # evidence. Every shape below reads as a declaration to a token scan of a text
+  # slice, and none of them defines a test on the named class.
+  test "a test call inside a helper method is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside a helper")
+      class ShapeTest < ActiveSupport::TestCase
+        def helper
+          test "inside a helper"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside a helper" in ShapeTest/, error.message)
+  end
+
+  test "a test call inside a branch that never runs is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside if false")
+      class ShapeTest < ActiveSupport::TestCase
+        if false
+          test "inside if false"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside if false" in ShapeTest/, error.message)
+  end
+
+  test "a test in an indented nested class is not evidence for the outer class" do
+    coverage = shape_coverage(<<~RUBY, "in the nested class")
+      class ShapeTest < ActiveSupport::TestCase
+        class NestedTest < ActiveSupport::TestCase
+          test "in the nested class"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "in the nested class" in ShapeTest/, error.message)
+  end
+
+  # The cited ShapeTest is the top-level one, so its own declaration verifies
+  # and the rejections below are exclusions, not a missing class. A class
+  # matches on its full lexical path: `module Wrapper; class ShapeTest` is
+  # Wrapper::ShapeTest and is not the cited ShapeTest, so neither it nor its
+  # sibling can stand in as evidence.
+  test "a test in an indented sibling class is not evidence" do
+    source = <<~RUBY
+      class ShapeTest < ActiveSupport::TestCase
+        test "direct in ShapeTest"
+      end
+
+      module Wrapper
+        class ShapeTest < ActiveSupport::TestCase
+          test "in the namespaced twin"
+        end
+
+        class SiblingTest < ActiveSupport::TestCase
+          test "in the sibling"
+        end
+      end
+    RUBY
+
+    assert_equal 1, shape_coverage(source, "direct in ShapeTest").verify!
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "in the sibling").verify! }
+    assert_match(/missing test "in the sibling" in ShapeTest/, error.message)
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "in the namespaced twin").verify! }
+    assert_match(/missing test "in the namespaced twin" in ShapeTest/, error.message)
+  end
+
+  # A class is matched on its full lexical path, so a cited top-level name
+  # cannot be satisfied by a same-named class nested inside anything else.
+  # Without this the enclosing scope was ignored: `module Wrapper; class
+  # ShapeTest` read as ShapeTest and answered for the cited top-level class.
+  # Both nesting forms are asserted because each extends the path separately.
+  test "a test in a nested class of the same name is not evidence" do
+    source = <<~RUBY
+      class ShapeTest < ActiveSupport::TestCase
+      end
+
+      module Wrapper
+        class ShapeTest < ActiveSupport::TestCase
+          test "declared inside Wrapper"
+        end
+      end
+
+      class OuterTest < ActiveSupport::TestCase
+        class ShapeTest < ActiveSupport::TestCase
+          test "declared inside OuterTest"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "declared inside Wrapper").verify! }
+    assert_match(/missing test "declared inside Wrapper" in ShapeTest/, error.message)
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "declared inside OuterTest").verify! }
+    assert_match(/missing test "declared inside OuterTest" in ShapeTest/, error.message)
+  end
+
+  # Decided in #152's triage plan: a contract row cites a literal declaration a
+  # reader can find, so a generated test is not evidence even though it runs.
+  test "a test generated inside a block is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "generated")
+      class ShapeTest < ActiveSupport::TestCase
+        [ 1 ].each do |_n|
+          test "generated" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "generated" in ShapeTest/, error.message)
+  end
+
+  # The three tests above put the `test` call in a place that does not
+  # necessarily run. These two put the *class declaration* there instead: the
+  # cited class is only ever declared under a dead branch or inside a block, so
+  # at load time no ShapeTest exists to hold the test that is cited.
+  test "a class declared in a branch that never runs is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside a dead class")
+      if false
+        class ShapeTest < ActiveSupport::TestCase
+          test "inside a dead class" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside a dead class" in ShapeTest/, error.message)
+  end
+
+  test "a class declared inside a block is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside a generated class")
+      [ 1 ].each do |_n|
+        class ShapeTest < ActiveSupport::TestCase
+          test "inside a generated class" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside a generated class" in ShapeTest/, error.message)
+  end
+
+  # `class ::ShapeTest` inside a module defines the TOP-LEVEL ShapeTest --
+  # `Wrapper.const_defined?(:ShapeTest, false)` is false. Dropping the root
+  # qualifier while walking made the gate read it as `Wrapper::ShapeTest`,
+  # which is both halves of the bug this gate exists to prevent: it refuses
+  # the class that is really there, and answers a citation of one that is not.
+  test "a root qualified class is the top level one, whatever module encloses it" do
+    coverage = shape_coverage(<<~RUBY, "declared at the root")
+      module Wrapper
+        class ::ShapeTest < ActiveSupport::TestCase
+          test "declared at the root" do
+          end
+        end
+      end
+    RUBY
+
+    assert_equal 1, coverage.verify!, "ShapeTest is declared, at the root"
+  end
+
+  test "a root qualified class does not answer for the enclosing module's namespace" do
+    File.write(File.join(@dir, "shape_test.rb"), <<~RUBY)
+      module Wrapper
+        class ::ShapeTest < ActiveSupport::TestCase
+          test "declared at the root" do
+          end
+        end
+      end
+    RUBY
+    write_contract("| P1 | first | `Wrapper::ShapeTest` \"declared at the root\" | - |\n")
+    write_manifest("P1" => [ { "file" => "shape_test.rb", "class" => "Wrapper::ShapeTest", "tests" => [ "declared at the root" ] } ])
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { rooted_coverage.verify! }
+    assert_match(/Wrapper::ShapeTest is not declared/, error.message)
+  end
+
+  test "a test file that does not parse is a contract error" do
+    coverage = shape_coverage(<<~RUBY, "declared before the syntax error")
+      class ShapeTest < ActiveSupport::TestCase
+        test "declared before the syntax error" do
+        end
+
+        def broken(
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/P1: shape_test.rb could not be parsed/, error.message)
+  end
+
+  test "a test call on a receiver is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "on a receiver")
+      class ShapeTest < ActiveSupport::TestCase
+        helper.test "on a receiver"
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "on a receiver" in ShapeTest/, error.message)
+  end
+
+  test "a declaration in a reopened body of the named class is evidence" do
+    coverage = shape_coverage(<<~RUBY, "in the second body")
+      class ShapeTest < ActiveSupport::TestCase
+        test "in the first body" do
+        end
+      end
+
+      class ShapeTest < ActiveSupport::TestCase
+        test "in the second body" do
+        end
+      end
+    RUBY
+
+    assert_equal 1, coverage.verify!
+  end
+
+  test "the returns gate accepts a direct declaration in a compact namespaced class" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+        test "declared directly" do
+        end
+      end
+    RUBY
+
+    assert_equal Portfolio::ReturnsContractCoverage::EXPECTED_ROWS,
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_directly").verify!
+  end
+
+  test "the returns gate rejects a test call inside a helper method" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+        def helper
+          test "inside a helper"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_inside_a_helper").verify!
+    end
+    assert_match(/R1: .* declares no test "test_inside_a_helper"/, error.message)
+  end
+
+  # The textual precondition only proves `class Portfolio::DailyReturnsTest <`
+  # appears somewhere; the declaration must still be in that class, not in a
+  # same-named class in another namespace later in the file.
+  test "the returns gate ignores a same-named class in another namespace" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+      end
+
+      module Other
+        class DailyReturnsTest < ActiveSupport::TestCase
+          test "declared elsewhere" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_elsewhere").verify!
+    end
+    assert_match(/R1: .* declares no test "test_declared_elsewhere"/, error.message)
+  end
+
+  test "the returns gate reports a test file that does not parse as a contract error" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+        test "declared before the syntax error" do
+        end
+
+        def broken(
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_before_the_syntax_error").verify!
+    end
+    assert_match(%r{R1: test/models/portfolio/daily_returns_test.rb could not be parsed}, error.message)
+  end
+
+  test "the returns gate still requires the class to be declared as it is cited" do
+    write_returns_test_file(<<~RUBY)
+      module Portfolio
+        class DailyReturnsTest < ActiveSupport::TestCase
+          test "declared directly" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_directly").verify!
+    end
+    assert_match(/R1: Portfolio::DailyReturnsTest is not declared/, error.message)
+  end
+
   private
+    # Writes a one-class test file and a single-row contract and manifest citing
+    # `name` in ShapeTest, so a failure can only come from the declaration check.
+    def shape_coverage(source, name)
+      File.write(File.join(@dir, "shape_test.rb"), source)
+      write_contract("| P1 | first | `ShapeTest` \"#{name}\" | - |\n")
+      write_manifest("P1" => [ { "file" => "shape_test.rb", "class" => "ShapeTest", "tests" => [ name ] } ])
+      rooted_coverage
+    end
+
+    def write_returns_test_file(source)
+      path = File.join(@dir, "test/models/portfolio/daily_returns_test.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, source)
+    end
+
+    # A returns contract whose every row cites `reference`, resolved against
+    # the temporary directory.
+    def returns_coverage(reference)
+      rows = (1..Portfolio::ReturnsContractCoverage::EXPECTED_ROWS).map { |n| "| R#{n} | decision | `#{reference}` |" }
+      File.write(File.join(@dir, "returns-contract.md"), rows.join("\n") + "\n")
+      Portfolio::ReturnsContractCoverage.new(contract_path: File.join(@dir, "returns-contract.md"), root: @dir)
+    end
+
     def coverage
       Portfolio::ContractCoverage.new(
         contract_path: File.join(@dir, "methodology.md"),
@@ -224,4 +554,39 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     def write_manifest(rows)
       File.write(File.join(@dir, "manifest.yml"), rows.to_yaml)
     end
+end
+
+# Two shapes the gate already handles correctly, asserted here rather than left
+# as silent assumptions in `constant_path` and `declared_test_name`. Both read
+# the singleton directly: the contract fixtures cite one fixed class name, and
+# what is under test here is the name matching itself.
+class Portfolio::ContractCoverageShapeTest < ActiveSupport::TestCase
+  # `constant_path` recurses through `const_path_ref`, so a head of three
+  # constants reads as its whole path. A suffix of that path is a different
+  # class and must not match it.
+  test "a class head of three constants is matched only by its whole path" do
+    source = <<~RUBY
+      class A::B::C < ActiveSupport::TestCase
+        test "deep"
+      end
+    RUBY
+
+    assert_equal [ "deep" ], Portfolio::ContractCoverage.declared_tests(source, "A::B::C")
+    assert_empty Portfolio::ContractCoverage.declared_tests(source, "B::C")
+    assert_empty Portfolio::ContractCoverage.declared_tests(source, "C")
+  end
+
+  # The receiver exclusion holds whether or not the call carries a block:
+  # `helper.test "x"` parses as a `:command_call`, and with a block as a
+  # `:method_add_block` wrapping one. Neither is a declaration on the class.
+  test "a test call on a receiver is not evidence even when it carries a block" do
+    source = <<~RUBY
+      class ShapeTest < ActiveSupport::TestCase
+        helper.test "receiver with a block" do
+        end
+      end
+    RUBY
+
+    assert_empty Portfolio::ContractCoverage.declared_tests(source, "ShapeTest")
+  end
 end
