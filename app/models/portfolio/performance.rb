@@ -239,7 +239,8 @@ class Portfolio::Performance
     # Eligibility for every account in the scope, resolved once per instance.
     # Both #money_weighted_supported? and #time_weighted_supported? read it, and
     # both run inside the uncached compute behind Rails.cache.fetch (R14), so a
-    # cache miss resolves three queries rather than up to four per account twice.
+    # cache miss costs the account load plus three resolution queries, once,
+    # rather than that load plus up to four queries per account, twice.
     def return_scopes
       @return_scopes ||= Portfolio::ReturnScope.resolve_all(
         accounts: Account.where(id: account_ids),
