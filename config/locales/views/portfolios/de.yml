@@ -76,9 +76,6 @@ de:
         missing_exchange_rate:
           one: 1 Veräußerung hat keinen Wechselkurs für ihr Handelsdatum und bleibt unberücksichtigt.
           other: "%{count} Veräußerungen haben keinen Wechselkurs für ihr Handelsdatum und bleiben unberücksichtigt."
-        mixed_currency:
-          one: 1 Veräußerung ist in einer Währung notiert, in der ihr Bestand nicht bewertet ist, und bleibt unberücksichtigt.
-          other: "%{count} Veräußerungen sind in einer Währung notiert, in der ihre Bestände nicht bewertet sind, und bleiben unberücksichtigt."
       excluded_title: Einige Veräußerungen werden nicht mitgezählt
       gains: Gewinne
       losses: Verluste

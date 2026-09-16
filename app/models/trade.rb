@@ -109,6 +109,21 @@ class Trade < ApplicationRecord
     remove_instance_variable(:@realized_gain_loss) if defined?(@realized_gain_loss)
   end
 
+  # Why #realized_gain_loss has no figure to give: `:missing_cost_basis` when
+  # no holding at or before the disposal carries one, `:missing_exchange_rate`
+  # when the proceeds cannot be expressed in the basis's currency on the
+  # disposal's own date. nil when a figure was produced, and nil for a trade
+  # that realises nothing -- a buy, or a position moved between accounts you
+  # own, has no missing fact to report.
+  #
+  # A caller that lists disposals it could not measure needs to name WHICH fact
+  # it lacks: telling a user their cost basis is unknown when the truth is a
+  # missing rate sends them to fix the wrong thing.
+  def realized_gain_loss_unavailable_reason
+    realized_gain_loss
+    @realized_gain_loss_unavailable_reason
+  end
+
   # Calculates realized gain/loss for sell trades based on avg_cost at time of sale
   # Returns nil for buy trades or when cost basis cannot be determined
   def realized_gain_loss
@@ -137,6 +152,8 @@ class Trade < ApplicationRecord
     end
 
     def calculate_realized_gain_loss
+      @realized_gain_loss_unavailable_reason = nil
+
       return nil unless sell?
       # Moving an asset to another account you own realises nothing. Without
       # this the cost basis is compared against the day's price and the
@@ -159,11 +176,48 @@ class Trade < ApplicationRecord
           .first
       end
 
-      return nil unless holding&.avg_cost
+      unless holding&.avg_cost
+        @realized_gain_loss_unavailable_reason = :missing_cost_basis
+        return nil
+      end
 
       cost_basis = holding.avg_cost * qty.abs
-      sale_proceeds = price_money * qty.abs
+      sale_proceeds = converted_to_basis_currency(price_money * qty.abs, cost_basis.currency)
+
+      if sale_proceeds.nil?
+        @realized_gain_loss_unavailable_reason = :missing_exchange_rate
+        return nil
+      end
 
       Trend.new(current: sale_proceeds, previous: cost_basis)
+    end
+
+    # The proceeds are priced in the security's currency; the basis is carried
+    # in the one the position is held in. `Trend#value` is `current - previous`
+    # and `Money#-` keeps the left operand's currency while taking the right
+    # one's bare amount, so without this the two were subtracted as plain
+    # numbers and the difference was then labelled with the disposal's
+    # currency -- an error that scaled with the rate and changed sign either
+    # side of parity.
+    #
+    # Converted in THIS direction, and not the other, because it is the
+    # direction the data holds: MarketDataImporter's first required pair is
+    # every entry currency against its account's, so a EUR disposal in a USD
+    # account has a EUR->USD row for the day it happened, while USD->EUR is
+    # only ever there by accident of another account.
+    #
+    # Exact date, exact direction, no parity fallback and no nearest-rate
+    # lookback. A disposal happened on one known day; the rate for that day is
+    # the rate, and its absence is a fact to report rather than a 1.0 nobody
+    # can see.
+    def converted_to_basis_currency(proceeds, basis_currency)
+      from = proceeds.currency.iso_code
+      to = basis_currency.iso_code
+      return proceeds if from == to
+
+      rate = ExchangeRate.find_by(from_currency: from, to_currency: to, date: entry.date)&.rate
+      return nil if rate.nil?
+
+      Money.new(proceeds.amount * rate, to)
     end
 end

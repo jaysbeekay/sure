@@ -117,6 +117,71 @@ class TradeTest < ActiveSupport::TestCase
     end
   end
 
+  # `Trend#value` is `current - previous` and `Money#-` neither converts nor
+  # raises, so a disposal priced in the security's currency was having a basis
+  # denominated in the account's subtracted from it as a bare number. The
+  # proceeds are converted into the basis's currency first, at the disposal's
+  # own date.
+  #
+  # A USD account holding a EUR-listed security: basis 100 USD/share, 2 sold at
+  # 150 EUR/share, EUR->USD 1.5 on the trade date. 300 EUR of proceeds is 450
+  # USD, less 200 USD of basis, so 250 USD. The unconverted subtraction reported
+  # 100 -- and then labelled it USD.
+  test "a disposal priced in another currency converts its proceeds at the trade date" do
+    account = create_portfolio_account(family: families(:empty))
+    date = Date.new(2026, 3, 10)
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell = sell_trade(account: account, date: date, qty: 2, price: 150, currency: "EUR").entryable
+    set_rate from: "EUR", to: "USD", date: date, rate: 1.5
+
+    gain = sell.realized_gain_loss
+
+    assert_equal BigDecimal(250), gain.value.amount
+    assert_equal "USD", gain.value.currency.iso_code,
+                 "the figure is carried in the currency the position is held in"
+  end
+
+  # The same defect at a rate below parity OVERSTATES, so a test at one rate
+  # cannot pass by accident of direction. 300 EUR at 0.7 is 210 USD, less 200
+  # USD of basis: a 10 USD gain, where the bare subtraction claimed 100.
+  test "a disposal at a rate below parity is not overstated" do
+    account = create_portfolio_account(family: families(:empty))
+    date = Date.new(2026, 3, 10)
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell = sell_trade(account: account, date: date, qty: 2, price: 150, currency: "EUR").entryable
+    set_rate from: "EUR", to: "USD", date: date, rate: 0.7
+
+    assert_equal BigDecimal(10), sell.realized_gain_loss.value.amount
+  end
+
+  # No rate for that date means the gain is unknown, not zero and not the
+  # figure the rate would have been 1.0. The reason is recorded so a caller can
+  # say WHICH fact it is missing rather than blaming the cost basis.
+  test "a cross-currency disposal with no rate for its date has no figure" do
+    account = create_portfolio_account(family: families(:empty))
+    date = Date.new(2026, 3, 10)
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell = sell_trade(account: account, date: date, qty: 2, price: 150, currency: "EUR").entryable
+    set_rate from: "EUR", to: "USD", date: date - 1, rate: 1.5
+
+    assert_nil sell.realized_gain_loss, "a neighbouring day's rate is not this day's"
+    assert_equal :missing_exchange_rate, sell.realized_gain_loss_unavailable_reason
+  end
+
+  test "a disposal with no cost basis says so rather than blaming a rate" do
+    account = create_portfolio_account(family: families(:empty))
+    date = Date.new(2026, 3, 10)
+
+    sell = sell_trade(account: account, date: date, qty: 2, price: 150).entryable
+    sell.preloaded_holdings = []
+
+    assert_nil sell.realized_gain_loss
+    assert_equal :missing_cost_basis, sell.realized_gain_loss_unavailable_reason
+  end
+
   private
     # A position whose cost basis is known, which is what makes a fabricated
     # gain possible: without one, realized_gain_loss returns nil for any reason.

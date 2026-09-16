@@ -167,34 +167,41 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal few, many, "2 disposals over 2 securities and 6 over 6 must cost the same"
   end
 
-  # `Trend#value` is `current - previous`, and `Money#-` neither converts nor
-  # raises: Money.new(300, "USD") - Money.new(200, "EUR") is 100.0 USD. So when
-  # a holding is valued in the account's currency and the disposal is priced in
-  # the security's, the basis is subtracted from the proceeds as a bare number
-  # and the result is labelled with the trade's currency.
+  # A USD account holding a EUR-listed security: basis 100 USD/share, 2 sold at
+  # 150 EUR/share, EUR->USD 1.5 on the trade date. 300 EUR of proceeds is 450
+  # USD, less 200 USD of basis, so 250 USD.
   #
-  # Concretely, before this was excluded: a USD account holding a EUR-listed
-  # security, basis 100 USD/share, sold at 150 EUR/share at a rate of 1.5, was
-  # reported as 150 USD of gain. The true figure is 250 USD -- 300 EUR of
-  # proceeds is 450 USD, less 200 USD of basis. A 40% understatement of a
-  # tax-relevant number.
-  #
-  # This section cannot fix the arithmetic -- it belongs to
-  # Trade#calculate_realized_gain_loss, which Reports shares -- but it must not
-  # print the wrong figure. It is excluded and counted, like any other disposal
-  # this page cannot measure honestly.
-  test "a disposal priced in a currency the holding is not valued in is excluded" do
+  # This was excluded as unmeasurable until jaysbeekay/sure#169 fixed the
+  # arithmetic in Trade#calculate_realized_gain_loss: `Trend#value` is
+  # `current - previous` and `Money#-` neither converts nor raises, so the
+  # basis was subtracted from the proceeds as a bare number and the 250 was
+  # reported as 150. The proceeds are now converted into the basis's currency
+  # before the subtraction, so the disposal is measured rather than declined.
+  test "a disposal priced in a currency the holding is not valued in is measured" do
     holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: 100
     sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
     set_rate from: "EUR", to: "USD", date: @march, rate: 1.5
 
-    assert_empty realized.buckets, "a figure that cannot be trusted is not shown"
-    assert_equal({ mixed_currency: 1 }, realized.excluded_trades)
+    assert_empty realized.excluded_trades, "a rate for the day is all this needed"
+    assert_equal BigDecimal(250), realized.net
+  end
+
+  # The rate has to be the one for the day the disposal happened. Without it
+  # the proceeds cannot be expressed in the basis's currency at all, and the
+  # tally must say THAT rather than blame the cost basis -- which is present,
+  # and would send the user to fix something that is not broken.
+  test "a cross-currency disposal with no rate for its date is excluded as a missing rate" do
+    holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "USD", date: @march - 1, rate: 1.5
+
+    assert_empty realized.buckets
+    assert_equal({ missing_exchange_rate: 1 }, realized.excluded_trades)
     assert_equal BigDecimal(0), realized.net
   end
 
-  # The guard is about a MISMATCH, not about foreign currency as such. An
-  # account, holding and disposal all in EUR still measure and convert.
+  # An account, holding and disposal all in EUR measure and convert once, at
+  # the statement's currency.
   test "a wholly foreign disposal is still measured when its holding agrees" do
     account = create_portfolio_account(family: @family, currency: "EUR")
     holding_snapshot account: account, date: @march, qty: 5, price: 150, cost_basis: 100

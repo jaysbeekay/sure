@@ -2,10 +2,48 @@ require "test_helper"
 
 class ReportsControllerTest < ActionDispatch::IntegrationTest
   include EntriesTestHelper
+  include PortfolioReturnsTestHelper
 
   setup do
     sign_in @user = users(:family_admin)
     @family = @user.family
+  end
+
+  # The per-trade line under the realised-gains card used to render
+  # `Money.new(gain.value, Current.family.currency)` -- taking the number out of
+  # the Trend and re-labelling it as family currency with no conversion at all.
+  #
+  # The fixture has to be a FOREIGN ACCOUNT for that to show. A gain is carried
+  # in the currency its position is held in, so for a USD account under a USD
+  # family the re-labelling is accidentally correct and a test built on one
+  # passes either way -- I wrote that test first and watched it fail to notice
+  # the bug restored.
+  #
+  # A USD family, a EUR account, a EUR-listed security: basis 100 EUR/share, 2
+  # sold at 150 EUR/share, EUR->USD 1.5 that day. The gain is 100 EUR, and the
+  # line must read $150.00. Re-labelled rather than converted it reads $100.00.
+  test "a foreign-account disposal is listed in family currency, not re-labelled" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family, currency: "EUR")
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: account, date: date, qty: 2, price: 150
+    set_rate from: "EUR", to: "USD", date: date, rate: 1.5
+
+    get reports_path
+    assert_response :ok
+
+    # The disposal line specifically. Matching on the ticker alone finds the
+    # HOLDINGS line above it, whose unrealized figure happens to be 250 in this
+    # fixture -- which is how the first version of this test passed against the
+    # very re-labelling it was written to catch.
+    line = css_select("[data-testid='realized-gain-line']").map(&:text)
+                                                           .find { |text| text.include?(security_under_test.ticker) }
+
+    assert line, "the disposal must be listed at all, or this proves nothing"
+    assert_match "$150.00", line, "the per-trade line converts at the trade's own rate"
+    assert_no_match(/\$100\.00/, line,
+                    "$100.00 is the EUR figure printed with a dollar sign")
   end
 
   # The Reports section controllers gained `url` and `preferenceKey` values so

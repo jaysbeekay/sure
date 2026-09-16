@@ -47,7 +47,7 @@ class Portfolio::RealizedGains
   # into the figures -- see notes 3 and 4 above. The order is the order the
   # partial lists them in, and #excluded_trades filters the tally through this
   # list, so a reason missing from it is silently dropped from the UI.
-  EXCLUSION_REASONS = %i[missing_cost_basis missing_exchange_rate mixed_currency].freeze
+  EXCLUSION_REASONS = %i[missing_cost_basis missing_exchange_rate].freeze
 
   attr_reader :accounts, :period, :currency, :active_until_dates
 
@@ -143,37 +143,24 @@ class Portfolio::RealizedGains
       sell_trades.each do |trade|
         gain = trade.realized_gain_loss
 
-        # nil means the cost basis could not be established -- no holding at or
-        # before the trade date, or one without an avg_cost (Trade
-        # #calculate_realized_gain_loss). Not a zero gain.
-        next @exclusions << :missing_cost_basis if gain.nil?
+        # nil is one of two facts the trade could not establish -- no cost
+        # basis, or no rate to express the proceeds in the basis's currency on
+        # the day of the disposal. Trade names which, and the two send a user
+        # to different places, so the tally keeps them apart. Neither is a zero
+        # gain.
+        if gain.nil?
+          next @exclusions << (trade.realized_gain_loss_unavailable_reason || :missing_cost_basis)
+        end
 
-        # `Trend#value` is `current - previous`, and `Money#-` neither converts
-        # nor raises across currencies. When the holding is valued in the
-        # account's currency and the disposal is priced in the security's, the
-        # basis is subtracted from the proceeds as a bare number and the result
-        # is then labelled `trade.currency` below -- understating a USD gain of
-        # 250 as 150 in the case pinned by the tests.
-        #
-        # The arithmetic belongs to Trade#calculate_realized_gain_loss, which
-        # Reports shares, so it is not fixed here (jaysbeekay/sure#169). What
-        # this section can do is decline to print a figure it cannot trust.
-        next @exclusions << :mixed_currency unless same_currency?(gain)
-
-        amount = converted(gain.value, trade.currency, trade.entry.date)
+        # The figure arrives in the currency the position is held in, which is
+        # not necessarily the disposal's (jaysbeekay/sure#169) and not
+        # necessarily this statement's. Convert from the currency it actually
+        # carries, at the trade's own date.
+        amount = converted(gain.value, gain.value.currency.iso_code, trade.entry.date)
         next @exclusions << :missing_exchange_rate if amount.nil?
 
         @measured_rows << { date: trade.entry.date, amount: amount }
       end
-    end
-
-    # Both sides of the Trend are Money. Equal currencies mean the subtraction
-    # behind `Trend#value` was between comparable amounts.
-    def same_currency?(gain)
-      current, previous = gain.current, gain.previous
-      return true unless current.respond_to?(:currency) && previous.respond_to?(:currency)
-
-      current.currency == previous.currency
     end
 
     def sell_trades
@@ -269,7 +256,15 @@ class Portfolio::RealizedGains
     def rates_by_date
       return @rates_by_date if defined?(@rates_by_date)
 
-      foreign = sell_trades.filter_map(&:currency).uniq - [ currency ]
+      # Both sets: a disposal is converted from the currency its POSITION is
+      # held in (Trade#realized_gain_loss converts the proceeds into the basis's
+      # currency first), and the account's currency is where that comes from.
+      # The trades' own currencies stay in the list because a holding written in
+      # the security's currency carries a gain in it.
+      foreign = (
+        sell_trades.filter_map(&:currency) +
+        sell_trades.filter_map { |trade| trade.entry.account.currency }
+      ).uniq - [ currency ]
       dates = sell_trades.map { |trade| trade.entry.date }.uniq
 
       @rates_by_date =
