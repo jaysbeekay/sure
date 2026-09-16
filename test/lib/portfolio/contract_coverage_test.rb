@@ -212,10 +212,14 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/missing test "in the nested class" in ShapeTest/, error.message)
   end
 
+  # ShapeTest is found inside the module (its own constant path reads
+  # ShapeTest), so the rejection is the sibling's test being excluded, not a
+  # missing class: the direct declaration beside it still verifies.
   test "a test in an indented sibling class is not evidence" do
-    coverage = shape_coverage(<<~RUBY, "in the sibling")
+    source = <<~RUBY
       module Wrapper
         class ShapeTest < ActiveSupport::TestCase
+          test "direct in ShapeTest"
         end
 
         class SiblingTest < ActiveSupport::TestCase
@@ -224,7 +228,9 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
       end
     RUBY
 
-    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_equal 1, shape_coverage(source, "direct in ShapeTest").verify!
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { shape_coverage(source, "in the sibling").verify! }
     assert_match(/missing test "in the sibling" in ShapeTest/, error.message)
   end
 
