@@ -267,18 +267,24 @@ class Portfolio::Performance
     # out of the scope -- and the closing value is what they could walk away with.
     #
     # Solved over the period, not the year. The rate is expressed in units of
-    # the span the rows actually cover, so the figure is the return over the
-    # period rather than an extrapolation of it to a year -- R4's rule, which
+    # the interval the rows cover, so the figure is the return over the period
+    # rather than an extrapolation of it to a year -- R4's rule, which
     # annualises nothing below a year, applied to the money-weighted figure.
     #
-    # The span is `last - first`, not `period.days`: Period#days counts both
-    # ends, so three consecutive rows report three days while the opening and
-    # closing values are two days apart, which is also the interval the
-    # time-weighted figure chains over.
+    # The closing value is dated at the END of the last row's day, which is the
+    # start of the next. A row's value_open is the previous day's close and its
+    # value_close is that day's, so N rows are N days of exposure and N daily
+    # returns -- the interval the time-weighted figure chains over, and the one
+    # Period#days counts. Dating the closing flow at the last row's own date
+    # instead would compress the series by a day: the money was at work for N
+    # days but discounted over N-1, which annualised to a figure about four
+    # basis points off the annual XIRR of the same flows over a year.
     def money_weighted(rows)
       return nil if rows.empty?
 
-      span_in_days = (rows.last.date - rows.first.date).to_i
+      # The end of the last day, not the start of it.
+      closing_date = rows.last.date + 1
+      span_in_days = (closing_date - rows.first.date).to_i
       return nil unless span_in_days.positive?
 
       opening = rows.first.value_open
@@ -293,7 +299,7 @@ class Portfolio::Performance
         flows << Portfolio::Xirr::Flow.new(date: row.date, amount: -flow)
       end
 
-      flows << Portfolio::Xirr::Flow.new(date: rows.last.date, amount: closing) unless closing.zero?
+      flows << Portfolio::Xirr::Flow.new(date: closing_date, amount: closing) unless closing.zero?
 
       Portfolio::Xirr.rate_or_nil(flows, days_per_unit: span_in_days)
     end

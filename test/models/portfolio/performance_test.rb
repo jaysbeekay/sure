@@ -398,7 +398,13 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
   end
 
   # The other side of the boundary: at a year or more the annualised figure is
-  # reported, and it is the annual rate the same flows have always produced.
+  # reported, and it is exactly the annual rate the same flows produce.
+  #
+  # The tolerance on mwr is tight on purpose. The closing value is dated at the
+  # end of the last row's day, so a 365-day period spans 365 days and the rate
+  # is the annual one: 0.13462698. Dated at the last row's own date instead the
+  # series spans 364 days and the rate is 0.13475242 -- 1.25e-4 out, which this
+  # delta rejects and a loose one would wave through.
   test "the annualised money weighted return is reported at a year or more" do
     start_date = Date.new(2026, 1, 1)
     mid_date = Date.new(2026, 7, 2)
@@ -411,8 +417,12 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
 
     result = performance(start_date: start_date, end_date: end_date)
 
+    assert_in_delta 0.13462698, result.mwr.to_f, 0.000001,
+                    "a 365-day period spans 365 days, so the period rate is the annual rate"
+
     assert_not_nil result.annualized_mwr, "365 days reaches MIN_DAYS_FOR_ANNUALISATION"
-    assert_in_delta 0.1346, result.annualized_mwr.to_f, 0.002
+    assert_in_delta result.mwr.to_f, result.annualized_mwr.to_f, 1e-9,
+                    "annualising a rate already measured over a year returns it unchanged"
   end
 
   private
