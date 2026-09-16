@@ -489,3 +489,38 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
       File.write(File.join(@dir, "manifest.yml"), rows.to_yaml)
     end
 end
+
+# Two shapes the gate already handles correctly, asserted here rather than left
+# as silent assumptions in `constant_path` and `declared_test_name`. Both read
+# the singleton directly: the contract fixtures cite one fixed class name, and
+# what is under test here is the name matching itself.
+class Portfolio::ContractCoverageShapeTest < ActiveSupport::TestCase
+  # `constant_path` recurses through `const_path_ref`, so a head of three
+  # constants reads as its whole path. A suffix of that path is a different
+  # class and must not match it.
+  test "a class head of three constants is matched only by its whole path" do
+    source = <<~RUBY
+      class A::B::C < ActiveSupport::TestCase
+        test "deep"
+      end
+    RUBY
+
+    assert_equal [ "deep" ], Portfolio::ContractCoverage.declared_tests(source, "A::B::C")
+    assert_empty Portfolio::ContractCoverage.declared_tests(source, "B::C")
+    assert_empty Portfolio::ContractCoverage.declared_tests(source, "C")
+  end
+
+  # The receiver exclusion holds whether or not the call carries a block:
+  # `helper.test "x"` parses as a `:command_call`, and with a block as a
+  # `:method_add_block` wrapping one. Neither is a declaration on the class.
+  test "a test call on a receiver is not evidence even when it carries a block" do
+    source = <<~RUBY
+      class ShapeTest < ActiveSupport::TestCase
+        helper.test "receiver with a block" do
+        end
+      end
+    RUBY
+
+    assert_empty Portfolio::ContractCoverage.declared_tests(source, "ShapeTest")
+  end
+end
