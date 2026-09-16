@@ -574,8 +574,14 @@ class ReportsController < ApplicationController
       # two sides are comparable (jaysbeekay/sure#169). Both sets of currencies
       # are needed here -- the account's, which is what a gain usually carries,
       # and the trade's, for a holding written in the security's currency.
+      # The holdings' own currencies join the list because a position can be
+      # carried in a third currency -- not the disposal's, not the account's --
+      # and a currency absent from this list converts at the `|| 1` parity
+      # below, which is the silent wrong answer #167 exists to remove.
       foreign_trade_currencies = (
-        sell_trades.map(&:currency) + sell_trades.map { |t| t.entry.account.currency }
+        sell_trades.map(&:currency) +
+        sell_trades.map { |t| t.entry.account.currency } +
+        holdings_by_account.values.flatten.map(&:currency)
       ).compact.uniq.reject { |c| c == currency }
       rates_by_trade_date = sell_trades.map { |t| t.entry.date }.uniq.each_with_object({}) do |date, memo|
         memo[date] = ExchangeRate.rates_for(foreign_trade_currencies, to: currency, date: date)

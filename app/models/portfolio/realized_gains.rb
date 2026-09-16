@@ -238,7 +238,13 @@ class Portfolio::RealizedGains
       numeric = amount.is_a?(Money) ? amount.amount : amount
       return numeric if from.blank? || from == currency
 
-      rate = rates_by_date.dig(date, from)
+      # The batch below enumerates the disposals' currencies and the accounts';
+      # a position carried in a THIRD currency is in neither, and treating the
+      # miss as "no rate" would exclude a disposal whose rate is on file. One
+      # lookup for that case, on the same terms as the batch -- exact date,
+      # exact direction, no parity.
+      rate = rates_by_date.dig(date, from) ||
+             ExchangeRate.find_by(from_currency: from, to_currency: currency, date: date)&.rate
       return nil if rate.nil?
 
       numeric * rate

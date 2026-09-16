@@ -46,6 +46,35 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
                     "$100.00 is the EUR figure printed with a dollar sign")
   end
 
+  # A position carried in a THIRD currency -- not the disposal's, not the
+  # account's. 300 EUR of proceeds at 0.8 is 240 GBP, less 200 GBP of basis, so
+  # 40 GBP and $50.00 at 1.25. GBP is in neither currency set the card
+  # enumerates by default, and a currency it does not enumerate converts at the
+  # `|| 1` parity fallback: the line would read $40.00, a GBP figure with a
+  # dollar sign, which is the same class of error as re-labelling.
+  test "a disposal carried in a third currency is converted, not passed through at parity" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family)
+
+    account.holdings.create!(
+      security: security_under_test, date: date, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: date, rate: 1.25
+
+    get reports_path
+    assert_response :ok
+
+    line = css_select("[data-testid='realized-gain-line']").map(&:text)
+                                                           .find { |text| text.include?(security_under_test.ticker) }
+
+    assert line, "the disposal must be listed at all, or this proves nothing"
+    assert_match "$50.00", line
+    assert_no_match(/\$40\.00/, line, "$40.00 is the GBP figure converted at parity")
+  end
+
   # The Reports section controllers gained `url` and `preferenceKey` values so
   # the portfolio hub can reuse them. Reports passes neither, so the page must
   # carry no override attributes and its endpoint must still accept the
