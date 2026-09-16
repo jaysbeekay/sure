@@ -52,9 +52,15 @@ class Portfolio::ReturnScope
   # "resolve_all asks the same number of queries however many accounts it is
   # given".
   #
-  # Accepts account records (InvestmentStatement passes its historical scope,
-  # which includes closed and disabled accounts) or anything that responds to
-  # #to_a with them.
+  # Takes Account RECORDS -- a relation, or an array of them. InvestmentStatement
+  # passes its historical scope, which includes closed and disabled accounts;
+  # Performance passes `Account.where(id: account_ids)`.
+  #
+  # Not ids. Passing them raises NoMethodError on the first `records.map(&:id)`,
+  # which is the intended answer: normalising them here would mean a load whose
+  # existence depends on the shape of the argument, so the query count this
+  # method advertises would stop being a property of the method. A caller that
+  # holds ids converts them, and pays for it where it can be seen.
   def self.resolve_all(accounts:, period:)
     records = accounts.to_a
     return {} if records.empty?
