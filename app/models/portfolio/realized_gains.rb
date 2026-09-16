@@ -102,8 +102,12 @@ class Portfolio::RealizedGains
     @excluded_trade_count ||= exclusions.size
   end
 
+  # Excluded disposals count. A period whose every disposal was unmeasurable
+  # has no buckets, and gating the section on buckets alone hid the one thing
+  # the user needed to see: that the page is missing data. Reporting exclusions
+  # and then hiding the report was the opposite of the intent in note 4.
   def any?
-    buckets.any?
+    buckets.any? || excluded_trade_count.positive?
   end
 
   private

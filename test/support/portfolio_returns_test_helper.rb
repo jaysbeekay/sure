@@ -126,14 +126,14 @@ module PortfolioReturnsTestHelper
   # A disposal. Mirrors buy_trade with a negative qty, which is the whole
   # difficulty this shape creates: a security journal (below) is written the
   # same way and only the label tells them apart.
-  def sell_trade(account:, date:, qty:, price:, currency: nil, label: "Sell")
+  def sell_trade(account:, date:, qty:, price:, currency: nil, label: "Sell", security: nil)
     account.entries.create!(
       name: "Sell",
       date: date,
       amount: BigDecimal((-qty.abs * price).to_s),
       currency: currency || account.currency,
       entryable: Trade.new(
-        security: security_under_test,
+        security: security || security_under_test,
         qty: -qty.abs,
         price: price,
         currency: currency || account.currency,

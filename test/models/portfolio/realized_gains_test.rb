@@ -84,6 +84,24 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal({ missing_cost_basis: 1 }, realized.excluded_trades)
   end
 
+  # The section is gated on #any?. A period whose every disposal was
+  # unmeasurable has no buckets, so gating on buckets alone hid the one thing
+  # the user needed to see -- that the page is missing data. Reporting the
+  # exclusions and then hiding the report is worse than not reporting them.
+  test "a period whose only disposals are all excluded still reports itself" do
+    holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: nil
+    sell_trade account: @account, date: @march, qty: 2, price: 150
+
+    assert_empty realized.buckets
+    assert realized.any?, "the section must render to surface the exclusion"
+    assert_equal({ missing_cost_basis: 1 }, realized.excluded_trades)
+  end
+
+  test "a portfolio with no disposals at all reports nothing" do
+    assert_not realized.any?
+    assert_empty realized.excluded_trades
+  end
+
   # `losses` is a positive magnitude and `net` carries the sign, so a losing
   # month is not silently absorbed into a smaller gain.
   test "a disposal below cost is a loss, reported as a magnitude with a negative net" do
@@ -105,7 +123,7 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: 100
     holding_snapshot account: @account, date: @march, qty: 5, price: 60, cost_basis: 100, security: other
     sell_trade account: @account, date: @march, qty: 2, price: 150
-    sell_trade_for account: @account, date: @march, qty: 1, price: 60, security: other
+    sell_trade account: @account, date: @march, qty: 1, price: 60, security: other
 
     bucket = realized.buckets.sole
 
@@ -175,19 +193,4 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
       Security.create!(ticker: "LOSS#{SecureRandom.hex(4)}", name: "Loss Security")
     end
 
-    def sell_trade_for(account:, date:, qty:, price:, security:)
-      account.entries.create!(
-        name: "Sell",
-        date: date,
-        amount: BigDecimal((-qty.abs * price).to_s),
-        currency: account.currency,
-        entryable: Trade.new(
-          security: security,
-          qty: -qty.abs,
-          price: price,
-          currency: account.currency,
-          investment_activity_label: "Sell"
-        )
-      )
-    end
 end

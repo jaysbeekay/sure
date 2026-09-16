@@ -9,10 +9,10 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     @statement = InvestmentStatement.new(@family, user: @user)
   end
 
-  test "registers the six built-in sections with their partials and locals" do
+  test "registers the seven built-in sections with their partials and locals" do
     sections = registry.sections
 
-    assert_equal %w[kpis value_chart holdings accounts allocation data_quality], sections.map { |s| s[:key] }
+    assert_equal %w[kpis value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
     assert_equal %w[portfolios/kpi_row portfolios/value_chart], sections.first(2).map { |s| s[:partial] }
     assert sections.all? { |s| s[:collapsible] }
 
@@ -68,7 +68,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "orders sections by the user's saved order, appending anything it omits" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis])
 
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -84,7 +84,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "ignores keys in the saved order that no longer exist" do
     @user.update_section_preferences("portfolio", order: %w[gone value_chart])
 
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -101,7 +101,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     sections = registry(extra_sections: [ stub ]).sections
 
     assert_equal "stub", sections.last[:key]
-    assert_equal 7, sections.size
+    assert_equal 8, sections.size
   end
 
   test "a saved order can place an extra section among the built-ins" do
@@ -109,7 +109,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
              locals: {}, visible: true, collapsible: true }
     @user.update_section_preferences("portfolio", order: %w[stub kpis])
 
-    assert_equal %w[stub kpis value_chart holdings accounts allocation data_quality],
+    assert_equal %w[stub kpis value_chart realized_gains holdings accounts allocation data_quality],
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 

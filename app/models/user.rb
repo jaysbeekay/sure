@@ -650,8 +650,12 @@ class User < ApplicationRecord
       %w[trends_insights transactions_breakdown]
     end
 
+    # Read from the registry rather than repeated here. These two lists must
+    # agree -- a key missing from this one is appended after every other
+    # section instead of appearing where it was declared -- and keeping a
+    # second copy is what let them drift when the realised P&L section landed.
     def default_portfolio_section_order
-      %w[kpis value_chart holdings accounts allocation data_quality]
+      Portfolio::SectionRegistry::KEYS.dup
     end
 
     def default_section_order(namespace)
