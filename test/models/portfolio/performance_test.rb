@@ -405,10 +405,13 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     subject = performance(account_ids: accounts.map(&:id))
 
     first = capture_sql_queries { subject.send(:time_weighted_supported?) }
-    second = capture_sql_queries { subject.send(:time_weighted_supported?) }
+    # The other call site, not the same one twice: this is what proves the two
+    # share a resolution rather than each memoising its own.
+    shared = capture_sql_queries { subject.send(:money_weighted_supported?, [ :row, :row ]) }
 
     assert_operator first.size, :<=, 4
-    assert_empty second, "the resolution is memoised, so the second read asks nothing"
+    assert_empty shared,
+                 "money_weighted_supported? reads the resolution time_weighted_supported? already paid for"
   end
 
   private
