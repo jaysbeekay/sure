@@ -167,6 +167,27 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal few, many, "2 disposals over 2 securities and 6 over 6 must cost the same"
   end
 
+  # The conversion the disposals need is a rate lookup, and one per foreign
+  # disposal would be a new N+1 introduced by the very fix that made them
+  # measurable. Trade.preload_exchange_rates answers all of them in one query.
+  #
+  # Each disposal falls on its OWN date, which is what makes this measure
+  # anything: identical lookups are served by the ActiveRecord query cache, so
+  # a fixture with every sale on one day reads as flat whether the preload runs
+  # or not. I wrote that version first and watched the mutation pass it.
+  test "the query count does not grow with the number of cross-currency disposals" do
+    holding_snapshot account: @account, date: @march, qty: 20, price: 150, cost_basis: 100
+    seed_foreign_disposals(2)
+    few = capture_sql_queries { measure_fully(build_gains) }.size
+
+    seed_foreign_disposals(4, offset: 2)
+    many = capture_sql_queries { measure_fully(build_gains) }.size
+
+    assert_equal 6, build_gains.trade_count, "the fixture must actually grow, or this proves nothing"
+    assert_equal BigDecimal(750), build_gains.net, "and every disposal must still be measured"
+    assert_equal few, many, "2 foreign disposals over 2 dates and 6 over 6 must cost the same"
+  end
+
   # A USD account holding a EUR-listed security: basis 100 USD/share, 2 sold at
   # 150 EUR/share, EUR->USD 1.5 on the trade date. 300 EUR of proceeds is 450
   # USD, less 200 USD of basis, so 250 USD.
@@ -252,6 +273,17 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
       gains.buckets
       gains.excluded_trades
       gains.net
+    end
+
+    # n EUR-priced disposals, each on its own date with its own rate row, so
+    # every one needs a DISTINCT rate lookup and the query cache cannot hide a
+    # per-disposal query behind the first one.
+    def seed_foreign_disposals(count, offset: 0)
+      count.times do |i|
+        date = @march + offset + i
+        set_rate from: "EUR", to: "USD", date: date, rate: 1.5
+        sell_trade account: @account, date: date, qty: 1, price: 150, currency: "EUR"
+      end
     end
 
     # n securities, each with a nil-basis snapshot, a buy at 100 and one sale

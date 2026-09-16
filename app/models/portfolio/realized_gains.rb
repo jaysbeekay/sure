@@ -226,6 +226,10 @@ class Portfolio::RealizedGains
       trades.each do |trade|
         trade.preloaded_holdings = by_account[trade.entry.account_id] || []
       end
+
+      # And the rates the disposals' own conversion needs, in one more query
+      # rather than one per foreign disposal (jaysbeekay/sure#169).
+      Trade.preload_exchange_rates(trades)
     end
 
     # Note 2: each disposal at its own trade date. Note 3: nil, never 1, when

@@ -109,6 +109,52 @@ class Trade < ApplicationRecord
     remove_instance_variable(:@realized_gain_loss) if defined?(@realized_gain_loss)
   end
 
+  # Set by callers that list many disposals, so the proceeds conversion below
+  # reads one preloaded set instead of a query per foreign disposal. Keyed
+  # `[from, to, date]`.
+  #
+  # NOT authoritative when a key is absent, unlike preloaded_holdings: the
+  # preload keys the basis side on the ACCOUNT's currency, which is what the
+  # sync and import paths write a holding in, and a holding carried in some
+  # other currency would miss the preload. Treating that as "no rate" would
+  # exclude a disposal that is perfectly measurable, so a miss falls back to
+  # the single lookup rather than to a wrong answer.
+  def preloaded_exchange_rates=(value)
+    @preloaded_exchange_rates = value
+    remove_instance_variable(:@realized_gain_loss) if defined?(@realized_gain_loss)
+  end
+
+  # One query for every rate a set of disposals can need, instead of one per
+  # disposal. The date set and the currency sets are each small; the product is
+  # a superset of the pairs actually wanted, which is cheaper to fetch than to
+  # describe pair by pair in SQL.
+  def self.preload_exchange_rates(trades)
+    return if trades.empty?
+
+    wanted = trades.filter_map do |trade|
+      from = trade.currency
+      to = trade.entry.account.currency
+      next if from.blank? || to.blank? || from == to
+
+      [ from, to, trade.entry.date ]
+    end
+
+    if wanted.empty?
+      trades.each { |trade| trade.preloaded_exchange_rates = {} }
+      return
+    end
+
+    rates = ExchangeRate
+      .where(
+        from_currency: wanted.map(&:first).uniq,
+        to_currency: wanted.map(&:second).uniq,
+        date: wanted.map(&:third).uniq
+      )
+      .to_h { |rate| [ [ rate.from_currency, rate.to_currency, rate.date ], rate.rate ] }
+
+    trades.each { |trade| trade.preloaded_exchange_rates = rates }
+  end
+
   # Why #realized_gain_loss has no figure to give: `:missing_cost_basis` when
   # no holding at or before the disposal carries one, `:missing_exchange_rate`
   # when the proceeds cannot be expressed in the basis's currency on the
@@ -215,9 +261,16 @@ class Trade < ApplicationRecord
       to = basis_currency.iso_code
       return proceeds if from == to
 
-      rate = ExchangeRate.find_by(from_currency: from, to_currency: to, date: entry.date)&.rate
+      rate = preloaded_rate(from, to) ||
+             ExchangeRate.find_by(from_currency: from, to_currency: to, date: entry.date)&.rate
       return nil if rate.nil?
 
       Money.new(proceeds.amount * rate, to)
+    end
+
+    def preloaded_rate(from, to)
+      return nil unless defined?(@preloaded_exchange_rates)
+
+      (@preloaded_exchange_rates || {})[[ from, to, entry.date ]]
     end
 end

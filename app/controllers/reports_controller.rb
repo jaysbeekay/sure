@@ -545,6 +545,10 @@ class ReportsController < ApplicationController
         trade.preloaded_holdings = holdings_by_account[trade.entry.account_id] || []
       end
 
+      # The rates the proceeds conversion needs, in one query rather than one
+      # per foreign disposal.
+      Trade.preload_exchange_rates(sell_trades)
+
       trades_by_treatment = sell_trades.group_by { |t| t.entry.account.tax_treatment || :taxable }
 
       # Unwrap helper: Trend#value / realized_gain_loss#value are Money objects,
