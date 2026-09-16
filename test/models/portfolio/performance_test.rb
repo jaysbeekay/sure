@@ -491,7 +491,49 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
                     "annualising a rate already measured over a year returns it unchanged"
   end
 
+  # Eligibility used to cost up to four queries per account, and both supported?
+  # methods paid it separately on the same uncached path. The property is that
+  # the count does not grow with the account count, so that is what is asserted
+  # rather than a number I have to keep in my head: three resolution queries
+  # plus the Account load the call site has always done.
+  test "eligibility for many accounts is resolved in a fixed number of queries" do
+    few = performance(account_ids: 2.times.map { build_valuation_tracked_account }.map(&:id))
+    many = performance(account_ids: 6.times.map { build_valuation_tracked_account }.map(&:id))
+
+    few_queries = capture_sql_queries { few.send(:return_scopes) }
+    many_queries = capture_sql_queries { many.send(:return_scopes) }
+
+    assert_equal few_queries.size, many_queries.size,
+                 "resolution must not grow with the account count: 2 accounts took " \
+                 "#{few_queries.size}, 6 took #{many_queries.size}"
+    assert_operator many_queries.size, :<=, 4,
+                    "expected the account load plus three resolution queries, got #{many_queries.size}"
+  end
+
+  # The second call site. It reads only balance_days, so it cost 1 + N rather
+  # than 1 + 4N, and it now shares the resolution with money_weighted_supported?.
+  test "both supported checks share one eligibility resolution" do
+    accounts = 3.times.map { build_valuation_tracked_account }
+    subject = performance(account_ids: accounts.map(&:id))
+
+    first = capture_sql_queries { subject.send(:time_weighted_supported?) }
+    # The other call site, not the same one twice: this is what proves the two
+    # share a resolution rather than each memoising its own.
+    shared = capture_sql_queries { subject.send(:money_weighted_supported?, [ :row, :row ]) }
+
+    assert_operator first.size, :<=, 4
+    assert_empty shared,
+                 "money_weighted_supported? reads the resolution time_weighted_supported? already paid for"
+  end
+
   private
+    def build_valuation_tracked_account
+      account = create_portfolio_account(family: @family)
+      lay_balance account: account, date: @day_one, opening: 1_000, closing: 1_000
+      lay_balance account: account, date: @day_two, opening: 1_000, closing: 1_100, market_flow: 100
+      account
+    end
+
     def build_textbook_case
       lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_100, market_flow: 100
       lay_balance account: @account, date: @day_two, opening: 1_100, closing: 2_310,
