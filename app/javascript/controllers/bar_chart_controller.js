@@ -73,6 +73,8 @@ export default class extends Controller {
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
     const series = [this.positiveKeyValue, this.negativeKeyValue];
+    // .attr("fill", ...) assigns an attribute value rather than parsing markup,
+    // so this path was never the sink the tooltip's inline style was.
     const seriesColor = {
       [this.positiveKeyValue]: this.positiveColorValue,
       [this.negativeKeyValue]: this.negativeColorValue,
@@ -108,6 +110,7 @@ export default class extends Controller {
         .style("opacity", 1)
         .style("left", `${adjustedX}px`)
         .style("top", `${event.pageY - 10}px`);
+      this._paintSwatch(tooltip, key);
     };
 
     const hideTooltip = () => tooltip.style("opacity", 0);
@@ -174,20 +177,31 @@ export default class extends Controller {
     labels.style("display", (_d, i) => (i % 2 === keepParity ? null : "none"));
   }
 
+  // Match the bar/legend palette — money flow's expenses render gray, not
+  // destructive red, so the colour comes from the same values the bars use.
+  _colorFor(key) {
+    return key === this.positiveKeyValue ? this.positiveColorValue : this.negativeColorValue;
+  }
+
+  // The swatch carries no inline style: its colour now comes from a Stimulus
+  // value (a DOM attribute) rather than the two literals this held before, and
+  // interpolating attribute-sourced text into markup that d3 then parses with
+  // .html() is an injection sink. The marker goes in, _paintSwatch sets the
+  // colour through the CSSOM, where a value is assigned rather than parsed.
   _tooltipTemplate(month, key) {
-    const positive = key === this.positiveKeyValue;
-    const label = positive ? this.incomeLabelValue : this.expenseLabelValue;
-    // Match the bar/legend palette — money flow's expenses render gray, not
-    // destructive red, so the colour comes from the same values the bars use.
-    const color = positive ? this.positiveColorValue : this.negativeColorValue;
+    const label = key === this.positiveKeyValue ? this.incomeLabelValue : this.expenseLabelValue;
 
     return `
       <div class="text-xs text-secondary mb-1">${month.label}</div>
       <div class="flex items-center gap-1.5 text-primary font-medium tabular-nums">
-        <span class="inline-block w-2 h-2 rounded-full" style="background-color: ${color};"></span>
+        <span class="inline-block w-2 h-2 rounded-full" data-swatch></span>
         ${label}: ${this._formatCurrency(month[key])}
       </div>
     `;
+  }
+
+  _paintSwatch(tooltip, key) {
+    tooltip.select("[data-swatch]").style("background-color", this._colorFor(key));
   }
 
   _formatCurrency(value) {
