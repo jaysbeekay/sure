@@ -206,6 +206,33 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
                  resolved.fetch(@account.id).balance_days
   end
 
+  # The batch path's actual cost, pinned so a claim about it can be settled by
+  # a number. Four round trips: the account load, then the three resolution
+  # queries. The account load is not avoidable here -- `resolve_all` returns
+  # `ReturnScope` objects that hold the record, and `Portfolio::Performance`
+  # carries only ids -- and what the batch path buys is that the four do not
+  # grow with the number of accounts.
+  test "resolve_all asks the same number of queries however many accounts it is given" do
+    second = create_portfolio_account(family: @family)
+    third = create_portfolio_account(family: @family)
+    [ @account, second, third ].each do |account|
+      lay_balance account: account, date: @day_one, opening: 1_000, closing: 1_000
+    end
+
+    one = capture_sql_queries do
+      Portfolio::ReturnScope.resolve_all(accounts: Account.where(id: [ @account.id ]), period: @period)
+    end
+    three = capture_sql_queries do
+      Portfolio::ReturnScope.resolve_all(
+        accounts: Account.where(id: [ @account.id, second.id, third.id ]), period: @period
+      )
+    end
+
+    assert_equal 4, one.size, "one account: the account load plus three resolution queries\n#{one.join("\n")}"
+    assert_equal one.size, three.size,
+                 "three accounts must cost what one does, or the batch path buys nothing\n#{three.join("\n")}"
+  end
+
   test "resolve_all over no accounts asks nothing" do
     queries = capture_sql_queries do
       assert_empty Portfolio::ReturnScope.resolve_all(accounts: [], period: @period)

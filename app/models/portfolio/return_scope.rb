@@ -41,8 +41,16 @@ class Portfolio::ReturnScope
     @external_transactions = resolved.fetch(:external_transactions)
   end
 
-  # Eligibility for a set of accounts in three round trips rather than up to
-  # four per account, keyed by account id.
+  # Eligibility for a set of accounts, keyed by account id, in a fixed number of
+  # round trips rather than up to four per account.
+  #
+  # Four, not three: loading the accounts, then the three resolution queries.
+  # The load is part of the work, because the resolver hands back ReturnScope
+  # objects that hold the record and `Portfolio::Performance` carries only ids,
+  # so nothing upstream has already fetched them. What the batch path buys is
+  # that the four do not grow with the number of accounts -- pinned by
+  # "resolve_all asks the same number of queries however many accounts it is
+  # given".
   #
   # Accepts account records (InvestmentStatement passes its historical scope,
   # which includes closed and disabled accounts) or anything that responds to
