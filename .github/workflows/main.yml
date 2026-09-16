@@ -49,6 +49,7 @@ jobs:
                      | {number, title, user: {login: .user.login}}
                      + (if has("pull_request") then {pull_request: .pull_request} else {} end) ),
             comment: {
+              id: .comment.id,
               body: .comment.body,
               user: { login: .comment.user.login },
               html_url: .comment.html_url,
