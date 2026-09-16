@@ -41,7 +41,7 @@ jobs:
           # printf (not `> payload.json`) so no trailing newline is added —
           # the signing step must hash the exact bytes curl will send.
           printf '%s' "$(jq -cn \
-            --arg event "codebot_trigger" \
+            --arg event_type "codebot_trigger" \
             --arg repo "${{ github.repository }}" \
             --argjson issue_number "${{ github.event.issue.number }}" \
             --argjson comment_id "${{ github.event.comment.id }}" \
@@ -51,7 +51,7 @@ jobs:
             --arg command "$COMMAND" \
             --arg triggered_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
-              event: $event,
+              event_type: $event_type,
               repository: $repo,
               issue_number: $issue_number,
               comment: {
