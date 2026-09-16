@@ -148,4 +148,57 @@ class Portfolio::XirrTest < ActiveSupport::TestCase
 
     assert_in_delta 1.0, unordered.to_f, 0.0005
   end
+
+  # The control for every test below: the default unit is a year, so nothing
+  # that does not ask for a period rate changes.
+  test "the rate is annualised unless a unit is asked for" do
+    flows = [ [ Date.new(2026, 1, 1), -1_000 ], [ Date.new(2027, 1, 1), 2_000 ] ]
+
+    assert_in_delta 1.0, Portfolio::Xirr.rate(flows).to_f, 0.0005
+    assert_equal Portfolio::Xirr::DAYS_PER_YEAR, Portfolio::Xirr.new(flows).days_per_unit
+  end
+
+  # A rate over the period is the same root as the annual rate, read in a
+  # different unit: (1 + period) ** (days / 365) == 1 + annual. Intermediate
+  # flows are in the series because the identity is not special to two flows.
+  test "a period rate and the annual rate are the same root in different units" do
+    start = Date.new(2026, 3, 2)
+    flows = [ [ start, -1_000.0 ], [ start + 10, -500.0 ], [ start + 30, 1_600.0 ] ]
+
+    annual = Portfolio::Xirr.rate(flows).to_f
+    period = Portfolio::Xirr.rate(flows, days_per_unit: 30).to_f
+
+    assert_in_delta annual, (1 + period)**(365 / 30.0) - 1, 1e-9
+  end
+
+  # Why the period form is solved rather than the annual one de-annualised.
+  # A day's gain of this size needs an annual rate of about 7.5e109, which is
+  # outside the bracket Newton reaches, so the annual form reports nothing at
+  # all. The period form is an ordinary number.
+  test "a short period rate is reported where the annual form cannot be solved" do
+    start = Date.new(2026, 3, 2)
+    flows = [ [ start, -1_000.0 ], [ start + 1, 2_000.0 ] ]
+
+    assert_nil Portfolio::Xirr.rate_or_nil(flows), "the annual form is expected to be unreachable here"
+    assert_in_delta 1.0, Portfolio::Xirr.rate(flows, days_per_unit: 1).to_f, 1e-9
+
+    # The render path is the one production takes: Performance#money_weighted
+    # calls rate_or_nil, not rate. A rate_or_nil that dropped the unit would
+    # return nil here -- the assertion above establishes that the annual form
+    # is unreachable on this fixture -- so this pins the forwarding that the
+    # only caller of this class depends on.
+    assert_in_delta 1.0, Portfolio::Xirr.rate_or_nil(flows, days_per_unit: 1).to_f, 1e-9
+  end
+
+  # An infinite unit is positive, so a bare positivity check lets it through,
+  # and it makes every elapsed interval zero: the present value stops depending
+  # on the rate and Newton hands back its 10% starting guess as an answer.
+  test "a unit that is not a positive finite number of days is refused" do
+    flows = [ [ Date.new(2026, 1, 1), -1_000 ], [ Date.new(2027, 1, 1), 2_000 ] ]
+
+    assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: 0) }
+    assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: -30) }
+    assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: Float::INFINITY) }
+    assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: Float::NAN) }
+  end
 end

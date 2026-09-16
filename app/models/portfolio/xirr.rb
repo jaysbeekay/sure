@@ -44,21 +44,38 @@ class Portfolio::Xirr
   RATE_FLOOR = -0.999999
   RATE_CEILING = 1.0e7
 
-  attr_reader :flows
+  attr_reader :flows, :days_per_unit
 
   # `flows` is any enumerable of objects answering `date` and `amount`, or
   # [date, amount] pairs. Sign convention: money leaving the investor is
   # negative, money returning to them is positive. The terminal value of the
   # portfolio is the final positive flow.
-  def initialize(flows)
+  #
+  # `days_per_unit` is the length of the unit the rate is expressed in. The
+  # default is a year, so `rate` is the annualised figure by default and every
+  # existing caller is unaffected. A caller reporting a period return passes the
+  # period's own length instead, which is not a presentational choice: the rate
+  # for a short period expressed annually is an extrapolation, and a large one
+  # is outside what Newton reaches or what a Float holds, so the annual form of
+  # a few days' return is unreliable where the period form is ordinary.
+  def initialize(flows, days_per_unit: DAYS_PER_YEAR)
     @flows = normalize(flows)
+    @days_per_unit = days_per_unit.to_f
+
+    # Finite as well as positive: Float::INFINITY is positive, and it would make
+    # every elapsed interval zero, so the present value stops depending on the
+    # rate and Newton returns its starting guess of 10% as if it had solved --
+    # the same trap NoDurationError exists to close.
+    raise ArgumentError, "days_per_unit must be a positive, finite number of days" unless
+      @days_per_unit.finite? && @days_per_unit.positive?
   end
 
-  def self.rate(flows)
-    new(flows).rate
+  def self.rate(flows, days_per_unit: DAYS_PER_YEAR)
+    new(flows, days_per_unit: days_per_unit).rate
   end
 
-  # The annualised money-weighted rate as a BigDecimal (0.0725 == 7.25%).
+  # The money-weighted rate per `days_per_unit`, as a BigDecimal
+  # (0.0725 == 7.25%). Annualised unless the caller said otherwise.
   def rate
     raise NoSignChangeError, "cash flows never change sign" unless sign_change?
     raise NoDurationError, "cash flows all fall on one date" if flows.map(&:date).uniq.one?
@@ -70,8 +87,8 @@ class Portfolio::Xirr
   end
 
   # Non-raising variant for render paths: returns nil where #rate would raise.
-  def self.rate_or_nil(flows)
-    rate(flows)
+  def self.rate_or_nil(flows, days_per_unit: DAYS_PER_YEAR)
+    rate(flows, days_per_unit: days_per_unit)
   rescue NoSignChangeError, NoDurationError, ConvergenceError
     nil
   end
@@ -96,22 +113,23 @@ class Portfolio::Xirr
       @first_date ||= flows.first.date
     end
 
-    # Years elapsed from the first flow, as a Float.
-    def years_for(flow)
-      (flow.date - first_date).to_i / DAYS_PER_YEAR
+    # Units elapsed from the first flow, as a Float. One unit is a year unless
+    # the caller asked for a different one.
+    def units_for(flow)
+      (flow.date - first_date).to_i / days_per_unit
     end
 
     # Present value of every flow at `rate`. The root of this is the answer.
     def present_value(rate)
-      flows.sum { |flow| flow.amount / ((1 + rate)**years_for(flow)) }
+      flows.sum { |flow| flow.amount / ((1 + rate)**units_for(flow)) }
     end
 
     def present_value_derivative(rate)
       flows.sum do |flow|
-        years = years_for(flow)
-        next 0.0 if years.zero?
+        units = units_for(flow)
+        next 0.0 if units.zero?
 
-        -years * flow.amount / ((1 + rate)**(years + 1))
+        -units * flow.amount / ((1 + rate)**(units + 1))
       end
     end
 
