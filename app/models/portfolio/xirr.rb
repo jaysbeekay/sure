@@ -62,7 +62,12 @@ class Portfolio::Xirr
     @flows = normalize(flows)
     @days_per_unit = days_per_unit.to_f
 
-    raise ArgumentError, "days_per_unit must be positive" unless @days_per_unit.positive?
+    # Finite as well as positive: Float::INFINITY is positive, and it would make
+    # every elapsed interval zero, so the present value stops depending on the
+    # rate and Newton returns its starting guess of 10% as if it had solved --
+    # the same trap NoDurationError exists to close.
+    raise ArgumentError, "days_per_unit must be a positive, finite number of days" unless
+      @days_per_unit.finite? && @days_per_unit.positive?
   end
 
   def self.rate(flows, days_per_unit: DAYS_PER_YEAR)

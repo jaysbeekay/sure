@@ -183,10 +183,15 @@ class Portfolio::XirrTest < ActiveSupport::TestCase
     assert_in_delta 1.0, Portfolio::Xirr.rate(flows, days_per_unit: 1).to_f, 1e-9
   end
 
-  test "a unit of zero or less is refused rather than dividing by it" do
+  # An infinite unit is positive, so a bare positivity check lets it through,
+  # and it makes every elapsed interval zero: the present value stops depending
+  # on the rate and Newton hands back its 10% starting guess as an answer.
+  test "a unit that is not a positive finite number of days is refused" do
     flows = [ [ Date.new(2026, 1, 1), -1_000 ], [ Date.new(2027, 1, 1), 2_000 ] ]
 
     assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: 0) }
     assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: -30) }
+    assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: Float::INFINITY) }
+    assert_raises(ArgumentError) { Portfolio::Xirr.new(flows, days_per_unit: Float::NAN) }
   end
 end

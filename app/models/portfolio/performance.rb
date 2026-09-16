@@ -26,7 +26,9 @@ class Portfolio::Performance
   # v3: an account entering or leaving the scope is a composition flow rather
   # than a return (R17), and an account with a single balance day withholds the
   # time-weighted figures (R15).
-  CACHE_VERSION = "v3".freeze
+  # v4: :mwr changed from an annual rate to a period rate and :annualized_mwr
+  # was added, so a v3 entry would serve the old meaning under the new name.
+  CACHE_VERSION = "v4".freeze
 
   # R5: the balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention
@@ -199,6 +201,7 @@ class Portfolio::Performance
       {
         twr: chained,
         annualized_twr: annualize(chained),
+        # Period basis. The annualised form is :annualized_mwr, nil under R4.
         mwr: money_weighted_rate,
         annualized_mwr: annualize(money_weighted_rate),
         volatility: withhold_time_weighted ? nil : annualized_volatility(returns),
