@@ -105,12 +105,11 @@ export default class extends Controller {
       const overflowX = tooltipX + estimatedTooltipWidth - pageWidth;
       const adjustedX = overflowX > 0 ? event.pageX - overflowX - 20 : tooltipX;
 
+      this._renderTooltip(tooltip, month, key);
       tooltip
-        .html(this._tooltipTemplate(month, key))
         .style("opacity", 1)
         .style("left", `${adjustedX}px`)
         .style("top", `${event.pageY - 10}px`);
-      this._paintSwatch(tooltip, key);
     };
 
     const hideTooltip = () => tooltip.style("opacity", 0);
@@ -183,25 +182,30 @@ export default class extends Controller {
     return key === this.positiveKeyValue ? this.positiveColorValue : this.negativeColorValue;
   }
 
-  // The swatch carries no inline style: its colour now comes from a Stimulus
-  // value (a DOM attribute) rather than the two literals this held before, and
-  // interpolating attribute-sourced text into markup that d3 then parses with
-  // .html() is an injection sink. The marker goes in, _paintSwatch sets the
-  // colour through the CSSOM, where a value is assigned rather than parsed.
-  _tooltipTemplate(month, key) {
+  // Built as DOM rather than returned as a string for .html() to parse.
+  //
+  // Three of the four values here reach the page from outside this method —
+  // the series labels and the colours are Stimulus values, so they arrive as
+  // DOM attributes, and month.label is server-rendered — and .html() parses
+  // whatever it is handed. Class names are the only literals, so they are the
+  // only things set as markup: .text() assigns textContent and .style()
+  // assigns through the CSSOM, and neither parses.
+  _renderTooltip(tooltip, month, key) {
     const label = key === this.positiveKeyValue ? this.incomeLabelValue : this.expenseLabelValue;
 
-    return `
-      <div class="text-xs text-secondary mb-1">${month.label}</div>
-      <div class="flex items-center gap-1.5 text-primary font-medium tabular-nums">
-        <span class="inline-block w-2 h-2 rounded-full" data-swatch></span>
-        ${label}: ${this._formatCurrency(month[key])}
-      </div>
-    `;
-  }
+    tooltip.selectAll("*").remove();
+    tooltip.append("div").attr("class", "text-xs text-secondary mb-1").text(month.label);
 
-  _paintSwatch(tooltip, key) {
-    tooltip.select("[data-swatch]").style("background-color", this._colorFor(key));
+    const row = tooltip
+      .append("div")
+      .attr("class", "flex items-center gap-1.5 text-primary font-medium tabular-nums");
+
+    row
+      .append("span")
+      .attr("class", "inline-block w-2 h-2 rounded-full")
+      .style("background-color", this._colorFor(key));
+
+    row.append("span").text(`${label}: ${this._formatCurrency(month[key])}`);
   }
 
   _formatCurrency(value) {

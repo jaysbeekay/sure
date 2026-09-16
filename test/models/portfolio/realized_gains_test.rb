@@ -192,5 +192,4 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     def create_portfolio_security_for_loss
       Security.create!(ticker: "LOSS#{SecureRandom.hex(4)}", name: "Loss Security")
     end
-
 end
