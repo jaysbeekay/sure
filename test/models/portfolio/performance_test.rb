@@ -28,11 +28,20 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
   # Contract R4. Two days of history annualised is a number with no meaning:
   # a 21% fortnight compounds to something absurd, and printing it would be
   # presenting an artefact of the arithmetic as a fact about the portfolio.
-  test "annualized twr is nil for periods under a year" do
+  #
+  # R4 makes the claim of BOTH annualised figures, and the gate reads one test
+  # per row, so both are asserted here. The period figures are asserted present
+  # in the same breath: R4 withholds the annualisation, never the return.
+  test "annualized twr and mwr are nil for periods under a year" do
     build_textbook_case
+    deposit account: @account, date: @day_one, amount: 1_000
 
-    assert_not_nil performance.twr
-    assert_nil performance.annualized_twr
+    result = performance
+
+    assert_not_nil result.twr
+    assert_nil result.annualized_twr
+    assert_not_nil result.mwr, "the period figure is reported, only its annualisation is withheld"
+    assert_nil result.annualized_mwr
   end
 
   # Contract R5. Daily returns of +10%, -10%, 0 have a sample standard deviation
@@ -395,6 +404,63 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
                     "the figure is the 3.5714% the period returned, not its annualisation"
     assert_nil result.annualized_mwr,
                "R4: a period under a year has no annualised money-weighted return"
+  end
+
+  # The triage plan named this case for the `growth <= 0` guard in #annualize.
+  # It is reached, but only on the time-weighted side, and the difference is
+  # worth writing down rather than asserting a shared nil and moving on:
+  #
+  #   twr  -> -1 exactly, so growth is 0 and the root of it is not a return;
+  #           the guard fires.
+  #   mwr  -> nil before annualisation is even reached. A total loss leaves no
+  #           terminal value, so the flow series never changes sign and XIRR
+  #           has nothing to solve. The `chained.nil?` branch answers first.
+  #
+  # So the guard is unreachable through the money-weighted path, and a test
+  # claiming otherwise would be asserting a mechanism that does not run.
+  test "a total loss has no annualised return on either side, for two different reasons" do
+    start_date = Date.new(2026, 1, 1)
+    end_date = Date.new(2026, 12, 31)
+
+    lay_balance account: @account, date: start_date, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: end_date, opening: 1_000, closing: 0, market_flow: -1_000
+    deposit account: @account, date: start_date + 5, amount: 1
+
+    result = performance(start_date: start_date, end_date: end_date)
+
+    assert_equal BigDecimal(-1), result.twr, "everything was lost"
+    assert_nil result.annualized_twr, "growth is zero, and its root is not a return"
+    assert_nil result.mwr, "no terminal value means no sign change for XIRR to solve"
+    assert_nil result.annualized_mwr
+  end
+
+  # R8 says "the return over the period", and for capital present throughout it
+  # is. For capital that arrives mid-period it is not the holding-period figure,
+  # and the gap is large enough that a reader has to be told.
+  #
+  # The rate is solved per unit of the period's OWN span, so money at work for
+  # half the period is discounted over half a unit: 10% over half a unit
+  # compounds to (1.10)^2 - 1 = 21% per unit. The time-weighted figure reports
+  # the 10% the assets earned. Neither is wrong; they answer different
+  # questions, and this pins the difference so the choice cannot drift silently.
+  test "money weighted extrapolates capital that arrives mid period, and time weighted does not" do
+    start_date = Date.new(2026, 1, 1)
+    arrival = Date.new(2026, 7, 2)
+    end_date = Date.new(2026, 12, 31)
+
+    lay_balance account: @account, date: start_date, opening: 0, closing: 0
+    lay_balance account: @account, date: arrival, opening: 0, closing: 1_000, cash_flow: 1_000
+    lay_balance account: @account, date: end_date, opening: 1_000, closing: 1_100, market_flow: 100
+    deposit account: @account, date: arrival, amount: 1_000
+
+    result = performance(start_date: start_date, end_date: end_date)
+
+    assert_in_delta 0.10, result.twr.to_f, 0.000001,
+                    "the assets earned 10%, and that is the holding-period figure"
+    assert_in_delta 0.21, result.mwr.to_f, 0.005,
+                    "an IRR per unit time extrapolates the idle half of the period"
+    assert_operator result.mwr.to_f, :>, result.twr.to_f,
+                    "if these ever converge the solver stopped solving per unit span"
   end
 
   # The other side of the boundary: at a year or more the annualised figure is
