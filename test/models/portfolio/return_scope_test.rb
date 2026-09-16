@@ -207,7 +207,11 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
   end
 
   test "resolve_all over no accounts asks nothing" do
-    assert_empty Portfolio::ReturnScope.resolve_all(accounts: [], period: @period)
+    queries = capture_sql_queries do
+      assert_empty Portfolio::ReturnScope.resolve_all(accounts: [], period: @period)
+    end
+
+    assert_empty queries, "an empty set must not reach the database at all"
   end
 
   private
