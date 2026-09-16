@@ -26,7 +26,9 @@ class Portfolio::Performance
   # v3: an account entering or leaving the scope is a composition flow rather
   # than a return (R17), and an account with a single balance day withholds the
   # time-weighted figures (R15).
-  CACHE_VERSION = "v3".freeze
+  # v4: :mwr changed from an annual rate to a period rate and :annualized_mwr
+  # was added, so a v3 entry would serve the old meaning under the new name.
+  CACHE_VERSION = "v4".freeze
 
   # R5: the balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention
@@ -69,11 +71,20 @@ class Portfolio::Performance
   end
   alias_method :annualized_twr, :annualized_time_weighted_return
 
-  # R8. nil when the scope cannot support it, or XIRR could not solve.
+  # R8. The money-weighted return over the period, as a BigDecimal fraction.
+  # nil when the scope cannot support it, or XIRR could not solve.
   def money_weighted_return
     metrics[:mwr]
   end
   alias_method :mwr, :money_weighted_return
+
+  # R8 under R4: the annualised money-weighted return, nil below
+  # MIN_DAYS_FOR_ANNUALISATION, exactly as annualized_twr is. Annualising a
+  # few days' return states a figure the assets never earned.
+  def annualized_money_weighted_return
+    metrics[:annualized_mwr]
+  end
+  alias_method :annualized_mwr, :annualized_money_weighted_return
 
   # R5. Annualised standard deviation of daily returns.
   def volatility
@@ -185,11 +196,14 @@ class Portfolio::Performance
       # history supports no return, so it withholds every time-weighted figure.
       withhold_time_weighted = rate_missing || !time_weighted_supported?
       chained = withhold_time_weighted ? nil : chain(returns)
+      money_weighted_rate = rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows)
 
       {
         twr: chained,
         annualized_twr: annualize(chained),
-        mwr: rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows),
+        # Period basis. The annualised form is :annualized_mwr, nil under R4.
+        mwr: money_weighted_rate,
+        annualized_mwr: annualize(money_weighted_rate),
         volatility: withhold_time_weighted ? nil : annualized_volatility(returns),
         max_drawdown: withhold_time_weighted ? nil : drawdown(returns),
         index_series: withhold_time_weighted ? [] : rebased_index(returns),
@@ -260,8 +274,27 @@ class Portfolio::Performance
     # R8 and R17. The opening value is the investor's first outlay; every flow
     # follows -- external flows, and the value an account brought into or carried
     # out of the scope -- and the closing value is what they could walk away with.
+    #
+    # Solved over the period, not the year. The rate is expressed in units of
+    # the interval the rows cover, so the figure is the return over the period
+    # rather than an extrapolation of it to a year -- R4's rule, which
+    # annualises nothing below a year, applied to the money-weighted figure.
+    #
+    # The closing value is dated at the END of the last row's day, which is the
+    # start of the next. A row's value_open is the previous day's close and its
+    # value_close is that day's, so N rows are N days of exposure and N daily
+    # returns -- the interval the time-weighted figure chains over, and the one
+    # Period#days counts. Dating the closing flow at the last row's own date
+    # instead would compress the series by a day: the money was at work for N
+    # days but discounted over N-1, which annualised to a figure about four
+    # basis points off the annual XIRR of the same flows over a year.
     def money_weighted(rows)
       return nil if rows.empty?
+
+      # The end of the last day, not the start of it.
+      closing_date = rows.last.date + 1
+      span_in_days = (closing_date - rows.first.date).to_i
+      return nil unless span_in_days.positive?
 
       opening = rows.first.value_open
       closing = rows.last.value_close
@@ -275,9 +308,9 @@ class Portfolio::Performance
         flows << Portfolio::Xirr::Flow.new(date: row.date, amount: -flow)
       end
 
-      flows << Portfolio::Xirr::Flow.new(date: rows.last.date, amount: closing) unless closing.zero?
+      flows << Portfolio::Xirr::Flow.new(date: closing_date, amount: closing) unless closing.zero?
 
-      Portfolio::Xirr.rate_or_nil(flows)
+      Portfolio::Xirr.rate_or_nil(flows, days_per_unit: span_in_days)
     end
 
     # R5.
