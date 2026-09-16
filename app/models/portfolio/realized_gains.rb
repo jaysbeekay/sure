@@ -43,9 +43,11 @@ class Portfolio::RealizedGains
     end
   end
 
-  # Why a sell trade could not be measured. Both are reported rather than
-  # folded into the figures -- see notes 3 and 4 above.
-  EXCLUSION_REASONS = %i[missing_cost_basis missing_exchange_rate].freeze
+  # Why a sell trade could not be measured. Each is reported rather than folded
+  # into the figures -- see notes 3 and 4 above. The order is the order the
+  # partial lists them in, and #excluded_trades filters the tally through this
+  # list, so a reason missing from it is silently dropped from the UI.
+  EXCLUSION_REASONS = %i[missing_cost_basis missing_exchange_rate mixed_currency].freeze
 
   attr_reader :accounts, :period, :currency, :active_until_dates
 
@@ -146,11 +148,32 @@ class Portfolio::RealizedGains
         # #calculate_realized_gain_loss). Not a zero gain.
         next @exclusions << :missing_cost_basis if gain.nil?
 
+        # `Trend#value` is `current - previous`, and `Money#-` neither converts
+        # nor raises across currencies. When the holding is valued in the
+        # account's currency and the disposal is priced in the security's, the
+        # basis is subtracted from the proceeds as a bare number and the result
+        # is then labelled `trade.currency` below -- understating a USD gain of
+        # 250 as 150 in the case pinned by the tests.
+        #
+        # The arithmetic belongs to Trade#calculate_realized_gain_loss, which
+        # Reports shares, so it is not fixed here (jaysbeekay/sure#169). What
+        # this section can do is decline to print a figure it cannot trust.
+        next @exclusions << :mixed_currency unless same_currency?(gain)
+
         amount = converted(gain.value, trade.currency, trade.entry.date)
         next @exclusions << :missing_exchange_rate if amount.nil?
 
         @measured_rows << { date: trade.entry.date, amount: amount }
       end
+    end
+
+    # Both sides of the Trend are Money. Equal currencies mean the subtraction
+    # behind `Trend#value` was between comparable amounts.
+    def same_currency?(gain)
+      current, previous = gain.current, gain.previous
+      return true unless current.respond_to?(:currency) && previous.respond_to?(:currency)
+
+      current.currency == previous.currency
     end
 
     def sell_trades
