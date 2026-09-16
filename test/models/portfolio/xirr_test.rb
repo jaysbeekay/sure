@@ -181,6 +181,13 @@ class Portfolio::XirrTest < ActiveSupport::TestCase
 
     assert_nil Portfolio::Xirr.rate_or_nil(flows), "the annual form is expected to be unreachable here"
     assert_in_delta 1.0, Portfolio::Xirr.rate(flows, days_per_unit: 1).to_f, 1e-9
+
+    # The render path is the one production takes: Performance#money_weighted
+    # calls rate_or_nil, not rate. A rate_or_nil that dropped the unit would
+    # return nil here -- the assertion above establishes that the annual form
+    # is unreachable on this fixture -- so this pins the forwarding that the
+    # only caller of this class depends on.
+    assert_in_delta 1.0, Portfolio::Xirr.rate_or_nil(flows, days_per_unit: 1).to_f, 1e-9
   end
 
   # An infinite unit is positive, so a bare positivity check lets it through,
