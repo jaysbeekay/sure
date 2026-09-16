@@ -446,8 +446,13 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "[data-section-key=?]", "realized_gains", count: 1
     assert_match I18n.t("portfolios.realized_gains.no_disposals", period: Period.last_30_days.label), response.body
-    # The figure and the chart are what there is nothing to show; they stay out.
+    # The figure, the summary and the chart are what there is nothing to show;
+    # all three stay out. Asserting only the chart would leave a regression that
+    # restored the figure on an empty period green, since all three sit behind
+    # the same `realized.any?` branch.
     assert_select "#portfolio-realized-gains [data-controller=?]", "bar-chart", count: 0
+    assert_select "#portfolio-realized-gains p.text-3xl", count: 0
+    assert_no_match I18n.t("portfolios.realized_gains.summary", count: 0, period: Period.last_30_days.label), response.body
   end
 
   private
