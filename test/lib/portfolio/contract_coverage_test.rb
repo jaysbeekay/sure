@@ -170,7 +170,226 @@ class Portfolio::ContractCoverageTest < ActiveSupport::TestCase
     assert_match(/P1: Portfolio::MissingTest is not declared/, error.message)
   end
 
+  # #152: only a `test` the named class declares directly in its own body is
+  # evidence. Every shape below reads as a declaration to a token scan of a text
+  # slice, and none of them defines a test on the named class.
+  test "a test call inside a helper method is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside a helper")
+      class ShapeTest < ActiveSupport::TestCase
+        def helper
+          test "inside a helper"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside a helper" in ShapeTest/, error.message)
+  end
+
+  test "a test call inside a branch that never runs is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "inside if false")
+      class ShapeTest < ActiveSupport::TestCase
+        if false
+          test "inside if false"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "inside if false" in ShapeTest/, error.message)
+  end
+
+  test "a test in an indented nested class is not evidence for the outer class" do
+    coverage = shape_coverage(<<~RUBY, "in the nested class")
+      class ShapeTest < ActiveSupport::TestCase
+        class NestedTest < ActiveSupport::TestCase
+          test "in the nested class"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "in the nested class" in ShapeTest/, error.message)
+  end
+
+  test "a test in an indented sibling class is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "in the sibling")
+      module Wrapper
+        class ShapeTest < ActiveSupport::TestCase
+        end
+
+        class SiblingTest < ActiveSupport::TestCase
+          test "in the sibling"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "in the sibling" in ShapeTest/, error.message)
+  end
+
+  # Decided in #152's triage plan: a contract row cites a literal declaration a
+  # reader can find, so a generated test is not evidence even though it runs.
+  test "a test generated inside a block is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "generated")
+      class ShapeTest < ActiveSupport::TestCase
+        [ 1 ].each do |_n|
+          test "generated" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "generated" in ShapeTest/, error.message)
+  end
+
+  test "a test file that does not parse is a contract error" do
+    coverage = shape_coverage(<<~RUBY, "declared before the syntax error")
+      class ShapeTest < ActiveSupport::TestCase
+        test "declared before the syntax error" do
+        end
+
+        def broken(
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/P1: shape_test.rb could not be parsed/, error.message)
+  end
+
+  test "a test call on a receiver is not evidence" do
+    coverage = shape_coverage(<<~RUBY, "on a receiver")
+      class ShapeTest < ActiveSupport::TestCase
+        helper.test "on a receiver"
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) { coverage.verify! }
+    assert_match(/missing test "on a receiver" in ShapeTest/, error.message)
+  end
+
+  test "a declaration in a reopened body of the named class is evidence" do
+    coverage = shape_coverage(<<~RUBY, "in the second body")
+      class ShapeTest < ActiveSupport::TestCase
+        test "in the first body" do
+        end
+      end
+
+      class ShapeTest < ActiveSupport::TestCase
+        test "in the second body" do
+        end
+      end
+    RUBY
+
+    assert_equal 1, coverage.verify!
+  end
+
+  test "the returns gate accepts a direct declaration in a compact namespaced class" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+        test "declared directly" do
+        end
+      end
+    RUBY
+
+    assert_equal Portfolio::ReturnsContractCoverage::EXPECTED_ROWS,
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_directly").verify!
+  end
+
+  test "the returns gate rejects a test call inside a helper method" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+        def helper
+          test "inside a helper"
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_inside_a_helper").verify!
+    end
+    assert_match(/R1: .* declares no test "test_inside_a_helper"/, error.message)
+  end
+
+  # The textual precondition only proves `class Portfolio::DailyReturnsTest <`
+  # appears somewhere; the declaration must still be in that class, not in a
+  # same-named class in another namespace later in the file.
+  test "the returns gate ignores a same-named class in another namespace" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+      end
+
+      module Other
+        class DailyReturnsTest < ActiveSupport::TestCase
+          test "declared elsewhere" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_elsewhere").verify!
+    end
+    assert_match(/R1: .* declares no test "test_declared_elsewhere"/, error.message)
+  end
+
+  test "the returns gate reports a test file that does not parse as a contract error" do
+    write_returns_test_file(<<~RUBY)
+      class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
+        test "declared before the syntax error" do
+        end
+
+        def broken(
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_before_the_syntax_error").verify!
+    end
+    assert_match(%r{R1: test/models/portfolio/daily_returns_test.rb could not be parsed}, error.message)
+  end
+
+  test "the returns gate still requires the class to be declared as it is cited" do
+    write_returns_test_file(<<~RUBY)
+      module Portfolio
+        class DailyReturnsTest < ActiveSupport::TestCase
+          test "declared directly" do
+          end
+        end
+      end
+    RUBY
+
+    error = assert_raises(Portfolio::ContractCoverage::Error) do
+      returns_coverage("Portfolio::DailyReturnsTest#test_declared_directly").verify!
+    end
+    assert_match(/R1: Portfolio::DailyReturnsTest is not declared/, error.message)
+  end
+
   private
+    # Writes a one-class test file and a single-row contract and manifest citing
+    # `name` in ShapeTest, so a failure can only come from the declaration check.
+    def shape_coverage(source, name)
+      File.write(File.join(@dir, "shape_test.rb"), source)
+      write_contract("| P1 | first | `ShapeTest` \"#{name}\" | - |\n")
+      write_manifest("P1" => [ { "file" => "shape_test.rb", "class" => "ShapeTest", "tests" => [ name ] } ])
+      rooted_coverage
+    end
+
+    def write_returns_test_file(source)
+      path = File.join(@dir, "test/models/portfolio/daily_returns_test.rb")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, source)
+    end
+
+    # A returns contract whose every row cites `reference`, resolved against
+    # the temporary directory.
+    def returns_coverage(reference)
+      rows = (1..Portfolio::ReturnsContractCoverage::EXPECTED_ROWS).map { |n| "| R#{n} | decision | `#{reference}` |" }
+      File.write(File.join(@dir, "returns-contract.md"), rows.join("\n") + "\n")
+      Portfolio::ReturnsContractCoverage.new(contract_path: File.join(@dir, "returns-contract.md"), root: @dir)
+    end
+
     def coverage
       Portfolio::ContractCoverage.new(
         contract_path: File.join(@dir, "methodology.md"),

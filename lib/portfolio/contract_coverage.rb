@@ -21,51 +21,68 @@ module Portfolio
   class ContractCoverage
     Error = Class.new(StandardError)
 
-    # The test names a class actually declares, read from the lexed token
-    # stream rather than the source text.
+    # The names of the tests `class_name` declares directly in its own body, or
+    # nil when the source does not parse.
     #
     # A singleton because Portfolio::ReturnsContractCoverage reads a contract in
     # a different row format but must answer "does this test exist?" the same
     # way. One implementation only: a second, regex-based one would reintroduce
-    # the comment and heredoc hole #133 closed.
+    # the holes closed below.
     #
     # A plain substring search accepted a name that appeared anywhere in the
-    # file, including a comment, a string or a heredoc. A test could be
-    # deleted, its name survive in prose, and this gate still report evidence
-    # that no longer ran -- the precise failure the gate exists to catch.
-    # Ripper.lex yields comments as :on_comment and heredoc bodies as string
-    # content, so neither can be mistaken for a declaration. It lexes
-    # best-effort and never raises, so a class body sliced out of a larger
-    # file is safe to pass in.
-    def self.declared_tests(body)
-      tokens = Ripper.lex(body)
+    # file, including a comment, a string or a heredoc (#133). A token scan of a
+    # text slice closed that, but still accepted a `test` call inside a helper
+    # method, a branch that never runs, a block, or an indented nested or
+    # sibling class, because neither the slice nor the tokens know what belongs
+    # to the class or runs (#152). Walking the parse tree answers both: a
+    # comment is not in the tree, a heredoc is a string, and only statements
+    # directly in a matching class's body are read.
+    def self.declared_tests(source, class_name)
+      tree = Ripper.sexp(source)
+      return if tree.nil?
 
-      tokens.each_with_index.filter_map do |(_, type, value, _), index|
-        next unless type == :on_ident && value == "test"
-
-        # `something.test "name"` is a method call on a receiver, not a
-        # Minitest declaration.
-        previous = tokens[0...index].reverse_each.find { |(_, token_type, _, _)| token_type != :on_sp }
-        next if previous && previous[1] == :on_period
-
-        beg, content, fin = tokens[(index + 1)..].to_a.drop_while { |(_, token_type, _, _)| token_type == :on_sp }.first(3)
-        next unless beg&.at(1) == :on_tstring_beg
-        next unless content&.at(1) == :on_tstring_content
-        next unless fin&.at(1) == :on_tstring_end
-
-        content[2]
+      class_nodes(tree, class_name).flat_map do |(_, _, _, bodystmt)|
+        Array(bodystmt[1]).filter_map { |statement| declared_test_name(statement) }
       end
     end
 
-    # The source between `class <name> <` and the next top-level `class`
-    # declaration (or the end of the file).
-    def self.class_body(source, class_name)
-      start = source.index("class #{class_name} <")
-      return "" if start.nil?
+    # Every `class` node whose own constant path reads exactly `class_name`,
+    # including a body reopened later in the file, which Minitest adds to.
+    def self.class_nodes(node, class_name)
+      return [] unless node.is_a?(Array)
 
-      rest = source[start..]
-      following = rest.index(/^class [A-Z]/, 1)
-      following ? rest[0...following] : rest
+      matches = node[0] == :class && constant_path(node[1]) == class_name ? [ node ] : []
+      matches + node.flat_map { |child| class_nodes(child, class_name) }
+    end
+
+    def self.constant_path(node)
+      return unless node.is_a?(Array)
+
+      case node[0]
+      when :const_ref, :top_const_ref, :var_ref then node[1][1]
+      when :const_path_ref then [ constant_path(node[1]), node[2][1] ].join("::")
+      end
+    end
+
+    # `test "name"`, with or without a block, called without a receiver and with
+    # a plain string literal as its first argument. `something.test "name"` is a
+    # :command_call and an interpolated name has no single string part, so
+    # neither matches.
+    def self.declared_test_name(statement)
+      command = statement[0] == :method_add_block ? statement[1] : statement
+      return unless command.is_a?(Array) && command[0] == :command
+
+      _, method, args = command
+      return unless method.is_a?(Array) && method[0] == :@ident && method[1] == "test"
+
+      args = args[1] if args.is_a?(Array) && args[0] == :args_add_block
+      literal = Array(args).first
+      return unless literal.is_a?(Array) && literal[0] == :string_literal
+
+      _, (content_type, *parts) = literal
+      return unless content_type == :string_content && parts.size == 1 && parts.first[0] == :@tstring_content
+
+      parts.first[1]
     end
 
     ROW_ID = /\AP(\d+)\z/
@@ -166,24 +183,21 @@ module Portfolio
         class_name = fetch!(entry, "class", id)
         fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless source.include?("class #{class_name} <")
 
-        # Search the named class's own body rather than the whole file, so a
-        # test that lives in a second class in the same file cannot stand in
-        # as evidence for this one.
-        body = class_body(source, class_name)
-
         tests = Array(fetch!(entry, "tests", id))
         fail!("#{id}: #{class_name} lists no tests") if tests.empty?
-        declared = declared_tests(body)
+
+        # Only a test the named class declares directly in its own body counts,
+        # so a test in a second class, a helper method or a branch cannot stand
+        # in as evidence for this one.
+        declared = self.class.declared_tests(source, class_name)
+        fail!("#{id}: #{relative_path} could not be parsed") if declared.nil?
+
         tests.each do |name|
           next if declared.include?(name)
 
           fail!("#{id}: missing test #{name.inspect} in #{class_name} (#{relative_path})")
         end
       end
-
-      def declared_tests(body) = self.class.declared_tests(body)
-
-      def class_body(source, class_name) = self.class.class_body(source, class_name)
 
       # Every value the manifest is required to carry, reported as a contract
       # error rather than a bare KeyError, so the rake task can abort with a
