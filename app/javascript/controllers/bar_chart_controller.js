@@ -11,6 +11,20 @@ import { CHART_TOOLTIP_CLASSES } from "utils/chart_tooltip";
 // Breathing room between neighbouring month labels before they read as touching.
 const LABEL_GAP_PX = 8;
 
+// The palettes a caller may choose, by name. Deliberately a fixed map rather
+// than two colour values passed in: a colour that arrives as a Stimulus value
+// is attribute-sourced text, and writing it into .style() or .attr("fill")
+// hands external data to a style sink. Naming a palette instead means the only
+// strings that ever reach those sinks are the literals below.
+//
+// "flow" is what the money-flow widget has always rendered — expenses gray,
+// not destructive red — and is the default, so that caller passes nothing.
+const PALETTES = {
+  flow: { positive: "var(--color-success)", negative: "var(--color-gray-400)" },
+  profit: { positive: "var(--color-success)", negative: "var(--color-destructive)" },
+};
+const DEFAULT_PALETTE = "flow";
+
 export default class extends Controller {
   // The two series are named on the wire so a chart that is not about income
   // and expenses does not have to lie in its payload. Every value defaults to
@@ -22,8 +36,7 @@ export default class extends Controller {
     expenseLabel: { type: String, default: "Expenses" },
     positiveKey: { type: String, default: "income" },
     negativeKey: { type: String, default: "expense" },
-    positiveColor: { type: String, default: "var(--color-success)" },
-    negativeColor: { type: String, default: "var(--color-gray-400)" },
+    palette: { type: String, default: DEFAULT_PALETTE },
   };
 
   _resizeObserver = null;
@@ -73,11 +86,9 @@ export default class extends Controller {
       .attr("transform", `translate(${margin.left},${margin.top})`);
 
     const series = [this.positiveKeyValue, this.negativeKeyValue];
-    // .attr("fill", ...) assigns an attribute value rather than parsing markup,
-    // so this path was never the sink the tooltip's inline style was.
     const seriesColor = {
-      [this.positiveKeyValue]: this.positiveColorValue,
-      [this.negativeKeyValue]: this.negativeColorValue,
+      [this.positiveKeyValue]: this._palette().positive,
+      [this.negativeKeyValue]: this._palette().negative,
     };
 
     const x0 = d3
@@ -176,10 +187,15 @@ export default class extends Controller {
     labels.style("display", (_d, i) => (i % 2 === keepParity ? null : "none"));
   }
 
-  // Match the bar/legend palette — money flow's expenses render gray, not
-  // destructive red, so the colour comes from the same values the bars use.
+  // An unknown name falls back to the default rather than rendering colourless
+  // bars, so a typo in a template degrades to the money-flow palette.
+  _palette() {
+    return PALETTES[this.paletteValue] ?? PALETTES[DEFAULT_PALETTE];
+  }
+
   _colorFor(key) {
-    return key === this.positiveKeyValue ? this.positiveColorValue : this.negativeColorValue;
+    const palette = this._palette();
+    return key === this.positiveKeyValue ? palette.positive : palette.negative;
   }
 
   // Built as DOM rather than returned as a string for .html() to parse.
