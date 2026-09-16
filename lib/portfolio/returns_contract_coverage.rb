@@ -69,16 +69,20 @@ module Portfolio
         fail!("#{id}: missing #{relative_path}") unless file.file?
 
         source = file.read
-        fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless source.include?("class #{class_name} <")
+        # `class ::Foo <` declares the same constant as `class Foo <`.
+        rooted = source.include?("class #{class_name} <") || source.include?("class ::#{class_name} <")
+        fail!("#{id}: #{class_name} is not declared in #{relative_path}") unless rooted
 
-        # Search the named class's own body, so a test in a second class in the
-        # same file cannot stand in as evidence for this row.
-        body = ContractCoverage.class_body(source, class_name)
+        # Only a test the named class declares directly in its own body counts,
+        # so a test in a second class, a helper method or a branch cannot stand
+        # in as evidence for this row.
+        declared = ContractCoverage.declared_tests(source, class_name)
+        fail!("#{id}: #{relative_path} could not be parsed") if declared.nil?
 
         # Minitest's `test "some words"` defines `test_some_words`. The contract
         # names the method; the file reads as a sentence.
         sentence = test_name.delete_prefix("test_").tr("_", " ")
-        return if ContractCoverage.declared_tests(body).include?(sentence)
+        return if declared.include?(sentence)
 
         fail!("#{id}: #{relative_path} declares no test #{test_name.inspect} (looked for `test #{sentence.inspect}`)")
       end
