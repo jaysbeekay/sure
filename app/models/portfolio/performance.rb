@@ -231,10 +231,21 @@ class Portfolio::Performance
     def money_weighted_supported?(rows)
       return false if rows.size < 2
 
-      Account.where(id: account_ids).to_a.all? do |account|
-        scope = Portfolio::ReturnScope.new(account: account, period: period)
+      return_scopes.values.all? do |scope|
         scope.balance_days.zero? || scope.supports_money_weighted_return?
       end
+    end
+
+    # Eligibility for every account in the scope, resolved once per instance.
+    # Both #money_weighted_supported? and #time_weighted_supported? read it, and
+    # both run inside the uncached compute behind Rails.cache.fetch (R14), so a
+    # cache miss costs the account load plus three resolution queries, once,
+    # rather than that load plus up to four queries per account, twice.
+    def return_scopes
+      @return_scopes ||= Portfolio::ReturnScope.resolve_all(
+        accounts: Account.where(id: account_ids),
+        period: period
+      )
     end
 
     # R15 applied to the whole scope for the time-weighted figures, mirroring
@@ -243,9 +254,7 @@ class Portfolio::Performance
     # account with no balance rows in the period contributes nothing and does
     # not block it.
     def time_weighted_supported?
-      Account.where(id: account_ids).to_a.none? do |account|
-        Portfolio::ReturnScope.new(account: account, period: period).balance_days == 1
-      end
+      return_scopes.values.none? { |scope| scope.balance_days == 1 }
     end
 
     # R8 and R17. The opening value is the investor's first outlay; every flow
