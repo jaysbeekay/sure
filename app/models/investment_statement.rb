@@ -498,9 +498,7 @@ class InvestmentStatement
   # look up, or the per-account breakdown silently omits a contributor to the
   # total it sits beside.
   def return_scopes(period: Period.current_month_for(family))
-    historical_scope.accounts.to_h do |account|
-      [ account.id, Portfolio::ReturnScope.new(account: account, period: period) ]
-    end
+    Portfolio::ReturnScope.resolve_all(accounts: historical_scope.accounts, period: period)
   end
 
   # Investment accounts
