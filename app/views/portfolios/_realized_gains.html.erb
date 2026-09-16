@@ -5,6 +5,15 @@
     the registry built, so this partial only formats. Gains and losses are both
     positive magnitudes on the bucket -- `net` is the only signed figure. %>
 <div id="portfolio-realized-gains" class="space-y-4">
+  <%# Nothing disposed of and nothing excluded: say so and stop. A zero total
+      and an empty chart would both be true and neither would be informative. %>
+  <% unless realized.any? %>
+    <div class="px-4">
+      <p class="text-sm text-secondary"><%= t("portfolios.realized_gains.no_disposals", period: period.label) %></p>
+    </div>
+  <% end %>
+
+  <% if realized.any? %>
   <div class="space-y-2 px-4">
     <p class="text-3xl font-medium tabular-nums privacy-sensitive <%= realized.net.negative? ? "text-destructive" : "text-primary" %>">
       <%= format_money(Money.new(realized.net, statement.family.currency)) %>
@@ -37,6 +46,8 @@
       data-bar-chart-income-label-value="<%= t("portfolios.realized_gains.gains") %>"
       data-bar-chart-expense-label-value="<%= t("portfolios.realized_gains.losses") %>">
     </div>
+  <% end %>
+
   <% end %>
 
   <%# A disposal this page could not measure is named rather than folded into

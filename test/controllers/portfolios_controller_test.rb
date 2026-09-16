@@ -207,7 +207,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     # The saved order places the chart first; sections it does not mention
     # follow in declaration order.
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -432,6 +432,22 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_match I18n.t("portfolios.realized_gains.excluded_title"), response.body
     assert_match I18n.t("portfolios.realized_gains.excluded.missing_cost_basis", count: 1), response.body
     assert_select "[data-controller=?]", "bar-chart"
+  end
+
+  # A buy-and-hold portfolio realises nothing, so the section used to vanish
+  # entirely. For a family that holds investments, "no section" is ambiguous
+  # between "you disposed of nothing this period" and "this page does not do
+  # that" -- the second being what a reader concludes when every other section
+  # is present. The value chart already answers the same question with an empty
+  # state rather than by disappearing; this follows it.
+  test "the realised gains section states that nothing was realised rather than vanishing" do
+    get portfolio_path(period: "last_30_days")
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "realized_gains", count: 1
+    assert_match I18n.t("portfolios.realized_gains.no_disposals", period: Period.last_30_days.label), response.body
+    # The figure and the chart are what there is nothing to show; they stay out.
+    assert_select "#portfolio-realized-gains [data-controller=?]", "bar-chart", count: 0
   end
 
   private

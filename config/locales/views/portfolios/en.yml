@@ -82,6 +82,7 @@ en:
       excluded_title: Some disposals are not counted
       gains: Gains
       losses: Losses
+      no_disposals: Nothing was realised in %{period}.
       summary:
         one: 1 disposal in %{period}
         other: "%{count} disposals in %{period}"

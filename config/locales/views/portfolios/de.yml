@@ -82,6 +82,7 @@ de:
       excluded_title: Einige Veräußerungen werden nicht mitgezählt
       gains: Gewinne
       losses: Verluste
+      no_disposals: In %{period} wurde nichts realisiert.
       summary:
         one: 1 Veräußerung in %{period}
         other: "%{count} Veräußerungen in %{period}"
