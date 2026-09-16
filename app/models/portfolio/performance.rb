@@ -69,11 +69,20 @@ class Portfolio::Performance
   end
   alias_method :annualized_twr, :annualized_time_weighted_return
 
-  # R8. nil when the scope cannot support it, or XIRR could not solve.
+  # R8. The money-weighted return over the period, as a BigDecimal fraction.
+  # nil when the scope cannot support it, or XIRR could not solve.
   def money_weighted_return
     metrics[:mwr]
   end
   alias_method :mwr, :money_weighted_return
+
+  # R8 under R4: the annualised money-weighted return, nil below
+  # MIN_DAYS_FOR_ANNUALISATION, exactly as annualized_twr is. Annualising a
+  # few days' return states a figure the assets never earned.
+  def annualized_money_weighted_return
+    metrics[:annualized_mwr]
+  end
+  alias_method :annualized_mwr, :annualized_money_weighted_return
 
   # R5. Annualised standard deviation of daily returns.
   def volatility
@@ -185,11 +194,13 @@ class Portfolio::Performance
       # history supports no return, so it withholds every time-weighted figure.
       withhold_time_weighted = rate_missing || !time_weighted_supported?
       chained = withhold_time_weighted ? nil : chain(returns)
+      money_weighted_rate = rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows)
 
       {
         twr: chained,
         annualized_twr: annualize(chained),
-        mwr: rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows),
+        mwr: money_weighted_rate,
+        annualized_mwr: annualize(money_weighted_rate),
         volatility: withhold_time_weighted ? nil : annualized_volatility(returns),
         max_drawdown: withhold_time_weighted ? nil : drawdown(returns),
         index_series: withhold_time_weighted ? [] : rebased_index(returns),
@@ -251,8 +262,21 @@ class Portfolio::Performance
     # R8 and R17. The opening value is the investor's first outlay; every flow
     # follows -- external flows, and the value an account brought into or carried
     # out of the scope -- and the closing value is what they could walk away with.
+    #
+    # Solved over the period, not the year. The rate is expressed in units of
+    # the span the rows actually cover, so the figure is the return over the
+    # period rather than an extrapolation of it to a year -- R4's rule, which
+    # annualises nothing below a year, applied to the money-weighted figure.
+    #
+    # The span is `last - first`, not `period.days`: Period#days counts both
+    # ends, so three consecutive rows report three days while the opening and
+    # closing values are two days apart, which is also the interval the
+    # time-weighted figure chains over.
     def money_weighted(rows)
       return nil if rows.empty?
+
+      span_in_days = (rows.last.date - rows.first.date).to_i
+      return nil unless span_in_days.positive?
 
       opening = rows.first.value_open
       closing = rows.last.value_close
@@ -268,7 +292,7 @@ class Portfolio::Performance
 
       flows << Portfolio::Xirr::Flow.new(date: rows.last.date, amount: closing) unless closing.zero?
 
-      Portfolio::Xirr.rate_or_nil(flows)
+      Portfolio::Xirr.rate_or_nil(flows, days_per_unit: span_in_days)
     end
 
     # R5.
