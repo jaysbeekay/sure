@@ -503,6 +503,20 @@ class InvestmentStatement
     end
   end
 
+  # Realised profit and loss over the period, by the month it was crystallised.
+  #
+  # Same historical scope, and for the same reason #performance gives: a
+  # realised-P&L timeline printed beside a return figure must be measured over
+  # the same accounts, or the two quietly describe different portfolios.
+  def realized_gains(period: Period.current_month_for(family))
+    Portfolio::RealizedGains.new(
+      accounts: historical_scope.accounts,
+      period: period,
+      currency: family.currency,
+      active_until_dates: historical_scope.active_until_dates
+    )
+  end
+
   # Investment accounts
   def investment_accounts
     @investment_accounts ||= begin

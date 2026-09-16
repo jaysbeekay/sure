@@ -94,6 +94,12 @@ class Trade < ApplicationRecord
     Trend.new(current: current_value, previous: cost_basis)
   end
 
+  # Set by callers that list many sell trades, so calculate_realized_gain_loss
+  # reads one preloaded set per account instead of querying holdings per trade.
+  # An empty array is authoritative (see the `defined?` check below): it means
+  # "preloaded, and there are none", not "not preloaded".
+  attr_writer :preloaded_holdings
+
   # Calculates realized gain/loss for sell trades based on avg_cost at time of sale
   # Returns nil for buy trades or when cost basis cannot be determined
   def realized_gain_loss
