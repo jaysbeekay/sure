@@ -46,13 +46,21 @@ module Portfolio
       end
     end
 
-    # Every `class` node whose own constant path reads exactly `class_name`,
+    # Every `class` node whose full lexical path reads exactly `class_name`,
     # including a body reopened later in the file, which Minitest adds to.
-    def self.class_nodes(node, class_name)
+    #
+    # The path is the enclosing `module` and `class` names joined to the node's
+    # own constant path, because that is the constant Ruby defines. Matching on
+    # the node's own name alone let a cited top-level `FooTest` be answered by a
+    # `FooTest` declared inside any module, which is a different class and a
+    # false positive of exactly the kind this check exists to reject.
+    def self.class_nodes(node, class_name, namespace = nil)
       return [] unless node.is_a?(Array)
 
-      matches = node[0] == :class && constant_path(node[1]) == class_name ? [ node ] : []
-      matches + node.flat_map { |child| class_nodes(child, class_name) }
+      own = node[0] == :class || node[0] == :module ? constant_path(node[1]) : nil
+      path = own.nil? ? namespace : [ namespace, own ].compact.join("::")
+      matches = node[0] == :class && !own.nil? && path == class_name ? [ node ] : []
+      matches + node.flat_map { |child| class_nodes(child, class_name, path) }
     end
 
     def self.constant_path(node)
