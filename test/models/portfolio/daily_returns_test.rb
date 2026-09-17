@@ -527,6 +527,12 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     returns = daily_returns.returns.map(&:last)
     assert_in_delta 0.0, returns.last.to_f, 0.000001,
                     "receiving a position you already owned elsewhere earns nothing"
+
+    # R12, and the assertion whose deletion let the identity break: the value is
+    # an external flow now, so it must have stopped being a market move. If both
+    # carried it, this would be -500.
+    assert_equal BigDecimal("0"), second.unexplained,
+                 "the journal is a flow OR a market move, never both"
   end
 
   # A2. The mirror case, and it fails differently: a journal OUT understates,
@@ -544,6 +550,7 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
 
     assert_in_delta 0.0, daily_returns.returns.map(&:last).last.to_f, 0.000001,
                     "giving a position away loses nothing"
+    assert_equal BigDecimal("0"), second.unexplained
   end
 
   # A1. The flow is qty x price, NOT the holding row's `amount`. `amount` is the
@@ -563,6 +570,7 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     assert_equal BigDecimal("500"), second.external_flow,
                  "five units arrived, not fifteen"
     assert_equal BigDecimal("1500"), second.denominator
+    assert_equal BigDecimal("0"), second.unexplained
   end
 
   # Correction from the senior review on #121, and the reason suppression keys
@@ -596,7 +604,13 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, market_flow: 500
     security_journal account: @account, date: @day_two, qty: 5
 
-    assert daily_returns.rows.last.suppressed
+    row = daily_returns.rows.last
+    assert row.suppressed
+    # Suppressed because the position could not be valued -- NOT because a
+    # currency had no rate. Reporting both would give the reader two
+    # contradictory explanations and no figures.
+    assert_not row.rate_missing,
+               "an unpriced journal is a valuation gap, not a missing exchange rate"
   end
 
   # `holdings` is unique on (account_id, security_id, date, CURRENCY), so one
@@ -625,6 +639,27 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     assert_equal BigDecimal("500"), second.external_flow,
                  "five units arrived once, however many currencies the position is recorded in"
     assert_equal BigDecimal("1500"), second.denominator
+    assert_equal BigDecimal("0"), second.unexplained
+  end
+
+  # F11 makes a Contribution or Withdrawal labelled Trade external too, and
+  # those carry a real cash amount. Valuing every external Trade from its
+  # position would have turned one with qty 0 into a flow of nothing.
+  test "a contribution written as a trade still flows at its cash amount" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, cash_flow: 500
+
+    @account.entries.create!(
+      name: "Contribution", date: @day_two, amount: -500, currency: @account.currency,
+      entryable: Trade.new(security: security_under_test, qty: 0, price: 0,
+                           currency: @account.currency, investment_activity_label: "Contribution")
+    )
+
+    second = daily_returns.rows.last
+
+    assert_equal BigDecimal("500"), second.external_flow,
+                 "a cash contribution flows at its amount, whatever entryable carries it"
+    assert_equal BigDecimal("0"), second.unexplained
   end
 
   # The negative control. A journal between two accounts the scope CONTAINS is

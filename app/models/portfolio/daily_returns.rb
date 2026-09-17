@@ -371,11 +371,22 @@ class Portfolio::DailyReturns
             -- numerator and the denominator move by one number rather than two
             -- independently derived ones.
             COALESCE(SUM(CASE WHEN #{flow_class_sql} IN ('external_inflow', 'external_outflow')
-                              THEN CASE WHEN entries.entryable_type = 'Trade'
+                              THEN CASE WHEN #{journal_predicate}
                                         THEN COALESCE(trades.qty * journal_holdings.price * journal_fx.rate, 0)
                                         ELSE -entries.amount * fx.rate
                                    END
                               ELSE 0 END), 0) AS external_flow,
+            -- R12. The SAME value is already in the balance row's
+            -- net_market_flows: a journal carries `amount: 0`, so
+            -- Balance::BaseCalculator books its whole arriving value as market
+            -- movement. Counting it as an external flow as well would leave the
+            -- identity short by exactly the journal, and `unexplained` would
+            -- carry minus its value on every journal day. Reported separately
+            -- here so the final SELECT can take it back out of `market`.
+            COALESCE(SUM(CASE WHEN #{journal_predicate}
+                              AND #{flow_class_sql} IN ('external_inflow', 'external_outflow')
+                              THEN COALESCE(trades.qty * journal_holdings.price * journal_fx.rate, 0)
+                              ELSE 0 END), 0) AS journal_flow,
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'income'
                               THEN -entries.amount * fx.rate ELSE 0 END), 0) AS income,
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'fee'
@@ -391,7 +402,8 @@ class Portfolio::DailyReturns
             COALESCE(BOOL_OR((fx.rate IS NULL
                               AND #{flow_class_sql} IN ('external_inflow', 'external_outflow', 'income', 'fee'))
                              OR (journal_fx.rate IS NULL
-                                 AND entries.entryable_type = 'Trade'
+                                 AND journal_holdings.currency IS NOT NULL
+                                 AND #{journal_predicate}
                                  AND #{flow_class_sql} IN ('external_inflow', 'external_outflow'))), false) AS flow_rate_missing,
             -- R18's suppression condition, and it keys on the PRICE rather than
             -- on the row. Holding::PortfolioCache deliberately keeps zero-price
@@ -466,7 +478,10 @@ class Portfolio::DailyReturns
           b.date,
           b.value_close,
           b.value_open,
-          b.market,
+          -- R12: the journal is now an external flow, so it must stop being a
+          -- market move. Same value, same row, taken out of the driver that
+          -- double-counted it.
+          b.market - COALESCE(f.journal_flow, 0) AS market,
           b.revaluations,
           b.fx_effect,
           (b.rate_missing OR COALESCE(f.flow_rate_missing, false)) AS rate_missing,
@@ -515,6 +530,14 @@ class Portfolio::DailyReturns
     # nothing to collide with.
     def flow_classifier
       @flow_classifier ||= Portfolio::FlowClassifier.new(scope_account_ids: scope_account_ids)
+    end
+
+    # A security journal: a Transfer-labelled trade. Deliberately NOT every
+    # Trade classified external -- F11 makes a Contribution or Withdrawal
+    # labelled Trade external too, and those carry a real cash amount that must
+    # keep flowing at its amount rather than being revalued from a position.
+    def journal_predicate
+      "entries.entryable_type = 'Trade' AND trades.investment_activity_label = 'Transfer'"
     end
 
     def flow_class_sql
