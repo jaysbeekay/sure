@@ -121,7 +121,11 @@ class Portfolio::DailyReturns
           revaluations: decimal(raw["revaluations"]),
           fx_effect: decimal(raw["fx_effect"]),
           rate_missing: raw["rate_missing"] == true,
-          suppressed: !denominator.positive?
+          # R6's precedent, extended by R18: a day carrying a journal that
+          # could not be valued is suppressed rather than returned. Its flow is
+          # missing from the denominator while its value is present in the
+          # close, so the day would read as return the portfolio did not earn.
+          suppressed: !denominator.positive? || raw["journal_unpriced"] == true
         )
       end
     end
@@ -348,8 +352,30 @@ class Portfolio::DailyReturns
         flows_by_date AS (
           SELECT
             entries.date AS date,
+            -- R18: a security journalled in or out is an external flow whose
+            -- magnitude is the POSITION's value, not the entry's cash amount.
+            -- A journal is written with `amount: 0` (Questrade writes
+            -- `price: 0, amount: 0`), so `-entries.amount` values it at nothing
+            -- and the arriving position lands in the numerator with the
+            -- denominator unchanged -- a position worth half the account read
+            -- as a 50% day.
+            --
+            -- Valued as qty x the holding's price for that date, and NOT as
+            -- `journal_holdings.amount`: `amount` is the whole position for
+            -- that security in the account, including units already held, so it
+            -- overstates the flow whenever a journal tops up a position the
+            -- scope already had. qty is what arrived.
+            --
+            -- The price comes from the same `holdings` row that
+            -- Balance::BaseCalculator#market_value_change_on_date reads, so the
+            -- numerator and the denominator move by one number rather than two
+            -- independently derived ones.
             COALESCE(SUM(CASE WHEN #{flow_class_sql} IN ('external_inflow', 'external_outflow')
-                              THEN -entries.amount * fx.rate ELSE 0 END), 0) AS external_flow,
+                              THEN CASE WHEN entries.entryable_type = 'Trade'
+                                        THEN COALESCE(trades.qty * journal_holdings.price * journal_fx.rate, 0)
+                                        ELSE -entries.amount * fx.rate
+                                   END
+                              ELSE 0 END), 0) AS external_flow,
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'income'
                               THEN -entries.amount * fx.rate ELSE 0 END), 0) AS income,
             COALESCE(SUM(CASE WHEN #{flow_class_sql} = 'fee'
@@ -359,7 +385,20 @@ class Portfolio::DailyReturns
             -- classes that feed a figure count; an internal trade in an
             -- unconvertible currency moves nothing we sum.
             COALESCE(BOOL_OR(fx.rate IS NULL
-                             AND #{flow_class_sql} IN ('external_inflow', 'external_outflow', 'income', 'fee')), false) AS flow_rate_missing
+                             AND #{flow_class_sql} IN ('external_inflow', 'external_outflow', 'income', 'fee')), false) AS flow_rate_missing,
+            -- R18's suppression condition, and it keys on the PRICE rather than
+            -- on the row. Holding::PortfolioCache deliberately keeps zero-price
+            -- journal trades (portfolio_cache.rb:120-126) and matches the exact
+            -- date only, so on a journal date with no price for that date --
+            -- a weekend, a holiday, an instance with no feed -- `build_holdings`
+            -- still writes a row, valued at qty x 0. Keying on "no row exists"
+            -- would never fire and the phantom gain would simply move to the
+            -- day the price appears.
+            COALESCE(BOOL_OR(entries.entryable_type = 'Trade'
+                             AND #{flow_class_sql} IN ('external_inflow', 'external_outflow')
+                             AND (journal_holdings.price IS NULL
+                                  OR journal_holdings.price <= 0
+                                  OR journal_fx.rate IS NULL)), false) AS journal_unpriced
           FROM entries
           JOIN accounts entry_accounts ON entry_accounts.id = entries.account_id
           -- The same active-until window the balances use: a flow dated after
@@ -375,6 +414,20 @@ class Portfolio::DailyReturns
           LEFT JOIN LATERAL (
             SELECT #{rate_lookup('COALESCE(entries.currency, entry_accounts.currency)', 'entries.date - 1')} AS rate
           ) fx ON TRUE
+          -- The position this entry moved, on the day it moved, for valuing a
+          -- journal. Absent for every non-trade entry and for a trade whose
+          -- security the account holds no row for that date.
+          LEFT JOIN holdings journal_holdings
+            ON entries.entryable_type = 'Trade'
+            AND journal_holdings.account_id = entries.account_id
+            AND journal_holdings.security_id = trades.security_id
+            AND journal_holdings.date = entries.date
+          -- Converted from the HOLDING's currency, which is the one its price
+          -- is quoted in, and at the previous day's rate for the same reason
+          -- every other start-of-day flow is (R11).
+          LEFT JOIN LATERAL (
+            SELECT #{rate_lookup('journal_holdings.currency', 'entries.date - 1')} AS rate
+          ) journal_fx ON TRUE
           WHERE entries.account_id = ANY(array[:account_ids]::uuid[])
             AND entries.date BETWEEN :start_date AND :end_date
             AND (flow_windows.active_until_date IS NULL OR entries.date <= flow_windows.active_until_date)
@@ -395,6 +448,7 @@ class Portfolio::DailyReturns
           (b.rate_missing OR COALESCE(f.flow_rate_missing, false)) AS rate_missing,
           COALESCE(arr.arrived_value, 0) AS arrived_value,
           COALESCE(dep.departed_value, 0) AS departed_value,
+          COALESCE(f.journal_unpriced, false) AS journal_unpriced,
           COALESCE(f.external_flow, 0) AS external_flow,
           COALESCE(f.income, 0) AS income,
           COALESCE(f.fees, 0) AS fees
