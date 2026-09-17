@@ -451,7 +451,13 @@ export default class extends Controller {
   };
 
   _extractNumericValue = (numeric) => {
-    if (numeric !== null && typeof numeric === "object" && "amount" in numeric) {
+    // Missing is NaN, not zero. `Number(null)` is 0, so a null value would
+    // plot on the axis as a real zero and compare as one -- a gap in a series
+    // reading as a crash to nothing. d3 skips NaN; it cannot skip a zero it
+    // was told to believe.
+    if (numeric === null || numeric === undefined) return NaN;
+
+    if (typeof numeric === "object" && "amount" in numeric) {
       return Number(numeric.amount);
     }
     return Number(numeric);
