@@ -243,9 +243,17 @@ class Portfolio::RealizedGains
       # miss as "no rate" would exclude a disposal whose rate is on file. One
       # lookup for that case, on the same terms as the batch -- exact date,
       # exact direction, no parity.
+      #
+      # It is also the path a genuinely missing rate takes, so a period with n
+      # unmeasurable disposals costs n queries on top of the batch. Bounded by
+      # the disposals that produce no figure rather than by all of them, and
+      # the alternative is excluding a disposal whose rate is on file.
       rate = rates_by_date.dig(date, from) ||
              ExchangeRate.find_by(from_currency: from, to_currency: currency, date: date)&.rate
-      return nil if rate.nil?
+      # Present but not positive is absent: `ExchangeRate` validates presence
+      # only, and a 0 would report the disposal as a total loss while a
+      # negative one would flip its sign. See Trade#converted_to_basis_currency.
+      return nil unless rate.to_d.positive?
 
       numeric * rate
     end

@@ -221,6 +221,26 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal BigDecimal(0), realized.net
   end
 
+  # The statement's own conversion leg has the same exposure as the disposal's.
+  # `ExchangeRate` requires a rate to be present, not to be usable, so a 0 in
+  # the GBP->USD row would carry a real 40 GBP gain into the tally as 0 USD --
+  # a figure, in the net, indistinguishable from a disposal that broke even.
+  # A rate that cannot convert excludes the disposal, exactly as an absent one
+  # does.
+  test "a statement rate that cannot convert excludes the disposal" do
+    @account.holdings.create!(
+      security: security_under_test, date: @march, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: @march, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: @march, rate: 0
+
+    assert_empty realized.buckets, "0 is not a conversion"
+    assert_equal({ missing_exchange_rate: 1 }, realized.excluded_trades)
+    assert_equal BigDecimal(0), realized.net
+  end
+
   # THREE currencies: the statement is in USD, the position is carried in GBP,
   # and the disposal was priced in EUR. 300 EUR of proceeds at 0.8 is 240 GBP,
   # less 200 GBP of basis, so 40 GBP -- and 50 USD at 1.25.
