@@ -96,11 +96,13 @@ positive flow.
 
 These are recorded so they are not mistaken for oversights.
 
-- **Security transfers in** (F10) do not raise the denominator, because the journal entry carries
-  no cash amount, so a portfolio built by transferring positions in rather than buying them will
-  show those positions as gains. The classification itself is now correct -- an out-of-scope
-  journal is external -- but the flow magnitude is read from the entry's amount, which is zero.
-  Tracked in #151.
+- **Security transfers are valued at one day's price** (R18). A journal in or out raises or lowers
+  the denominator now -- the defect where it did not, and the arriving position read as gain, is
+  closed. What remains is narrower: the journalled units are valued and closed at the same day-t
+  price, so they contribute exactly 0% on arrival and their intraday move is lost, and on an
+  instance with no price feed the position stays valued at 0 until a later priced trade, whose
+  jump still reads as return. Suppressing the journal day names that second case without closing
+  it; it is a valuation-quality gap rather than a returns one.
 - **Intraday flows** are not modelled. Every flow is treated as landing at the start of its day
   (R1).
 - **`fx_effect` is measured per day** (R11) as the closing local balance times the day's rate

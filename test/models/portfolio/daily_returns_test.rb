@@ -599,6 +599,34 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     assert daily_returns.rows.last.suppressed
   end
 
+  # `holdings` is unique on (account_id, security_id, date, CURRENCY), so one
+  # security can carry several rows for one day and Balance::SyncCache sums them
+  # all. A journal join without the currency matched every row and valued the
+  # journal once per row -- two rows, twice the flow.
+  #
+  # The row matching the entry's own currency is the one used, since that is the
+  # unit the quantity is priced in.
+  test "a journal is valued once when the security has rows in several currencies" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, market_flow: 500
+    security_journal account: @account, date: @day_two, qty: 5, price: 100
+
+    # A second row for the same security and day, in another currency, which the
+    # schema allows and a provider reporting in the security's own currency
+    # produces.
+    @account.holdings.create!(
+      security: security_under_test, date: @day_two, qty: 5, price: 80,
+      amount: BigDecimal(400), currency: "EUR"
+    )
+    set_rate from: "EUR", to: "USD", date: @day_one, rate: 1.25
+
+    second = daily_returns.rows.last
+
+    assert_equal BigDecimal("500"), second.external_flow,
+                 "five units arrived once, however many currencies the position is recorded in"
+    assert_equal BigDecimal("1500"), second.denominator
+  end
+
   # The negative control. A journal between two accounts the scope CONTAINS is
   # internal (F10) and moves nothing across the boundary, so it must not be
   # valued as a flow however well the valuation works.

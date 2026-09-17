@@ -384,8 +384,15 @@ class Portfolio::DailyReturns
             -- with no rate is flagged, never converted at parity. Only the
             -- classes that feed a figure count; an internal trade in an
             -- unconvertible currency moves nothing we sum.
-            COALESCE(BOOL_OR(fx.rate IS NULL
-                             AND #{flow_class_sql} IN ('external_inflow', 'external_outflow', 'income', 'fee')), false) AS flow_rate_missing,
+            -- A journal converts from the HOLDING's currency, not the entry's,
+            -- so a missing rate there is invisible to the check above. Without
+            -- this a suppressed journal day would not report `rate_missing?`
+            -- and a caller could not say which fact it was short of.
+            COALESCE(BOOL_OR((fx.rate IS NULL
+                              AND #{flow_class_sql} IN ('external_inflow', 'external_outflow', 'income', 'fee'))
+                             OR (journal_fx.rate IS NULL
+                                 AND entries.entryable_type = 'Trade'
+                                 AND #{flow_class_sql} IN ('external_inflow', 'external_outflow'))), false) AS flow_rate_missing,
             -- R18's suppression condition, and it keys on the PRICE rather than
             -- on the row. Holding::PortfolioCache deliberately keeps zero-price
             -- journal trades (portfolio_cache.rb:120-126) and matches the exact
@@ -417,11 +424,28 @@ class Portfolio::DailyReturns
           -- The position this entry moved, on the day it moved, for valuing a
           -- journal. Absent for every non-trade entry and for a trade whose
           -- security the account holds no row for that date.
-          LEFT JOIN holdings journal_holdings
-            ON entries.entryable_type = 'Trade'
-            AND journal_holdings.account_id = entries.account_id
-            AND journal_holdings.security_id = trades.security_id
-            AND journal_holdings.date = entries.date
+          --
+          -- EXACTLY ONE ROW, which is why this is a LATERAL and not a plain
+          -- join. `holdings` is unique on (account_id, security_id, date,
+          -- CURRENCY), so one security can hold several rows for one day --
+          -- Balance::SyncCache sums them all, converting each from its own
+          -- currency. A join without the currency would match every one of
+          -- them and value the journal once per row.
+          --
+          -- The row matching the entry's own currency is preferred, since that
+          -- is the unit `trades.qty` is priced in; the ordering falls back to
+          -- the alphabetically first currency so the choice is deterministic
+          -- rather than whatever the planner returns.
+          LEFT JOIN LATERAL (
+            SELECT h.price, h.currency
+            FROM holdings h
+            WHERE entries.entryable_type = 'Trade'
+              AND h.account_id = entries.account_id
+              AND h.security_id = trades.security_id
+              AND h.date = entries.date
+            ORDER BY (h.currency = COALESCE(entries.currency, entry_accounts.currency)) DESC, h.currency
+            LIMIT 1
+          ) journal_holdings ON TRUE
           -- Converted from the HOLDING's currency, which is the one its price
           -- is quoted in, and at the previous day's rate for the same reason
           -- every other start-of-day flow is (R11).
