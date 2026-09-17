@@ -326,6 +326,35 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
                     "equal value ties break alphabetically, not by insertion order"
   end
 
+  # A closed broker keeps its history in the aggregate -- that is what
+  # historical_scope is for -- but it must not spend one of the five comparison
+  # slots. It would rank on its large final balance, then lose its line to the
+  # two-point guard, and a live account would go undrawn for it.
+  test "an account closed before the period end does not take a comparison slot" do
+    closed = create_portfolio_account(family: @family, name: "Closed broker")
+    @statement.stubs(:historical_scope).returns(
+      stub(accounts: [ closed ], account_ids: [ closed.id ],
+           active_until_dates: { closed.id => @period.date_range.end - 5 })
+    )
+
+    assert_empty registry.send(:comparison_accounts),
+                 "an account whose cut-off predates the period end is not a candidate"
+  end
+
+  # The palette is written twice -- once in Ruby for the legend, once in JS for
+  # the lines -- and a legend that disagrees with its chart mislabels every
+  # series. The comment on COMPARISON_COLORS promises this test; it now exists.
+  test "the legend palette matches the chart controller's, in order" do
+    js = Rails.root.join("app/javascript/controllers/time_series_chart_controller.js").read
+    block = js[/static SERIES_COLORS = \[(.*?)\]/m, 1]
+    assert block, "SERIES_COLORS not found in the controller"
+
+    from_js = block.scan(/"([^"]+)"/).flatten
+
+    assert_equal PortfoliosHelper::COMPARISON_COLORS, from_js,
+                 "the legend and the chart must draw the same colours in the same order"
+  end
+
   test "sections are visible only when the family has data for them" do
     visible = registry.sections.select { |s| s[:visible] }.map { |s| s[:key] }
     assert_includes visible, "holdings"

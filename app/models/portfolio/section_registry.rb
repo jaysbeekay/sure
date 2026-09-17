@@ -330,7 +330,18 @@ class Portfolio::SectionRegistry
     # one.
     def comparison_accounts
       @comparison_accounts ||= begin
-        accounts = statement.historical_scope.accounts.to_a
+        # Only accounts still contributing value at the period's end.
+        # historical_scope includes disabled accounts by design -- their history
+        # belongs in the aggregate -- but a closed broker with a large final
+        # balance would rank into the top five, then lose its line to the
+        # two-point guard below, and the slot would be spent on nothing while a
+        # live account went undrawn.
+        cutoffs = statement.historical_scope.active_until_dates
+        period_end = period.date_range.end
+        accounts = statement.historical_scope.accounts.reject { |account|
+          cutoff = cutoffs[account.id]
+          cutoff.present? && cutoff < period_end
+        }
         values = closing_values_for(accounts)
         # Rate availability sorts FIRST, then value. Ranking a rateless account
         # as zero is not enough: an account that genuinely closed at zero or
