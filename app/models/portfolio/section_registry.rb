@@ -20,7 +20,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[kpis performance value_chart realized_gains holdings accounts allocation data_quality].freeze
+  KEYS = %w[kpis performance index_chart value_chart realized_gains holdings accounts allocation data_quality].freeze
 
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
@@ -86,6 +86,18 @@ class Portfolio::SectionRegistry
           partial: "portfolios/performance",
           locals: shared_locals.merge(performance: performance, returns: returns),
           visible: true,
+          collapsible: true
+        },
+        # Hidden when the period cannot produce two points to join. Unlike the
+        # performance cards, an empty chart says nothing a sentence could not
+        # say better, and the cards above already state why a period has no
+        # figures.
+        {
+          key: "index_chart",
+          title: "portfolios.sections.index_chart",
+          partial: "portfolios/index_chart",
+          locals: shared_locals.merge(series: index_chart_series),
+          visible: index_chart_series.present?,
           collapsible: true
         },
         {
@@ -178,6 +190,28 @@ class Portfolio::SectionRegistry
         volatility: performance.volatility,
         max_drawdown: performance.max_drawdown
       }
+    end
+
+    # The flow-adjusted index as a Series the time-series chart can draw.
+    #
+    # Built here rather than in the partial for the same reason the realised
+    # P&L bars are: the view formats, it does not assemble. Built here rather
+    # than on Portfolio::Performance because a Series is a presentation shape,
+    # and that class stays free of one.
+    #
+    # `index_series` is [[date, level], ...] rebased on 100, so the values are
+    # plain BigDecimals rather than Money. Series passes a non-Money value
+    # through untouched (`display_amount`), and the chart's tooltip then reads
+    # a level and a percentage change -- which is what an index is, and why
+    # this is not the value chart with different numbers in it.
+    #
+    # from_raw_values demands two values, and a period with one day or none has
+    # no line to draw; nil here is what hides the section.
+    def index_chart_series
+      return @index_chart_series if defined?(@index_chart_series)
+
+      points = performance.index_series.map { |date, level| { date: date, value: level } }
+      @index_chart_series = points.size >= 2 ? Series.from_raw_values(points) : nil
     end
 
     def holdings_rows

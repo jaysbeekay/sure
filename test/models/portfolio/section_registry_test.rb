@@ -12,8 +12,8 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "registers the built-in sections with their partials and locals" do
     sections = registry.sections
 
-    assert_equal %w[kpis performance value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
-    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/value_chart], sections.first(3).map { |s| s[:partial] }
+    assert_equal %w[kpis performance index_chart value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
+    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/index_chart portfolios/value_chart], sections.first(4).map { |s| s[:partial] }
     assert sections.all? { |s| s[:collapsible] }
 
     # Every partial gets its locals passed in: none of them reaches for
@@ -55,6 +55,42 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
 
     assert_equal BigDecimal("0.21"), returns[:twr]
     assert_nil returns[:mwr], "a withheld figure must not be defaulted to zero"
+  end
+
+  # The index is a level, not an amount: 121.34 means the portfolio returned
+  # 21.34%. Series passes a non-Money value through untouched, which is what
+  # lets the same chart controller draw it -- and is also what would let a
+  # Money slip in unnoticed, so the payload is asserted rather than assumed.
+  test "the index chart series carries rebased levels, not money" do
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:index_series).returns([
+      [ Date.new(2026, 3, 1), BigDecimal("100") ],
+      [ Date.new(2026, 3, 2), BigDecimal("110") ],
+      [ Date.new(2026, 3, 3), BigDecimal("121.34") ]
+    ])
+    @statement.stubs(:performance).returns(perf)
+
+    section = registry.sections.find { |s| s[:key] == "index_chart" }
+
+    assert section[:visible]
+    values = section[:locals][:series].values
+    assert_equal 3, values.size
+    assert_equal BigDecimal("121.34"), values.last.value
+    assert_not values.any? { |v| v.value.is_a?(Money) }, "an index level is not money"
+  end
+
+  # from_raw_values demands two points, and a period with one day or none has
+  # no line to draw. An empty chart says nothing the performance cards above
+  # have not already said, so the section hides rather than drawing a blank box.
+  test "the index chart section hides when there is no line to draw" do
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:index_series).returns([ [ Date.new(2026, 3, 1), BigDecimal("100") ] ])
+    @statement.stubs(:performance).returns(perf)
+
+    section = registry.sections.find { |s| s[:key] == "index_chart" }
+
+    assert_not section[:visible]
+    assert_nil section[:locals][:series]
   end
 
   test "sections are visible only when the family has data for them" do
@@ -104,7 +140,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "orders sections by the user's saved order, appending anything it omits" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis])
 
-    assert_equal %w[value_chart kpis performance realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -120,7 +156,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "ignores keys in the saved order that no longer exist" do
     @user.update_section_preferences("portfolio", order: %w[gone value_chart])
 
-    assert_equal %w[value_chart kpis performance realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -137,7 +173,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     sections = registry(extra_sections: [ stub ]).sections
 
     assert_equal "stub", sections.last[:key]
-    assert_equal 9, sections.size
+    assert_equal 10, sections.size
   end
 
   test "a saved order can place an extra section among the built-ins" do
@@ -145,7 +181,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
              locals: {}, visible: true, collapsible: true }
     @user.update_section_preferences("portfolio", order: %w[stub kpis])
 
-    assert_equal %w[stub kpis performance value_chart realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[stub kpis performance index_chart value_chart realized_gains holdings accounts allocation data_quality],
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 
