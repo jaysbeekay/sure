@@ -402,6 +402,51 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal baseline.size, grown.size, "adding 20 holdings changed the query count:\n#{(grown - baseline).join("\n")}"
   end
 
+  # The fixture family moves no value, so the drivers section hides and its
+  # partial is never rendered by any other test -- the registry tests cover the
+  # locals, not the template. A bad i18n key, or Money.new on a nil value_open,
+  # would reach a user before it reached a test.
+  test "the drivers table renders its rows, its total and its warning" do
+    drivers = {
+      value_open: BigDecimal(1_000), value_close: BigDecimal(1_100),
+      change: BigDecimal(100), external_net: BigDecimal(50), composition: BigDecimal(0),
+      income: BigDecimal(30), fees: BigDecimal(20), market: BigDecimal(40),
+      revaluations: BigDecimal(0), fx_effect: BigDecimal(0), unexplained: BigDecimal(0)
+    }
+    Portfolio::Performance.any_instance.stubs(:drivers).returns(drivers)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-drivers" do
+      assert_select "[data-portfolio-driver=?]", "external_net"
+      assert_select "[data-portfolio-driver=?]", "fees"
+      # Signed against the change, so it renders as a negative even though
+      # Portfolio::Drivers reports fees as a positive magnitude (R7).
+      assert_select "[data-portfolio-driver=fees] td", text: /-/
+    end
+    assert_match I18n.t("portfolios.drivers.value_open"), response.body
+    assert_match I18n.t("portfolios.drivers.value_close"), response.body
+    assert_select "#portfolio-drivers", text: /#{Regexp.escape(I18n.t("portfolios.drivers.unreconciled_title"))}/, count: 0,
+      message: "a reconciling table does not warn"
+  end
+
+  test "the drivers table warns when the components do not reconcile" do
+    drivers = {
+      value_open: BigDecimal(1_000), value_close: BigDecimal(1_100),
+      change: BigDecimal(100), external_net: BigDecimal(0), composition: BigDecimal(0),
+      income: BigDecimal(0), fees: BigDecimal(0), market: BigDecimal(90),
+      revaluations: BigDecimal(0), fx_effect: BigDecimal(0), unexplained: BigDecimal(10)
+    }
+    Portfolio::Performance.any_instance.stubs(:drivers).returns(drivers)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_match I18n.t("portfolios.drivers.unreconciled_title"), response.body
+    assert_select "[data-portfolio-driver=?]", "unexplained"
+  end
+
   # --- accounts, allocation and data quality tests ---
 
   test "accounts grid links every countable investment account to its holdings tab and skips excluded shares" do

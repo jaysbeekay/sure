@@ -249,11 +249,22 @@ class Portfolio::SectionRegistry
       @drivers ||= performance.drivers || {}
     end
 
-    # R12 held, re-derived from the cached hash. Portfolio::Drivers#unexplained
-    # is measured independently of the components it is compared against, so a
-    # non-zero value is a real gap rather than a rounding artefact.
+    # R12 held, re-derived from the cached hash because Portfolio::Performance
+    # stores `drivers.to_h` and the object's own `reconciles?` does not survive
+    # that. Re-derived at the SAME tolerance the contract defines -- a cent, per
+    # Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and not
+    # at exact zero.
+    #
+    # The difference is not academic. A multi-currency family accumulates
+    # sub-cent residue by construction: entry flows convert entry -> family at
+    # t-1 while balance-row flows went entry -> account at the entry date and
+    # then account -> family. A residual of 0.004 is normal and reconciles; at
+    # exact zero it would raise the "these figures do not reconcile" banner and
+    # print an "Unexplained $0.00" row, which is alarming and wrong.
+    DRIVER_RECONCILE_TOLERANCE = BigDecimal("0.01")
+
     def driver_reconciles?
-      drivers[:unexplained].to_d.zero?
+      drivers[:unexplained].to_d.abs <= DRIVER_RECONCILE_TOLERANCE
     end
 
     # The decomposition as SIGNED contributions, in the order they are added.
@@ -290,7 +301,14 @@ class Portfolio::SectionRegistry
           [ :unexplained, drivers[:unexplained] ]
         ]
 
-        signed.reject { |_key, amount| amount.nil? || amount.zero? }
+        # Dropped when it rounds away as well as when it is exactly zero: an
+        # "Unexplained $0.00" row states a gap the figure itself denies, and
+        # sub-cent residue is normal in a multi-currency scope.
+        signed.reject { |key, amount|
+          next true if amount.nil? || amount.zero?
+
+          key == :unexplained && amount.abs <= DRIVER_RECONCILE_TOLERANCE
+        }
       end
     end
 

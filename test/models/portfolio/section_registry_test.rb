@@ -173,6 +173,43 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
                "and the table says so, rather than leaving the reader to spot the row"
   end
 
+  # R12 defines reconciliation at a CENT, not at exact zero, and a
+  # multi-currency scope accumulates sub-cent residue by construction: entry
+  # flows convert entry -> family at t-1 while balance-row flows went
+  # entry -> account at the entry date and then account -> family.
+  #
+  # At exact zero a residual of 0.004 would raise the "these figures do not
+  # reconcile" banner and print an "Unexplained $0.00" row -- a gap the figure
+  # itself denies.
+  test "a sub-cent residual reconciles and is not listed" do
+    drivers = stub_drivers(value_open: 1_000, value_close: 1_100, market: 100,
+                           unexplained: BigDecimal("0.004"))
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:drivers).returns(drivers)
+    @statement.stubs(:performance).returns(perf)
+
+    section = registry.sections.find { |s| s[:key] == "drivers" }
+
+    assert section[:locals][:reconciles], "a sub-cent residual is what the contract calls reconciled"
+    assert_not_includes section[:locals][:contributions].map(&:first), :unexplained,
+                        "and a row that rounds to nothing says nothing"
+  end
+
+  # The other side of the boundary: a residual ABOVE the cent is a real gap and
+  # must still be shown, so the tolerance cannot quietly swallow a finding.
+  test "a residual above the tolerance is still reported" do
+    drivers = stub_drivers(value_open: 1_000, value_close: 1_100, market: 90,
+                           unexplained: BigDecimal("10"))
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:drivers).returns(drivers)
+    @statement.stubs(:performance).returns(perf)
+
+    section = registry.sections.find { |s| s[:key] == "drivers" }
+
+    assert_not section[:locals][:reconciles]
+    assert_includes section[:locals][:contributions].map(&:first), :unexplained
+  end
+
   test "sections are visible only when the family has data for them" do
     visible = registry.sections.select { |s| s[:visible] }.map { |s| s[:key] }
     assert_includes visible, "holdings"
