@@ -413,7 +413,14 @@ class Portfolio::DailyReturns
             -- still writes a row, valued at qty x 0. Keying on "no row exists"
             -- would never fire and the phantom gain would simply move to the
             -- day the price appears.
-            COALESCE(BOOL_OR(entries.entryable_type = 'Trade'
+            --
+            -- Keyed on the JOURNAL predicate, not on `entryable_type` alone:
+            -- F11 makes a Contribution or Withdrawal labelled trade external
+            -- too, and one of those is valued from `-entries.amount` like any
+            -- other external flow. It needs no holdings row, and a trade with
+            -- qty 0 writes none, so keying on the type suppressed a day whose
+            -- figures were complete.
+            COALESCE(BOOL_OR(#{journal_predicate}
                              AND #{flow_class_sql} IN ('external_inflow', 'external_outflow')
                              AND (journal_holdings.price IS NULL
                                   OR journal_holdings.price <= 0

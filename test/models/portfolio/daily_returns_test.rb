@@ -662,6 +662,37 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     assert_equal BigDecimal("0"), second.unexplained
   end
 
+  # R18's suppression is about a JOURNAL that could not be valued, and a journal
+  # is a Transfer-labelled trade. Keyed on `entryable_type = 'Trade'` alone it
+  # also caught the Contribution and Withdrawal labelled trades of F11, whose
+  # flow comes from `-entries.amount` and never touches a holdings price. Such a
+  # trade on a day with no holdings row for its security -- qty 0 writes none,
+  # and a cash contribution recorded as a trade is exactly that -- suppressed a
+  # day whose figures were complete, and the real return it carried was dropped
+  # from the chain instead of contributing to it.
+  test "a contribution written as a trade is not suppressed by a price it never needed" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_650,
+                cash_flow: 500, market_flow: 150
+
+    @account.entries.create!(
+      name: "Contribution", date: @day_two, amount: -500, currency: @account.currency,
+      entryable: Trade.new(security: security_under_test, qty: 0, price: 0,
+                           currency: @account.currency, investment_activity_label: "Contribution")
+    )
+
+    second = daily_returns.rows.last
+
+    assert_equal BigDecimal("500"), second.external_flow
+    assert_equal BigDecimal("1500"), second.denominator
+    assert_not second.suppressed,
+               "nothing here is valued from a position, so no price is missing"
+
+    second_return = daily_returns.returns.find { |date, _| date == @day_two }&.last
+    assert_in_delta 0.10, second_return.to_f, 0.000001,
+                    "the day returned 10% and must contribute it"
+  end
+
   # The negative control. A journal between two accounts the scope CONTAINS is
   # internal (F10) and moves nothing across the boundary, so it must not be
   # valued as a flow however well the valuation works.
