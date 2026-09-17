@@ -141,6 +141,12 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     # the change was.
     assert_equal BigDecimal(150), contributions.sum { |_key, amount| amount }
     assert_equal drivers[:change], contributions.sum { |_key, amount| amount }
+
+    # The local that drives the "these figures do not reconcile" alert. Without
+    # asserting it, a broken driver_reconciles? could invert the alert while
+    # every assertion above stayed green.
+    assert registry.sections.find { |s| s[:key] == "drivers" }[:locals][:reconciles],
+           "a decomposition that adds up reports as reconciled"
   end
 
   # A period with no fees does not need a fees row saying zero, and
@@ -160,8 +166,11 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     perf2.stubs(:drivers).returns(noisy)
     @statement.stubs(:performance).returns(perf2)
 
-    keys = registry.sections.find { |s| s[:key] == "drivers" }[:locals][:contributions].map(&:first)
+    section = registry.sections.find { |s| s[:key] == "drivers" }
+    keys = section[:locals][:contributions].map(&:first)
     assert_includes keys, :unexplained, "a measured gap must be shown, not folded away"
+    assert_not section[:locals][:reconciles],
+               "and the table says so, rather than leaving the reader to spot the row"
   end
 
   test "sections are visible only when the family has data for them" do
