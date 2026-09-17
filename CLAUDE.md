@@ -97,9 +97,12 @@ from this fork.
    link as well. The issue link shows a maintainer which programme a slice belongs
    to; the fork link shows where its CI, Gatekeeper and CodeRabbit history lives,
    which is most of the review evidence and is invisible from upstream otherwise.
-   Check both directions by grepping (`jaysbeekay/sure#` in upstream bodies,
-   `we-promise/sure#` in fork bodies) rather than from memory -- a PR reads as
-   correctly linked when the reverse link is missing. Where the two share a
+   Verify all three by grepping rather than from memory, because a PR reads as
+   correctly linked when one of them is missing: the issue reference in the
+   upstream body (`Closes #`, `Fixes #` or `Part of #`), `jaysbeekay/sure#` in
+   the upstream body, and `we-promise/sure#` in the fork body. Checking only the
+   fork link would pass a PR that never named its issue -- which is the older
+   half of this rule and the one that was being followed all along. Where the two share a
    branch, say "same branch, same commit"; where the fork pre-flight is a
    cherry-pick onto the mirror, say that instead.
 
