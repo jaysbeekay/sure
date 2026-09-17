@@ -455,7 +455,7 @@ export default class extends Controller {
     // plot on the axis as a real zero and compare as one -- a gap in a series
     // reading as a crash to nothing. d3 skips NaN; it cannot skip a zero it
     // was told to believe.
-    if (numeric === null || numeric === undefined) return NaN;
+    if (numeric === null || numeric === undefined) return Number.NaN;
 
     if (typeof numeric === "object" && "amount" in numeric) {
       return Number(numeric.amount);
