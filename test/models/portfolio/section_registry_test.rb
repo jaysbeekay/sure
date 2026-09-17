@@ -77,6 +77,20 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_equal 3, values.size
     assert_equal BigDecimal("121.34"), values.last.value
     assert_not values.any? { |v| v.value.is_a?(Money) }, "an index level is not money"
+
+    # Rounded before it reaches the wire. A chained level is a division result,
+    # and nothing downstream rounds it: the hover would otherwise read
+    # 112.30000000000000000000000000000311.
+    long = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    long.stubs(:index_series).returns([
+      [ Date.new(2026, 3, 1), BigDecimal("100") ],
+      [ Date.new(2026, 3, 2), BigDecimal(1123) / BigDecimal(10) ]
+    ])
+    @statement.stubs(:performance).returns(long)
+
+    serialised = registry.sections.find { |s| s[:key] == "index_chart" }[:locals][:series].to_json
+    assert_no_match(/\d+\.\d{4,}/, serialised,
+                    "a level reaches the tooltip with two decimals, not thirty")
   end
 
   # from_raw_values demands two points, and a period with one day or none has

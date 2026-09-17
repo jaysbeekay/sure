@@ -216,7 +216,17 @@ class Portfolio::SectionRegistry
       levels = performance.index_series
       @index_chart_series =
         if levels.size >= 2
-          Series.from_raw_values(levels.map { |date, level| { date: date, value: level } })
+          # Rounded to two places HERE, because nothing downstream will do it.
+          # A chained level is a BigDecimal division result --
+          # 112.30000000000000000000000000000311 for an ordinary two-day series
+          # -- and Series#display_amount passes a non-Money value through
+          # untouched, Trend#as_json emits it raw, and the chart's
+          # _extractFormattedValue returns it verbatim. The hover would read
+          # every one of those digits. The percentage half is already fine:
+          # Trend#percent_formatted rounds it.
+          Series.from_raw_values(
+            levels.map { |date, level| { date: date, value: level.round(2) } }
+          )
         end
     end
 
