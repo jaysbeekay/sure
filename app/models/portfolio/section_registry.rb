@@ -210,8 +210,14 @@ class Portfolio::SectionRegistry
     def index_chart_series
       return @index_chart_series if defined?(@index_chart_series)
 
-      points = performance.index_series.map { |date, level| { date: date, value: level } }
-      @index_chart_series = points.size >= 2 ? Series.from_raw_values(points) : nil
+      # Size checked before mapping: a period with one point or none has no line
+      # to draw, and building the hashes only to discard them is allocation for
+      # nothing on a page that renders this on every request.
+      levels = performance.index_series
+      @index_chart_series =
+        if levels.size >= 2
+          Series.from_raw_values(levels.map { |date, level| { date: date, value: level } })
+        end
     end
 
     def holdings_rows
