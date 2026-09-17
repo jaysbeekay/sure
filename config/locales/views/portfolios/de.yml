@@ -85,12 +85,31 @@ de:
       summary:
         one: 1 Veräußerung in %{period}
         other: "%{count} Veräußerungen in %{period}"
+    performance:
+      annualized_hint: Auf ein volles Jahr hochgerechnet; bei kurzen Zeiträumen nicht ausgewiesen.
+      annualized_mwr: Annualisiert, geldgewichtet
+      annualized_twr: Annualisiert, zeitgewichtet
+      incomplete_title: Einige Kennzahlen konnten nicht berechnet werden
+      max_drawdown: Maximaler Rückgang
+      max_drawdown_hint: Größter Rückgang vom Hoch zum Tief innerhalb des Zeitraums.
+      mwr: Geldgewichtete Rendite
+      mwr_hint: Deine Rendite, einschließlich Zeitpunkt und Höhe deiner eigenen Einzahlungen.
+      mwr_unavailable: Nicht verfügbar für Konten, die nur über den Wert geführt werden, da die Einzahlungen unbekannt sind.
+      rate_missing: Für einen Teil dieses Zeitraums fehlte ein Wechselkurs. Betroffene Kennzahlen werden zurückgehalten statt zum Kurs 1 umgerechnet.
+      suppressed_days:
+        one: Ein Tag wurde ausgelassen, weil sein Anfangswert zuzüglich der Zuflüsse nicht positiv war.
+        other: "%{count} Tage wurden ausgelassen, weil ihr Anfangswert zuzüglich der Zuflüsse nicht positiv war."
+      twr: Zeitgewichtete Rendite
+      twr_hint: Was die Anlagen erwirtschaftet haben, ohne den Effekt deiner Einzahlungen.
+      volatility: Volatilität
+      volatility_hint: Annualisierte Standardabweichung der Tagesrenditen.
     sections:
       accounts: Konten
       allocation: Aufteilung
       data_quality: Datenqualität
       holdings: Bestände
       kpis: Überblick
+      performance: Wertentwicklung
       realized_gains: Realisiertes Ergebnis
       value_chart: Portfoliowert
     show:

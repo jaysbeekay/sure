@@ -199,6 +199,45 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[value_chart kpis], keys.first(2)
   end
 
+  # A return is a rate, not an amount. The card takes `money:` and `trend:` as
+  # well, and both format with a currency symbol, so the failure this guards
+  # against is a 21% return rendering as $0.21 -- plausible-looking, and wrong
+  # by two orders of magnitude and a unit.
+  test "a return renders as a percentage, not as money" do
+    Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(BigDecimal("0.2134"))
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-performance" do
+      assert_select "p", text: /21\.34%/
+    end
+    assert_no_match(/\$0\.21/, response.body, "a rate must not be formatted as currency")
+  end
+
+  # Every figure may be withheld by contract (R13, R15, R16). The section still
+  # renders and says so -- the same decision #171 settled for realised P&L,
+  # where a vanishing section reads as "this page does not do that".
+  test "the performance section states that figures are withheld rather than vanishing" do
+    Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:annualized_time_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:annualized_money_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:volatility).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:max_drawdown).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(true)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "performance", count: 1
+    assert_match I18n.t("portfolios.performance.rate_missing"), response.body
+    assert_match I18n.t("portfolios.kpi_row.no_data"), response.body
+  end
+
   test "renders sections in the saved order, collapsed where the user left them" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis], collapsed: { "kpis" => true })
 
@@ -207,7 +246,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     # The saved order places the chart first; sections it does not mention
     # follow in declaration order.
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -314,10 +353,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     baseline = capture_sql_queries { get portfolio_path }
     assert_response :success
 
-    # Measured: 54 queries for this page (layout included) at 10 accounts and
-    # 60 holdings when this test was written, none of them per holding or per
-    # account. The ceiling is that figure plus a little headroom, not a
-    # guess; the assertion below is the one that matters.
+    # Measured: 61 queries for this page (layout included) at 10 accounts and
+    # 60 holdings, none of them per holding or per account. The ceiling is that
+    # figure plus a little headroom, not a guess; the assertion below is the
+    # one that matters.
     assert_operator baseline.size, :<=, PORTFOLIO_QUERY_CEILING, "GET /portfolio issued #{baseline.size} queries"
 
     build_portfolio(accounts: 10, securities: 2, existing_accounts: @family.accounts.where("name LIKE 'Bulk %'").to_a)
@@ -398,7 +437,14 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
-  PORTFOLIO_QUERY_CEILING = 60 # measured 54, see the ceiling test
+  # Measured 61, ceiling 67 -- the same 6 of headroom the previous pair carried.
+  # It was 54/60 before the performance section, which adds ~7 fixed queries:
+  # one Portfolio::Performance for the request (memoised on the registry, and
+  # the registry is the only caller), covering the daily-returns query, the
+  # return-scope lookups and its cache reads. None is per holding or per
+  # account, which the flatness assertion in the test above is what proves --
+  # that one is the assertion that matters, and it did not move.
+  PORTFOLIO_QUERY_CEILING = 67
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one

@@ -12,8 +12,8 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "registers the built-in sections with their partials and locals" do
     sections = registry.sections
 
-    assert_equal %w[kpis value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
-    assert_equal %w[portfolios/kpi_row portfolios/value_chart], sections.first(2).map { |s| s[:partial] }
+    assert_equal %w[kpis performance value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
+    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/value_chart], sections.first(3).map { |s| s[:partial] }
     assert sections.all? { |s| s[:collapsible] }
 
     # Every partial gets its locals passed in: none of them reaches for
@@ -22,6 +22,39 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
       assert_equal({ statement: @statement, period: @period, as_of: @as_of }, section[:locals].slice(:statement, :period, :as_of),
         "#{section[:key]} must receive the shared locals rather than reading them itself")
     end
+  end
+
+  # The six return figures come from ONE Portfolio::Performance for the request.
+  # Six independently-derived figures could each re-read the period, which is
+  # the class of defect the "one as_of, passed down" rule on this class exists
+  # to prevent.
+  test "the performance section reads every figure from one computation" do
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    @statement.expects(:performance).with(period: @period).returns(perf).once
+
+    section = registry.sections.find { |s| s[:key] == "performance" }
+
+    assert_equal "portfolios/performance", section[:partial]
+    assert_same perf, section[:locals][:performance]
+    assert_equal %i[twr annualized_twr mwr annualized_mwr volatility max_drawdown].sort,
+                 section[:locals][:returns].keys.sort
+  end
+
+  # nil is a contract outcome, not a gap: R13 suppresses a figure whose rate is
+  # missing, R15 an account with fewer than two balance days, and R16 withholds
+  # the money-weighted return from a valuation-only scope. Passing nil through
+  # rather than defaulting is what lets the card say "no data" instead of
+  # printing a zero return that nobody earned.
+  test "the performance section passes a withheld figure through as nil" do
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:time_weighted_return).returns(BigDecimal("0.21"))
+    perf.stubs(:money_weighted_return).returns(nil)
+    @statement.stubs(:performance).returns(perf)
+
+    returns = registry.sections.find { |s| s[:key] == "performance" }[:locals][:returns]
+
+    assert_equal BigDecimal("0.21"), returns[:twr]
+    assert_nil returns[:mwr], "a withheld figure must not be defaulted to zero"
   end
 
   test "sections are visible only when the family has data for them" do
@@ -34,7 +67,10 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     # always-on KPI row and chart (the controller shows the empty state).
     empty_statement = InvestmentStatement.new(families(:empty), user: nil)
     empty = Portfolio::SectionRegistry.new(statement: empty_statement, period: @period, as_of: @as_of, user: @user).sections
-    assert_equal %w[kpis value_chart], empty.select { |s| s[:visible] }.map { |s| s[:key] }
+    # `performance` joins kpis and value_chart as always-on: a period with no
+    # computable figure is a fact worth stating, where a vanishing section
+    # reads as "this page does not do returns".
+    assert_equal %w[kpis performance value_chart], empty.select { |s| s[:visible] }.map { |s| s[:key] }
   end
 
   test "passes the sort, direction and grouping through to the holdings and allocation locals" do
@@ -68,7 +104,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "orders sections by the user's saved order, appending anything it omits" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis])
 
-    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -84,7 +120,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "ignores keys in the saved order that no longer exist" do
     @user.update_section_preferences("portfolio", order: %w[gone value_chart])
 
-    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -101,7 +137,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     sections = registry(extra_sections: [ stub ]).sections
 
     assert_equal "stub", sections.last[:key]
-    assert_equal 8, sections.size
+    assert_equal 9, sections.size
   end
 
   test "a saved order can place an extra section among the built-ins" do
@@ -109,7 +145,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
              locals: {}, visible: true, collapsible: true }
     @user.update_section_preferences("portfolio", order: %w[stub kpis])
 
-    assert_equal %w[stub kpis value_chart realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[stub kpis performance value_chart realized_gains holdings accounts allocation data_quality],
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 

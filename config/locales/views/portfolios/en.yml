@@ -85,12 +85,31 @@ en:
       summary:
         one: 1 disposal in %{period}
         other: "%{count} disposals in %{period}"
+    performance:
+      annualized_hint: Extrapolated to a full year; not shown for short periods.
+      annualized_mwr: Annualised money-weighted
+      annualized_twr: Annualised time-weighted
+      incomplete_title: Some figures could not be computed
+      max_drawdown: Max drawdown
+      max_drawdown_hint: Largest peak-to-trough fall within the period.
+      mwr: Money-weighted return
+      mwr_hint: Your return, including the timing and size of your own contributions.
+      mwr_unavailable: Not available for accounts tracked by value alone, where contributions are unknown.
+      rate_missing: An exchange rate was missing for part of this period, so affected figures are withheld rather than converted at parity.
+      suppressed_days:
+        one: One day was suppressed because its opening value plus flows was not positive.
+        other: "%{count} days were suppressed because their opening value plus flows was not positive."
+      twr: Time-weighted return
+      twr_hint: What the investments did, with the effect of your contributions removed.
+      volatility: Volatility
+      volatility_hint: Annualised standard deviation of daily returns.
     sections:
       accounts: Accounts
       allocation: Allocation
       data_quality: Data quality
       holdings: Holdings
       kpis: Overview
+      performance: Performance
       realized_gains: Realised P&L
       value_chart: Portfolio value
     show:

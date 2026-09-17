@@ -20,7 +20,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[kpis value_chart realized_gains holdings accounts allocation data_quality].freeze
+  KEYS = %w[kpis performance value_chart realized_gains holdings accounts allocation data_quality].freeze
 
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
@@ -73,6 +73,18 @@ class Portfolio::SectionRegistry
           title: "portfolios.sections.kpis",
           partial: "portfolios/kpi_row",
           locals: shared_locals.merge(kpis: kpis),
+          visible: true,
+          collapsible: true
+        },
+        # Always visible, like kpis and value_chart. A period in which no
+        # figure could be computed is a fact about the portfolio worth showing
+        # -- the section says which figures are missing and why -- where a
+        # vanishing section reads as "this page does not do returns".
+        {
+          key: "performance",
+          title: "portfolios.sections.performance",
+          partial: "portfolios/performance",
+          locals: shared_locals.merge(performance: performance, returns: returns),
           visible: true,
           collapsible: true
         },
@@ -142,6 +154,29 @@ class Portfolio::SectionRegistry
         period_return: statement.period_return_trend(period: period),
         net_contributions: statement.net_contributions(period: period),
         income: statement.totals(period: period).total_income
+      }
+    end
+
+    # One Portfolio::Performance for the request, so the six figures below and
+    # the disclosure flags all come from a single computation over a single
+    # period rather than from six that could each re-derive it.
+    def performance
+      @performance ||= statement.performance(period: period)
+    end
+
+    # The six return figures, read here so the partial only formats. Each may
+    # be nil by contract -- R13 (missing rate), R15 (fewer than two balance
+    # days), R16 (no money-weighted return for a valuation-only scope) -- and
+    # nil is passed through rather than defaulted, because a zero return and no
+    # return are different statements.
+    def returns
+      @returns ||= {
+        twr: performance.time_weighted_return,
+        annualized_twr: performance.annualized_time_weighted_return,
+        mwr: performance.money_weighted_return,
+        annualized_mwr: performance.annualized_money_weighted_return,
+        volatility: performance.volatility,
+        max_drawdown: performance.max_drawdown
       }
     end
 
