@@ -87,6 +87,21 @@ from this fork.
    gets a full Gatekeeper review. Each gate below waits for its review to land and
    for every finding to be validated: checked against the current code and head
    commit, then fixed or declined with evidence.
+8. **Upstream PRs open as drafts and link both ways** *(both repos)*. A PR raised
+   on `we-promise/sure` opens as a **draft**, and its description carries **two
+   separate links**: the upstream issue it answers (or the coordination issue for
+   programme work), and its **fork pre-flight PR**. The fork PR links back to the
+   upstream one. These are two obligations, not one -- satisfying the issue link
+   does not satisfy the fork link, and on 2026-09-17 every upstream PR linked an
+   issue while **none** linked its fork PR, with two fork PRs missing the reverse
+   link as well. The issue link shows a maintainer which programme a slice belongs
+   to; the fork link shows where its CI, Gatekeeper and CodeRabbit history lives,
+   which is most of the review evidence and is invisible from upstream otherwise.
+   Check both directions by grepping (`jaysbeekay/sure#` in upstream bodies,
+   `we-promise/sure#` in fork bodies) rather than from memory -- a PR reads as
+   correctly linked when the reverse link is missing. Where the two share a
+   branch, say "same branch, same commit"; where the fork pre-flight is a
+   cherry-pick onto the mirror, say that instead.
 
 ### Issue and pull request sequence (this fork)
 
