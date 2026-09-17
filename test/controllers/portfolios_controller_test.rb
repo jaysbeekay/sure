@@ -217,6 +217,39 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/\$0\.21/, response.body, "a rate must not be formatted as currency")
   end
 
+  # R8 solves the money-weighted return per unit of the PERIOD'S SPAN, not as a
+  # holding-period figure. Capital that arrives part-way through is therefore
+  # expressed over the whole period: money invested for half of a ten-day
+  # period and gaining 10% reports about 21% (1.1 ** (10/5) - 1), where TWR
+  # reports 10%.
+  #
+  # The contract says the UI must not label that a holding-period return. This
+  # is the card copy most likely to produce a "my broker says something
+  # different" report, so the wording is pinned rather than left to drift, in
+  # both locales -- a German reader gets the same warning or none at all.
+  test "the money-weighted card says it is a period figure, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(BigDecimal("0.21"))
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    # A fragment, not the whole hint: it carries an apostrophe and an em dash,
+    # which render HTML-escaped and would never match the raw string.
+    assert_match(/Money-weighted, over the period/, response.body)
+
+    %i[en de].each do |locale|
+      label = I18n.t("portfolios.performance.mwr", locale: locale)
+      hint = I18n.t("portfolios.performance.mwr_hint", locale: locale)
+
+      assert_match(/period|Zeitraum/i, label,
+                   "#{locale} label must say the figure is over the period, not a holding-period return")
+      assert_match(/when money was invested|wann Geld angelegt wurde/i, hint,
+                   "#{locale} hint must say the figure reflects when money was invested")
+    end
+  end
+
   # Every figure may be withheld by contract (R13, R15, R16). The section still
   # renders and says so -- the same decision #171 settled for realised P&L,
   # where a vanishing section reads as "this page does not do that".
