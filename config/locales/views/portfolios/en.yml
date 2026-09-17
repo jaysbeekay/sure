@@ -96,8 +96,8 @@ en:
       mwr_hint: Money-weighted, over the period. It reflects when money was invested, so money that arrived part-way through is expressed over the whole period — which is why this can differ from a broker's holding-period figure.
       rate_missing: An exchange rate was missing for part of this period, so affected figures are withheld rather than converted at parity.
       suppressed_days:
-        one: One day was suppressed because its opening value plus flows was not positive.
-        other: "%{count} days were suppressed because their opening value plus flows was not positive."
+        one: One day was left out because its return could not be measured.
+        other: "%{count} days were left out because their return could not be measured."
       twr: Time-weighted return
       twr_hint: What the investments did, with the effect of your contributions removed. Daily, net of fees, with each contribution counted from the start of its day.
       volatility: Volatility
