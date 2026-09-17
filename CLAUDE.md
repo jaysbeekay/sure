@@ -102,9 +102,11 @@ from this fork.
    upstream body (`Closes #`, `Fixes #` or `Part of #`), `jaysbeekay/sure#` in
    the upstream body, and `we-promise/sure#` in the fork body. Checking only the
    fork link would pass a PR that never named its issue -- which is the older
-   half of this rule and the one that was being followed all along. Where the two share a
-   branch, say "same branch, same commit"; where the fork pre-flight is a
-   cherry-pick onto the mirror, say that instead.
+   half of this rule and the one that was being followed all along. Say how the two
+   relate IN THE PR DESCRIPTION, beside the links rather than in a commit message
+   or a comment, since the reader who needs it is the one deciding whether the two
+   PRs are the same change: where they share a branch, "same branch, same commit";
+   where the fork pre-flight is a cherry-pick onto the mirror, say that instead.
 
 ### Issue and pull request sequence (this fork)
 
