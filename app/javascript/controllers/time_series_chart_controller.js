@@ -286,10 +286,12 @@ export default class extends Controller {
       .call(
         d3
           .axisBottom(this._d3XScale)
-          .tickValues([
-            this._normalDataPoints[0].date,
-            this._normalDataPoints[this._normalDataPoints.length - 1].date,
-          ])
+          // d3.extent, not first-and-last. In multi-series mode
+          // _normalDataPoints is every line's points concatenated, so it is not
+          // globally ordered and the last element can be an earlier date than
+          // the true maximum -- the axis would then end on a label the x-scale
+          // does not end on. The scale itself already uses extent.
+          .tickValues(d3.extent(this._normalDataPoints, (d) => d.date))
           .tickSize(0)
           .tickFormat(d3.timeFormat("%b %d, %Y")),
       )

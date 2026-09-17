@@ -283,8 +283,15 @@ class Portfolio::SectionRegistry
     def comparison_series
       @comparison_series ||= begin
         lines = comparison_accounts.filter_map do |account|
+          # active_until_dates matters as much here as it does for the
+          # portfolio line. It carries each account's historical cut-off, and
+          # InvestmentStatement#performance passes it for the aggregate -- so
+          # without it a disabled account's line would run past the date the
+          # baseline stops at, and the two would be drawn over different spans
+          # while inviting comparison.
           points = Portfolio::Performance.new(
-            family: statement.family, account_ids: [ account.id ], period: period, user: user
+            family: statement.family, account_ids: [ account.id ], period: period, user: user,
+            active_until_dates: statement.historical_scope.active_until_dates.slice(account.id)
           ).index_series
 
           next if points.size < 2
@@ -292,11 +299,20 @@ class Portfolio::SectionRegistry
           { label: account.name, values: points.map { |date, level| { date: date, value: level } } }
         end
 
+        # No baseline, no comparison. When the portfolio's own series is
+        # withheld -- R13's missing rate, or R15's too-short history -- the
+        # account lines have nothing to be read against, and a chart of
+        # individual accounts presented as a comparison would invite exactly
+        # the reading the withholding exists to prevent.
         whole = performance.index_series
-        lines.unshift(label: I18n.t("portfolios.comparison.whole_portfolio"),
-                      values: whole.map { |date, level| { date: date, value: level } }) if whole.size >= 2
 
-        lines
+        if whole.size < 2
+          []
+        else
+          lines.unshift(label: I18n.t("portfolios.comparison.whole_portfolio"),
+                        values: whole.map { |date, level| { date: date, value: level } })
+          lines
+        end
       end
     end
 
@@ -316,8 +332,15 @@ class Portfolio::SectionRegistry
       @comparison_accounts ||= begin
         accounts = statement.historical_scope.accounts.to_a
         values = closing_values_for(accounts)
-        accounts.sort_by { |account| [ -(values[account.id] || BigDecimal(0)), account.name.to_s ] }
-                .first(COMPARISON_LIMIT)
+        # Rate availability sorts FIRST, then value. Ranking a rateless account
+        # as zero is not enough: an account that genuinely closed at zero or
+        # below would then be outranked by one whose value is merely unknown,
+        # which is the parity mistake in a different shape -- a missing figure
+        # winning a comparison it was never measured for.
+        accounts.sort_by { |account|
+          value = values[account.id]
+          [ value.nil? ? 1 : 0, -(value || BigDecimal(0)), account.name.to_s ]
+        }.first(COMPARISON_LIMIT)
       end
     end
 
@@ -327,10 +350,16 @@ class Portfolio::SectionRegistry
       end_date = period.date_range.end
       rates = rates_on_or_before(accounts.map(&:currency).uniq, end_date)
 
-      Balance.where(account_id: accounts.map(&:id))
+      # Restricted to the row in the ACCOUNT's own currency. `balances` can
+      # carry rows in another currency for the same account and day -- a legacy
+      # or orphaned row from a currency change -- and DISTINCT ON without this
+      # would rank the account from whichever of them sorted first.
+      Balance.joins(:account)
+             .where(account_id: accounts.map(&:id))
              .where(date: ..end_date)
-             .select("DISTINCT ON (account_id) account_id, end_balance, flows_factor, currency")
-             .order(:account_id, date: :desc)
+             .where("balances.currency = accounts.currency")
+             .select("DISTINCT ON (balances.account_id) balances.account_id, balances.end_balance, balances.flows_factor, balances.currency")
+             .order("balances.account_id", "balances.date DESC")
              .each_with_object({}) do |balance, acc|
         rate = balance.currency == statement.family.currency ? BigDecimal(1) : rates[balance.currency]
         next if rate.nil?
@@ -343,11 +372,27 @@ class Portfolio::SectionRegistry
       foreign = currencies.reject { |currency| currency == statement.family.currency }
       return {} if foreign.empty?
 
-      ExchangeRate.where(from_currency: foreign, to_currency: statement.family.currency)
-                  .where(date: ..date)
-                  .order(:from_currency, date: :desc)
-                  .select("DISTINCT ON (from_currency) from_currency, rate")
-                  .each_with_object({}) { |row, acc| acc[row.from_currency] = row.rate }
+      # R13's lookup, both sides: the most recent rate on or before the date,
+      # and failing that the earliest one after it. A one-sided lookup would
+      # report a currency whose first stored rate falls after the period end as
+      # having no rate at all, and push a perfectly measurable account behind
+      # the cap.
+      on_or_before = ExchangeRate.where(from_currency: foreign, to_currency: statement.family.currency)
+                                 .where(date: ..date)
+                                 .order(:from_currency, date: :desc)
+                                 .select("DISTINCT ON (from_currency) from_currency, rate")
+                                 .each_with_object({}) { |row, acc| acc[row.from_currency] = row.rate }
+
+      missing = foreign - on_or_before.keys
+      return on_or_before if missing.empty?
+
+      after = ExchangeRate.where(from_currency: missing, to_currency: statement.family.currency)
+                          .where("date > ?", date)
+                          .order(:from_currency, :date)
+                          .select("DISTINCT ON (from_currency) from_currency, rate")
+                          .each_with_object({}) { |row, acc| acc[row.from_currency] = row.rate }
+
+      on_or_before.merge(after)
     end
 
     def drivers

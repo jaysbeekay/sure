@@ -316,9 +316,14 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
 
     chosen = registry.send(:comparison_accounts).map(&:name)
 
-    assert_equal chosen.sort, chosen.sort, "sanity"
+    # Both new accounts hold nothing, as do the fixture accounts, so every
+    # value is zero and NAME is the only thing separating them. Asserted
+    # unconditionally: if either ever dropped out of the selection this should
+    # fail loudly rather than skip itself.
+    assert_includes chosen, "Alpha"
+    assert_includes chosen, "Zeta"
     assert_operator chosen.index("Alpha"), :<, chosen.index("Zeta"),
-                    "equal value ties break alphabetically" if chosen.include?("Zeta")
+                    "equal value ties break alphabetically, not by insertion order"
   end
 
   test "sections are visible only when the family has data for them" do

@@ -553,13 +553,17 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
-  # Measured 61, ceiling 67 -- the same 6 of headroom the previous pair carried.
-  # It was 54/60 before the performance section, which adds ~7 fixed queries:
-  # one Portfolio::Performance for the request (memoised on the registry, and
-  # the registry is the only caller), covering the daily-returns query, the
-  # return-scope lookups and its cache reads. None is per holding or per
-  # account, which the flatness assertion in the test above is what proves --
-  # that one is the assertion that matters, and it did not move.
+  # Measured 87, ceiling 93 -- the same 6 of headroom every previous pair
+  # carried. The figure has moved twice:
+  #
+  #   54 -> 61  the performance section: one Portfolio::Performance for the
+  #             request, memoised on the registry, which is its only caller
+  #   61 -> 87  the account comparison: one more Portfolio::Performance per
+  #             line, capped at five accounts plus the portfolio (D7)
+  #
+  # Neither rise is per holding, and the comparison's is bounded rather than
+  # merely small: the two tests above prove both, and those assertions -- not
+  # this constant -- are the ones that matter.
   PORTFOLIO_QUERY_CEILING = 93
 
   # The section hides itself on every fixture family, so nothing rendered this
