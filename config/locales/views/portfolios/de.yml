@@ -35,6 +35,19 @@ de:
         provider_unavailable: Zugewiesener Anbieter nicht verfügbar
         stale: Letzte Abrufe fehlgeschlagen
       set_cost_basis: Kostenbasis festlegen
+    drivers:
+      composition: Konten hinzugefügt oder entfernt
+      external_net: Einzahlungen und Entnahmen
+      fees: Gebühren
+      fx_effect: Währungseffekt
+      income: Dividenden und Zinsen
+      market: Marktbewegung
+      revaluations: Neubewertungen
+      unexplained: Nicht erklärt
+      unreconciled_body: Die Komponenten oben ergeben nicht die Wertänderung. Das wird gemessen und nicht unterstellt und weist daher auf Daten hin, die diese Seite nicht erklären kann.
+      unreconciled_title: Diese Zahlen stimmen nicht überein
+      value_close: Schlusswert
+      value_open: Anfangswert
     empty_state:
       add_account: Anlagekonto hinzufügen
       description: Verbinde oder ergänze ein Depot-, Vorsorge- oder Krypto-Konto, dann zeigt diese Seite Wert, Rendite und Bestände.
@@ -108,6 +121,7 @@ de:
       accounts: Konten
       allocation: Aufteilung
       data_quality: Datenqualität
+      drivers: Was den Wert bewegt hat
       holdings: Bestände
       index_chart: Rendite-Index
       kpis: Überblick

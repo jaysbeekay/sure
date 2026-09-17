@@ -278,7 +278,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     # The saved order places the chart first; sections it does not mention
-    # follow in declaration order.
+    # follow in declaration order. `drivers` is absent on purpose: this
+    # family's period moves no value, so every component is zero and the
+    # section hides rather than printing a table of zeros that reconciles to
+    # zero.
     assert_equal %w[value_chart kpis performance index_chart holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
