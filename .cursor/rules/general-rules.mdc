@@ -11,7 +11,7 @@ alwaysApply: true
   - Read [project-design.mdc](mdc:.cursor/rules/project-design.mdc) to understand the codebase
   - Read [project-conventions.mdc](mdc:.cursor/rules/project-conventions.mdc) to understand _how_ to write code for the codebase
   - Read [ui-ux-design-guidelines.mdc](mdc:.cursor/rules/ui-ux-design-guidelines.mdc) to understand how to implement frontend code specifically
-- New ActiveRecord migrations inherit from the CURRENT Rails migration version -- `ActiveRecord::Migration[8.1]` while the app is on Rails 8.1, and whatever `db/schema.rb` declares after an upgrade. Leave historical migrations on the version they were written against.
+- New ActiveRecord migrations inherit from the Rails migration version the app currently runs -- the one `db/schema.rb` declares in its `ActiveRecord::Schema[...]` header. Leave historical migrations on the version they were written against.
 
 ## Prohibited actions
 
