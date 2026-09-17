@@ -196,6 +196,43 @@ class TradeTest < ActiveSupport::TestCase
     end
   end
 
+  # The preload keys its basis side on the ACCOUNT's currency; the conversion
+  # targets the currency the POSITION is carried in. Those differ in exactly the
+  # shape this change exists for -- a EUR disposal of a GBP position in a USD
+  # account -- so every such disposal missed the preload and issued the lookup
+  # the preload is here to remove. The keys have to come from the holding that
+  # `realized_gain_loss` will actually select.
+  #
+  # A date per disposal, because identical lookups are served by the query cache
+  # and a single-date fixture reads as flat whether the preload works or not.
+  # The preload runs INSIDE the capture: one query for the whole set is the
+  # claim, so a preloader that issued one query per trade must fail this.
+  test "preloading answers a disposal against a position carried in a third currency" do
+    account = create_portfolio_account(family: families(:empty))
+
+    sells = (0..3).map do |offset|
+      date = Date.new(2026, 3, 10) + offset
+      set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+      account.holdings.create!(security: security_under_test, date: date, qty: 5, price: 150,
+                               amount: BigDecimal(750), currency: "GBP", cost_basis: 100)
+      sell_trade(account: account, date: date, qty: 2, price: 150, currency: "EUR").entryable
+    end
+
+    holdings = account.holdings.to_a
+    sells.each { |sell| sell.preloaded_holdings = holdings }
+
+    queries = capture_sql_queries do
+      Trade.preload_exchange_rates(sells)
+      sells.each(&:realized_gain_loss)
+    end.grep(/exchange_rates/)
+
+    assert_equal 1, queries.size,
+                 "a position in a third currency costs one rate query for the set, not one each"
+    # 2 units at 150 EUR is 300 EUR of proceeds, 240 GBP at 0.8, against a basis
+    # of 2 x 100 GBP.
+    assert_equal [ BigDecimal(40) ] * 4, sells.map { |sell| sell.realized_gain_loss.value.amount }
+  end
+
   # The control: the guard rejects what cannot convert, not every rate below
   # parity. 300 EUR at 0.7 is a real conversion and must still produce a figure.
   test "a positive rate below parity still converts" do
