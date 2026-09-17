@@ -81,10 +81,19 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     # Rounded before it reaches the wire. A chained level is a division result,
     # and nothing downstream rounds it: the hover would otherwise read
     # 112.30000000000000000000000000000311.
+    # Built the way Portfolio::Performance builds it -- chained DIVISION
+    # results, not a literal -- because that is what produces the long value.
+    # Verified: this is 112.30000000000000000000000000000311, 32 places.
+    r1 = (BigDecimal(1037) / BigDecimal(1000)) - 1
+    r2 = (BigDecimal(1123) / BigDecimal(1037)) - 1
+    chained = BigDecimal(100) * (1 + r1) * (1 + r2)
+    assert_operator chained.to_s.split(".").last.length, :>, 4,
+                    "the fixture must actually be long, or this test proves nothing"
+
     long = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
     long.stubs(:index_series).returns([
       [ Date.new(2026, 3, 1), BigDecimal("100") ],
-      [ Date.new(2026, 3, 2), BigDecimal(1123) / BigDecimal(10) ]
+      [ Date.new(2026, 3, 2), chained ]
     ])
     @statement.stubs(:performance).returns(long)
 
