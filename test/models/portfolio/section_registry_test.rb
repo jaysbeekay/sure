@@ -1,6 +1,7 @@
 require "test_helper"
 
 class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
+  include PortfolioReturnsTestHelper
   setup do
     @user = users(:family_admin)
     @family = @user.family
@@ -12,8 +13,8 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "registers the built-in sections with their partials and locals" do
     sections = registry.sections
 
-    assert_equal %w[kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
-    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/index_chart portfolios/drivers], sections.first(4).map { |s| s[:partial] }
+    assert_equal %w[kpis performance index_chart comparison drivers value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
+    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/index_chart portfolios/comparison], sections.first(4).map { |s| s[:partial] }
     assert sections.all? { |s| s[:collapsible] }
 
     # Every partial gets its locals passed in: none of them reaches for
@@ -259,6 +260,67 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     end
   end
 
+  # B2, and it is a GIPS point rather than a preference. Each account's line is
+  # computed with ITS OWN id as the scope, not the wider portfolio: money moved
+  # from account A to account B is internal to the portfolio and a CONTRIBUTION
+  # to B. A line labelled "B" has to answer "what did B return", so B's scope
+  # is B. Passing the wider scope would keep the transfer internal and report
+  # the arriving money as B's investment return -- the same defect class as
+  # #151, one level up.
+  test "each comparison line is scoped to its own account, not the portfolio" do
+    create_portfolio_account(family: @family, name: "Second")
+    built = []
+
+    Portfolio::Performance.stubs(:new).with do |args|
+      built << args
+      true
+    end.returns(stub_index_performance)
+
+    registry.send(:comparison_series)
+
+    lines = built.select { |args| args[:account_ids].size == 1 }
+    assert lines.any?, "each line is built from a single account"
+
+    # The assertion is about scope_account_ids, NOT account_ids. Widening the
+    # scope is exactly what DailyReturns documents as the way to keep internal
+    # transfers internal, so a test that only checked account_ids would pass
+    # against the mistake it exists to prevent -- which the first version of
+    # this test did.
+    lines.each do |args|
+      scope = args[:scope_account_ids]
+      assert scope.nil? || scope == args[:account_ids],
+             "a line named for one account must not be scoped to the whole portfolio: " \
+             "money moved from another account is a contribution to this one, not its return"
+    end
+  end
+
+  # D7's cap, and the reason it exists: each line costs one
+  # Portfolio::Performance, so an uncapped comparison would make the page's cost
+  # grow with the number of accounts a family holds.
+  test "the comparison plots at most five accounts plus the whole portfolio" do
+    7.times { |i| create_portfolio_account(family: @family, name: "Acct #{i}") }
+    Portfolio::Performance.any_instance.stubs(:index_series).returns(two_points)
+
+    series = registry.send(:comparison_series)
+
+    assert_operator series.size, :<=, Portfolio::SectionRegistry::COMPARISON_LIMIT + 1
+    assert_equal I18n.t("portfolios.comparison.whole_portfolio"), series.first[:label],
+                 "the portfolio is the baseline the others are read against, so it is drawn first"
+  end
+
+  # Deterministic selection: name breaks a tie, so the plotted set does not
+  # depend on whatever order the database returns.
+  test "accounts of equal value are chosen by name, not by database order" do
+    %w[Zeta Alpha].each { |name| create_portfolio_account(family: @family, name: name) }
+    Portfolio::Performance.any_instance.stubs(:index_series).returns(two_points)
+
+    chosen = registry.send(:comparison_accounts).map(&:name)
+
+    assert_equal chosen.sort, chosen.sort, "sanity"
+    assert_operator chosen.index("Alpha"), :<, chosen.index("Zeta"),
+                    "equal value ties break alphabetically" if chosen.include?("Zeta")
+  end
+
   test "sections are visible only when the family has data for them" do
     visible = registry.sections.select { |s| s[:visible] }.map { |s| s[:key] }
     assert_includes visible, "holdings"
@@ -306,7 +368,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "orders sections by the user's saved order, appending anything it omits" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis])
 
-    assert_equal %w[value_chart kpis performance index_chart drivers realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart comparison drivers realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -322,7 +384,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "ignores keys in the saved order that no longer exist" do
     @user.update_section_preferences("portfolio", order: %w[gone value_chart])
 
-    assert_equal %w[value_chart kpis performance index_chart drivers realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart comparison drivers realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -339,7 +401,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     sections = registry(extra_sections: [ stub ]).sections
 
     assert_equal "stub", sections.last[:key]
-    assert_equal 11, sections.size
+    assert_equal 12, sections.size
   end
 
   test "a saved order can place an extra section among the built-ins" do
@@ -347,7 +409,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
              locals: {}, visible: true, collapsible: true }
     @user.update_section_preferences("portfolio", order: %w[stub kpis])
 
-    assert_equal %w[stub kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[stub kpis performance index_chart comparison drivers value_chart realized_gains holdings accounts allocation data_quality],
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 
@@ -406,6 +468,16 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
         composition: composition, income: income, fees: fees, market: market,
         revaluations: revaluations, fx_effect: fx_effect, unexplained: unexplained
       }.transform_values { |value| BigDecimal(value.to_s) }
+    end
+
+    def two_points
+      [ [ Date.new(2026, 3, 1), BigDecimal("100") ], [ Date.new(2026, 3, 2), BigDecimal("110") ] ]
+    end
+
+    def stub_index_performance
+      perf = Portfolio::Performance.allocate
+      perf.stubs(:index_series).returns(two_points)
+      perf
     end
 
     def registry(extra_sections: [])

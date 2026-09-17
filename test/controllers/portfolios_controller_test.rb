@@ -282,7 +282,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     # family's period moves no value, so every component is zero and the
     # section hides rather than printing a table of zeros that reconciles to
     # zero.
-    assert_equal %w[value_chart kpis performance index_chart holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart comparison holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -389,10 +389,14 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     baseline = capture_sql_queries { get portfolio_path }
     assert_response :success
 
-    # Measured: 61 queries for this page (layout included) at 10 accounts and
-    # 60 holdings, none of them per holding or per account. The ceiling is that
-    # figure plus a little headroom, not a guess; the assertion below is the
-    # one that matters.
+    # Measured: 87 queries for this page (layout included) at 10 accounts and
+    # 60 holdings, none of them per holding. The ceiling is that figure plus a
+    # little headroom, not a guess; the assertion below is the one that matters.
+    #
+    # It rose from 61 with the account comparison, which costs one
+    # Portfolio::Performance per line. That cost is capped at five accounts plus
+    # the portfolio (D7), which is what the test below this one proves: it is
+    # bounded, not merely currently small.
     assert_operator baseline.size, :<=, PORTFOLIO_QUERY_CEILING, "GET /portfolio issued #{baseline.size} queries"
 
     build_portfolio(accounts: 10, securities: 2, existing_accounts: @family.accounts.where("name LIKE 'Bulk %'").to_a)
@@ -445,6 +449,37 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_match I18n.t("portfolios.drivers.unreconciled_title"), response.body
     assert_select "[data-portfolio-driver=?]", "unexplained"
+  end
+
+  # B1 of the senior review on #121. The flatness test above grows HOLDINGS and
+  # says nothing about accounts -- and the account comparison is the first
+  # section whose cost depends on how many accounts a family has.
+  #
+  # Below D7's cap of five, adding an account adds a line and a query set, which
+  # is the intended behaviour rather than a leak. Above it, the count must stop
+  # moving: that is what the cap is for, and without this the ceiling above
+  # would only be "true today for ten accounts".
+  test "the comparison cap keeps the query count from growing with account count" do
+    # One added account, so three in total with the two the fixtures carry --
+    # genuinely below D7's cap of five, which `accounts: 3` would already have
+    # reached.
+    build_portfolio(accounts: 1, securities: 2)
+    below_cap = capture_sql_queries { get portfolio_path }.size
+    assert_response :success
+
+    build_portfolio(accounts: 9, securities: 2)
+    at_cap = capture_sql_queries { get portfolio_path }.size
+    assert_response :success
+
+    assert_operator below_cap, :<, at_cap,
+                    "below the cap, each account genuinely adds a line and its queries"
+
+    build_portfolio(accounts: 12, securities: 2)
+    beyond_cap = capture_sql_queries { get portfolio_path }.size
+    assert_response :success
+
+    assert_equal at_cap, beyond_cap,
+                 "past five accounts the comparison stops growing:\n#{(beyond_cap - at_cap)} extra queries"
   end
 
   # --- accounts, allocation and data quality tests ---
@@ -525,7 +560,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # return-scope lookups and its cache reads. None is per holding or per
   # account, which the flatness assertion in the test above is what proves --
   # that one is the assertion that matters, and it did not move.
-  PORTFOLIO_QUERY_CEILING = 67
+  PORTFOLIO_QUERY_CEILING = 93
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one

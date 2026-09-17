@@ -1,0 +1,32 @@
+<%# locals: (statement:, period:, as_of:, series:) %>
+
+<%# How each of the largest accounts performed against the portfolio as a whole.
+    Every line is a flow-adjusted index rebased to 100, NOT a value: accounts
+    that received deposits at different times are not comparable by value, and
+    removing that difference is what a time-weighted return is for. Two accounts
+    that returned the same plot as the same line even if one is ten times the
+    size of the other.
+
+    The chart carries no tooltip on purpose -- see the controller. The legend is
+    how a reader tells the lines apart. %>
+<div id="portfolio-comparison">
+  <div class="space-y-2 px-4">
+    <p class="text-sm text-secondary"><%= t("portfolios.comparison.explainer") %></p>
+
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+      <% series.each_with_index do |line, index| %>
+        <span class="flex items-center gap-1.5 text-xs text-secondary" data-portfolio-comparison-line="<%= index %>">
+          <span class="w-2 h-2 rounded-full" style="background-color: <%= portfolio_comparison_color(index) %>"></span>
+          <%= line[:label] %>
+        </span>
+      <% end %>
+    </div>
+  </div>
+
+  <div
+    id="portfolioComparisonChart"
+    class="w-full h-52 privacy-sensitive"
+    data-controller="time-series-chart"
+    data-time-series-chart-use-tooltip-value="false"
+    data-time-series-chart-series-value="<%= series.to_json %>"></div>
+</div>
