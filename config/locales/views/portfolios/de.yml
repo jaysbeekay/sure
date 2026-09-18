@@ -96,8 +96,8 @@ de:
       mwr_hint: "Geldgewichtet, über den Zeitraum. Sie berücksichtigt, wann Geld angelegt wurde: Mittel, die erst im Verlauf hinzukamen, werden auf den gesamten Zeitraum bezogen — deshalb kann diese Zahl von der Haltedauer-Rendite deines Brokers abweichen."
       rate_missing: Für einen Teil dieses Zeitraums fehlte ein Wechselkurs. Betroffene Kennzahlen werden zurückgehalten statt zum Kurs 1 umgerechnet.
       suppressed_days:
-        one: Ein Tag wurde ausgelassen, weil seine Rendite nicht ermittelt werden konnte.
-        other: "%{count} Tage wurden ausgelassen, weil ihre Rendite nicht ermittelt werden konnte."
+        one: Ein Tag wurde als Nullrendite gezählt, weil er nicht ermittelt werden konnte.
+        other: "%{count} Tage wurden als Nullrendite gezählt, weil sie nicht ermittelt werden konnten."
       twr: Zeitgewichtete Rendite
       twr_hint: Was die Anlagen erwirtschaftet haben, ohne den Effekt deiner Einzahlungen. Täglich, nach Gebühren, wobei jede Einzahlung ab dem Beginn ihres Tages zählt.
       volatility: Volatilität

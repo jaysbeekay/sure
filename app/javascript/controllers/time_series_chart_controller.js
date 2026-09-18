@@ -451,10 +451,18 @@ export default class extends Controller {
   };
 
   _extractNumericValue = (numeric) => {
-    // Missing is NaN, not zero. `Number(null)` is 0, so a null value would
-    // plot on the axis as a real zero and compare as one -- a gap in a series
-    // reading as a crash to nothing. d3 skips NaN; it cannot skip a zero it
-    // was told to believe.
+    // Missing is NaN, not zero. `Number(null)` is 0, so a null value would plot
+    // on the axis as a real zero and compare as one -- a gap in a series
+    // reading as a crash to nothing.
+    //
+    // NaN is not free either, and this is narrower than it looks: `d3.min`,
+    // `d3.max` and `d3.extent` ignore NaN, so the y-domain is honest, but
+    // `d3.line()` and `d3.area()` write it straight into the path
+    // (`line()([[0,1],[1,NaN],[2,3]])` is "M0,1L1,NaNL2,3"), which is an
+    // invalid path rather than a gap. Nothing this PR renders emits null, so no
+    // series reaches that yet; the PR that first does adds
+    // `.defined((d) => !Number.isNaN(this._getDatumValue(d)))` to both
+    // generators.
     if (numeric === null || numeric === undefined) return Number.NaN;
 
     if (typeof numeric === "object" && "amount" in numeric) {
@@ -464,6 +472,13 @@ export default class extends Controller {
   };
 
   _extractFormattedValue = (numeric) => {
+    // Guarded first, for the same reason its numeric twin is: `typeof null` is
+    // "object", so `"formatted" in null` is a TypeError rather than a false,
+    // and the tooltip would throw on the null the numeric branch is built to
+    // survive. Unreachable today -- no producer emits one -- and the two
+    // helpers reading the same datum must not disagree about what it can hold.
+    if (numeric === null || numeric === undefined) return "";
+
     if (typeof numeric === "object" && "formatted" in numeric) {
       return numeric.formatted;
     }

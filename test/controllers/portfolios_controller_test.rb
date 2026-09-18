@@ -250,6 +250,33 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # "Left out" is true of the chained TWR and of nothing else on this section. A
+  # suppressed day keeps its place in the series (R6): volatility counts it as an
+  # observation of zero, and its flows stay in the money-weighted series. Three
+  # of the six figures on the card are computed from a day the banner told the
+  # reader was omitted, so the wording is pinned in both locales rather than left
+  # to drift back.
+  test "the suppressed-days banner says a day was counted as zero, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([ Date.current ])
+
+    get portfolio_path
+    assert_response :success
+
+    assert_match(/counted as a zero return/, response.body)
+
+    %i[en de].each do |locale|
+      %i[one other].each do |count|
+        line = I18n.t("portfolios.performance.suppressed_days.#{count}", locale: locale)
+
+        assert_match(/zero return|Nullrendite/i, line,
+                     "#{locale}.#{count} must say the day was counted as zero")
+        assert_no_match(/left out|ausgelassen/i, line,
+                        "#{locale}.#{count} must not say the day was omitted: it is still in the series")
+      end
+    end
+  end
+
   # Every figure may be withheld by contract (R13, R15, R16). The section still
   # renders and says so -- the same decision #171 settled for realised P&L,
   # where a vanishing section reads as "this page does not do that".

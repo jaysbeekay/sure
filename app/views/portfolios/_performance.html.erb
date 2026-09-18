@@ -12,8 +12,14 @@
   <%# A figure withheld is not the same as a figure of zero, and the reader
       cannot tell them apart from the cards alone. R13 suppresses a figure whose
       exchange rate is missing; R6 suppresses a day whose denominator is not
-      positive. Both are surfaced rather than hidden, which is what the contract
-      means by "suppressed days are surfaced". %>
+      positive, and R18 a day whose journalled position has no usable price or
+      rate. All of them are surfaced rather than hidden, which is what the
+      contract means by "suppressed days are surfaced".
+
+      "Counted as a zero return" and not "left out": a suppressed day keeps its
+      place in the series (R6), so it is an omission for the chained TWR only.
+      Volatility still counts it as an observation of zero and its flows still
+      enter the money-weighted series. %>
   <% if performance.rate_missing? || performance.suppressed_dates.any? %>
     <div class="px-4">
       <%= render DS::Alert.new(title: t("portfolios.performance.incomplete_title"), variant: :warning) do %>
