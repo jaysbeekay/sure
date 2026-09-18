@@ -1,4 +1,14 @@
 class Account::ProviderImportAdapter
+  # Matches a transaction any provider has flagged pending, for the lookups below that
+  # join `transactions` directly. Derived from Transaction::PENDING_PROVIDERS rather
+  # than spelled out, so a newly supported provider cannot silently drop out of
+  # pending→posted reconciliation. Frozen constant built from a frozen provider list:
+  # no user input reaches the SQL (same reasoning as Transaction::PENDING_CHECK_SQL).
+  PENDING_LOOKUP_SQL = Transaction::PENDING_PROVIDERS
+    .map { |provider| "(transactions.extra -> '#{provider}' ->> 'pending')::boolean = true" }
+    .join(" OR ")
+    .freeze
+
   attr_reader :account, :skipped_entries
 
   def initialize(account)
@@ -623,7 +633,7 @@ class Account::ProviderImportAdapter
   # @param security [Security] The security object
   # @param quantity [BigDecimal, Numeric] Number of shares (negative for sells, positive for buys)
   # @param price [BigDecimal, Numeric] Price per share
-  # @param amount [BigDecimal, Numeric] Total trade value
+  # @param amount [BigDecimal, Numeric] Total cash impact of the trade, fee included
   # @param currency [String] Currency code
   # @param date [Date, String] Trade date
   # @param name [String, nil] Optional custom name for the trade
@@ -631,8 +641,9 @@ class Account::ProviderImportAdapter
   # @param source [String] Provider name
   # @param activity_label [String, nil] Investment activity label (e.g., "Buy", "Sell", "Reinvestment")
   # @param exchange_rate [BigDecimal, Numeric, nil] Optional provider-supplied FX rate into the account currency
+  # @param fee [BigDecimal, Numeric, nil] Optional provider-reported transaction fee, already included in `amount`
   # @return [Entry] The created entry with trade
-  def import_trade(security:, quantity:, price:, amount:, currency:, date:, name: nil, external_id: nil, source:, activity_label: nil, exchange_rate: nil)
+  def import_trade(security:, quantity:, price:, amount:, currency:, date:, name: nil, external_id: nil, source:, activity_label: nil, exchange_rate: nil, fee: nil)
     raise ArgumentError, "security is required" if security.nil?
     raise ArgumentError, "source is required" if source.blank?
 
@@ -673,6 +684,7 @@ class Account::ProviderImportAdapter
         investment_activity_label: activity_label || (quantity > 0 ? "Buy" : "Sell")
       }
       trade_attributes[:exchange_rate] = exchange_rate unless exchange_rate.nil?
+      trade_attributes[:fee] = fee unless fee.nil?
 
       entry.entryable.assign_attributes(trade_attributes)
 
@@ -792,7 +804,8 @@ class Account::ProviderImportAdapter
     # 4. Same currency
     # 5. Date within window (pending can post days later)
     # 6. Is a Transaction (not Trade or Valuation)
-    # 7. Has pending=true in transaction.extra["simplefin"]["pending"] or extra["plaid"]["pending"]
+    # 7. Has pending=true in transaction.extra[<provider>]["pending"] for any provider
+    #    in Transaction::PENDING_PROVIDERS
     candidates = account.entries
       .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
       .where(source: source)

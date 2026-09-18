@@ -43,6 +43,16 @@ class AccountTest < ActiveSupport::TestCase
 
   test "default owner is stable when two admins share a created_at" do
     family = families(:empty)
+
+    # The tie is built here rather than taken from the fixtures. Upstream's
+    # users.yml now gives its second admin an explicit `created_at` precisely so
+    # the fixtures do NOT tie -- which is a fine way to make that fixture
+    # deterministic, and leaves this test with nothing to pin. A test that needs
+    # a tie makes one.
+    family.users.create!(
+      email: "tie-break-admin@example.com", role: "admin",
+      password: "password", first_name: "Tie", last_name: "Break"
+    )
     tied_admins = family.users.where(role: "admin")
     tied_admins.update_all(created_at: 1.hour.ago)
     assert_operator tied_admins.count, :>, 1, "the tie this pins needs at least two admins"

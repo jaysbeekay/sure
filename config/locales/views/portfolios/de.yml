@@ -78,15 +78,13 @@ de:
         missing_exchange_rate:
           one: 1 Veräußerung hat keinen Wechselkurs für ihr Handelsdatum und bleibt unberücksichtigt.
           other: "%{count} Veräußerungen haben keinen Wechselkurs für ihr Handelsdatum und bleiben unberücksichtigt."
-        mixed_currency:
-          one: 1 Veräußerung ist in einer Währung notiert, in der ihr Bestand nicht bewertet ist, und bleibt unberücksichtigt.
-          other: "%{count} Veräußerungen sind in einer Währung notiert, in der ihre Bestände nicht bewertet sind, und bleiben unberücksichtigt."
       excluded_title: Einige Veräußerungen werden nicht mitgezählt
       gains: Gewinne
       losses: Verluste
+      no_disposals: Im ausgewählten Zeitraum (%{period}) wurde nichts realisiert.
       summary:
-        one: 1 Veräußerung in %{period}
-        other: "%{count} Veräußerungen in %{period}"
+        one: 1 Veräußerung im Zeitraum (%{period})
+        other: "%{count} Veräußerungen im Zeitraum (%{period})"
     performance:
       annualized_hint: Auf ein volles Jahr hochgerechnet, bezogen auf Kalendertage; bei Zeiträumen unter einem Jahr nicht ausgewiesen.
       annualized_mwr: Annualisiert, geldgewichtet
@@ -98,8 +96,8 @@ de:
       mwr_hint: "Geldgewichtet, über den Zeitraum. Sie berücksichtigt, wann Geld angelegt wurde: Mittel, die erst im Verlauf hinzukamen, werden auf den gesamten Zeitraum bezogen — deshalb kann diese Zahl von der Haltedauer-Rendite deines Brokers abweichen."
       rate_missing: Für einen Teil dieses Zeitraums fehlte ein Wechselkurs. Betroffene Kennzahlen werden zurückgehalten statt zum Kurs 1 umgerechnet.
       suppressed_days:
-        one: Ein Tag wurde ausgelassen, weil seine Rendite nicht ermittelt werden konnte.
-        other: "%{count} Tage wurden ausgelassen, weil ihre Rendite nicht ermittelt werden konnte."
+        one: Ein Tag wurde als Nullrendite gezählt, weil er nicht ermittelt werden konnte.
+        other: "%{count} Tage wurden als Nullrendite gezählt, weil sie nicht ermittelt werden konnten."
       twr: Zeitgewichtete Rendite
       twr_hint: Was die Anlagen erwirtschaftet haben, ohne den Effekt deiner Einzahlungen. Täglich, nach Gebühren, wobei jede Einzahlung ab dem Beginn ihres Tages zählt.
       volatility: Volatilität

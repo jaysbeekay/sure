@@ -2,10 +2,112 @@ require "test_helper"
 
 class ReportsControllerTest < ActionDispatch::IntegrationTest
   include EntriesTestHelper
+  include PortfolioReturnsTestHelper
 
   setup do
     sign_in @user = users(:family_admin)
     @family = @user.family
+  end
+
+  # The per-trade line under the realised-gains card used to render
+  # `Money.new(gain.value, Current.family.currency)` -- taking the number out of
+  # the Trend and re-labelling it as family currency with no conversion at all.
+  #
+  # The fixture has to be a FOREIGN ACCOUNT for that to show. A gain is carried
+  # in the currency its position is held in, so for a USD account under a USD
+  # family the re-labelling is accidentally correct and a test built on one
+  # passes either way -- I wrote that test first and watched it fail to notice
+  # the bug restored.
+  #
+  # A USD family, a EUR account, a EUR-listed security: basis 100 EUR/share, 2
+  # sold at 150 EUR/share, EUR->USD 1.5 that day. The gain is 100 EUR, and the
+  # line must read $150.00. Re-labelled rather than converted it reads $100.00.
+  test "a foreign-account disposal is listed in family currency, not re-labelled" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family, currency: "EUR")
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: account, date: date, qty: 2, price: 150
+    set_rate from: "EUR", to: "USD", date: date, rate: 1.5
+
+    get reports_path
+    assert_response :ok
+
+    # The disposal line specifically. Matching on the ticker alone finds the
+    # HOLDINGS line above it, whose unrealized figure happens to be 250 in this
+    # fixture -- which is how the first version of this test passed against the
+    # very re-labelling it was written to catch.
+    line = css_select("[data-testid='realized-gain-line']").map(&:text)
+                                                           .find { |text| text.include?(security_under_test.ticker) }
+
+    assert line, "the disposal must be listed at all, or this proves nothing"
+    assert_match "$150.00", line, "the per-trade line converts at the trade's own rate"
+    assert_no_match(/\$100\.00/, line,
+                    "$100.00 is the EUR figure printed with a dollar sign")
+  end
+
+  # A position carried in a THIRD currency -- not the disposal's, not the
+  # account's. 300 EUR of proceeds at 0.8 is 240 GBP, less 200 GBP of basis, so
+  # 40 GBP and $50.00 at 1.25. GBP is in neither currency set the card
+  # enumerates by default, and a currency it does not enumerate converts at the
+  # `|| 1` parity fallback: the line would read $40.00, a GBP figure with a
+  # dollar sign, which is the same class of error as re-labelling.
+  test "a disposal carried in a third currency is converted, not passed through at parity" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family)
+
+    account.holdings.create!(
+      security: security_under_test, date: date, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: date, rate: 1.25
+
+    get reports_path
+    assert_response :ok
+
+    line = css_select("[data-testid='realized-gain-line']").map(&:text)
+                                                           .find { |text| text.include?(security_under_test.ticker) }
+
+    assert line, "the disposal must be listed at all, or this proves nothing"
+    assert_match "$50.00", line
+    assert_no_match(/\$40\.00/, line, "$40.00 is the GBP figure converted at parity")
+  end
+
+  # The same exposure the hub's own conversion leg has, and the card was the one
+  # place still carrying it. `ExchangeRate` validates presence, not usability, so
+  # a provider or an import can leave a 0 in the GBP->USD row; `rates_for` hands
+  # that 0 back unchanged, and multiplying by it reports a real 40 GBP gain as
+  # $0.00 -- in the total, and on the line, indistinguishable from a disposal
+  # that broke even. The hub excludes the same disposal
+  # ("a statement rate that cannot convert excludes the disposal"), so the two
+  # views of one disposal disagreed.
+  #
+  # A rate that cannot convert is an absent rate, and an absent figure is what
+  # the line already knows how to render.
+  test "a disposal whose statement rate cannot convert is not reported as zero" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family)
+
+    account.holdings.create!(
+      security: security_under_test, date: date, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: date, rate: 0
+
+    get reports_path
+    assert_response :ok
+
+    line = css_select("[data-testid='realized-gain-line']").map(&:text)
+                                                           .find { |text| text.include?(security_under_test.ticker) }
+
+    assert line, "the disposal must be listed at all, or this proves nothing"
+    assert_match I18n.t("reports.investment_performance.no_data"), line,
+                 "0 is not a conversion, and the card says so rather than printing a figure"
+    assert_no_match(/\$0\.00/, line, "$0.00 reads as a disposal that broke even")
   end
 
   # The Reports section controllers gained `url` and `preferenceKey` values so
@@ -461,7 +563,7 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
 
     expense_href = transactions_path(q: { categories: [ expense_category.name ], start_date: start_date, end_date: end_date })
     income_href = transactions_path(q: { categories: [ income_category.name ], start_date: start_date, end_date: end_date })
-    uncategorized_href = transactions_path(q: { categories: [ Category.uncategorized.name ], start_date: start_date, end_date: end_date })
+    uncategorized_href = transactions_path(q: { categories: [ Category.uncategorized.filter_value ], start_date: start_date, end_date: end_date })
 
     assert_select "tr[data-category='category-#{expense_category.id}'] a[href=?]", expense_href, text: expense_category.name
     assert_select "tr[data-category='category-#{income_category.id}'] a[href=?]", income_href, text: income_category.name
@@ -474,7 +576,7 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_select "tr.group\\/category-row[data-category='category-#{expense_category.id}'] td div.relative a[class*='before:absolute'][class*='before:inset-0']"
   end
 
-  test "index uncategorized category link uses localized name that Search accepts" do
+  test "index uncategorized category link stays on the stable filter value while the displayed text is localized" do
     start_date = Date.current.beginning_of_month
     end_date = Date.current.end_of_month
     account = @family.accounts.first
@@ -482,12 +584,11 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
 
     @user.update!(locale: "zh-CN")
     localized_name = I18n.with_locale(:"zh-CN") { Category.uncategorized.name }
-    assert_includes Category.all_uncategorized_names, localized_name
 
     get reports_path(period_type: :monthly, start_date: start_date, end_date: end_date)
     assert_response :ok
 
-    href = transactions_path(q: { categories: [ localized_name ], start_date: start_date, end_date: end_date })
+    href = transactions_path(q: { categories: [ Category::UNCATEGORIZED_FILTER_VALUE ], start_date: start_date, end_date: end_date })
     assert_select "tr[data-category='category-uncategorized'] a[href=?]", href, text: localized_name
   end
 
@@ -531,6 +632,7 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_match(/#{Regexp.escape(I18n.t("reports.transactions_breakdown.table.entries", count: 1))}/, other_investments_rows.first.text)
     assert_match(/\$100\.00/, other_investments_rows.first.text)
   end
+
 
   test "monthly period navigation shows previous month link" do
     get reports_path(period_type: :monthly)
