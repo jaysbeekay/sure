@@ -199,6 +199,105 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[value_chart kpis], keys.first(2)
   end
 
+  # A return is a rate, not an amount. The card takes `money:` and `trend:` as
+  # well, and both format with a currency symbol, so the failure this guards
+  # against is a 21% return rendering as $0.21 -- plausible-looking, and wrong
+  # by two orders of magnitude and a unit.
+  test "a return renders as a percentage, not as money" do
+    Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(BigDecimal("0.2134"))
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-performance" do
+      assert_select "p", text: /21\.34%/
+    end
+    assert_no_match(/\$0\.21/, response.body, "a rate must not be formatted as currency")
+  end
+
+  # R8 solves the money-weighted return per unit of the PERIOD'S SPAN, not as a
+  # holding-period figure. Capital that arrives part-way through is therefore
+  # expressed over the whole period: money invested for half of a ten-day
+  # period and gaining 10% reports about 21% (1.1 ** (10/5) - 1), where TWR
+  # reports 10%.
+  #
+  # The contract says the UI must not label that a holding-period return. This
+  # is the card copy most likely to produce a "my broker says something
+  # different" report, so the wording is pinned rather than left to drift, in
+  # both locales -- a German reader gets the same warning or none at all.
+  test "the money-weighted card says it is a period figure, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(BigDecimal("0.21"))
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    # A fragment, not the whole hint: it carries an apostrophe and an em dash,
+    # which render HTML-escaped and would never match the raw string.
+    assert_match(/Money-weighted, over the period/, response.body)
+
+    %i[en de].each do |locale|
+      label = I18n.t("portfolios.performance.mwr", locale: locale)
+      hint = I18n.t("portfolios.performance.mwr_hint", locale: locale)
+
+      assert_match(/period|Zeitraum/i, label,
+                   "#{locale} label must say the figure is over the period, not a holding-period return")
+      assert_match(/when money was invested|wann Geld angelegt wurde/i, hint,
+                   "#{locale} hint must say the figure reflects when money was invested")
+    end
+  end
+
+  # "Left out" is true of the chained TWR and of nothing else on this section. A
+  # suppressed day keeps its place in the series (R6): volatility counts it as an
+  # observation of zero, and its flows stay in the money-weighted series. Three
+  # of the six figures on the card are computed from a day the banner told the
+  # reader was omitted, so the wording is pinned in both locales rather than left
+  # to drift back.
+  test "the suppressed-days banner says a day was counted as zero, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([ Date.current ])
+
+    get portfolio_path
+    assert_response :success
+
+    assert_match(/counted as a zero return/, response.body)
+
+    %i[en de].each do |locale|
+      %i[one other].each do |count|
+        line = I18n.t("portfolios.performance.suppressed_days.#{count}", locale: locale)
+
+        assert_match(/zero return|Nullrendite/i, line,
+                     "#{locale}.#{count} must say the day was counted as zero")
+        assert_no_match(/left out|ausgelassen/i, line,
+                        "#{locale}.#{count} must not say the day was omitted: it is still in the series")
+      end
+    end
+  end
+
+  # Every figure may be withheld by contract (R13, R15, R16). The section still
+  # renders and says so -- the same decision #171 settled for realised P&L,
+  # where a vanishing section reads as "this page does not do that".
+  test "the performance section states that figures are withheld rather than vanishing" do
+    Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:annualized_time_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:annualized_money_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:volatility).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:max_drawdown).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(true)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "performance", count: 1
+    assert_match I18n.t("portfolios.performance.rate_missing"), response.body
+    assert_match I18n.t("portfolios.kpi_row.no_data"), response.body
+  end
+
   test "renders sections in the saved order, collapsed where the user left them" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis], collapsed: { "kpis" => true })
 
@@ -207,7 +306,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     # The saved order places the chart first; sections it does not mention
     # follow in declaration order.
-    assert_equal %w[value_chart kpis realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance realized_gains holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -314,10 +413,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     baseline = capture_sql_queries { get portfolio_path }
     assert_response :success
 
-    # Measured: 54 queries for this page (layout included) at 10 accounts and
-    # 60 holdings when this test was written, none of them per holding or per
-    # account. The ceiling is that figure plus a little headroom, not a
-    # guess; the assertion below is the one that matters.
+    # Measured: 61 queries for this page (layout included) at 10 accounts and
+    # 60 holdings, none of them per holding or per account. The ceiling is that
+    # figure plus a little headroom, not a guess; the assertion below is the
+    # one that matters.
     assert_operator baseline.size, :<=, PORTFOLIO_QUERY_CEILING, "GET /portfolio issued #{baseline.size} queries"
 
     build_portfolio(accounts: 10, securities: 2, existing_accounts: @family.accounts.where("name LIKE 'Bulk %'").to_a)
@@ -398,7 +497,14 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
-  PORTFOLIO_QUERY_CEILING = 60 # measured 54, see the ceiling test
+  # Measured 61, ceiling 67 -- the same 6 of headroom the previous pair carried.
+  # It was 54/60 before the performance section, which adds ~7 fixed queries:
+  # one Portfolio::Performance for the request (memoised on the registry, and
+  # the registry is the only caller), covering the daily-returns query, the
+  # return-scope lookups and its cache reads. None is per holding or per
+  # account, which the flatness assertion in the test above is what proves --
+  # that one is the assertion that matters, and it did not move.
+  PORTFOLIO_QUERY_CEILING = 67
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one

@@ -569,10 +569,15 @@ export default class extends Controller {
   }
 
   _getTrendIcon(datum) {
-    const isIncrease =
-      Number(datum.trend.previous.amount) < Number(datum.trend.current.amount);
-    const isDecrease =
-      Number(datum.trend.previous.amount) > Number(datum.trend.current.amount);
+    // Through _extractNumericValue, which handles both shapes. Reading
+    // `.amount` directly assumes a Money, and a series of plain numbers -- an
+    // index rebased to 100, say -- yields undefined, then NaN, then two false
+    // comparisons and a flat icon on every point however the line moved.
+    const previous = this._extractNumericValue(datum.trend.previous);
+    const current = this._extractNumericValue(datum.trend.current);
+
+    const isIncrease = previous < current;
+    const isDecrease = previous > current;
 
     if (isIncrease) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${datum.trend.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right-icon lucide-arrow-up-right"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>`;
@@ -590,6 +595,20 @@ export default class extends Controller {
   };
 
   _extractNumericValue = (numeric) => {
+    // Missing is NaN, not zero. `Number(null)` is 0, so a null value would plot
+    // on the axis as a real zero and compare as one -- a gap in a series
+    // reading as a crash to nothing.
+    //
+    // NaN is not free either, and this is narrower than it looks: `d3.min`,
+    // `d3.max` and `d3.extent` ignore NaN, so the y-domain is honest, but
+    // `d3.line()` and `d3.area()` write it straight into the path
+    // (`line()([[0,1],[1,NaN],[2,3]])` is "M0,1L1,NaNL2,3"), which is an
+    // invalid path rather than a gap. Nothing this PR renders emits null, so no
+    // series reaches that yet; the PR that first does adds
+    // `.defined((d) => !Number.isNaN(this._getDatumValue(d)))` to both
+    // generators.
+    if (numeric === null || numeric === undefined) return Number.NaN;
+
     if (typeof numeric === "object" && "amount" in numeric) {
       return Number(numeric.amount);
     }
@@ -597,6 +616,13 @@ export default class extends Controller {
   };
 
   _extractFormattedValue = (numeric) => {
+    // Guarded first, for the same reason its numeric twin is: `typeof null` is
+    // "object", so `"formatted" in null` is a TypeError rather than a false,
+    // and the tooltip would throw on the null the numeric branch is built to
+    // survive. Unreachable today -- no producer emits one -- and the two
+    // helpers reading the same datum must not disagree about what it can hold.
+    if (numeric === null || numeric === undefined) return "";
+
     if (typeof numeric === "object" && "formatted" in numeric) {
       return numeric.formatted;
     }
