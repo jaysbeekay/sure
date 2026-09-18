@@ -1,7 +1,7 @@
 # The daily return series a set of accounts produced over a period, in the
 # family's currency.
 #
-# Implements rows R1, R2, R6, R11, R13 and R17 of docs/portfolio/returns-contract.md.
+# Implements rows R1, R2, R6, R11, R13, R17 and R18 of docs/portfolio/returns-contract.md.
 #
 # Division of labour (contract §Scope): the database does the joining, windowing
 # and FX -- what it is good at -- and returns raw components. The arithmetic that
@@ -539,12 +539,27 @@ class Portfolio::DailyReturns
       @flow_classifier ||= Portfolio::FlowClassifier.new(scope_account_ids: scope_account_ids)
     end
 
-    # A security journal: a Transfer-labelled trade. Deliberately NOT every
-    # Trade classified external -- F11 makes a Contribution or Withdrawal
-    # labelled Trade external too, and those carry a real cash amount that must
-    # keep flowing at its amount rather than being revalued from a position.
+    # A security journal, as R18 defines one: a Transfer-labelled trade with no
+    # cash amount.
+    #
+    # Deliberately NOT every Trade classified external -- F11 makes a
+    # Contribution or Withdrawal labelled Trade external too, and those carry a
+    # real cash amount that must keep flowing at its amount rather than being
+    # revalued from a position.
+    #
+    # The amount is checked as well as the label, and it is not belt and braces.
+    # A Transfer-labelled trade that carries `amount = qty x price` is ordinary
+    # -- the onchain processor, the web edit form, the API update and any Buy
+    # relabelled Transfer all write one -- and for those the balance calculator
+    # has already booked a cash-settled purchase, so the close does not move and
+    # there is no market flow to take the value out of. Valued from the position
+    # anyway, a 500 purchase in a 1,000 account read as external_flow 500,
+    # market -500, denominator 1,500 and a -33% day, with `unexplained` at 0:
+    # a phantom loss that reconciles, which the drivers table cannot flag.
     def journal_predicate
-      "entries.entryable_type = 'Trade' AND trades.investment_activity_label = 'Transfer'"
+      "entries.entryable_type = 'Trade' " \
+        "AND trades.investment_activity_label = '#{Portfolio::FlowClassifier::TRANSFER_LABEL}' " \
+        "AND entries.amount = 0"
     end
 
     def flow_class_sql

@@ -553,6 +553,54 @@ class Portfolio::DailyReturnsTest < ActiveSupport::TestCase
     assert_equal BigDecimal("0"), second.unexplained
   end
 
+  # R18 defines a journal as a Transfer-labelled trade with `price: 0,
+  # amount: 0`, and the predicate only read the label. A Transfer trade that
+  # carries a real cash amount is ordinary -- the onchain processor, the web
+  # edit form, the API update and any Buy relabelled Transfer all write
+  # `amount = qty x price` -- and for one of those the balance calculator has
+  # already booked a cash-settled purchase, so the close does not move and there
+  # is no market flow to take the value out of.
+  #
+  # Valued from the position anyway, the day read: external_flow 500, market
+  # -500, denominator 1500, unexplained 0 and a -33% return -- a phantom loss
+  # that reconciles, which is worse than one the drivers table would flag.
+  # Keyed on the amount as well, the trade keeps flowing at its own amount and
+  # the day is what it was.
+  test "a Transfer labelled trade that carries a cash amount is not valued as a journal" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
+
+    @account.entries.create!(
+      name: "Transfer in", date: @day_two, amount: 500, currency: @account.currency,
+      entryable: Trade.new(security: security_under_test, qty: 5, price: 100,
+                           currency: @account.currency, investment_activity_label: "Transfer")
+    )
+    @account.holdings.create!(
+      security: security_under_test, date: @day_two, qty: 5, price: 100,
+      amount: BigDecimal(500), currency: @account.currency
+    )
+
+    second = daily_returns.rows.last
+
+    assert_equal BigDecimal("-500"), second.external_flow,
+                 "the trade flows at the cash amount it carries, not at the position's worth"
+    assert_equal BigDecimal("0"), second.market,
+                 "and nothing is subtracted from market for a purchase the close already absorbed"
+
+    # The day does NOT reconcile, and that is the point. How F10 classifies a
+    # Transfer-labelled trade that carries cash is a separate question and a
+    # separate row; what this pins is that R18 does not paper over it. Revalued
+    # from the position the residual cancelled to zero and the day reported
+    # -33%: a phantom loss that reconciles, which #180's drivers table cannot
+    # flag. Left alone it lands in `unexplained`, where it is visible.
+    assert_equal BigDecimal("500"), second.unexplained,
+                 "the residual stays visible rather than being cancelled by a revaluation"
+
+    second_return = daily_returns.returns.find { |date, _| date == @day_two }&.last
+    assert_operator second_return.to_f, :>, -0.3,
+                    "-33% was the revaluation's phantom, not the day's return"
+  end
+
   # A1. The flow is qty x price, NOT the holding row's `amount`. `amount` is the
   # whole position for that security in the account, so when a journal tops up
   # something the scope already held, valuing the flow from it counts the units
