@@ -306,7 +306,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     # The saved order places the chart first; sections it does not mention
     # follow in declaration order.
-    assert_equal %w[value_chart kpis performance realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart realized_gains holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
