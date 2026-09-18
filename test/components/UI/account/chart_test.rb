@@ -14,6 +14,29 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     assert_text "+$100.00"
   end
 
+  # The all-time period is widened to the account's own history start, which is
+  # right for an account that began after the family did. It must not be widened
+  # to a start AFTER the period's end: `Period#initialize` validates the range
+  # and raises, so the chart 500s rather than drawing anything.
+  #
+  # Reachable whenever `history_start_date` is in the future -- a scheduled
+  # opening anchor, a valuation dated ahead, a provider backfill that lands
+  # tomorrow. The fork's `Account#chart_period` guarded this with
+  # `start_date > Date.current`; the generalised version adopted from upstream
+  # in the A1 sync did not carry the guard, and the 8 tests on `chart_period`
+  # kept passing because the component had stopped calling it.
+  test "an account whose history starts after the period ends still renders" do
+    @account.update!(name: "Future start")
+    Account.any_instance.stubs(:history_start_date).returns(Date.current + 30)
+
+    component = UI::Account::Chart.new(account: @account, period: Period.from_key("all_time"), view: "balance")
+
+    period = component.send(:period)
+
+    assert_operator period.start_date, :<=, period.end_date,
+                    "a period whose start is after its end cannot be built at all"
+  end
+
   test "does not sign non-gains views" do
     component = UI::Account::Chart.new(account: @account, view: "balance")
 

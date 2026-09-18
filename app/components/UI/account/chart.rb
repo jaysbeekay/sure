@@ -11,7 +11,17 @@ class UI::Account::Chart < ApplicationComponent
     @effective_period ||= begin
       p = @period || Period.last_30_days
       acc_start = account.history_start_date
-      if p.key == "all_time" && acc_start.present? && acc_start > p.start_date
+      # `acc_start <= p.end_date` is not belt and braces. `Period#initialize`
+      # calls `validate!`, which RAISES on a start after its end, so an account
+      # whose history begins in the future -- a scheduled opening anchor, a
+      # valuation dated ahead, a provider backfill landing tomorrow -- would 500
+      # the chart rather than draw a thin one. The fork's `Account#chart_period`
+      # guarded this with `start_date > Date.current`; the generalised version
+      # adopted from upstream in the A1 sync did not carry the guard, and the
+      # eight tests on `chart_period` kept passing because this component had
+      # stopped calling it. Expressed against the period's own end rather than
+      # against today, since that is the bound the validation actually checks.
+      if p.key == "all_time" && acc_start.present? && acc_start > p.start_date && acc_start <= p.end_date
         Period.new(key: "all_time", start_date: acc_start, end_date: p.end_date)
       else
         p
