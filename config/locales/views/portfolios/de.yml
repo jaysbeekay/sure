@@ -79,9 +79,10 @@ de:
       excluded_title: Einige Veräußerungen werden nicht mitgezählt
       gains: Gewinne
       losses: Verluste
+      no_disposals: Im ausgewählten Zeitraum (%{period}) wurde nichts realisiert.
       summary:
-        one: 1 Veräußerung in %{period}
-        other: "%{count} Veräußerungen in %{period}"
+        one: 1 Veräußerung im Zeitraum (%{period})
+        other: "%{count} Veräußerungen im Zeitraum (%{period})"
     sections:
       accounts: Konten
       allocation: Aufteilung

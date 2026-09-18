@@ -31,10 +31,12 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_includes visible, "allocation"
 
     # A family with no investment accounts has nothing to list beyond the
-    # always-on KPI row and chart (the controller shows the empty state).
+    # sections that speak for themselves when empty: the KPI row, the value
+    # chart and the realised-P&L timeline, each of which says so rather than
+    # disappearing. (The controller shows the whole-page empty state anyway.)
     empty_statement = InvestmentStatement.new(families(:empty), user: nil)
     empty = Portfolio::SectionRegistry.new(statement: empty_statement, period: @period, as_of: @as_of, user: @user).sections
-    assert_equal %w[kpis value_chart], empty.select { |s| s[:visible] }.map { |s| s[:key] }
+    assert_equal %w[kpis value_chart realized_gains], empty.select { |s| s[:visible] }.map { |s| s[:key] }
   end
 
   test "passes the sort, direction and grouping through to the holdings and allocation locals" do
