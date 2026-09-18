@@ -69,11 +69,11 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     # disappearing. (The controller shows the whole-page empty state anyway.)
     empty_statement = InvestmentStatement.new(families(:empty), user: nil)
     empty = Portfolio::SectionRegistry.new(statement: empty_statement, period: @period, as_of: @as_of, user: @user).sections
-      # `performance` joins kpis, value_chart and realized_gains as always-on: a
-      # period with no computable figure is a fact worth stating, where a
-      # vanishing section reads as "this page does not do returns". The same
-      # argument #171 made for realised P&L, which is why both are here.
-      assert_equal %w[kpis performance value_chart realized_gains], empty.select { |s| s[:visible] }.map { |s| s[:key] }
+    # `performance` joins kpis, value_chart and realized_gains as always-on: a
+    # period with no computable figure is a fact worth stating, where a
+    # vanishing section reads as "this page does not do returns". The same
+    # argument #171 made for realised P&L, which is why both are here.
+    assert_equal %w[kpis performance value_chart realized_gains], empty.select { |s| s[:visible] }.map { |s| s[:key] }
   end
 
   test "passes the sort, direction and grouping through to the holdings and allocation locals" do
