@@ -20,7 +20,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[kpis performance index_chart value_chart realized_gains holdings accounts allocation data_quality].freeze
+  KEYS = %w[kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality].freeze
 
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
@@ -98,6 +98,17 @@ class Portfolio::SectionRegistry
           partial: "portfolios/index_chart",
           locals: shared_locals.merge(series: index_chart_series),
           visible: index_chart_series.present?,
+          collapsible: true
+        },
+        # Hidden when the period moved nothing: a table of zeros reconciling to
+        # zero is true and tells the reader nothing.
+        {
+          key: "drivers",
+          title: "portfolios.sections.drivers",
+          partial: "portfolios/drivers",
+          locals: shared_locals.merge(drivers: drivers, contributions: driver_contributions,
+                                      reconciles: driver_reconciles?),
+          visible: drivers.present? && driver_contributions.any?,
           collapsible: true
         },
         {
@@ -234,6 +245,76 @@ class Portfolio::SectionRegistry
             levels.map { |date, level| { date: date, value: level.round(2) } }
           )
         end
+    end
+
+    # A Hash, not a Portfolio::Drivers. Portfolio::Performance caches its
+    # metrics, so it stores `drivers.to_h` rather than the object -- which also
+    # means `reconciles?` is not available here and has to be re-derived from
+    # `unexplained` (see driver_reconciles? below).
+    def drivers
+      @drivers ||= performance.drivers || {}
+    end
+
+    # R12 held, re-derived from the cached hash because Portfolio::Performance
+    # stores `drivers.to_h` and the object's own `reconciles?` does not survive
+    # that. Re-derived at the SAME tolerance the contract defines -- a cent, per
+    # Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and not
+    # at exact zero.
+    #
+    # Read from Portfolio::Drivers rather than written out again. This was a
+    # second literal, and the two had already drifted once -- exact zero here,
+    # a cent there -- so the section could call a period unreconciled while
+    # `Drivers#reconciles?` called it reconciled. See that constant for what
+    # the cent is for and where it does not hold.
+    def driver_reconciles?
+      drivers[:unexplained].to_d.abs <= Portfolio::Drivers::RECONCILE_TOLERANCE
+    end
+
+    # The decomposition as SIGNED contributions, in the order they are added.
+    #
+    # Signing happens here rather than in the partial because the sign is a
+    # contract rule, not a formatting choice. R12's identity is
+    #
+    #   external_net + composition + income - fees + market + revaluations
+    #     + fx_effect == value_close - value_open
+    #
+    # and `fees` is reported by Portfolio::Drivers as a POSITIVE magnitude that
+    # REDUCES the change (R7). A table that rendered each component as given
+    # would show fees adding to the portfolio and would not sum to the change
+    # it sits under. Negating it here keeps the one place that knows the rule
+    # next to the comment that states it.
+    #
+    # `unexplained` is included only when it is not zero. It is expected to be
+    # zero and is measured rather than defined so (see Portfolio::Drivers), so
+    # a non-zero value is a real finding and hiding it would be the dishonest
+    # choice; a zero row would just be noise.
+    #
+    # Zero components are dropped: a period with no fees does not need a fees
+    # row to say so.
+    def driver_contributions
+      @driver_contributions ||= begin
+        signed = [
+          [ :external_net, drivers[:external_net] ],
+          [ :composition, drivers[:composition] ],
+          [ :income, drivers[:income] ],
+          [ :fees, drivers[:fees] ? -drivers[:fees] : nil ],
+          [ :market, drivers[:market] ],
+          [ :revaluations, drivers[:revaluations] ],
+          [ :fx_effect, drivers[:fx_effect] ],
+          [ :unexplained, drivers[:unexplained] ]
+        ]
+
+        # Dropped when it rounds away as well as when it is exactly zero: an
+        # "Unexplained $0.00" row states a gap the figure itself denies, and
+        # sub-cent residue is normal in a multi-currency scope. "Rounds away"
+        # is true at two decimal places; see Portfolio::Drivers::RECONCILE_TOLERANCE
+        # for the zero-decimal currencies where it is not.
+        signed.reject { |key, amount|
+          next true if amount.nil? || amount.zero?
+
+          key == :unexplained && amount.abs <= Portfolio::Drivers::RECONCILE_TOLERANCE
+        }
+      end
     end
 
     def holdings_rows

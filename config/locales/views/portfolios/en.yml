@@ -35,6 +35,19 @@ en:
         provider_unavailable: Assigned provider unavailable
         stale: Recent fetches failed
       set_cost_basis: Set cost basis
+    drivers:
+      composition: Accounts added or removed
+      external_net: Contributions and withdrawals
+      fees: Fees
+      fx_effect: Currency movement
+      income: Dividends and interest
+      market: Market movement
+      revaluations: Revaluations
+      unexplained: Unexplained
+      unreconciled_body: The components above do not add up to the change in value. This is measured rather than assumed, so it points at data this page cannot account for.
+      unreconciled_title: These figures do not reconcile
+      value_close: Closing value
+      value_open: Opening value
     empty_state:
       add_account: Add an investment account
       description: Connect or add a brokerage, retirement or crypto account and this page will show its value, returns and holdings.
@@ -106,6 +119,7 @@ en:
       accounts: Accounts
       allocation: Allocation
       data_quality: Data quality
+      drivers: What moved the value
       holdings: Holdings
       index_chart: Return index
       kpis: Overview

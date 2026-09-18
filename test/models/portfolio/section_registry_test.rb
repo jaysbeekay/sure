@@ -12,8 +12,8 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "registers the built-in sections with their partials and locals" do
     sections = registry.sections
 
-    assert_equal %w[kpis performance index_chart value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
-    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/index_chart portfolios/value_chart], sections.first(4).map { |s| s[:partial] }
+    assert_equal %w[kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality], sections.map { |s| s[:key] }
+    assert_equal %w[portfolios/kpi_row portfolios/performance portfolios/index_chart portfolios/drivers], sections.first(4).map { |s| s[:partial] }
     assert sections.all? { |s| s[:collapsible] }
 
     # Every partial gets its locals passed in: none of them reaches for
@@ -116,6 +116,149 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_nil section[:locals][:series]
   end
 
+  # R7 reports fees as a POSITIVE magnitude that REDUCES the change, and R12's
+  # identity subtracts it:
+  #
+  #   external_net + composition + income - fees + market + revaluations
+  #     + fx_effect == value_close - value_open
+  #
+  # A table that rendered each component as given would show fees ADDING to the
+  # portfolio, and would not sum to the change printed beneath it. The signing
+  # is a contract rule, so it lives in the registry, and this is what pins it.
+  test "the drivers table signs fees against the change, and reconciles" do
+    drivers = stub_drivers(value_open: 1_000, value_close: 1_150,
+                           external_net: 100, income: 30, fees: 20, market: 40)
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:drivers).returns(drivers)
+    @statement.stubs(:performance).returns(perf)
+
+    contributions = registry.sections.find { |s| s[:key] == "drivers" }[:locals][:contributions]
+
+    assert_equal(-BigDecimal(20), contributions.to_h[:fees], "fees reduce the change, so they render negative")
+    assert_equal BigDecimal(100), contributions.to_h[:external_net]
+
+    # The row that matters: what the table shows must add up to what it says
+    # the change was.
+    assert_equal BigDecimal(150), contributions.sum { |_key, amount| amount }
+    assert_equal drivers[:change], contributions.sum { |_key, amount| amount }
+
+    # The local that drives the "these figures do not reconcile" alert. Without
+    # asserting it, a broken driver_reconciles? could invert the alert while
+    # every assertion above stayed green.
+    assert registry.sections.find { |s| s[:key] == "drivers" }[:locals][:reconciles],
+           "a decomposition that adds up reports as reconciled"
+  end
+
+  # A period with no fees does not need a fees row saying zero, and
+  # `unexplained` is expected to be zero -- it is measured rather than defined
+  # so, which is why a NON-zero one has to be shown rather than swallowed.
+  test "the drivers table drops zero components but keeps a real unexplained" do
+    quiet = stub_drivers(value_open: 1_000, value_close: 1_100, market: 100)
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:drivers).returns(quiet)
+    @statement.stubs(:performance).returns(perf)
+
+    keys = registry.sections.find { |s| s[:key] == "drivers" }[:locals][:contributions].map(&:first)
+    assert_equal [ :market ], keys, "a period with only market movement lists only market"
+
+    noisy = stub_drivers(value_open: 1_000, value_close: 1_100, market: 90, unexplained: 10)
+    perf2 = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf2.stubs(:drivers).returns(noisy)
+    @statement.stubs(:performance).returns(perf2)
+
+    section = registry.sections.find { |s| s[:key] == "drivers" }
+    keys = section[:locals][:contributions].map(&:first)
+    assert_includes keys, :unexplained, "a measured gap must be shown, not folded away"
+    assert_not section[:locals][:reconciles],
+               "and the table says so, rather than leaving the reader to spot the row"
+  end
+
+  # R12 defines reconciliation at a CENT, not at exact zero, and a
+  # multi-currency scope accumulates sub-cent residue by construction: entry
+  # flows convert entry -> family at t-1 while balance-row flows went
+  # entry -> account at the entry date and then account -> family.
+  #
+  # At exact zero a residual of 0.004 would raise the "these figures do not
+  # reconcile" banner and print an "Unexplained $0.00" row -- a gap the figure
+  # itself denies.
+  test "a sub-cent residual reconciles and is not listed" do
+    drivers = stub_drivers(value_open: 1_000, value_close: 1_100, market: 100,
+                           unexplained: BigDecimal("0.004"))
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:drivers).returns(drivers)
+    @statement.stubs(:performance).returns(perf)
+
+    section = registry.sections.find { |s| s[:key] == "drivers" }
+
+    assert section[:locals][:reconciles], "a sub-cent residual is what the contract calls reconciled"
+    assert_not_includes section[:locals][:contributions].map(&:first), :unexplained,
+                        "and a row that rounds to nothing says nothing"
+  end
+
+  # The other side of the boundary: a residual ABOVE the cent is a real gap and
+  # must still be shown, so the tolerance cannot quietly swallow a finding.
+  test "a residual above the tolerance is still reported" do
+    drivers = stub_drivers(value_open: 1_000, value_close: 1_100, market: 90,
+                           unexplained: BigDecimal("10"))
+    perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+    perf.stubs(:drivers).returns(drivers)
+    @statement.stubs(:performance).returns(perf)
+
+    section = registry.sections.find { |s| s[:key] == "drivers" }
+
+    assert_not section[:locals][:reconciles]
+    assert_includes section[:locals][:contributions].map(&:first), :unexplained
+  end
+
+  # The two tests above sit at 0.004 and at 10, so nothing between them is
+  # pinned: with those fixtures alone, changing `<=` to `<` passes, and so does
+  # widening the tolerance to half a unit. The boundary is the claim the
+  # constant makes, so the boundary is what is asserted -- a residual exactly at
+  # one cent reconciles, and one a thousandth above it does not.
+  test "the reconcile boundary is the cent itself, inclusive" do
+    assert_equal BigDecimal("0.01"), Portfolio::Drivers::RECONCILE_TOLERANCE,
+                 "the figure itself, not whatever the constant says: it is one minor unit " \
+                 "of a two-decimal currency, and a wider one would swallow a real gap"
+
+    [ [ BigDecimal("0.01"), true ],
+      [ BigDecimal("0.011"), false ] ].each do |residual, expected|
+      drivers = stub_drivers(value_open: 1_000, value_close: 1_100,
+                             market: BigDecimal(100) - residual, unexplained: residual)
+      perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+      perf.stubs(:drivers).returns(drivers)
+      @statement.stubs(:performance).returns(perf)
+
+      section = registry.sections.find { |s| s[:key] == "drivers" }
+
+      assert_equal expected, section[:locals][:reconciles],
+                   "a residual of #{residual.to_s('F')} must #{expected ? '' : 'not '}reconcile"
+      assert_equal expected, section[:locals][:contributions].map(&:first).exclude?(:unexplained),
+                   "and the row must #{expected ? 'not ' : ''}be listed with it"
+    end
+  end
+
+  # The section and Portfolio::Drivers both decide what "reconciles" means --
+  # the section re-derives it from `unexplained` because Performance caches
+  # `drivers.to_h` rather than the object -- and the two literals had already
+  # drifted once, exact zero here against a cent there, so the table called a
+  # period unreconciled while the model called it reconciled. They read one
+  # constant now, and this fails if either grows its own again.
+  test "the section and the drivers model reconcile at the same figures" do
+    [ BigDecimal("0.01"), BigDecimal("0.011") ].each do |residual|
+      drivers = stub_drivers(value_open: 1_000, value_close: 1_100,
+                             market: BigDecimal(100) - residual, unexplained: residual)
+      perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+      perf.stubs(:drivers).returns(drivers)
+      @statement.stubs(:performance).returns(perf)
+
+      model = Portfolio::Drivers.allocate
+      model.stubs(:unexplained).returns(residual)
+
+      assert_equal model.reconciles?, registry.sections.find { |s| s[:key] == "drivers" }[:locals][:reconciles],
+                   "the table and the model must agree at a residual of #{residual.to_s('F')}"
+    end
+  end
+
   test "sections are visible only when the family has data for them" do
     visible = registry.sections.select { |s| s[:visible] }.map { |s| s[:key] }
     assert_includes visible, "holdings"
@@ -166,7 +309,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "orders sections by the user's saved order, appending anything it omits" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis])
 
-    assert_equal %w[value_chart kpis performance index_chart realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart drivers realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -182,7 +325,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   test "ignores keys in the saved order that no longer exist" do
     @user.update_section_preferences("portfolio", order: %w[gone value_chart])
 
-    assert_equal %w[value_chart kpis performance index_chart realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart drivers realized_gains holdings accounts allocation data_quality],
                  registry.sections.map { |s| s[:key] }
   end
 
@@ -199,7 +342,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     sections = registry(extra_sections: [ stub ]).sections
 
     assert_equal "stub", sections.last[:key]
-    assert_equal 10, sections.size
+    assert_equal 11, sections.size
   end
 
   test "a saved order can place an extra section among the built-ins" do
@@ -207,7 +350,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
              locals: {}, visible: true, collapsible: true }
     @user.update_section_preferences("portfolio", order: %w[stub kpis])
 
-    assert_equal %w[stub kpis performance index_chart value_chart realized_gains holdings accounts allocation data_quality],
+    assert_equal %w[stub kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality],
                  registry(extra_sections: [ stub ]).sections.map { |s| s[:key] }
   end
 
@@ -248,6 +391,24 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
         entryable: Trade.new(security: securities(:aapl), qty: -2, price: 150,
                              currency: "USD", investment_activity_label: "Sell")
       )
+    end
+
+    # A Portfolio::Drivers whose components are whatever the test names, so a
+    # table test does not depend on building balance history that produces
+    # exactly the split it wants to assert.
+    # The shape Portfolio::Performance#drivers actually returns: the HASH from
+    # Portfolio::Drivers#to_h, not the object. It caches its metrics, so the
+    # object cannot survive the round trip -- which is also why `reconciles?`
+    # is absent and the registry re-derives it from `unexplained`.
+    def stub_drivers(value_open:, value_close:, external_net: 0, composition: 0,
+                     income: 0, fees: 0, market: 0, revaluations: 0,
+                     fx_effect: 0, unexplained: 0)
+      {
+        value_open: value_open, value_close: value_close,
+        change: value_close - value_open, external_net: external_net,
+        composition: composition, income: income, fees: fees, market: market,
+        revaluations: revaluations, fx_effect: fx_effect, unexplained: unexplained
+      }.transform_values { |value| BigDecimal(value.to_s) }
     end
 
     def registry(extra_sections: [])

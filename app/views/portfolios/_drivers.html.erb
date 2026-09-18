@@ -1,0 +1,49 @@
+<%# locals: (statement:, period:, as_of:, drivers:, contributions:, reconciles:) %>
+
+<%# Where the period's change in value came from. Opening value, each driver
+    that moved it, closing value -- so a reader can see which part of a gain
+    was the market and which part was money they paid in.
+
+    The contributions are already SIGNED by the registry: fees arrive negative
+    even though Portfolio::Drivers reports them as a positive magnitude, because
+    R7 has them reducing the change. This partial formats; it does not decide
+    which way a component points. %>
+<div id="portfolio-drivers" class="px-4">
+  <table class="w-full text-sm">
+    <tbody>
+      <tr class="border-b border-primary">
+        <td class="py-2 text-secondary"><%= t("portfolios.drivers.value_open") %></td>
+        <td class="py-2 text-right tabular-nums text-primary privacy-sensitive">
+          <%= format_money(Money.new(drivers[:value_open], statement.family.currency)) %>
+        </td>
+      </tr>
+
+      <% contributions.each do |key, amount| %>
+        <tr data-portfolio-driver="<%= key %>">
+          <td class="py-2 text-secondary"><%= t("portfolios.drivers.#{key}") %></td>
+          <td class="py-2 text-right tabular-nums privacy-sensitive <%= amount.negative? ? "text-destructive" : "text-primary" %>">
+            <%= format_money(Money.new(amount, statement.family.currency)) %>
+          </td>
+        </tr>
+      <% end %>
+
+      <tr class="border-t border-primary font-medium">
+        <td class="py-2 text-primary"><%= t("portfolios.drivers.value_close") %></td>
+        <td class="py-2 text-right tabular-nums text-primary privacy-sensitive">
+          <%= format_money(Money.new(drivers[:value_close], statement.family.currency)) %>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <%# `unexplained` is measured, not defined to be zero, so a non-zero one is a
+      real finding rather than rounding. Saying so beside the row is more use
+      than a row the reader has to interpret alone. %>
+  <% unless reconciles %>
+    <div class="mt-3">
+      <%= render DS::Alert.new(title: t("portfolios.drivers.unreconciled_title"), variant: :warning) do %>
+        <p class="text-xs text-secondary"><%= t("portfolios.drivers.unreconciled_body") %></p>
+      <% end %>
+    </div>
+  <% end %>
+</div>
