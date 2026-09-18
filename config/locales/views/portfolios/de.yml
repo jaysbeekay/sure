@@ -15,6 +15,9 @@ de:
       total: Gesamt
       value: Wert
       weight: Gewichtung
+    comparison:
+      explainer: Deine größten Konten im Vergleich zum Gesamtportfolio, auf 100 normiert und ohne Einzahlungseffekte. Es geht um den Verlauf, nicht um die Größe.
+      whole_portfolio: Gesamtportfolio
     data_quality:
       kinds:
         missing_cost_basis:
@@ -35,6 +38,19 @@ de:
         provider_unavailable: Zugewiesener Anbieter nicht verfügbar
         stale: Letzte Abrufe fehlgeschlagen
       set_cost_basis: Kostenbasis festlegen
+    drivers:
+      composition: Konten hinzugefügt oder entfernt
+      external_net: Einzahlungen und Entnahmen
+      fees: Gebühren
+      fx_effect: Währungseffekt
+      income: Dividenden und Zinsen
+      market: Marktbewegung
+      revaluations: Neubewertungen
+      unexplained: Nicht erklärt
+      unreconciled_body: Die Komponenten oben ergeben nicht die Wertänderung. Das wird gemessen und nicht unterstellt und weist daher auf Daten hin, die diese Seite nicht erklären kann.
+      unreconciled_title: Diese Zahlen stimmen nicht überein
+      value_close: Schlusswert
+      value_open: Anfangswert
     empty_state:
       add_account: Anlagekonto hinzufügen
       description: Verbinde oder ergänze ein Depot-, Vorsorge- oder Krypto-Konto, dann zeigt diese Seite Wert, Rendite und Bestände.
@@ -58,6 +74,8 @@ de:
       position_missing_cost_basis_hint: Diese Position hat keine bekannte Kostenbasis, daher hat sie keine Durchschnittskosten und fließt nicht in die Rendite der Zeile ein.
       positions_caption: Positionen in %{ticker} nach Konto
       toggle_positions: Positionen in %{ticker} anzeigen
+    index_chart:
+      explainer: Zu Beginn des Zeitraums auf 100 normiert, ohne den Effekt von Ein- und Auszahlungen. Ein Stand von 121 bedeutet 21% Rendite.
     kpi_row:
       as_of: Stand %{date}
       day_change: Tagesveränderung
@@ -76,21 +94,40 @@ de:
         missing_exchange_rate:
           one: 1 Veräußerung hat keinen Wechselkurs für ihr Handelsdatum und bleibt unberücksichtigt.
           other: "%{count} Veräußerungen haben keinen Wechselkurs für ihr Handelsdatum und bleiben unberücksichtigt."
-        mixed_currency:
-          one: 1 Veräußerung ist in einer Währung notiert, in der ihr Bestand nicht bewertet ist, und bleibt unberücksichtigt.
-          other: "%{count} Veräußerungen sind in einer Währung notiert, in der ihre Bestände nicht bewertet sind, und bleiben unberücksichtigt."
       excluded_title: Einige Veräußerungen werden nicht mitgezählt
       gains: Gewinne
       losses: Verluste
+      no_disposals: Im ausgewählten Zeitraum (%{period}) wurde nichts realisiert.
       summary:
-        one: 1 Veräußerung in %{period}
-        other: "%{count} Veräußerungen in %{period}"
+        one: 1 Veräußerung im Zeitraum (%{period})
+        other: "%{count} Veräußerungen im Zeitraum (%{period})"
+    performance:
+      annualized_hint: Auf ein volles Jahr hochgerechnet, bezogen auf Kalendertage; bei Zeiträumen unter einem Jahr nicht ausgewiesen.
+      annualized_mwr: Annualisiert, geldgewichtet
+      annualized_twr: Annualisiert, zeitgewichtet
+      incomplete_title: Einige Kennzahlen konnten nicht berechnet werden
+      max_drawdown: Maximaler Rückgang
+      max_drawdown_hint: Größter Rückgang vom Hoch zum Tief innerhalb des Zeitraums.
+      mwr: Geldgewichtete Rendite (Zeitraum)
+      mwr_hint: "Geldgewichtet, über den Zeitraum. Sie berücksichtigt, wann Geld angelegt wurde: Mittel, die erst im Verlauf hinzukamen, werden auf den gesamten Zeitraum bezogen — deshalb kann diese Zahl von der Haltedauer-Rendite deines Brokers abweichen."
+      rate_missing: Für einen Teil dieses Zeitraums fehlte ein Wechselkurs. Betroffene Kennzahlen werden zurückgehalten statt zum Kurs 1 umgerechnet.
+      suppressed_days:
+        one: Ein Tag wurde als Nullrendite gezählt, weil er nicht ermittelt werden konnte.
+        other: "%{count} Tage wurden als Nullrendite gezählt, weil sie nicht ermittelt werden konnten."
+      twr: Zeitgewichtete Rendite
+      twr_hint: Was die Anlagen erwirtschaftet haben, ohne den Effekt deiner Einzahlungen. Täglich, nach Gebühren, wobei jede Einzahlung ab dem Beginn ihres Tages zählt.
+      volatility: Volatilität
+      volatility_hint: Annualisierte Standardabweichung der Tagesrenditen, bezogen auf Kalendertage statt Handelstage.
     sections:
       accounts: Konten
       allocation: Aufteilung
+      comparison: Kontenvergleich
       data_quality: Datenqualität
+      drivers: Was den Wert bewegt hat
       holdings: Bestände
+      index_chart: Rendite-Index
       kpis: Überblick
+      performance: Wertentwicklung
       realized_gains: Realisiertes Ergebnis
       value_chart: Portfoliowert
     show:

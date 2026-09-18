@@ -7,10 +7,37 @@ const parseLocalDate = d3.timeParse("%Y-%m-%d");
 export default class extends Controller {
   static values = {
     data: Object,
+    // Optional. When given, the chart draws one line per entry instead of the
+    // single trendline, and `data` is ignored. Each entry is
+    // { label, values: [{ date, value }] }.
+    //
+    // D6: this controller is extended rather than the loan payoff chart being
+    // generalised. Every existing caller passes `data` only, takes the branch
+    // below that this does not touch, and is unaffected.
+    series: Array,
     strokeWidth: { type: Number, default: 2 },
     useLabels: { type: Boolean, default: true },
     useTooltip: { type: Boolean, default: true },
+    selectable: { type: Boolean, default: false },
   };
+
+  // Distinguishable without relying on hue alone being readable: the portfolio
+  // line is drawn first and darkest, so "the whole thing" reads as the baseline
+  // the others are compared against.
+  //
+  // The baseline is `currentColor` and not a gray, because the mount carries
+  // `text-primary` and that token is the one the design system flips: gray-900
+  // on light, white on dark. The literal `var(--color-gray-900)` has no dark
+  // override, and in dark mode `--color-container` IS gray-900, so the line
+  // every other line is read against was painted the background it sat on.
+  static SERIES_COLORS = [
+    "currentColor",
+    "var(--color-blue-500)",
+    "var(--color-green-600)",
+    "var(--color-yellow-600)",
+    "var(--color-destructive)",
+    "var(--color-gray-400)",
+  ];
 
   _d3SvgMemo = null;
   _d3GroupMemo = null;
@@ -18,7 +45,15 @@ export default class extends Controller {
   _d3InitialContainerWidth = 0;
   _d3InitialContainerHeight = 0;
   _normalDataPoints = [];
+  _multiSeries = [];
   _resizeObserver = null;
+  _d3DragSelectBrush = null;
+  _d3DragSelectGroup = null;
+  // d3 only nulls a truly zero-width selection, so 1-3px of jitter on a click
+  // still arrives here as a real drag. On a dense period (365D is ~2px per
+  // point) that is enough to straddle two data points and navigate somewhere
+  // the user never aimed at, so treat anything this small as a click.
+  _dragSelectMinPx = 4;
 
   connect() {
     this._install();
@@ -42,6 +77,8 @@ export default class extends Controller {
     this._d3GroupMemo = null;
     this._d3Tooltip = null;
     this._normalDataPoints = [];
+    this._d3DragSelectBrush = null;
+    this._d3DragSelectGroup = null;
 
     this._d3Container.selectAll("*").remove();
   }
@@ -53,6 +90,26 @@ export default class extends Controller {
   }
 
   _normalizeDataPoints() {
+    this._multiSeries = (this.seriesValue || [])
+      .map((s) => ({
+        label: s.label,
+        points: (s.values || []).map((d) => ({
+          date: parseLocalDate(d.date),
+          date_formatted: d.date_formatted,
+          value: d.value,
+        })),
+      }))
+      .filter((s) => s.points.length >= 2);
+
+    // The scales read _normalDataPoints, so in multi-series mode it carries
+    // every line's points. That is what makes one x domain and one y domain
+    // cover all of them -- and it means the "fewer than two points" empty
+    // state below keeps working without knowing which mode it is in.
+    if (this._multiSeries.length > 0) {
+      this._normalDataPoints = this._multiSeries.flatMap((s) => s.points);
+      return;
+    }
+
     this._normalDataPoints = (this.dataValue.values || []).map((d) => ({
       date: parseLocalDate(d.date),
       date_formatted: d.date_formatted,
@@ -81,9 +138,35 @@ export default class extends Controller {
 
     if (this._normalDataPoints.length < 2) {
       this._drawEmpty();
+    } else if (this._multiSeries.length > 0) {
+      this._drawMultiSeries();
     } else {
       this._drawChart();
     }
+  }
+
+  // One plain line per series, sharing the x and y scales built from all of
+  // them. Deliberately none of the single-series machinery: no gradient split
+  // (it colours one line by its own direction, which says nothing when there
+  // are six), no trendline fill, and no hover tooltip -- comparing shapes is
+  // what this chart is for, and a tooltip that can only report one series at a
+  // time invites reading it as the answer.
+  _drawMultiSeries() {
+    const colors = this.constructor.SERIES_COLORS;
+
+    this._multiSeries.forEach((series, index) => {
+      this._d3Group
+        .append("path")
+        .datum(series.points)
+        .attr("fill", "none")
+        .attr("stroke", colors[index % colors.length])
+        .attr("stroke-width", this.strokeWidthValue)
+        .attr("stroke-linejoin", "round")
+        .attr("stroke-linecap", "round")
+        .attr("d", this._d3Line);
+    });
+
+    if (this.useLabelsValue) this._drawXAxisLabels();
   }
 
   _drawEmpty() {
@@ -125,7 +208,10 @@ export default class extends Controller {
 
     if (this.useTooltipValue) {
       this._drawTooltip();
-      this._trackMouseForShowingTooltip();
+    }
+
+    if (this.useTooltipValue || this.selectableValue) {
+      this._drawInteractionOverlay();
     }
   }
 
@@ -219,10 +305,12 @@ export default class extends Controller {
       .call(
         d3
           .axisBottom(this._d3XScale)
-          .tickValues([
-            this._normalDataPoints[0].date,
-            this._normalDataPoints[this._normalDataPoints.length - 1].date,
-          ])
+          // d3.extent, not first-and-last. In multi-series mode
+          // _normalDataPoints is every line's points concatenated, so it is not
+          // globally ordered and the last element can be an earlier date than
+          // the true maximum -- the axis would then end on a label the x-scale
+          // does not end on. The scale itself already uses extent.
+          .tickValues(d3.extent(this._normalDataPoints, (d) => d.date))
           .tickSize(0)
           .tickFormat(d3.timeFormat("%b %d, %Y")),
       )
@@ -303,95 +391,226 @@ export default class extends Controller {
       .attr("class", `${CHART_TOOLTIP_CLASSES} opacity-0 top-0`);
   }
 
-  _trackMouseForShowingTooltip() {
-    const bisectDate = d3.bisector((d) => d.date).left;
+  // The interaction surface is either a plain full-size rect (hover-only charts)
+  // or a d3-brush overlay (selectable charts, which also need drag capture).
+  // Either way, tooltip handlers bind to whichever element ends up on top so
+  // hover and drag-select never fight over the same pointer events.
+  _drawInteractionOverlay() {
+    if (this.selectableValue) {
+      this._drawDragSelectOverlay();
+    } else {
+      this._drawHoverOverlay();
+    }
+  }
 
-    this._d3Group
+  _drawHoverOverlay() {
+    const rect = this._d3Group
       .append("rect")
       .attr("class", "bg-container")
       .attr("width", this._d3ContainerWidth)
       .attr("height", this._d3ContainerHeight)
       .attr("fill", "none")
-      .attr("pointer-events", "all")
+      .attr("pointer-events", "all");
+
+    this._bindTooltipHandlers(rect);
+  }
+
+  _drawDragSelectOverlay() {
+    const brush = d3
+      .brushX()
+      .extent([
+        [0, 0],
+        [this._d3ContainerWidth, this._d3ContainerHeight],
+      ])
+      // d3-brush treats any touch-capable device as "touchable" by default,
+      // which makes it bind touchstart/touchmove and set touch-action: none
+      // on the overlay — silently disabling native scroll on these full-width
+      // charts. Drag-select is a mouse-only affordance for now, so opt out of
+      // touch handling and leave scrolling/panning untouched on mobile.
+      .touchable(false)
+      .on("start brush", (event) => this._handleDragSelectMove(event))
+      .on("end", (event) => this._handleDragSelectEnd(event));
+
+    const brushGroup = this._d3Group
+      .append("g")
+      .attr("class", "drag-select-brush")
+      .call(brush);
+
+    brushGroup
+      .select(".selection")
+      .attr("fill", this._trendColor)
+      .attr("fill-opacity", 0.12)
+      .attr("stroke", this._trendColor)
+      .attr("stroke-opacity", 0.5);
+
+    // Idle hovering (before any mousedown) still goes through the overlay's
+    // own mousemove — only an in-progress drag needs the brush events above.
+    if (this.useTooltipValue) {
+      this._bindTooltipHandlers(brushGroup.select(".overlay"));
+    }
+
+    this._d3DragSelectBrush = brush;
+    this._d3DragSelectGroup = brushGroup;
+  }
+
+  // d3-brush captures mousemove at the window level while dragging, so the
+  // overlay's own "mousemove" listener (used for plain hover) never fires
+  // mid-drag. Drive the same tooltip off the brush's own events instead,
+  // reading the pointer position from its sourceEvent — this is also what
+  // keeps the tooltip glued to an exact data point instead of drifting to
+  // whatever fraction-of-a-day pixel the mouse happens to be over.
+  _handleDragSelectMove(event) {
+    const sourceEvent = event.sourceEvent;
+    if (!sourceEvent || typeof sourceEvent.pageX !== "number") return;
+
+    const [xPos] = d3.pointer(sourceEvent, this._d3Group.node());
+    const datum = this._nearestDataPointForPixel(xPos);
+
+    this._renderTooltipAt(datum, sourceEvent.pageX, sourceEvent.pageY);
+  }
+
+  _handleDragSelectEnd(event) {
+    this._hideTooltip();
+
+    if (!event.selection) return;
+
+    const [x0, x1] = event.selection;
+
+    if (x1 - x0 < this._dragSelectMinPx) {
+      this._d3DragSelectGroup?.call(this._d3DragSelectBrush.move, null);
+      return;
+    }
+
+    // Snap to the actual plotted data points (same as the tooltip shown
+    // during the drag) rather than the raw continuous pixel-to-time value —
+    // a few pixels of mouse imprecision can otherwise land on a date that's
+    // days away from the one the user was looking at on a wide chart.
+    const startDatum = this._nearestDataPointForPixel(x0);
+    const endDatum = this._nearestDataPointForPixel(x1);
+
+    // Reject *after* snapping, which is where the outcome is actually decided:
+    // a 30D chart is ~27px per point, so a drag can clear the pixel floor above
+    // and still collapse to a single date. That range renders one value, which
+    // sends _draw() down the empty-state path — and the empty state has no
+    // brush left to drag back out of.
+    if (startDatum === endDatum) {
+      this._d3DragSelectGroup?.call(this._d3DragSelectBrush.move, null);
+      return;
+    }
+
+    this._navigateToDateRange(startDatum.date, endDatum.date);
+  }
+
+  _navigateToDateRange(startDate, endDate) {
+    const formatDate = d3.timeFormat("%Y-%m-%d");
+    const url = new URL(window.location.href);
+
+    url.searchParams.delete("period");
+    url.searchParams.set("start_date", formatDate(startDate));
+    url.searchParams.set("end_date", formatDate(endDate));
+
+    Turbo.visit(url.toString());
+  }
+
+  _nearestDataPointForPixel(xPos) {
+    const bisectDate = d3.bisector((d) => d.date).left;
+    const clampedX = Math.max(0, Math.min(xPos, this._d3ContainerWidth));
+    const x0 = bisectDate(
+      this._normalDataPoints,
+      this._d3XScale.invert(clampedX),
+      1,
+    );
+    const d0 = this._normalDataPoints[Math.max(x0 - 1, 0)];
+    const d1 =
+      this._normalDataPoints[Math.min(x0, this._normalDataPoints.length - 1)];
+
+    return clampedX - this._d3XScale(d0.date) >
+      this._d3XScale(d1.date) - clampedX
+      ? d1
+      : d0;
+  }
+
+  _bindTooltipHandlers(selection) {
+    selection
       .on("mousemove", (event) => {
-        const estimatedTooltipWidth = 250;
-        const pageWidth = document.body.clientWidth;
-        const tooltipX = event.pageX + 10;
-        const overflowX = tooltipX + estimatedTooltipWidth - pageWidth;
-        const adjustedX =
-          overflowX > 0 ? event.pageX - overflowX - 20 : tooltipX;
-
         const [xPos] = d3.pointer(event);
-        const x0 = bisectDate(
-          this._normalDataPoints,
-          this._d3XScale.invert(xPos),
-          1,
-        );
-        const d0 = this._normalDataPoints[x0 - 1];
-        const d1 = this._normalDataPoints[x0];
-        const d =
-          xPos - this._d3XScale(d0.date) > this._d3XScale(d1.date) - xPos
-            ? d1
-            : d0;
-        const xPercent = this._d3XScale(d.date) / this._d3ContainerWidth;
+        const datum = this._nearestDataPointForPixel(xPos);
 
-        this._setTrendlineSplitAt(xPercent);
-
-        // Reset
-        this._d3Group.selectAll(".data-point-circle").remove();
-        this._d3Group.selectAll(".guideline").remove();
-
-        // Guideline
-        this._d3Group
-          .append("line")
-          .attr("class", "guideline text-subdued")
-          .attr("x1", this._d3XScale(d.date))
-          .attr("y1", 0)
-          .attr("x2", this._d3XScale(d.date))
-          .attr("y2", this._d3ContainerHeight)
-          .attr("stroke", "currentColor")
-          .attr("stroke-dasharray", "4, 4");
-
-        // Big circle
-        this._d3Group
-          .append("circle")
-          .attr("class", "data-point-circle")
-          .attr("cx", this._d3XScale(d.date))
-          .attr("cy", this._d3YScale(this._getDatumValue(d)))
-          .attr("r", 10)
-          .attr("fill", this._trendColor)
-          .attr("fill-opacity", "0.1")
-          .attr("pointer-events", "none");
-
-        // Small circle
-        this._d3Group
-          .append("circle")
-          .attr("class", "data-point-circle")
-          .attr("cx", this._d3XScale(d.date))
-          .attr("cy", this._d3YScale(this._getDatumValue(d)))
-          .attr("r", 5)
-          .attr("fill", this._trendColor)
-          .attr("pointer-events", "none");
-
-        // Render tooltip
-        this._d3Tooltip
-          .html(this._tooltipTemplate(d))
-          .style("opacity", 1)
-          .style("z-index", 999)
-          .style("left", `${adjustedX}px`)
-          .style("top", `${event.pageY - 10}px`);
+        this._renderTooltipAt(datum, event.pageX, event.pageY);
       })
       .on("mouseout", (event) => {
         const hoveringOnGuideline =
           event.toElement?.classList.contains("guideline");
 
         if (!hoveringOnGuideline) {
-          this._d3Group.selectAll(".guideline").remove();
-          this._d3Group.selectAll(".data-point-circle").remove();
-          this._d3Tooltip.style("opacity", 0);
-          this._setTrendlineSplitAt(1);
+          this._hideTooltip();
         }
       });
+  }
+
+  _renderTooltipAt(datum, pageX, pageY) {
+    const estimatedTooltipWidth = 250;
+    const pageWidth = document.body.clientWidth;
+    const tooltipX = pageX + 10;
+    const overflowX = tooltipX + estimatedTooltipWidth - pageWidth;
+    const adjustedX = overflowX > 0 ? pageX - overflowX - 20 : tooltipX;
+
+    const xPercent = this._d3XScale(datum.date) / this._d3ContainerWidth;
+
+    this._setTrendlineSplitAt(xPercent);
+
+    // Reset
+    this._d3Group.selectAll(".data-point-circle").remove();
+    this._d3Group.selectAll(".guideline").remove();
+
+    // Guideline
+    this._d3Group
+      .append("line")
+      .attr("class", "guideline text-subdued")
+      .attr("x1", this._d3XScale(datum.date))
+      .attr("y1", 0)
+      .attr("x2", this._d3XScale(datum.date))
+      .attr("y2", this._d3ContainerHeight)
+      .attr("stroke", "currentColor")
+      .attr("stroke-dasharray", "4, 4");
+
+    // Big circle
+    this._d3Group
+      .append("circle")
+      .attr("class", "data-point-circle")
+      .attr("cx", this._d3XScale(datum.date))
+      .attr("cy", this._d3YScale(this._getDatumValue(datum)))
+      .attr("r", 10)
+      .attr("fill", this._trendColor)
+      .attr("fill-opacity", "0.1")
+      .attr("pointer-events", "none");
+
+    // Small circle
+    this._d3Group
+      .append("circle")
+      .attr("class", "data-point-circle")
+      .attr("cx", this._d3XScale(datum.date))
+      .attr("cy", this._d3YScale(this._getDatumValue(datum)))
+      .attr("r", 5)
+      .attr("fill", this._trendColor)
+      .attr("pointer-events", "none");
+
+    // Render tooltip. Optional, to match _hideTooltip: the brush drives this
+    // method unconditionally, so a selectable chart with use_tooltip=false has
+    // no tooltip node — but it still gets the guideline and circles above.
+    this._d3Tooltip
+      ?.html(this._tooltipTemplate(datum))
+      .style("opacity", 1)
+      .style("z-index", 999)
+      .style("left", `${adjustedX}px`)
+      .style("top", `${pageY - 10}px`);
+  }
+
+  _hideTooltip() {
+    this._d3Group.selectAll(".guideline").remove();
+    this._d3Group.selectAll(".data-point-circle").remove();
+    this._d3Tooltip?.style("opacity", 0);
+    this._setTrendlineSplitAt(1);
   }
 
   _tooltipTemplate(datum) {
@@ -425,10 +644,15 @@ export default class extends Controller {
   }
 
   _getTrendIcon(datum) {
-    const isIncrease =
-      Number(datum.trend.previous.amount) < Number(datum.trend.current.amount);
-    const isDecrease =
-      Number(datum.trend.previous.amount) > Number(datum.trend.current.amount);
+    // Through _extractNumericValue, which handles both shapes. Reading
+    // `.amount` directly assumes a Money, and a series of plain numbers -- an
+    // index rebased to 100, say -- yields undefined, then NaN, then two false
+    // comparisons and a flat icon on every point however the line moved.
+    const previous = this._extractNumericValue(datum.trend.previous);
+    const current = this._extractNumericValue(datum.trend.current);
+
+    const isIncrease = previous < current;
+    const isDecrease = previous > current;
 
     if (isIncrease) {
       return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${datum.trend.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-right-icon lucide-arrow-up-right"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg>`;
@@ -446,6 +670,20 @@ export default class extends Controller {
   };
 
   _extractNumericValue = (numeric) => {
+    // Missing is NaN, not zero. `Number(null)` is 0, so a null value would plot
+    // on the axis as a real zero and compare as one -- a gap in a series
+    // reading as a crash to nothing.
+    //
+    // NaN is not free either, and this is narrower than it looks: `d3.min`,
+    // `d3.max` and `d3.extent` ignore NaN, so the y-domain is honest, but
+    // `d3.line()` and `d3.area()` write it straight into the path
+    // (`line()([[0,1],[1,NaN],[2,3]])` is "M0,1L1,NaNL2,3"), which is an
+    // invalid path rather than a gap. Nothing this PR renders emits null, so no
+    // series reaches that yet; the PR that first does adds
+    // `.defined((d) => !Number.isNaN(this._getDatumValue(d)))` to both
+    // generators.
+    if (numeric === null || numeric === undefined) return Number.NaN;
+
     if (typeof numeric === "object" && "amount" in numeric) {
       return Number(numeric.amount);
     }
@@ -453,6 +691,13 @@ export default class extends Controller {
   };
 
   _extractFormattedValue = (numeric) => {
+    // Guarded first, for the same reason its numeric twin is: `typeof null` is
+    // "object", so `"formatted" in null` is a TypeError rather than a false,
+    // and the tooltip would throw on the null the numeric branch is built to
+    // survive. Unreachable today -- no producer emits one -- and the two
+    // helpers reading the same datum must not disagree about what it can hold.
+    if (numeric === null || numeric === undefined) return "";
+
     if (typeof numeric === "object" && "formatted" in numeric) {
       return numeric.formatted;
     }

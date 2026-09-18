@@ -57,4 +57,26 @@ module PortfoliosHelper
   def allocation_segment_name(segment, by)
     by.to_s == "kind" ? t("portfolios.allocation.kinds.#{segment.name}") : segment.name
   end
+
+  # The same palette, in the same order, as
+  # time_series_chart_controller's SERIES_COLORS. Two copies of a list is a
+  # cost; the alternative is the legend guessing what the chart drew, which is
+  # worse -- a legend that disagrees with its chart is actively misleading.
+  # A test asserts the two stay the same length and order.
+  #
+  # The first entry is `currentColor`: both the legend dot and the chart mount
+  # carry `text-primary`, so the baseline follows the theme (gray-900 on light,
+  # white on dark) instead of being painted the container's own colour.
+  COMPARISON_COLORS = [
+    "currentColor",
+    "var(--color-blue-500)",
+    "var(--color-green-600)",
+    "var(--color-yellow-600)",
+    "var(--color-destructive)",
+    "var(--color-gray-400)"
+  ].freeze
+
+  def portfolio_comparison_color(index)
+    COMPARISON_COLORS[index % COMPARISON_COLORS.length]
+  end
 end

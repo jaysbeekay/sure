@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
 
 concurrency:
   group: codebot-${{ github.event.issue.number }}
@@ -48,6 +50,7 @@ jobs:
             issue: ( .issue
                      | {number, title, user: {login: .user.login}}
                      + (if has("pull_request") then {pull_request: .pull_request} else {} end) ),
+            is_pull_request: (.issue | has("pull_request")),
             comment: {
               id: .comment.id,
               body: .comment.body,

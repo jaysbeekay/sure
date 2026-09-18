@@ -199,6 +199,105 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[value_chart kpis], keys.first(2)
   end
 
+  # A return is a rate, not an amount. The card takes `money:` and `trend:` as
+  # well, and both format with a currency symbol, so the failure this guards
+  # against is a 21% return rendering as $0.21 -- plausible-looking, and wrong
+  # by two orders of magnitude and a unit.
+  test "a return renders as a percentage, not as money" do
+    Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(BigDecimal("0.2134"))
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-performance" do
+      assert_select "p", text: /21\.34%/
+    end
+    assert_no_match(/\$0\.21/, response.body, "a rate must not be formatted as currency")
+  end
+
+  # R8 solves the money-weighted return per unit of the PERIOD'S SPAN, not as a
+  # holding-period figure. Capital that arrives part-way through is therefore
+  # expressed over the whole period: money invested for half of a ten-day
+  # period and gaining 10% reports about 21% (1.1 ** (10/5) - 1), where TWR
+  # reports 10%.
+  #
+  # The contract says the UI must not label that a holding-period return. This
+  # is the card copy most likely to produce a "my broker says something
+  # different" report, so the wording is pinned rather than left to drift, in
+  # both locales -- a German reader gets the same warning or none at all.
+  test "the money-weighted card says it is a period figure, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(BigDecimal("0.21"))
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    # A fragment, not the whole hint: it carries an apostrophe and an em dash,
+    # which render HTML-escaped and would never match the raw string.
+    assert_match(/Money-weighted, over the period/, response.body)
+
+    %i[en de].each do |locale|
+      label = I18n.t("portfolios.performance.mwr", locale: locale)
+      hint = I18n.t("portfolios.performance.mwr_hint", locale: locale)
+
+      assert_match(/period|Zeitraum/i, label,
+                   "#{locale} label must say the figure is over the period, not a holding-period return")
+      assert_match(/when money was invested|wann Geld angelegt wurde/i, hint,
+                   "#{locale} hint must say the figure reflects when money was invested")
+    end
+  end
+
+  # "Left out" is true of the chained TWR and of nothing else on this section. A
+  # suppressed day keeps its place in the series (R6): volatility counts it as an
+  # observation of zero, and its flows stay in the money-weighted series. Three
+  # of the six figures on the card are computed from a day the banner told the
+  # reader was omitted, so the wording is pinned in both locales rather than left
+  # to drift back.
+  test "the suppressed-days banner says a day was counted as zero, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([ Date.current ])
+
+    get portfolio_path
+    assert_response :success
+
+    assert_match(/counted as a zero return/, response.body)
+
+    %i[en de].each do |locale|
+      %i[one other].each do |count|
+        line = I18n.t("portfolios.performance.suppressed_days.#{count}", locale: locale)
+
+        assert_match(/zero return|Nullrendite/i, line,
+                     "#{locale}.#{count} must say the day was counted as zero")
+        assert_no_match(/left out|ausgelassen/i, line,
+                        "#{locale}.#{count} must not say the day was omitted: it is still in the series")
+      end
+    end
+  end
+
+  # Every figure may be withheld by contract (R13, R15, R16). The section still
+  # renders and says so -- the same decision #171 settled for realised P&L,
+  # where a vanishing section reads as "this page does not do that".
+  test "the performance section states that figures are withheld rather than vanishing" do
+    Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:annualized_time_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:annualized_money_weighted_return).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:volatility).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:max_drawdown).returns(nil)
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(true)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "performance", count: 1
+    assert_match I18n.t("portfolios.performance.rate_missing"), response.body
+    assert_match I18n.t("portfolios.kpi_row.no_data"), response.body
+  end
+
   test "renders sections in the saved order, collapsed where the user left them" do
     @user.update_section_preferences("portfolio", order: %w[value_chart kpis], collapsed: { "kpis" => true })
 
@@ -206,8 +305,11 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     # The saved order places the chart first; sections it does not mention
-    # follow in declaration order.
-    assert_equal %w[value_chart kpis holdings accounts allocation data_quality],
+    # follow in declaration order. `drivers` is absent on purpose: this
+    # family's period moves no value, so every component is zero and the
+    # section hides rather than printing a table of zeros that reconciles to
+    # zero.
+    assert_equal %w[value_chart kpis performance index_chart comparison realized_gains holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -314,10 +416,14 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     baseline = capture_sql_queries { get portfolio_path }
     assert_response :success
 
-    # Measured: 54 queries for this page (layout included) at 10 accounts and
-    # 60 holdings when this test was written, none of them per holding or per
-    # account. The ceiling is that figure plus a little headroom, not a
-    # guess; the assertion below is the one that matters.
+    # Measured: 87 queries for this page (layout included) at 10 accounts and
+    # 60 holdings, none of them per holding. The ceiling is that figure plus a
+    # little headroom, not a guess; the assertion below is the one that matters.
+    #
+    # It rose from 61 with the account comparison, which costs one
+    # Portfolio::Performance per line. That cost is capped at five accounts plus
+    # the portfolio (D7), which is what the test below this one proves: it is
+    # bounded, not merely currently small.
     assert_operator baseline.size, :<=, PORTFOLIO_QUERY_CEILING, "GET /portfolio issued #{baseline.size} queries"
 
     build_portfolio(accounts: 10, securities: 2, existing_accounts: @family.accounts.where("name LIKE 'Bulk %'").to_a)
@@ -325,6 +431,113 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     assert_equal baseline.size, grown.size, "adding 20 holdings changed the query count:\n#{(grown - baseline).join("\n")}"
+  end
+
+  # The fixture family moves no value, so the drivers section hides and its
+  # partial is never rendered by any other test -- the registry tests cover the
+  # locals, not the template. A bad i18n key, or Money.new on a nil value_open,
+  # would reach a user before it reached a test.
+  test "the drivers table renders its rows, its total and its warning" do
+    drivers = {
+      value_open: BigDecimal(1_000), value_close: BigDecimal(1_100),
+      change: BigDecimal(100), external_net: BigDecimal(50), composition: BigDecimal(0),
+      income: BigDecimal(30), fees: BigDecimal(20), market: BigDecimal(40),
+      revaluations: BigDecimal(0), fx_effect: BigDecimal(0), unexplained: BigDecimal(0)
+    }
+    Portfolio::Performance.any_instance.stubs(:drivers).returns(drivers)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-drivers" do
+      assert_select "[data-portfolio-driver=?]", "external_net"
+      assert_select "[data-portfolio-driver=?]", "fees"
+      # Signed against the change, so it renders as a negative even though
+      # Portfolio::Drivers reports fees as a positive magnitude (R7).
+      assert_select "[data-portfolio-driver=fees] td", text: /-/
+    end
+    assert_match I18n.t("portfolios.drivers.value_open"), response.body
+    assert_match I18n.t("portfolios.drivers.value_close"), response.body
+    assert_select "#portfolio-drivers", text: /#{Regexp.escape(I18n.t("portfolios.drivers.unreconciled_title"))}/, count: 0,
+      message: "a reconciling table does not warn"
+  end
+
+  test "the drivers table warns when the components do not reconcile" do
+    drivers = {
+      value_open: BigDecimal(1_000), value_close: BigDecimal(1_100),
+      change: BigDecimal(100), external_net: BigDecimal(0), composition: BigDecimal(0),
+      income: BigDecimal(0), fees: BigDecimal(0), market: BigDecimal(90),
+      revaluations: BigDecimal(0), fx_effect: BigDecimal(0), unexplained: BigDecimal(10)
+    }
+    Portfolio::Performance.any_instance.stubs(:drivers).returns(drivers)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_match I18n.t("portfolios.drivers.unreconciled_title"), response.body
+    assert_select "[data-portfolio-driver=?]", "unexplained"
+  end
+
+  # B1 of the senior review on #121. The flatness test above grows HOLDINGS and
+  # says nothing about accounts -- and the account comparison is the first
+  # section whose cost depends on how many accounts a family has.
+  #
+  # Below D7's cap of five, adding an account adds a line and a query set, which
+  # is the intended behaviour rather than a leak. Above it, the count must stop
+  # moving: that is what the cap is for, and without this the ceiling above
+  # would only be "true today for ten accounts".
+  test "the comparison cap keeps the query count from growing with account count" do
+    # One added account, so three in total with the two the fixtures carry --
+    # genuinely below D7's cap of five, which `accounts: 3` would already have
+    # reached.
+    build_portfolio(accounts: 1, securities: 2)
+    below_cap = capture_sql_queries { get portfolio_path }.size
+    assert_response :success
+
+    build_portfolio(accounts: 9, securities: 2)
+    at_cap = capture_sql_queries { get portfolio_path }.size
+    assert_response :success
+
+    assert_operator below_cap, :<, at_cap,
+                    "below the cap, each account genuinely adds a line and its queries"
+
+    build_portfolio(accounts: 12, securities: 2)
+    beyond_cap = capture_sql_queries { get portfolio_path }.size
+    assert_response :success
+
+    assert_equal at_cap, beyond_cap,
+                 "past five accounts the comparison stops growing:\n#{(beyond_cap - at_cap)} extra queries"
+  end
+
+  # The legend is the only thing that tells the lines apart -- the chart carries
+  # no tooltip on purpose -- and nothing read it. This pins the rendering: one
+  # entry per series, the portfolio's own line first, and the two elements that
+  # have to carry `text-primary` for the baseline to be visible at all.
+  #
+  # `currentColor` is not a colour on its own: it resolves against the element
+  # it is used on. Painting the dot and the mount with a literal gray was what
+  # made the baseline invisible in dark mode, so the token that replaced it must
+  # actually be in the markup or the line has no colour to follow.
+  test "the comparison legend names every line and carries the theme token for the baseline" do
+    build_portfolio(accounts: 1, securities: 2)
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-comparison-line]", minimum: 2
+
+    baseline = css_select("[data-portfolio-comparison-line='0']").first
+    assert baseline, "the portfolio's own line is the first legend entry"
+    assert_includes baseline.text, I18n.t("portfolios.comparison.whole_portfolio"),
+                    "the first line is the portfolio the others are read against"
+
+    dot = baseline.css("span").first
+    assert_includes dot["class"].split, "text-primary",
+                    "the baseline dot follows the theme rather than a fixed gray"
+    assert_equal "background-color: currentColor", dot["style"]
+
+    assert_select "#portfolioComparisonChart.text-primary", 1,
+                  "the mount carries the token the first series' `currentColor` resolves against"
   end
 
   # --- accounts, allocation and data quality tests ---
@@ -398,7 +611,18 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
-  PORTFOLIO_QUERY_CEILING = 60 # measured 54, see the ceiling test
+  # Measured 87, ceiling 93 -- the same 6 of headroom every previous pair
+  # carried. The figure has moved twice:
+  #
+  #   54 -> 61  the performance section: one Portfolio::Performance for the
+  #             request, memoised on the registry, which is its only caller
+  #   61 -> 87  the account comparison: one more Portfolio::Performance per
+  #             line, capped at five accounts plus the portfolio (D7)
+  #
+  # Neither rise is per holding, and the comparison's is bounded rather than
+  # merely small: the two tests above prove both, and those assertions -- not
+  # this constant -- are the ones that matter.
+  PORTFOLIO_QUERY_CEILING = 93
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one
@@ -432,6 +656,27 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_match I18n.t("portfolios.realized_gains.excluded_title"), response.body
     assert_match I18n.t("portfolios.realized_gains.excluded.missing_cost_basis", count: 1), response.body
     assert_select "[data-controller=?]", "bar-chart"
+  end
+
+  # A buy-and-hold portfolio realises nothing, so the section used to vanish
+  # entirely. For a family that holds investments, "no section" is ambiguous
+  # between "you disposed of nothing this period" and "this page does not do
+  # that" -- the second being what a reader concludes when every other section
+  # is present. The value chart already answers the same question with an empty
+  # state rather than by disappearing; this follows it.
+  test "the realised gains section states that nothing was realised rather than vanishing" do
+    get portfolio_path(period: "last_30_days")
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "realized_gains", count: 1
+    assert_match I18n.t("portfolios.realized_gains.no_disposals", period: Period.last_30_days.label), response.body
+    # The figure, the summary and the chart are what there is nothing to show;
+    # all three stay out. Asserting only the chart would leave a regression that
+    # restored the figure on an empty period green, since all three sit behind
+    # the same `realized.any?` branch.
+    assert_select "#portfolio-realized-gains [data-controller=?]", "bar-chart", count: 0
+    assert_select "#portfolio-realized-gains p.text-3xl", count: 0
+    assert_no_match I18n.t("portfolios.realized_gains.summary", count: 0, period: Period.last_30_days.label), response.body
   end
 
   private
