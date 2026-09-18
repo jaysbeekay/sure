@@ -274,14 +274,23 @@ class Portfolio::RealizedGains
     def rates_by_date
       return @rates_by_date if defined?(@rates_by_date)
 
-      # Both sets: a disposal is converted from the currency its POSITION is
-      # held in (Trade#realized_gain_loss converts the proceeds into the basis's
-      # currency first), and the account's currency is where that comes from.
-      # The trades' own currencies stay in the list because a holding written in
-      # the security's currency carries a gain in it.
+      # Three sets, because a gain arrives in the currency its POSITION is held
+      # in and that is not always the account's: Trade#realized_gain_loss
+      # converts the proceeds into the basis's currency first, so the leg this
+      # batch serves runs from the HOLDING's currency to the statement's.
+      #
+      # The account's currency covers the ordinary case and the trade's covers a
+      # holding written in the security's currency, but a position carried in a
+      # third currency was in neither, and every such disposal paid its own
+      # `find_by` below -- the exact shape Trade.preload_exchange_rates was
+      # extended to cover one level up. `sell_trades` has already preloaded its
+      # holdings by the time this runs, so `preloaded_basis_currency` answers
+      # without a query; it returns nil when they were not, and the fallback
+      # stays for that.
       foreign = (
         sell_trades.filter_map(&:currency) +
-        sell_trades.filter_map { |trade| trade.entry.account.currency }
+        sell_trades.filter_map { |trade| trade.entry.account.currency } +
+        sell_trades.filter_map(&:preloaded_basis_currency)
       ).uniq - [ currency ]
       dates = sell_trades.map { |trade| trade.entry.date }.uniq
 

@@ -586,9 +586,22 @@ class ReportsController < ApplicationController
       rates_by_trade_date = sell_trades.map { |t| t.entry.date }.uniq.each_with_object({}) do |date, memo|
         memo[date] = ExchangeRate.rates_for(foreign_trade_currencies, to: currency, date: date)
       end
+      # nil, not a number, when the rate cannot convert. `ExchangeRate` validates
+      # presence and not usability, and `rates_for` returns `rate&.rate || 1`,
+      # so a stored 0 comes back as a 0 and multiplying by it reports a real
+      # gain as nothing -- in the total, and on the line, indistinguishable from
+      # a disposal that broke even. A negative one would flip the sign. Both are
+      # the missing-rate case wearing a number, and the hub already excludes
+      # them (Portfolio::RealizedGains#converted), so a card that tallied them
+      # made the two views of one disposal disagree.
       convert_trade = ->(amount, from, date) {
         numeric = to_numeric.call(amount)
-        from == currency ? numeric : numeric * (rates_by_trade_date.dig(date, from) || 1)
+        return numeric if from == currency
+
+        rate = rates_by_trade_date.dig(date, from)
+        return nil unless rate.to_d.positive?
+
+        numeric * rate
       }
 
       # Build metrics per treatment
@@ -609,6 +622,11 @@ class ReportsController < ApplicationController
           next if gain.nil?
 
           converted = convert_trade.call(gain.value, gain.value.currency.iso_code, t.entry.date)
+          # Left out of the memo rather than stored as zero: the partial already
+          # renders an absent figure as "no data", which is what an unusable
+          # rate means.
+          next if converted.nil?
+
           memo[t.id] = Money.new(converted, currency)
         end
 

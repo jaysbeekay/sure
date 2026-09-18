@@ -75,6 +75,41 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/\$40\.00/, line, "$40.00 is the GBP figure converted at parity")
   end
 
+  # The same exposure the hub's own conversion leg has, and the card was the one
+  # place still carrying it. `ExchangeRate` validates presence, not usability, so
+  # a provider or an import can leave a 0 in the GBP->USD row; `rates_for` hands
+  # that 0 back unchanged, and multiplying by it reports a real 40 GBP gain as
+  # $0.00 -- in the total, and on the line, indistinguishable from a disposal
+  # that broke even. The hub excludes the same disposal
+  # ("a statement rate that cannot convert excludes the disposal"), so the two
+  # views of one disposal disagreed.
+  #
+  # A rate that cannot convert is an absent rate, and an absent figure is what
+  # the line already knows how to render.
+  test "a disposal whose statement rate cannot convert is not reported as zero" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family)
+
+    account.holdings.create!(
+      security: security_under_test, date: date, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: date, rate: 0
+
+    get reports_path
+    assert_response :ok
+
+    line = css_select("[data-testid='realized-gain-line']").map(&:text)
+                                                           .find { |text| text.include?(security_under_test.ticker) }
+
+    assert line, "the disposal must be listed at all, or this proves nothing"
+    assert_match I18n.t("reports.investment_performance.no_data"), line,
+                 "0 is not a conversion, and the card says so rather than printing a figure"
+    assert_no_match(/\$0\.00/, line, "$0.00 reads as a disposal that broke even")
+  end
+
   # The Reports section controllers gained `url` and `preferenceKey` values so
   # the portfolio hub can reuse them. Reports passes neither, so the page must
   # carry no override attributes and its endpoint must still accept the

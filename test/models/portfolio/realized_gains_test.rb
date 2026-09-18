@@ -188,6 +188,27 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal few, many, "2 foreign disposals over 2 dates and 6 over 6 must cost the same"
   end
 
+  # The flat-count test above seeds USD-basis holdings, so both conversion legs
+  # are covered by a batch and it cannot see this: when the POSITION is carried
+  # in a third currency, the statement leg is GBP->USD, GBP is in neither set
+  # the hub enumerates, and every disposal pays its own `find_by`. That is the
+  # exact shape the Trade-side preload was extended to cover, one level up.
+  #
+  # Each disposal falls on its own date, or the ActiveRecord query cache serves
+  # the repeats and the fixture reads flat whether the batch covers it or not.
+  test "the query count does not grow with disposals carried in a third currency" do
+    seed_third_currency_disposals(2)
+    few = capture_sql_queries { measure_fully(build_gains) }.size
+
+    seed_third_currency_disposals(4, offset: 2)
+    many = capture_sql_queries { measure_fully(build_gains) }.size
+
+    assert_equal 6, build_gains.trade_count, "the fixture must actually grow, or this proves nothing"
+    assert_empty build_gains.excluded_trades, "every rate these disposals need is on file"
+    assert_equal BigDecimal(300), build_gains.net, "and every one of them is measured"
+    assert_equal few, many, "2 third-currency disposals over 2 dates and 6 over 6 must cost the same"
+  end
+
   # A USD account holding a EUR-listed security: basis 100 USD/share, 2 sold at
   # 150 EUR/share, EUR->USD 1.5 on the trade date. 300 EUR of proceeds is 450
   # USD, less 200 USD of basis, so 250 USD.
@@ -245,11 +266,12 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
   # and the disposal was priced in EUR. 300 EUR of proceeds at 0.8 is 240 GBP,
   # less 200 GBP of basis, so 40 GBP -- and 50 USD at 1.25.
   #
-  # Neither batch covers this on its own. Trade's rate preload keys the basis
-  # side on the ACCOUNT's currency, so it misses and falls back to a single
-  # lookup; this section's own rate batch enumerates the disposals' and the
-  # accounts' currencies, and GBP is in neither. A disposal with every rate it
-  # needs on file must still be measured rather than tallied as a missing rate.
+  # Both batches cover it now, and neither did when it was written: Trade's rate
+  # preload keyed the basis side on the ACCOUNT's currency and this section's
+  # own batch enumerated the disposals' and the accounts', so GBP was in neither
+  # and each leg fell back to a single lookup. Both key on the holding's
+  # currency as well; what this test pins is unchanged either way -- a disposal
+  # with every rate it needs on file is measured, not tallied as a missing rate.
   test "a disposal is measured when the basis, the disposal and the statement are three currencies" do
     @account.holdings.create!(
       security: security_under_test, date: @march, qty: 5, price: 150,
@@ -325,6 +347,23 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
         date = @march + offset + i
         set_rate from: "EUR", to: "USD", date: date, rate: 1.5
         sell_trade account: @account, date: date, qty: 1, price: 150, currency: "EUR"
+      end
+    end
+
+    # A GBP-carried position under a USD statement, sold in EUR: three
+    # currencies, one date each, and both rates on file for every date. 300 EUR
+    # of proceeds at 0.8 is 240 GBP, less 200 GBP of basis, so 40 GBP and 50 USD
+    # at 1.25 -- per disposal, at qty 2.
+    def seed_third_currency_disposals(count, offset: 0)
+      count.times do |i|
+        date = @march + offset + i
+        @account.holdings.create!(
+          security: security_under_test, date: date, qty: 20, price: 150,
+          amount: BigDecimal(3_000), currency: "GBP", cost_basis: 100
+        )
+        set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+        set_rate from: "GBP", to: "USD", date: date, rate: 1.25
+        sell_trade account: @account, date: date, qty: 2, price: 150, currency: "EUR"
       end
     end
 
