@@ -545,6 +545,10 @@ class ReportsController < ApplicationController
         trade.preloaded_holdings = holdings_by_account[trade.entry.account_id] || []
       end
 
+      # The rates the proceeds conversion needs, in one query rather than one
+      # per foreign disposal.
+      Trade.preload_exchange_rates(sell_trades)
+
       trades_by_treatment = sell_trades.group_by { |t| t.entry.account.tax_treatment || :taxable }
 
       # Unwrap helper: Trend#value / realized_gain_loss#value are Money objects,
@@ -564,13 +568,40 @@ class ReportsController < ApplicationController
       # Realized gains are locked at trade time, so convert each at its own
       # entry-date FX. Mirrors InvestmentStatement::Totals, which also uses
       # entry-date rates for contributions/withdrawals on this same card.
-      foreign_trade_currencies = sell_trades.map(&:currency).compact.uniq.reject { |c| c == currency }
+      # A realised figure arrives in the currency the POSITION is held in, not
+      # the one the disposal was priced in: Trade#realized_gain_loss converts
+      # the proceeds into the basis's currency before subtracting, so that the
+      # two sides are comparable (jaysbeekay/sure#169). Both sets of currencies
+      # are needed here -- the account's, which is what a gain usually carries,
+      # and the trade's, for a holding written in the security's currency.
+      # The holdings' own currencies join the list because a position can be
+      # carried in a third currency -- not the disposal's, not the account's --
+      # and a currency absent from this list converts at the `|| 1` parity
+      # below, which is the silent wrong answer #167 exists to remove.
+      foreign_trade_currencies = (
+        sell_trades.map(&:currency) +
+        sell_trades.map { |t| t.entry.account.currency } +
+        holdings_by_account.values.flatten.map(&:currency)
+      ).compact.uniq.reject { |c| c == currency }
       rates_by_trade_date = sell_trades.map { |t| t.entry.date }.uniq.each_with_object({}) do |date, memo|
         memo[date] = ExchangeRate.rates_for(foreign_trade_currencies, to: currency, date: date)
       end
+      # nil, not a number, when the rate cannot convert. `ExchangeRate` validates
+      # presence and not usability, and `rates_for` returns `rate&.rate || 1`,
+      # so a stored 0 comes back as a 0 and multiplying by it reports a real
+      # gain as nothing -- in the total, and on the line, indistinguishable from
+      # a disposal that broke even. A negative one would flip the sign. Both are
+      # the missing-rate case wearing a number, and the hub already excludes
+      # them (Portfolio::RealizedGains#converted), so a card that tallied them
+      # made the two views of one disposal disagree.
       convert_trade = ->(amount, from, date) {
         numeric = to_numeric.call(amount)
-        from == currency ? numeric : numeric * (rates_by_trade_date.dig(date, from) || 1)
+        return numeric if from == currency
+
+        rate = rates_by_trade_date.dig(date, from)
+        return nil unless rate.to_d.positive?
+
+        numeric * rate
       }
 
       # Build metrics per treatment
@@ -584,11 +615,22 @@ class ReportsController < ApplicationController
           trend ? convert_current.call(trend.value, h.currency) : 0
         end
 
-        # Sum realized gains from sell trades
-        realized = trades.sum do |t|
+        # Sum realized gains from sell trades, each converted from the currency
+        # its own figure carries.
+        realized_by_trade = trades.each_with_object({}) do |t, memo|
           gain = t.realized_gain_loss
-          gain ? convert_trade.call(gain.value, t.currency, t.entry.date) : 0
+          next if gain.nil?
+
+          converted = convert_trade.call(gain.value, gain.value.currency.iso_code, t.entry.date)
+          # Left out of the memo rather than stored as zero: the partial already
+          # renders an absent figure as "no data", which is what an unusable
+          # rate means.
+          next if converted.nil?
+
+          memo[t.id] = Money.new(converted, currency)
         end
+
+        realized = realized_by_trade.values.sum(Money.new(0, currency)).amount
 
         # Only include treatment groups that have some activity
         next if holdings.empty? && trades.empty?
@@ -598,6 +640,10 @@ class ReportsController < ApplicationController
           sell_trades: trades,
           unrealized_gain: Money.new(unrealized, currency),
           realized_gain: Money.new(realized, currency),
+          # Per-trade figures in family currency, so the lines under the card
+          # and the card's own total are the same arithmetic. The partial used
+          # to re-label `gain.value` as family currency without converting it.
+          realized_gain_by_trade: realized_by_trade,
           total_gain: Money.new(unrealized + realized, currency)
         }
       end
