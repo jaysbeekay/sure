@@ -90,7 +90,16 @@ from this fork.
 8. **Upstream PRs open as drafts and link both ways** *(both repos)*. A PR raised
    on `we-promise/sure` opens as a **draft**, and its description carries **two
    separate links**: the upstream issue it answers (or the coordination issue for
-   programme work), and its **fork pre-flight PR**. The fork PR links back to the
+   programme work), and its **fork pre-flight PR**.
+
+   *When this applies.* Whenever an upstream PR exists -- which, for programme
+   work under #118, is not the same moment for every layer. Schema, model and
+   ingestion PRs go up as they are built, so the pre-flight and the cross-links
+   are created then. **UI work is held on fork `main` behind the preview gate
+   until its drop is sent**, so its pre-flight branch is cut at drop time, from
+   merged fork history, and the cross-links are written then rather than months
+   earlier. A pre-flight created before its PR is due has nothing to point at
+   and rots against a mirror that resets daily. The fork PR links back to the
    upstream one. These are two obligations, not one -- satisfying the issue link
    does not satisfy the fork link, which the audit in the PR that introduced this
    rule found across every upstream PR then open. The issue link shows a maintainer
