@@ -92,18 +92,24 @@ from this fork.
    separate links**: the upstream issue it answers (or the coordination issue for
    programme work), and its **fork pre-flight PR**. The fork PR links back to the
    upstream one. These are two obligations, not one -- satisfying the issue link
-   does not satisfy the fork link, and on 2026-09-17 every upstream PR linked an
-   issue while **none** linked its fork PR, with two fork PRs missing the reverse
-   link as well. The issue link shows a maintainer which programme a slice belongs
-   to; the fork link shows where its CI, Gatekeeper and CodeRabbit history lives,
-   which is most of the review evidence and is invisible from upstream otherwise.
+   does not satisfy the fork link, which the audit in the PR that introduced this
+   rule found across every upstream PR then open. The issue link shows a maintainer
+   which programme a slice belongs to; the fork link shows where its CI, Gatekeeper
+   and CodeRabbit history lives, which is most of the review evidence and is
+   invisible from upstream otherwise.
    Verify all three by grepping rather than from memory, because a PR reads as
    correctly linked when one of them is missing: the issue reference in the
-   upstream body (`Closes #`, `Fixes #` or `Part of #`), `jaysbeekay/sure#` in
-   the upstream body, and `we-promise/sure#` in the fork body. Checking only the
-   fork link would pass a PR that never named its issue -- which is the older
-   half of this rule and the one that was being followed all along. Say how the two
-   relate IN THE PR DESCRIPTION, beside the links rather than in a commit message
+   upstream body (`Closes #`, `Fixes #` or `Part of #`), the fork PR's own number
+   in the upstream body, and the upstream PR's own number in the fork body.
+   **Grep for the number, not for the repository name.** `jaysbeekay/sure#` and
+   `we-promise/sure#` match an issue as readily as a pull request, so a body that
+   names only the coordination issue passes a check meant to find the missing PR
+   link -- which is exactly what #172's body did (`we-promise/sure#3494`, the
+   issue), and what #170's `jaysbeekay/sure#119` would do. Confirm the number is
+   the PR's, by `/pull/<n>` or by opening it; an issue number does not count.
+   Checking only the fork link would pass a PR that never named its issue --
+   which is the older half of this rule and the one that was being followed all
+   along. Say how the two relate IN THE PR DESCRIPTION, beside the links rather than in a commit message
    or a comment, since the reader who needs it is the one deciding whether the two
    PRs are the same change: where they share a branch, "same branch, same commit";
    where the fork pre-flight is a cherry-pick onto the mirror, say that instead.
