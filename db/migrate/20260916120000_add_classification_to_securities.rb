@@ -8,8 +8,8 @@
 # every value stays NULL and the migration carries no data risk.
 #
 # The enumerated columns are plain strings with a check constraint, matching
-# `securities.kind` (`chk_securities_kind`) and `loans.day_count_convention`:
-# adding a value later is a constraint swap, not a type change. The permitted
+# `securities.kind` (`chk_securities_kind`): adding a value later is a
+# constraint swap, not a type change. The permitted
 # values are the six-class / twelve-sub-class taxonomy other portfolio trackers
 # use, so an import maps onto them without a translation table.
 #
@@ -18,8 +18,22 @@
 # locks instead of one full-table scan under an exclusive lock; it needs
 # `disable_ddl_transaction!` to mean anything, and `validate_check_constraint`
 # has no inverse for a `change` block to record.
-class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
+class AddClassificationToSecurities < ActiveRecord::Migration[8.1]
   disable_ddl_transaction!
+
+  # These lists are deliberately repeated here rather than read from
+  # `Security::ASSET_CLASSES` and friends. A migration has to produce the same
+  # schema whenever it is run -- on a fresh install today, on a self-hosted
+  # instance upgrading in a year -- and a constant it borrowed from a model
+  # would produce a different constraint once the model's list changed. That is
+  # the usual reason migrations do not reference application code, and it
+  # applies here rather than being a copy-paste.
+  #
+  # The cost is that growing the taxonomy is a two-file edit. `SecurityTest`
+  # "the model taxonomy and the database constraint list the same values" reads
+  # the rendered constraint back out of the catalog and compares it to the
+  # model's constants, so the two cannot silently diverge -- a change to one
+  # without the other fails that test rather than shipping.
 
   ASSET_CLASSES = %w[
     alternative_investment commodity equity fixed_income liquidity real_estate
@@ -46,6 +60,12 @@ class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
   def up
     add_column :securities, :asset_class, :string, if_not_exists: true
     add_column :securities, :asset_sub_class, :string, if_not_exists: true
+    # Free text, and deliberately so: these come from providers, each with its
+    # own vocabulary (EODHD's `General.Sector` is not GICS, and no two agree on
+    # region). There is no constraint and no `inclusion` validation on purpose
+    # -- adding one would reject a value a provider legitimately returns and
+    # break classification ingestion for that provider. Normalisation, if it
+    # ever happens, belongs above these columns rather than in them.
     add_column :securities, :sector, :string, if_not_exists: true
     add_column :securities, :industry, :string, if_not_exists: true
     add_column :securities, :region, :string, if_not_exists: true
@@ -54,11 +74,29 @@ class AddClassificationToSecurities < ActiveRecord::Migration[7.2]
     # PostgreSQL 11+; existing rows are not rewritten. The project ships
     # PostgreSQL 16 (compose.example.yml, .devcontainer) and the existing
     # loans migrations rely on the same behaviour.
+    #
+    # `null: false` means an explicit nil write raises rather than falling back
+    # to the default -- `update_column(:classification_locked, nil)` and any
+    # other ORM bypass included. That is intended: "locked" is a yes or no, and
+    # a third state would leave a later writer guessing whether it may replace
+    # a user's classification.
     add_column :securities, :classification_locked, :boolean, null: false, default: false, if_not_exists: true
 
     CONSTRAINTS.each do |name, (column, values)|
+      # `if_not_exists: true` is not sufficient here, and this is the reason.
+      # It resolves through `CheckConstraintDefinition#defined_for?`, which
+      # compares `validate` alongside the name, so it only recognises an
+      # existing constraint that is *also* NOT VALID. One this migration has
+      # already created AND validated is not matched, the ADD is issued a
+      # second time, and PostgreSQL raises `PG::DuplicateObject`. That is a
+      # reachable state: `disable_ddl_transaction!` leaves a window between
+      # `validate_check_constraint` below and the schema_migrations write, and
+      # a process killed inside it leaves exactly this shape. Matching on the
+      # name alone is what "safe to run again" actually requires.
+      next if check_constraint_exists?(:securities, name: name)
+
       add_check_constraint :securities, "#{column} IN (#{values.map { |v| "'#{v}'" }.join(', ')})",
-        name: name, validate: false, if_not_exists: true
+        name: name, validate: false
     end
 
     CONSTRAINTS.each_key do |name|
