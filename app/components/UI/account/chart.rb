@@ -7,11 +7,16 @@ class UI::Account::Chart < ApplicationComponent
     @view = view
   end
 
-  # Substituted through the account so a loan's "All" means the loan's own
-  # history rather than the family's oldest entry (D5/FR-501). Every other
-  # account type and every other period comes back untouched.
   def period
-    @resolved_period ||= account.chart_period(@period)
+    @effective_period ||= begin
+      p = @period || Period.last_30_days
+      acc_start = account.history_start_date
+      if p.key == "all_time" && acc_start.present? && acc_start > p.start_date
+        Period.new(key: "all_time", start_date: acc_start, end_date: p.end_date)
+      else
+        p
+      end
+    end
   end
 
   def holdings_value_money
