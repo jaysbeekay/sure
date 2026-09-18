@@ -250,6 +250,33 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # "Left out" is true of the chained TWR and of nothing else on this section. A
+  # suppressed day keeps its place in the series (R6): volatility counts it as an
+  # observation of zero, and its flows stay in the money-weighted series. Three
+  # of the six figures on the card are computed from a day the banner told the
+  # reader was omitted, so the wording is pinned in both locales rather than left
+  # to drift back.
+  test "the suppressed-days banner says a day was counted as zero, in every locale" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([ Date.current ])
+
+    get portfolio_path
+    assert_response :success
+
+    assert_match(/counted as a zero return/, response.body)
+
+    %i[en de].each do |locale|
+      %i[one other].each do |count|
+        line = I18n.t("portfolios.performance.suppressed_days.#{count}", locale: locale)
+
+        assert_match(/zero return|Nullrendite/i, line,
+                     "#{locale}.#{count} must say the day was counted as zero")
+        assert_no_match(/left out|ausgelassen/i, line,
+                        "#{locale}.#{count} must not say the day was omitted: it is still in the series")
+      end
+    end
+  end
+
   # Every figure may be withheld by contract (R13, R15, R16). The section still
   # renders and says so -- the same decision #171 settled for realised P&L,
   # where a vanishing section reads as "this page does not do that".
@@ -282,7 +309,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     # family's period moves no value, so every component is zero and the
     # section hides rather than printing a table of zeros that reconciles to
     # zero.
-    assert_equal %w[value_chart kpis performance index_chart holdings accounts allocation data_quality],
+    assert_equal %w[value_chart kpis performance index_chart realized_gains holdings accounts allocation data_quality],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -559,6 +586,27 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_match I18n.t("portfolios.realized_gains.excluded_title"), response.body
     assert_match I18n.t("portfolios.realized_gains.excluded.missing_cost_basis", count: 1), response.body
     assert_select "[data-controller=?]", "bar-chart"
+  end
+
+  # A buy-and-hold portfolio realises nothing, so the section used to vanish
+  # entirely. For a family that holds investments, "no section" is ambiguous
+  # between "you disposed of nothing this period" and "this page does not do
+  # that" -- the second being what a reader concludes when every other section
+  # is present. The value chart already answers the same question with an empty
+  # state rather than by disappearing; this follows it.
+  test "the realised gains section states that nothing was realised rather than vanishing" do
+    get portfolio_path(period: "last_30_days")
+
+    assert_response :success
+    assert_select "[data-section-key=?]", "realized_gains", count: 1
+    assert_match I18n.t("portfolios.realized_gains.no_disposals", period: Period.last_30_days.label), response.body
+    # The figure, the summary and the chart are what there is nothing to show;
+    # all three stay out. Asserting only the chart would leave a regression that
+    # restored the figure on an empty period green, since all three sit behind
+    # the same `realized.any?` branch.
+    assert_select "#portfolio-realized-gains [data-controller=?]", "bar-chart", count: 0
+    assert_select "#portfolio-realized-gains p.text-3xl", count: 0
+    assert_no_match I18n.t("portfolios.realized_gains.summary", count: 0, period: Period.last_30_days.label), response.body
   end
 
   private

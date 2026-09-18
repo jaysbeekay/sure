@@ -26,9 +26,14 @@ class Portfolio::Performance
   # v3: an account entering or leaving the scope is a composition flow rather
   # than a return (R17), and an account with a single balance day withholds the
   # time-weighted figures (R15).
+  # v5: a security journal is an external flow valued from its position
+  # (R18) and is no longer part of `market`, so `external_flow`, `market` and
+  # `suppressed` all change meaning. A warm v4 entry would serve the old
+  # decomposition under the new names until the next sync.
+  #
   # v4: :mwr changed from an annual rate to a period rate and :annualized_mwr
   # was added, so a v3 entry would serve the old meaning under the new name.
-  CACHE_VERSION = "v4".freeze
+  CACHE_VERSION = "v5".freeze
 
   # R5: the balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention

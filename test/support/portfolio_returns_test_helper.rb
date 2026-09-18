@@ -165,8 +165,19 @@ module PortfolioReturnsTestHelper
   # Transfer-labelled trade with no cash value. Questrade writes exactly this
   # shape (QuestradeAccount::ActivitiesProcessor -- price: 0, amount: 0), and
   # the zero amount is the point: the position moves, no money does.
-  def security_journal(account:, date:, qty:, currency: nil)
-    account.entries.create!(
+  #
+  # Written as a Transfer-labelled trade with
+  # `price: 0, amount: 0`, which is what Questrade's processor produces.
+  #
+  # `price:` writes the holdings row the position is valued from on that date --
+  # the row Balance::BaseCalculator reads, and the one R18 values the flow from.
+  # Omit it to model a journal date with no price: a weekend, a holiday, or an
+  # instance with no feed. `holding_qty:` defaults to the journalled quantity
+  # and is passed explicitly when the account already held some of the security,
+  # so the holding row carries the whole position while the journal moved only
+  # part of it.
+  def security_journal(account:, date:, qty:, currency: nil, price: nil, holding_qty: nil)
+    entry = account.entries.create!(
       name: "Journal",
       date: date,
       amount: 0,
@@ -179,6 +190,21 @@ module PortfolioReturnsTestHelper
         investment_activity_label: "Transfer"
       )
     )
+
+    if price
+      # After the journal: the arriving quantity for a journal in, and whatever
+      # is left for a journal out -- zero when the whole position went. The row
+      # still carries the security's price, which is what the flow is valued
+      # from, and `holdings` refuses a negative quantity.
+      held = holding_qty || [ qty, 0 ].max
+      account.holdings.create!(
+        security: security_under_test, date: date, qty: held, price: price,
+        amount: BigDecimal(held.to_s) * BigDecimal(price.to_s),
+        currency: currency || account.currency
+      )
+    end
+
+    entry
   end
 
   def set_rate(from:, to:, date:, rate:)

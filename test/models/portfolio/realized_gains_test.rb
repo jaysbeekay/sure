@@ -167,34 +167,126 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     assert_equal few, many, "2 disposals over 2 securities and 6 over 6 must cost the same"
   end
 
-  # `Trend#value` is `current - previous`, and `Money#-` neither converts nor
-  # raises: Money.new(300, "USD") - Money.new(200, "EUR") is 100.0 USD. So when
-  # a holding is valued in the account's currency and the disposal is priced in
-  # the security's, the basis is subtracted from the proceeds as a bare number
-  # and the result is labelled with the trade's currency.
+  # The conversion the disposals need is a rate lookup, and one per foreign
+  # disposal would be a new N+1 introduced by the very fix that made them
+  # measurable. Trade.preload_exchange_rates answers all of them in one query.
   #
-  # Concretely, before this was excluded: a USD account holding a EUR-listed
-  # security, basis 100 USD/share, sold at 150 EUR/share at a rate of 1.5, was
-  # reported as 150 USD of gain. The true figure is 250 USD -- 300 EUR of
-  # proceeds is 450 USD, less 200 USD of basis. A 40% understatement of a
-  # tax-relevant number.
+  # Each disposal falls on its OWN date, which is what makes this measure
+  # anything: identical lookups are served by the ActiveRecord query cache, so
+  # a fixture with every sale on one day reads as flat whether the preload runs
+  # or not. I wrote that version first and watched the mutation pass it.
+  test "the query count does not grow with the number of cross-currency disposals" do
+    holding_snapshot account: @account, date: @march, qty: 20, price: 150, cost_basis: 100
+    seed_foreign_disposals(2)
+    few = capture_sql_queries { measure_fully(build_gains) }.size
+
+    seed_foreign_disposals(4, offset: 2)
+    many = capture_sql_queries { measure_fully(build_gains) }.size
+
+    assert_equal 6, build_gains.trade_count, "the fixture must actually grow, or this proves nothing"
+    assert_equal BigDecimal(750), build_gains.net, "and every disposal must still be measured"
+    assert_equal few, many, "2 foreign disposals over 2 dates and 6 over 6 must cost the same"
+  end
+
+  # The flat-count test above seeds USD-basis holdings, so both conversion legs
+  # are covered by a batch and it cannot see this: when the POSITION is carried
+  # in a third currency, the statement leg is GBP->USD, GBP is in neither set
+  # the hub enumerates, and every disposal pays its own `find_by`. That is the
+  # exact shape the Trade-side preload was extended to cover, one level up.
   #
-  # This section cannot fix the arithmetic -- it belongs to
-  # Trade#calculate_realized_gain_loss, which Reports shares -- but it must not
-  # print the wrong figure. It is excluded and counted, like any other disposal
-  # this page cannot measure honestly.
-  test "a disposal priced in a currency the holding is not valued in is excluded" do
+  # Each disposal falls on its own date, or the ActiveRecord query cache serves
+  # the repeats and the fixture reads flat whether the batch covers it or not.
+  test "the query count does not grow with disposals carried in a third currency" do
+    seed_third_currency_disposals(2)
+    few = capture_sql_queries { measure_fully(build_gains) }.size
+
+    seed_third_currency_disposals(4, offset: 2)
+    many = capture_sql_queries { measure_fully(build_gains) }.size
+
+    assert_equal 6, build_gains.trade_count, "the fixture must actually grow, or this proves nothing"
+    assert_empty build_gains.excluded_trades, "every rate these disposals need is on file"
+    assert_equal BigDecimal(300), build_gains.net, "and every one of them is measured"
+    assert_equal few, many, "2 third-currency disposals over 2 dates and 6 over 6 must cost the same"
+  end
+
+  # A USD account holding a EUR-listed security: basis 100 USD/share, 2 sold at
+  # 150 EUR/share, EUR->USD 1.5 on the trade date. 300 EUR of proceeds is 450
+  # USD, less 200 USD of basis, so 250 USD.
+  #
+  # This was excluded as unmeasurable until jaysbeekay/sure#169 fixed the
+  # arithmetic in Trade#calculate_realized_gain_loss: `Trend#value` is
+  # `current - previous` and `Money#-` neither converts nor raises, so the
+  # basis was subtracted from the proceeds as a bare number and the 250 was
+  # reported as 150. The proceeds are now converted into the basis's currency
+  # before the subtraction, so the disposal is measured rather than declined.
+  test "a disposal priced in a currency the holding is not valued in is measured" do
     holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: 100
     sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
     set_rate from: "EUR", to: "USD", date: @march, rate: 1.5
 
-    assert_empty realized.buckets, "a figure that cannot be trusted is not shown"
-    assert_equal({ mixed_currency: 1 }, realized.excluded_trades)
+    assert_empty realized.excluded_trades, "a rate for the day is all this needed"
+    assert_equal BigDecimal(250), realized.net
+  end
+
+  # The rate has to be the one for the day the disposal happened. Without it
+  # the proceeds cannot be expressed in the basis's currency at all, and the
+  # tally must say THAT rather than blame the cost basis -- which is present,
+  # and would send the user to fix something that is not broken.
+  test "a cross-currency disposal with no rate for its date is excluded as a missing rate" do
+    holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "USD", date: @march - 1, rate: 1.5
+
+    assert_empty realized.buckets
+    assert_equal({ missing_exchange_rate: 1 }, realized.excluded_trades)
     assert_equal BigDecimal(0), realized.net
   end
 
-  # The guard is about a MISMATCH, not about foreign currency as such. An
-  # account, holding and disposal all in EUR still measure and convert.
+  # The statement's own conversion leg has the same exposure as the disposal's.
+  # `ExchangeRate` requires a rate to be present, not to be usable, so a 0 in
+  # the GBP->USD row would carry a real 40 GBP gain into the tally as 0 USD --
+  # a figure, in the net, indistinguishable from a disposal that broke even.
+  # A rate that cannot convert excludes the disposal, exactly as an absent one
+  # does.
+  test "a statement rate that cannot convert excludes the disposal" do
+    @account.holdings.create!(
+      security: security_under_test, date: @march, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: @march, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: @march, rate: 0
+
+    assert_empty realized.buckets, "0 is not a conversion"
+    assert_equal({ missing_exchange_rate: 1 }, realized.excluded_trades)
+    assert_equal BigDecimal(0), realized.net
+  end
+
+  # THREE currencies: the statement is in USD, the position is carried in GBP,
+  # and the disposal was priced in EUR. 300 EUR of proceeds at 0.8 is 240 GBP,
+  # less 200 GBP of basis, so 40 GBP -- and 50 USD at 1.25.
+  #
+  # Both batches cover it now, and neither did when it was written: Trade's rate
+  # preload keyed the basis side on the ACCOUNT's currency and this section's
+  # own batch enumerated the disposals' and the accounts', so GBP was in neither
+  # and each leg fell back to a single lookup. Both key on the holding's
+  # currency as well; what this test pins is unchanged either way -- a disposal
+  # with every rate it needs on file is measured, not tallied as a missing rate.
+  test "a disposal is measured when the basis, the disposal and the statement are three currencies" do
+    @account.holdings.create!(
+      security: security_under_test, date: @march, qty: 5, price: 150,
+      amount: BigDecimal(750), currency: "GBP", cost_basis: 100
+    )
+    sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
+    set_rate from: "EUR", to: "GBP", date: @march, rate: 0.8
+    set_rate from: "GBP", to: "USD", date: @march, rate: 1.25
+
+    assert_empty realized.excluded_trades, "every rate this disposal needs is on file"
+    assert_equal BigDecimal(50), realized.net
+  end
+
+  # An account, holding and disposal all in EUR measure and convert once, at
+  # the statement's currency.
   test "a wholly foreign disposal is still measured when its holding agrees" do
     account = create_portfolio_account(family: @family, currency: "EUR")
     holding_snapshot account: account, date: @march, qty: 5, price: 150, cost_basis: 100
@@ -245,6 +337,34 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
       gains.buckets
       gains.excluded_trades
       gains.net
+    end
+
+    # n EUR-priced disposals, each on its own date with its own rate row, so
+    # every one needs a DISTINCT rate lookup and the query cache cannot hide a
+    # per-disposal query behind the first one.
+    def seed_foreign_disposals(count, offset: 0)
+      count.times do |i|
+        date = @march + offset + i
+        set_rate from: "EUR", to: "USD", date: date, rate: 1.5
+        sell_trade account: @account, date: date, qty: 1, price: 150, currency: "EUR"
+      end
+    end
+
+    # A GBP-carried position under a USD statement, sold in EUR: three
+    # currencies, one date each, and both rates on file for every date. 300 EUR
+    # of proceeds at 0.8 is 240 GBP, less 200 GBP of basis, so 40 GBP and 50 USD
+    # at 1.25 -- per disposal, at qty 2.
+    def seed_third_currency_disposals(count, offset: 0)
+      count.times do |i|
+        date = @march + offset + i
+        @account.holdings.create!(
+          security: security_under_test, date: date, qty: 20, price: 150,
+          amount: BigDecimal(3_000), currency: "GBP", cost_basis: 100
+        )
+        set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
+        set_rate from: "GBP", to: "USD", date: date, rate: 1.25
+        sell_trade account: @account, date: date, qty: 2, price: 150, currency: "EUR"
+      end
     end
 
     # n securities, each with a nil-basis snapshot, a buy at 100 and one sale

@@ -19,7 +19,7 @@ module Portfolio
     Error = ContractCoverage::Error
 
     ROW_LINE = /\A\| (R\d+) \|.*?\| `([^`#]+)#([^`]+)`/
-    EXPECTED_ROWS = 17
+    EXPECTED_ROWS = 18
 
     def initialize(contract_path:, root: Rails.root)
       @contract_path = Pathname(contract_path)

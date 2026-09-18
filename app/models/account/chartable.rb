@@ -59,7 +59,7 @@ module Account::Chartable
       interval: interval
     ))
 
-    normalize_linked_investment_series(builder.send("#{view}_series"))
+    normalize_linked_investment_series(builder.send("#{view}_series"), view: view)
   end
 
   def sparkline_series
@@ -88,7 +88,7 @@ module Account::Chartable
       Balance::BaseCalculator.new(self).calculation_start_date
     end
 
-    def normalize_linked_investment_series(series)
-      Balance::LinkedInvestmentSeriesNormalizer.new(account: self, series: series).normalize
+    def normalize_linked_investment_series(series, view: :balance)
+      Balance::LinkedInvestmentSeriesNormalizer.new(account: self, series: series, view: view).normalize
     end
 end
