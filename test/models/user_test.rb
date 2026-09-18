@@ -667,7 +667,7 @@ class UserTest < ActiveSupport::TestCase
   test "section preferences merge collapsed keys and default the order per namespace" do
     @user.update!(preferences: {})
 
-    assert_equal %w[kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality], @user.section_order("portfolio")
+    assert_equal %w[kpis performance index_chart comparison drivers value_chart realized_gains holdings accounts allocation data_quality], @user.section_order("portfolio")
     assert_not @user.section_collapsed?("portfolio", "kpis")
 
     @user.update_section_preferences("portfolio", collapsed: { "kpis" => true })
@@ -676,7 +676,7 @@ class UserTest < ActiveSupport::TestCase
 
     assert @user.section_collapsed?("portfolio", "kpis"), "an earlier toggle must survive a later one"
     assert @user.section_collapsed?("portfolio", "holdings")
-    assert_equal %w[kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality], @user.section_order("portfolio"),
+    assert_equal %w[kpis performance index_chart comparison drivers value_chart realized_gains holdings accounts allocation data_quality], @user.section_order("portfolio"),
       "collapsing must not write an order"
   end
 

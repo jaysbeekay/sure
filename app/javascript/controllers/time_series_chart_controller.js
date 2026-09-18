@@ -7,11 +7,37 @@ const parseLocalDate = d3.timeParse("%Y-%m-%d");
 export default class extends Controller {
   static values = {
     data: Object,
+    // Optional. When given, the chart draws one line per entry instead of the
+    // single trendline, and `data` is ignored. Each entry is
+    // { label, values: [{ date, value }] }.
+    //
+    // D6: this controller is extended rather than the loan payoff chart being
+    // generalised. Every existing caller passes `data` only, takes the branch
+    // below that this does not touch, and is unaffected.
+    series: Array,
     strokeWidth: { type: Number, default: 2 },
     useLabels: { type: Boolean, default: true },
     useTooltip: { type: Boolean, default: true },
     selectable: { type: Boolean, default: false },
   };
+
+  // Distinguishable without relying on hue alone being readable: the portfolio
+  // line is drawn first and darkest, so "the whole thing" reads as the baseline
+  // the others are compared against.
+  //
+  // The baseline is `currentColor` and not a gray, because the mount carries
+  // `text-primary` and that token is the one the design system flips: gray-900
+  // on light, white on dark. The literal `var(--color-gray-900)` has no dark
+  // override, and in dark mode `--color-container` IS gray-900, so the line
+  // every other line is read against was painted the background it sat on.
+  static SERIES_COLORS = [
+    "currentColor",
+    "var(--color-blue-500)",
+    "var(--color-green-600)",
+    "var(--color-yellow-600)",
+    "var(--color-destructive)",
+    "var(--color-gray-400)",
+  ];
 
   _d3SvgMemo = null;
   _d3GroupMemo = null;
@@ -19,6 +45,7 @@ export default class extends Controller {
   _d3InitialContainerWidth = 0;
   _d3InitialContainerHeight = 0;
   _normalDataPoints = [];
+  _multiSeries = [];
   _resizeObserver = null;
   _d3DragSelectBrush = null;
   _d3DragSelectGroup = null;
@@ -63,6 +90,26 @@ export default class extends Controller {
   }
 
   _normalizeDataPoints() {
+    this._multiSeries = (this.seriesValue || [])
+      .map((s) => ({
+        label: s.label,
+        points: (s.values || []).map((d) => ({
+          date: parseLocalDate(d.date),
+          date_formatted: d.date_formatted,
+          value: d.value,
+        })),
+      }))
+      .filter((s) => s.points.length >= 2);
+
+    // The scales read _normalDataPoints, so in multi-series mode it carries
+    // every line's points. That is what makes one x domain and one y domain
+    // cover all of them -- and it means the "fewer than two points" empty
+    // state below keeps working without knowing which mode it is in.
+    if (this._multiSeries.length > 0) {
+      this._normalDataPoints = this._multiSeries.flatMap((s) => s.points);
+      return;
+    }
+
     this._normalDataPoints = (this.dataValue.values || []).map((d) => ({
       date: parseLocalDate(d.date),
       date_formatted: d.date_formatted,
@@ -91,9 +138,35 @@ export default class extends Controller {
 
     if (this._normalDataPoints.length < 2) {
       this._drawEmpty();
+    } else if (this._multiSeries.length > 0) {
+      this._drawMultiSeries();
     } else {
       this._drawChart();
     }
+  }
+
+  // One plain line per series, sharing the x and y scales built from all of
+  // them. Deliberately none of the single-series machinery: no gradient split
+  // (it colours one line by its own direction, which says nothing when there
+  // are six), no trendline fill, and no hover tooltip -- comparing shapes is
+  // what this chart is for, and a tooltip that can only report one series at a
+  // time invites reading it as the answer.
+  _drawMultiSeries() {
+    const colors = this.constructor.SERIES_COLORS;
+
+    this._multiSeries.forEach((series, index) => {
+      this._d3Group
+        .append("path")
+        .datum(series.points)
+        .attr("fill", "none")
+        .attr("stroke", colors[index % colors.length])
+        .attr("stroke-width", this.strokeWidthValue)
+        .attr("stroke-linejoin", "round")
+        .attr("stroke-linecap", "round")
+        .attr("d", this._d3Line);
+    });
+
+    if (this.useLabelsValue) this._drawXAxisLabels();
   }
 
   _drawEmpty() {
@@ -232,10 +305,12 @@ export default class extends Controller {
       .call(
         d3
           .axisBottom(this._d3XScale)
-          .tickValues([
-            this._normalDataPoints[0].date,
-            this._normalDataPoints[this._normalDataPoints.length - 1].date,
-          ])
+          // d3.extent, not first-and-last. In multi-series mode
+          // _normalDataPoints is every line's points concatenated, so it is not
+          // globally ordered and the last element can be an earlier date than
+          // the true maximum -- the axis would then end on a label the x-scale
+          // does not end on. The scale itself already uses extent.
+          .tickValues(d3.extent(this._normalDataPoints, (d) => d.date))
           .tickSize(0)
           .tickFormat(d3.timeFormat("%b %d, %Y")),
       )

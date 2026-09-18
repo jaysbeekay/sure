@@ -20,7 +20,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[kpis performance index_chart drivers value_chart realized_gains holdings accounts allocation data_quality].freeze
+  KEYS = %w[kpis performance index_chart comparison drivers value_chart realized_gains holdings accounts allocation data_quality].freeze
 
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
 
@@ -98,6 +98,24 @@ class Portfolio::SectionRegistry
           partial: "portfolios/index_chart",
           locals: shared_locals.merge(series: index_chart_series),
           visible: index_chart_series.present?,
+          collapsible: true
+        },
+        # D7: the largest five accounts plus the portfolio as a whole. Capped
+        # because each line costs one Portfolio::Performance; uncapped, the
+        # page's query count would grow with the number of accounts a family
+        # holds, and the hub's flatness guarantee would be gone.
+        #
+        # Hidden below three lines, and three rather than two because the first
+        # is the baseline: a family with one account is compared against a
+        # portfolio it is the entirety of, and the two lines are the same
+        # series drawn twice. `> 1` read as "more than one line" and let that
+        # case through.
+        {
+          key: "comparison",
+          title: "portfolios.sections.comparison",
+          partial: "portfolios/comparison",
+          locals: shared_locals.merge(series: comparison_series),
+          visible: comparison_series.size > 2,
           collapsible: true
         },
         # Hidden when the period moved nothing: a table of zeros reconciling to
@@ -251,6 +269,154 @@ class Portfolio::SectionRegistry
     # metrics, so it stores `drivers.to_h` rather than the object -- which also
     # means `reconciles?` is not available here and has to be re-derived from
     # `unexplained` (see driver_reconciles? below).
+    # D7's cap. Five is a product decision; see the `comparison` entry above for
+    # what it buys.
+    COMPARISON_LIMIT = 5
+
+    # The flow-adjusted index for each of the largest five accounts, plus the
+    # whole portfolio.
+    #
+    # The INDEX, not the value: accounts that received deposits at different
+    # times are not comparable by value, and removing that difference is the
+    # whole reason a time-weighted return exists. Two accounts that returned
+    # the same amount plot as the same line here even if one of them is ten
+    # times the size of the other.
+    #
+    # Each account's own Performance is built with its own id as the scope
+    # (the default), NOT the wider portfolio. That is deliberate and is the
+    # difference between two defensible readings: money moved from account A to
+    # account B is internal to the portfolio, and a CONTRIBUTION to B. A line
+    # labelled "B" has to answer "what did B return", so B's scope is B.
+    def comparison_series
+      @comparison_series ||= begin
+        lines = comparison_accounts.filter_map do |account|
+          # active_until_dates matters as much here as it does for the
+          # portfolio line. It carries each account's historical cut-off, and
+          # InvestmentStatement#performance passes it for the aggregate -- so
+          # without it a disabled account's line would run past the date the
+          # baseline stops at, and the two would be drawn over different spans
+          # while inviting comparison.
+          points = Portfolio::Performance.new(
+            family: statement.family, account_ids: [ account.id ], period: period, user: user,
+            active_until_dates: statement.historical_scope.active_until_dates.slice(account.id)
+          ).index_series
+
+          next if points.size < 2
+
+          { label: account.name, values: points.map { |date, level| { date: date, value: level.round(2) } } }
+        end
+
+        # No baseline, no comparison. When the portfolio's own series is
+        # withheld -- R13's missing rate, or R15's too-short history -- the
+        # account lines have nothing to be read against, and a chart of
+        # individual accounts presented as a comparison would invite exactly
+        # the reading the withholding exists to prevent.
+        whole = performance.index_series
+
+        if whole.size < 2
+          []
+        else
+          # Rounded for the same reason index_chart_series rounds, and it matters
+          # more here: a chained level is a BigDecimal division result carrying
+          # ~35 digits, nothing downstream trims it, and up to six lines of them
+          # are serialised into a data attribute on every render.
+          lines.unshift(label: I18n.t("portfolios.comparison.whole_portfolio"),
+                        values: whole.map { |date, level| { date: date, value: level.round(2) } })
+          lines
+        end
+      end
+    end
+
+    # The largest five by closing value on the period's END date, tie-broken by
+    # name so the set is stable between renders rather than left to whatever
+    # order the database returns.
+    #
+    # One query for the balances and one for the rates, so the selection does
+    # not grow with the account count either -- the cap would be pointless if
+    # choosing what to cap cost a query per account.
+    #
+    # An account whose currency has no rate is ranked last rather than
+    # converted at parity (R13). It is still listed if it reaches the cap; what
+    # it must not do is outrank a real figure on the strength of a fabricated
+    # one.
+    def comparison_accounts
+      @comparison_accounts ||= begin
+        # Only accounts still contributing value at the period's end.
+        # historical_scope includes disabled accounts by design -- their history
+        # belongs in the aggregate -- but a closed broker with a large final
+        # balance would rank into the top five, then lose its line to the
+        # two-point guard below, and the slot would be spent on nothing while a
+        # live account went undrawn.
+        cutoffs = statement.historical_scope.active_until_dates
+        period_end = period.date_range.end
+        accounts = statement.historical_scope.accounts.reject { |account|
+          cutoff = cutoffs[account.id]
+          cutoff.present? && cutoff < period_end
+        }
+        values = closing_values_for(accounts)
+        # Rate availability sorts FIRST, then value. Ranking a rateless account
+        # as zero is not enough: an account that genuinely closed at zero or
+        # below would then be outranked by one whose value is merely unknown,
+        # which is the parity mistake in a different shape -- a missing figure
+        # winning a comparison it was never measured for.
+        accounts.sort_by { |account|
+          value = values[account.id]
+          [ value.nil? ? 1 : 0, -(value || BigDecimal(0)), account.name.to_s ]
+        }.first(COMPARISON_LIMIT)
+      end
+    end
+
+    def closing_values_for(accounts)
+      return {} if accounts.empty?
+
+      end_date = period.date_range.end
+      rates = rates_on_or_before(accounts.map(&:currency).uniq, end_date)
+
+      # Restricted to the row in the ACCOUNT's own currency. `balances` can
+      # carry rows in another currency for the same account and day -- a legacy
+      # or orphaned row from a currency change -- and DISTINCT ON without this
+      # would rank the account from whichever of them sorted first.
+      Balance.joins(:account)
+             .where(account_id: accounts.map(&:id))
+             .where(date: ..end_date)
+             .where("balances.currency = accounts.currency")
+             .select("DISTINCT ON (balances.account_id) balances.account_id, balances.end_balance, balances.flows_factor, balances.currency")
+             .order("balances.account_id", "balances.date DESC")
+             .each_with_object({}) do |balance, acc|
+        rate = balance.currency == statement.family.currency ? BigDecimal(1) : rates[balance.currency]
+        next if rate.nil?
+
+        acc[balance.account_id] = balance.end_balance * balance.flows_factor * rate
+      end
+    end
+
+    def rates_on_or_before(currencies, date)
+      foreign = currencies.reject { |currency| currency == statement.family.currency }
+      return {} if foreign.empty?
+
+      # R13's lookup, both sides: the most recent rate on or before the date,
+      # and failing that the earliest one after it. A one-sided lookup would
+      # report a currency whose first stored rate falls after the period end as
+      # having no rate at all, and push a perfectly measurable account behind
+      # the cap.
+      on_or_before = ExchangeRate.where(from_currency: foreign, to_currency: statement.family.currency)
+                                 .where(date: ..date)
+                                 .order(:from_currency, date: :desc)
+                                 .select("DISTINCT ON (from_currency) from_currency, rate")
+                                 .each_with_object({}) { |row, acc| acc[row.from_currency] = row.rate }
+
+      missing = foreign - on_or_before.keys
+      return on_or_before if missing.empty?
+
+      after = ExchangeRate.where(from_currency: missing, to_currency: statement.family.currency)
+                          .where("date > ?", date)
+                          .order(:from_currency, :date)
+                          .select("DISTINCT ON (from_currency) from_currency, rate")
+                          .each_with_object({}) { |row, acc| acc[row.from_currency] = row.rate }
+
+      on_or_before.merge(after)
+    end
+
     def drivers
       @drivers ||= performance.drivers || {}
     end

@@ -15,6 +15,9 @@ de:
       total: Gesamt
       value: Wert
       weight: Gewichtung
+    comparison:
+      explainer: Deine größten Konten im Vergleich zum Gesamtportfolio, auf 100 normiert und ohne Einzahlungseffekte. Es geht um den Verlauf, nicht um die Größe.
+      whole_portfolio: Gesamtportfolio
     data_quality:
       kinds:
         missing_cost_basis:
@@ -118,6 +121,7 @@ de:
     sections:
       accounts: Konten
       allocation: Aufteilung
+      comparison: Kontenvergleich
       data_quality: Datenqualität
       drivers: Was den Wert bewegt hat
       holdings: Bestände
