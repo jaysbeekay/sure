@@ -170,7 +170,7 @@ This single command generates:
 Creates two complete tables with all necessary fields:
 
 ```ruby
-class CreateMyBankTablesAndAccounts < ActiveRecord::Migration[7.2]
+class CreateMyBankTablesAndAccounts < ActiveRecord::Migration[8.1]
   def change
     # Create provider items table (stores per-family connection credentials)
     create_table :my_bank_items, id: :uuid do |t|
