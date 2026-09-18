@@ -308,6 +308,46 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
                  "the portfolio is the baseline the others are read against, so it is drawn first"
   end
 
+  # The comment on the section says it is hidden when there is nothing to
+  # compare, and the predicate said `size > 1` -- which one account satisfies,
+  # because the baseline is a line too. The whole portfolio and its only account
+  # are the same series: the aggregate Performance and the per-account one are
+  # built over the same holdings, so the reader gets two identical lines and a
+  # legend implying they differ.
+  test "a family with a single account gets no comparison section" do
+    only = create_portfolio_account(family: @family, name: "Only broker")
+    @statement.stubs(:historical_scope).returns(
+      stub(accounts: [ only ], account_ids: [ only.id ], active_until_dates: {})
+    )
+    Portfolio::Performance.any_instance.stubs(:index_series).returns(two_points)
+
+    series = registry.send(:comparison_series)
+    assert_equal 2, series.size, "the premise: a baseline and the one account under it"
+
+    comparison = registry.sections.find { |section| section[:key] == "comparison" }
+    assert_not comparison[:visible],
+               "one account against the portfolio it is the entirety of compares nothing"
+  end
+
+  # The levels reach the browser inside a `data-...-series-value` attribute, one
+  # per point per line, up to six lines. A chained level is a BigDecimal
+  # division result and nothing downstream trims it, so unrounded they are ~35
+  # digits each. index_chart_series already rounds for the same reason.
+  test "comparison levels are serialised rounded, not at BigDecimal's full width" do
+    create_portfolio_account(family: @family, name: "Second broker")
+    long = [ [ Date.new(2026, 1, 1), BigDecimal(100) ],
+             [ Date.new(2026, 1, 2), BigDecimal(1_000) / BigDecimal(7) ] ]
+    Portfolio::Performance.any_instance.stubs(:index_series).returns(long)
+
+    values = registry.send(:comparison_series).flat_map { |line| line[:values].map { |point| point[:value] } }
+
+    assert values.any?, "the fixture has to actually draw lines"
+    values.each do |value|
+      assert_operator value.to_s("F").split(".").last.length, :<=, 2,
+                      "#{value} reaches the attribute with more than two decimal places"
+    end
+  end
+
   # Deterministic selection: name breaks a tie, so the plotted set does not
   # depend on whatever order the database returns.
   test "accounts of equal value are chosen by name, not by database order" do
@@ -353,6 +393,29 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
 
     assert_equal PortfoliosHelper::COMPARISON_COLORS, from_js,
                  "the legend and the chart must draw the same colours in the same order"
+  end
+
+  # A series colour has to be readable on the surface the chart is drawn on, and
+  # in dark mode that surface IS gray-900: `_generated.css` sets
+  # `--color-container: var(--color-gray-900)` under `[data-theme="dark"]`, and
+  # the section wrapper is `bg-container`. The baseline -- the line every other
+  # line is read against -- was `var(--color-gray-900)`, which has no dark
+  # override, so it was #171717 drawn on #171717, and its legend dot with it.
+  #
+  # Read out of the stylesheet rather than hard-coded, so that a later change to
+  # what `--color-container` resolves to is caught here instead of going dark
+  # again silently.
+  test "no series colour is the container's own colour in dark mode" do
+    css = Rails.root.join("app/assets/tailwind/sure-design-system/_generated.css").read
+    dark = css[/\[data-theme="dark"\]\s*\{(.*?)^  \}/m, 1]
+    assert dark, "the dark theme block was not found in the design system"
+
+    container = dark[/--color-container:\s*([^;]+);/, 1]&.strip
+    assert_equal "var(--color-gray-900)", container,
+                 "the premise: in dark mode a container is painted gray-900"
+
+    assert_not_includes PortfoliosHelper::COMPARISON_COLORS, container,
+                        "a line painted the container's own colour is an invisible line"
   end
 
   test "sections are visible only when the family has data for them" do

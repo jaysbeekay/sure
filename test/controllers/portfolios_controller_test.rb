@@ -482,6 +482,37 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
                  "past five accounts the comparison stops growing:\n#{(beyond_cap - at_cap)} extra queries"
   end
 
+  # The legend is the only thing that tells the lines apart -- the chart carries
+  # no tooltip on purpose -- and nothing read it. This pins the rendering: one
+  # entry per series, the portfolio's own line first, and the two elements that
+  # have to carry `text-primary` for the baseline to be visible at all.
+  #
+  # `currentColor` is not a colour on its own: it resolves against the element
+  # it is used on. Painting the dot and the mount with a literal gray was what
+  # made the baseline invisible in dark mode, so the token that replaced it must
+  # actually be in the markup or the line has no colour to follow.
+  test "the comparison legend names every line and carries the theme token for the baseline" do
+    build_portfolio(accounts: 1, securities: 2)
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-comparison-line]", minimum: 2
+
+    baseline = css_select("[data-portfolio-comparison-line='0']").first
+    assert baseline, "the portfolio's own line is the first legend entry"
+    assert_includes baseline.text, I18n.t("portfolios.comparison.whole_portfolio"),
+                    "the first line is the portfolio the others are read against"
+
+    dot = baseline.css("span").first
+    assert_includes dot["class"].split, "text-primary",
+                    "the baseline dot follows the theme rather than a fixed gray"
+    assert_equal "background-color: currentColor", dot["style"]
+
+    assert_select "#portfolioComparisonChart.text-primary", 1,
+                  "the mount carries the token the first series' `currentColor` resolves against"
+  end
+
   # --- accounts, allocation and data quality tests ---
 
   test "accounts grid links every countable investment account to its holdings tab and skips excluded shares" do

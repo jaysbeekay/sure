@@ -63,8 +63,12 @@ module PortfoliosHelper
   # cost; the alternative is the legend guessing what the chart drew, which is
   # worse -- a legend that disagrees with its chart is actively misleading.
   # A test asserts the two stay the same length and order.
+  #
+  # The first entry is `currentColor`: both the legend dot and the chart mount
+  # carry `text-primary`, so the baseline follows the theme (gray-900 on light,
+  # white on dark) instead of being painted the container's own colour.
   COMPARISON_COLORS = [
-    "var(--color-gray-900)",
+    "currentColor",
     "var(--color-blue-500)",
     "var(--color-green-600)",
     "var(--color-yellow-600)",

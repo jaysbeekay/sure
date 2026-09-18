@@ -16,7 +16,10 @@
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
       <% series.each_with_index do |line, index| %>
         <span class="flex items-center gap-1.5 text-xs text-secondary" data-portfolio-comparison-line="<%= index %>">
-          <span class="w-2 h-2 rounded-full" style="background-color: <%= portfolio_comparison_color(index) %>"></span>
+          <%# text-primary on the dot, not on the label: the first series is drawn in
+              `currentColor` so that it follows the theme, and the label around it is
+              deliberately text-secondary. %>
+          <span class="w-2 h-2 rounded-full text-primary" style="background-color: <%= portfolio_comparison_color(index) %>"></span>
           <%= line[:label] %>
         </span>
       <% end %>
@@ -25,7 +28,7 @@
 
   <div
     id="portfolioComparisonChart"
-    class="w-full h-52 privacy-sensitive"
+    class="w-full h-52 privacy-sensitive text-primary"
     data-controller="time-series-chart"
     data-time-series-chart-use-tooltip-value="false"
     data-time-series-chart-series-value="<%= series.to_json %>"></div>

@@ -100,23 +100,26 @@ class Portfolio::SectionRegistry
           visible: index_chart_series.present?,
           collapsible: true
         },
-        # Hidden when the period moved nothing: a table of zeros reconciling to
-        # zero is true and tells the reader nothing.
         # D7: the largest five accounts plus the portfolio as a whole. Capped
         # because each line costs one Portfolio::Performance; uncapped, the
         # page's query count would grow with the number of accounts a family
         # holds, and the hub's flatness guarantee would be gone.
         #
-        # Hidden below two lines: comparing one account against the whole
-        # portfolio it is the entirety of draws two identical lines.
+        # Hidden below three lines, and three rather than two because the first
+        # is the baseline: a family with one account is compared against a
+        # portfolio it is the entirety of, and the two lines are the same
+        # series drawn twice. `> 1` read as "more than one line" and let that
+        # case through.
         {
           key: "comparison",
           title: "portfolios.sections.comparison",
           partial: "portfolios/comparison",
           locals: shared_locals.merge(series: comparison_series),
-          visible: comparison_series.size > 1,
+          visible: comparison_series.size > 2,
           collapsible: true
         },
+        # Hidden when the period moved nothing: a table of zeros reconciling to
+        # zero is true and tells the reader nothing.
         {
           key: "drivers",
           title: "portfolios.sections.drivers",
@@ -260,10 +263,8 @@ class Portfolio::SectionRegistry
     # metrics, so it stores `drivers.to_h` rather than the object -- which also
     # means `reconciles?` is not available here and has to be re-derived from
     # `unexplained` (see driver_reconciles? below).
-    # D7's cap. Five is a product decision, not a technical limit, but the
-    # technical consequence is the one that matters here: the page costs one
-    # Portfolio::Performance per line, so the cap is what keeps its query count
-    # independent of how many accounts a family holds.
+    # D7's cap. Five is a product decision; see the `comparison` entry above for
+    # what it buys.
     COMPARISON_LIMIT = 5
 
     # The flow-adjusted index for each of the largest five accounts, plus the
@@ -296,7 +297,7 @@ class Portfolio::SectionRegistry
 
           next if points.size < 2
 
-          { label: account.name, values: points.map { |date, level| { date: date, value: level } } }
+          { label: account.name, values: points.map { |date, level| { date: date, value: level.round(2) } } }
         end
 
         # No baseline, no comparison. When the portfolio's own series is
@@ -309,8 +310,12 @@ class Portfolio::SectionRegistry
         if whole.size < 2
           []
         else
+          # Rounded for the same reason index_chart_series rounds, and it matters
+          # more here: a chained level is a BigDecimal division result carrying
+          # ~35 digits, nothing downstream trims it, and up to six lines of them
+          # are serialised into a data attribute on every render.
           lines.unshift(label: I18n.t("portfolios.comparison.whole_portfolio"),
-                        values: whole.map { |date, level| { date: date, value: level } })
+                        values: whole.map { |date, level| { date: date, value: level.round(2) } })
           lines
         end
       end

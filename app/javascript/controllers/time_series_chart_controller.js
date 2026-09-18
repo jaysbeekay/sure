@@ -23,8 +23,14 @@ export default class extends Controller {
   // Distinguishable without relying on hue alone being readable: the portfolio
   // line is drawn first and darkest, so "the whole thing" reads as the baseline
   // the others are compared against.
+  //
+  // The baseline is `currentColor` and not a gray, because the mount carries
+  // `text-primary` and that token is the one the design system flips: gray-900
+  // on light, white on dark. The literal `var(--color-gray-900)` has no dark
+  // override, and in dark mode `--color-container` IS gray-900, so the line
+  // every other line is read against was painted the background it sat on.
   static SERIES_COLORS = [
-    "var(--color-gray-900)",
+    "currentColor",
     "var(--color-blue-500)",
     "var(--color-green-600)",
     "var(--color-yellow-600)",
