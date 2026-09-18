@@ -76,12 +76,10 @@ en:
         missing_exchange_rate:
           one: 1 disposal has no exchange rate for its trade date and is left out.
           other: "%{count} disposals have no exchange rate for their trade date and are left out."
-        mixed_currency:
-          one: 1 disposal is priced in a currency its holding is not valued in and is left out.
-          other: "%{count} disposals are priced in a currency their holdings are not valued in and are left out."
       excluded_title: Some disposals are not counted
       gains: Gains
       losses: Losses
+      no_disposals: Nothing was realised in %{period}.
       summary:
         one: 1 disposal in %{period}
         other: "%{count} disposals in %{period}"

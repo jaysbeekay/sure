@@ -96,15 +96,21 @@ class Portfolio::SectionRegistry
           visible: true,
           collapsible: true
         },
-        # Hidden when nothing was realised in the period: a P&L timeline with no
-        # disposals in it is an empty chart, not a finding, and the section
-        # chrome around it would read as one.
+        # Always shown, and it says so when nothing was realised, rather than
+        # disappearing. An earlier revision hid it on an empty period, reasoning
+        # that a timeline with no disposals is an empty chart rather than a
+        # finding. That holds for the chart and not for the section: a
+        # buy-and-hold portfolio realises nothing in most periods, so the
+        # section was absent for those users always, and absence reads as "this
+        # page does not do that" rather than "you disposed of nothing". The
+        # value chart answers the same question the same way (`no_data`), and
+        # the partial keeps the figure and the chart out of an empty period.
         {
           key: "realized_gains",
           title: "portfolios.sections.realized_gains",
           partial: "portfolios/realized_gains",
           locals: shared_locals.merge(realized: realized_gains, bars: realized_gains_bars),
-          visible: realized_gains.any?,
+          visible: true,
           collapsible: true
         },
         {
