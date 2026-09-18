@@ -94,12 +94,10 @@ en:
         missing_exchange_rate:
           one: 1 disposal has no exchange rate for its trade date and is left out.
           other: "%{count} disposals have no exchange rate for their trade date and are left out."
-        mixed_currency:
-          one: 1 disposal is priced in a currency its holding is not valued in and is left out.
-          other: "%{count} disposals are priced in a currency their holdings are not valued in and are left out."
       excluded_title: Some disposals are not counted
       gains: Gains
       losses: Losses
+      no_disposals: Nothing was realised in %{period}.
       summary:
         one: 1 disposal in %{period}
         other: "%{count} disposals in %{period}"
@@ -114,8 +112,8 @@ en:
       mwr_hint: Money-weighted, over the period. It reflects when money was invested, so money that arrived part-way through is expressed over the whole period — which is why this can differ from a broker's holding-period figure.
       rate_missing: An exchange rate was missing for part of this period, so affected figures are withheld rather than converted at parity.
       suppressed_days:
-        one: One day was left out because its return could not be measured.
-        other: "%{count} days were left out because their return could not be measured."
+        one: One day was counted as a zero return because it could not be measured.
+        other: "%{count} days were counted as a zero return because they could not be measured."
       twr: Time-weighted return
       twr_hint: What the investments did, with the effect of your contributions removed. Daily, net of fees, with each contribution counted from the start of its day.
       volatility: Volatility
