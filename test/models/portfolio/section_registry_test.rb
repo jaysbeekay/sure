@@ -210,6 +210,55 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_includes section[:locals][:contributions].map(&:first), :unexplained
   end
 
+  # The two tests above sit at 0.004 and at 10, so nothing between them is
+  # pinned: with those fixtures alone, changing `<=` to `<` passes, and so does
+  # widening the tolerance to half a unit. The boundary is the claim the
+  # constant makes, so the boundary is what is asserted -- a residual exactly at
+  # one cent reconciles, and one a thousandth above it does not.
+  test "the reconcile boundary is the cent itself, inclusive" do
+    assert_equal BigDecimal("0.01"), Portfolio::Drivers::RECONCILE_TOLERANCE,
+                 "the figure itself, not whatever the constant says: it is one minor unit " \
+                 "of a two-decimal currency, and a wider one would swallow a real gap"
+
+    [ [ BigDecimal("0.01"), true ],
+      [ BigDecimal("0.011"), false ] ].each do |residual, expected|
+      drivers = stub_drivers(value_open: 1_000, value_close: 1_100,
+                             market: BigDecimal(100) - residual, unexplained: residual)
+      perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+      perf.stubs(:drivers).returns(drivers)
+      @statement.stubs(:performance).returns(perf)
+
+      section = registry.sections.find { |s| s[:key] == "drivers" }
+
+      assert_equal expected, section[:locals][:reconciles],
+                   "a residual of #{residual.to_s('F')} must #{expected ? '' : 'not '}reconcile"
+      assert_equal expected, section[:locals][:contributions].map(&:first).exclude?(:unexplained),
+                   "and the row must #{expected ? 'not ' : ''}be listed with it"
+    end
+  end
+
+  # The section and Portfolio::Drivers both decide what "reconciles" means --
+  # the section re-derives it from `unexplained` because Performance caches
+  # `drivers.to_h` rather than the object -- and the two literals had already
+  # drifted once, exact zero here against a cent there, so the table called a
+  # period unreconciled while the model called it reconciled. They read one
+  # constant now, and this fails if either grows its own again.
+  test "the section and the drivers model reconcile at the same figures" do
+    [ BigDecimal("0.01"), BigDecimal("0.011") ].each do |residual|
+      drivers = stub_drivers(value_open: 1_000, value_close: 1_100,
+                             market: BigDecimal(100) - residual, unexplained: residual)
+      perf = Portfolio::Performance.new(family: @family, account_ids: [], period: @period)
+      perf.stubs(:drivers).returns(drivers)
+      @statement.stubs(:performance).returns(perf)
+
+      model = Portfolio::Drivers.allocate
+      model.stubs(:unexplained).returns(residual)
+
+      assert_equal model.reconciles?, registry.sections.find { |s| s[:key] == "drivers" }[:locals][:reconciles],
+                   "the table and the model must agree at a residual of #{residual.to_s('F')}"
+    end
+  end
+
   test "sections are visible only when the family has data for them" do
     visible = registry.sections.select { |s| s[:visible] }.map { |s| s[:key] }
     assert_includes visible, "holdings"

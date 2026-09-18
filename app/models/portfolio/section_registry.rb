@@ -255,16 +255,13 @@ class Portfolio::SectionRegistry
     # Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and not
     # at exact zero.
     #
-    # The difference is not academic. A multi-currency family accumulates
-    # sub-cent residue by construction: entry flows convert entry -> family at
-    # t-1 while balance-row flows went entry -> account at the entry date and
-    # then account -> family. A residual of 0.004 is normal and reconciles; at
-    # exact zero it would raise the "these figures do not reconcile" banner and
-    # print an "Unexplained $0.00" row, which is alarming and wrong.
-    DRIVER_RECONCILE_TOLERANCE = BigDecimal("0.01")
-
+    # Read from Portfolio::Drivers rather than written out again. This was a
+    # second literal, and the two had already drifted once -- exact zero here,
+    # a cent there -- so the section could call a period unreconciled while
+    # `Drivers#reconciles?` called it reconciled. See that constant for what
+    # the cent is for and where it does not hold.
     def driver_reconciles?
-      drivers[:unexplained].to_d.abs <= DRIVER_RECONCILE_TOLERANCE
+      drivers[:unexplained].to_d.abs <= Portfolio::Drivers::RECONCILE_TOLERANCE
     end
 
     # The decomposition as SIGNED contributions, in the order they are added.
@@ -303,11 +300,13 @@ class Portfolio::SectionRegistry
 
         # Dropped when it rounds away as well as when it is exactly zero: an
         # "Unexplained $0.00" row states a gap the figure itself denies, and
-        # sub-cent residue is normal in a multi-currency scope.
+        # sub-cent residue is normal in a multi-currency scope. "Rounds away"
+        # is true at two decimal places; see Portfolio::Drivers::RECONCILE_TOLERANCE
+        # for the zero-decimal currencies where it is not.
         signed.reject { |key, amount|
           next true if amount.nil? || amount.zero?
 
-          key == :unexplained && amount.abs <= DRIVER_RECONCILE_TOLERANCE
+          key == :unexplained && amount.abs <= Portfolio::Drivers::RECONCILE_TOLERANCE
         }
       end
     end

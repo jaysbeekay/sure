@@ -125,10 +125,29 @@ class Portfolio::Drivers
     }
   end
 
+  # One minor unit. Not academic slack: a multi-currency family accumulates
+  # sub-cent residue by construction, because entry flows convert entry ->
+  # family at t-1 while balance-row flows went entry -> account at the entry
+  # date and then account -> family. At exact zero an ordinary residual of
+  # 0.004 raises the "these figures do not reconcile" banner and prints an
+  # "Unexplained $0.00" row, which is alarming and wrong.
+  #
+  # Named here and read from here by Portfolio::SectionRegistry. The two were
+  # separate literals and had already drifted once -- exact zero on one side,
+  # a cent on the other -- so the section said a period reconciled while this
+  # said it did not.
+  #
+  # Known limitation: one minor unit assumes two decimal places. JPY, KRW and
+  # CLP carry `default_precision: 0` in config/currencies.yml, so a residual of
+  # 0.3 JPY is above this and the row prints "Unexplained JPY 0". Expressing
+  # the tolerance in the family currency's own minor unit belongs in the
+  # contract, not in a constant here.
+  RECONCILE_TOLERANCE = BigDecimal("0.01")
+
   # R12. A real check: `unexplained` is measured independently of the components
   # it is compared against, so this returns false when the decomposition does
   # not hold.
-  def reconciles?(tolerance: BigDecimal("0.01"))
+  def reconciles?(tolerance: RECONCILE_TOLERANCE)
     unexplained.abs <= tolerance
   end
 
