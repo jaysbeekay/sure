@@ -39,6 +39,24 @@ class Security < ApplicationRecord
   # is the user's veto over every source.
   CLASSIFICATION_SOURCES = %w[provider manual ai default].freeze
 
+  # Country code -> portfolio region and developed/emerging. Data in
+  # config/regions.yml, which carries the reasoning for the five-region split
+  # and for the developed/emerging calls the index families disagree on.
+  #
+  # `region` has no check constraint -- unlike asset class and sub-class -- so
+  # the vocabulary is held here rather than in the database. REGION_KEYS is
+  # what keeps it a vocabulary at all: a test asserts the config uses those
+  # five and nothing else, so a typo in a new country's entry fails rather
+  # than quietly creating a sixth region that an allocation chart would show
+  # as its own slice.
+  REGIONS = YAML.safe_load_file(Rails.root.join("config", "regions.yml")).freeze
+
+  # Snake_case keys, like ASSET_CLASSES and ASSET_SUB_CLASSES, so the label a
+  # user sees is a translation rather than the stored value.
+  REGION_KEYS = %w[
+    north_america europe asia_pacific latin_america middle_east_africa
+  ].freeze
+
   # Known securities provider keys — derived from the registry so adding a new
   # provider to Registry#available_providers automatically allows it here.
   # Evaluated at runtime (not boot) so runtime-enabled providers are accepted.
@@ -64,6 +82,9 @@ class Security < ApplicationRecord
   end
 
   before_validation :upcase_symbols
+  # Declared after :upcase_symbols deliberately -- `crypto?` compares against a
+  # canonical MIC, and that callback is what canonicalises it.
+  before_validation :apply_classification_defaults
   before_save :generate_logo_url_from_brandfetch, if: :should_generate_logo?
   before_save :reset_first_provider_price_on_if_provider_changed
 
@@ -104,6 +125,13 @@ class Security < ApplicationRecord
 
   def cash?
     kind == "cash"
+  end
+
+  # Derived rather than stored: developed/emerging is a property of the country,
+  # so there is no column for it and nothing to keep in sync. Nil for a country
+  # the config does not name.
+  def development_status
+    REGIONS.dig(country_code.to_s.upcase, "development")
   end
 
   # True when this security represents a crypto asset. Today the only signal
@@ -262,6 +290,46 @@ class Security < ApplicationRecord
       host.sub(/\Awww\./, "")
     rescue URI::InvalidURIError
       nil
+    end
+
+    # The weakest writer in the precedence order (default -> provider -> ai ->
+    # manual), so it fills only what is still empty and never touches a
+    # security whose classification the user has locked. That is what makes it
+    # safe on every save, which is also how an existing security picks these
+    # up: as it is next written to, with no backfill job.
+    def apply_classification_defaults
+      return if classification_locked?
+
+      apply_default_asset_class
+      apply_default_region
+    end
+
+    # Only the two kinds a provider cannot answer. An ordinary listed
+    # instrument is left alone on purpose: "listed in the US" says nothing
+    # about whether it is a stock, an ETF or a bond, and guessing would mark
+    # it `default` and make the provider's later answer look like an
+    # overwrite rather than the first real classification.
+    def apply_default_asset_class
+      return if asset_class.present? || asset_sub_class.present?
+
+      defaults =
+        if cash?
+          [ "liquidity", "cash" ]
+        elsif crypto?
+          [ "alternative_investment", "cryptocurrency" ]
+        end
+      return if defaults.nil?
+
+      self.asset_class, self.asset_sub_class = defaults
+      # Claimed only when this actually classified the instrument. Filling a
+      # region does not make the classification ours.
+      self.classification_source ||= "default"
+    end
+
+    def apply_default_region
+      return if region.present?
+
+      self.region = REGIONS.dig(country_code.to_s.upcase, "region")
     end
 
     def upcase_symbols
