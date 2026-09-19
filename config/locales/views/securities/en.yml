@@ -14,3 +14,10 @@ en:
       binance_public: Binance
       moex_public: MOEX
       mansa: Mansa
+    tags:
+      saved: Tags saved.
+      title: Tags
+      description: Your own grouping for this instrument. Tags are private to your
+        household, unlike the classification above.
+      label: Tags
+      save: Save tags
