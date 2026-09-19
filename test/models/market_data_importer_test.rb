@@ -60,6 +60,22 @@ class MarketDataImporterTest < ActiveSupport::TestCase
     assert_operator after, :>, before + 1, "Should insert at least two new exchange-rate rows (forward + computed inverse)"
   end
 
+  # Pins the keyword rather than the behaviour it enables. The test below stubs
+  # `fetch_security_info` and never looks at how `import_provider_details` was
+  # called, so a change dropping this keyword would silently switch off
+  # classification backfill with every test still green.
+  test "asks for classification when importing security details" do
+    Security.create!(ticker: "AAPL", exchange_operating_mic: "XNAS")
+
+    Security.any_instance.stubs(:import_provider_prices)
+    Security.any_instance
+            .expects(:import_provider_details)
+            .with(has_entry(include_classification: true))
+            .at_least_once
+
+    MarketDataImporter.new(mode: :snapshot).import_security_prices
+  end
+
   test "syncs security prices" do
     security = Security.create!(ticker: "AAPL", exchange_operating_mic: "XNAS")
 

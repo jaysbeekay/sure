@@ -64,8 +64,36 @@ module PortfoliosHelper
       "#{t('portfolios.kpi_row.period_return_unconvertible', count: unconvertible_count)}"
   end
 
+  # Segment names arrive as stored keys, not display text -- `equity`,
+  # `north_america`, `unclassified` -- because that is what the taxonomy stores
+  # so the label can be translated. Anything without a key of its own (a
+  # security, an account, a currency, and the provider free text in `sector`)
+  # is shown as it comes.
+  ALLOCATION_TRANSLATED_GROUPINGS = {
+    "kind" => "kinds",
+    "asset_class" => "asset_classes",
+    "asset_sub_class" => "asset_sub_classes",
+    "region" => "regions"
+  }.freeze
+
+  # The grouping one level down, so a child row's label is translated in its own
+  # vocabulary rather than its parent's.
+  def allocation_child_grouping(by)
+    by.to_s == "asset_class" ? "asset_sub_class" : "security"
+  end
+
   def allocation_segment_name(segment, by)
-    by.to_s == "kind" ? t("portfolios.allocation.kinds.#{segment.name}") : segment.name
+    # By id, not by name: a real security actually called "unclassified" would
+    # otherwise have its name replaced with the translated bucket label.
+    return t("portfolios.allocation.unclassified") if segment.id == InvestmentStatement::UNCLASSIFIED
+
+    scope = ALLOCATION_TRANSLATED_GROUPINGS[by.to_s]
+    return segment.name if scope.nil?
+
+    # `default:` rather than a bare lookup: `sector` is provider free text and
+    # `region` could carry a value the config named before this list did, and a
+    # missing label should show the value rather than "translation missing".
+    t("portfolios.allocation.#{scope}.#{segment.name}", default: segment.name)
   end
 
   # The same palette, in the same order, as

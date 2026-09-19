@@ -185,7 +185,9 @@ class Provider::Eodhd < Provider
         logo_url: general.dig("LogoURL"),
         description: general.dig("Description"),
         kind: general.dig("Type"),
-        exchange_operating_mic: exchange_operating_mic
+        exchange_operating_mic: exchange_operating_mic,
+        sector: general.dig("Sector"),
+        industry: general.dig("Industry")
       )
     end
   end

@@ -5,9 +5,40 @@ de:
       grouping_aria_label: Allokation gruppieren nach
       groupings:
         account: Konto
+        asset_class: Anlageklasse
+        asset_sub_class: Unterklasse
         currency: Währung
         kind: Art
+        region: Region
+        sector: Sektor
         security: Wertpapier
+      asset_classes:
+        alternative_investment: Alternative Anlagen
+        commodity: Rohstoffe
+        equity: Aktien
+        fixed_income: Anleihen
+        liquidity: Liquidität
+        real_estate: Immobilien
+      asset_sub_classes:
+        bond: Anleihe
+        cash: Bargeld
+        collectible: Sammlerstück
+        commodity: Rohstoff
+        cryptocurrency: Kryptowährung
+        etf: ETF
+        loan: Darlehen
+        mutual_fund: Investmentfonds
+        precious_metal: Edelmetall
+        private_equity: Private Equity
+        real_estate: Immobilien
+        stock: Aktie
+      regions:
+        asia_pacific: Asien-Pazifik
+        europe: Europa
+        latin_america: Lateinamerika
+        middle_east_africa: Naher Osten & Afrika
+        north_america: Nordamerika
+      unclassified: Nicht klassifiziert
       kinds:
         cash: Bargeld
         crypto: Krypto
