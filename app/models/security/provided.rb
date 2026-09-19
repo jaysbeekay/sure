@@ -228,7 +228,7 @@ module Security::Provided
   # `require_holding_write_permission!` -- a user asking for one holding's
   # prices, not a page view; `#show` makes no provider call at all. It keeps
   # the narrow gate because the user asked for prices, not for classification.
-  def import_provider_details(clear_cache: false, include_classification: false)
+  def import_provider_details(clear_cache: false, include_classification: false, include_constituents: false)
     unless price_data_provider.present?
       Rails.logger.warn("No provider configured for Security.import_provider_details")
       return
@@ -257,7 +257,14 @@ module Security::Provided
     wants_classification = include_classification && !classification_locked? &&
       classification_source.blank? && sector.blank? && industry.blank?
 
-    unless has_metadata && !wants_classification && !clear_cache
+    # Keyed on the TIMESTAMP, not on whether constituents are present. Most
+    # securities are not funds, so the provider returns nothing for them -- and a
+    # presence-keyed gate would re-ask every one of those on every sync, for
+    # ever. The timestamp is written whether or not anything came back, which is
+    # what lets "never asked" be told from "asked, nothing there".
+    wants_constituents = include_constituents && constituents_fetched_at.nil?
+
+    unless has_metadata && !wants_classification && !wants_constituents && !clear_cache
       response = price_data_provider.fetch_security_info(
         symbol: ticker,
         exchange_operating_mic: exchange_operating_mic
@@ -272,6 +279,7 @@ module Security::Provided
         attrs[:website_url] = response.data.links   if response.data.links.present?
         attrs.merge!(classification_attributes_from(response.data))
         update(attrs) if attrs.any?
+        store_constituents(response.data.constituents) if wants_constituents
       else
         Rails.logger.warn("Failed to fetch security info for #{ticker} from #{price_data_provider.class.name}: #{response.error.message}")
         DebugLogEntry.capture(
@@ -361,6 +369,45 @@ module Security::Provided
   # The provider is the second-weakest writer: it may fill what nothing has
   # answered, and may replace a `default`, but never a `manual` classification,
   # and never anything at all on a locked security.
+  # Replaces the fund's holdings wholesale rather than merging: a constituent
+  # that has left the fund must leave the table with it, and a merge would leave
+  # it behind for ever.
+  #
+  # The timestamp is written even when `list` is nil -- that is the whole point
+  # of the gate above.
+  def store_constituents(list)
+    transaction do
+      constituents.destroy_all
+
+      Array(list).each do |entry|
+        weight = entry[:weight] || entry["weight"]
+        constituents.create!(
+          ticker: entry[:ticker] || entry["ticker"],
+          name: entry[:name] || entry["name"],
+          weight: weight.present? ? BigDecimal(weight.to_s) : nil
+        )
+      end
+
+      update_column(:constituents_fetched_at, Time.current)
+    end
+  end
+
+  # The fund expanded into what it actually holds, as fractions summing to 1.
+  #
+  # Normalised against the ACTUAL sum rather than against 100. A fund's reported
+  # holdings routinely fall short -- cash, rounding, securities lending -- so
+  # dividing by 100 silently under-reports every constituent and the expansion
+  # does not add up to the position it replaces.
+  def look_through_weights
+    weighted = constituents.where.not(weight: nil)
+    total = weighted.sum(:weight)
+    return {} if total.zero?
+
+    weighted.each_with_object({}) do |constituent, map|
+      map[constituent.ticker] = constituent.weight / total
+    end
+  end
+
   def classification_attributes_from(data)
     return {} if classification_locked?
 

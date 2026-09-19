@@ -96,6 +96,7 @@ class Security < ApplicationRecord
   # classification columns, which are shared.
   has_many :taggings, as: :taggable, dependent: :destroy
   has_many :tags, through: :taggings
+  has_many :constituents, class_name: "Security::Constituent", dependent: :destroy
 
   validates :ticker, presence: true
   validates :ticker, uniqueness: { scope: :exchange_operating_mic, case_sensitive: false }
