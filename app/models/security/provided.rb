@@ -216,12 +216,18 @@ module Security::Provided
 
   # `include_classification` widens the refetch gate below so a security that
   # already has a name and a logo -- which is most of them -- can still be
-  # asked for its classification. It defaults to FALSE because the gate is what
-  # stands between this method and a provider call, and one of the three
-  # callers is `HoldingsController#sync_prices`: widening it unconditionally would put
-  # a provider request on every holding page view, forever, for any security
-  # whose provider returns no sector. The two importers pass true, so
-  # classification backfills at sync cadence instead.
+  # asked for its classification.
+  #
+  # It defaults to FALSE because the unbounded shape is the importers' cadence,
+  # not any single call. `Account::MarketDataImporter` and `MarketDataImporter`
+  # walk every security on every sync, so a widened gate that never closes
+  # costs one provider request per security per sync, indefinitely. The gate
+  # closing is what bounds that, and the importers opt in on that basis.
+  #
+  # The third caller, `HoldingsController#sync_prices`, is a POST behind
+  # `require_holding_write_permission!` -- a user asking for one holding's
+  # prices, not a page view; `#show` makes no provider call at all. It keeps
+  # the narrow gate because the user asked for prices, not for classification.
   def import_provider_details(clear_cache: false, include_classification: false)
     unless price_data_provider.present?
       Rails.logger.warn("No provider configured for Security.import_provider_details")

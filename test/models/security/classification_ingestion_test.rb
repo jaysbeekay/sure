@@ -97,11 +97,13 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
     @security.import_provider_details(include_classification: true)
   end
 
-  # The reason `include_classification` defaults to false. `HoldingsController`
-  # calls this on every holding page view; if the widened gate applied there, a
-  # security whose provider returns no sector would be re-fetched on every view,
-  # forever. The importers opt in; the view does not.
-  test "the default caller does not widen the gate, so a page view makes no provider call" do
+  # The reason `include_classification` defaults to false. The unbounded shape
+  # is the importers' cadence -- they walk every security on every sync -- so a
+  # caller that has not opted in must not widen the gate and inherit that cost.
+  # `HoldingsController#sync_prices` is the one such caller: a POST behind
+  # `require_holding_write_permission!`, where the user asked for prices rather
+  # than for classification.
+  test "a caller that has not opted in makes no provider call" do
     @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png")
     provider = mock("provider")
     provider.expects(:fetch_security_info).never
