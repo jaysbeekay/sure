@@ -76,11 +76,17 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # constant. This asserts each one renders rather than 500s -- including on a
   # portfolio with nothing classified, which is every portfolio until the
   # provider and default slices land.
-  test "every classification grouping renders" do
+  test "every classification grouping renders, and is actually the grouping asked for" do
     %w[asset_class asset_sub_class sector region].each do |grouping|
       get portfolio_path(by: grouping)
 
       assert_response :success, "?by=#{grouping} did not render"
+      # A 200 alone proves nothing: `params[:by].presence_in(ALLOCATION_GROUPINGS)`
+      # returns nil for a grouping dropped from the constant, and the page then
+      # renders the DEFAULT grouping with the same 200. Assert the picker marks
+      # this grouping active, which only happens when it survived the whitelist.
+      assert_select %([data-portfolio-allocation="#{grouping}"]), { count: 1 },
+                    "?by=#{grouping} fell back to the default grouping"
     end
   end
 

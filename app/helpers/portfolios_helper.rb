@@ -73,7 +73,9 @@ module PortfoliosHelper
   end
 
   def allocation_segment_name(segment, by)
-    return t("portfolios.allocation.unclassified") if segment.name == InvestmentStatement::UNCLASSIFIED
+    # By id, not by name: a real security actually called "unclassified" would
+    # otherwise have its name replaced with the translated bucket label.
+    return t("portfolios.allocation.unclassified") if segment.id == InvestmentStatement::UNCLASSIFIED
 
     scope = ALLOCATION_TRANSLATED_GROUPINGS[by.to_s]
     return segment.name if scope.nil?

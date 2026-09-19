@@ -1544,6 +1544,30 @@ class InvestmentStatementTest < ActiveSupport::TestCase
                  "cash was given a region it does not have"
   end
 
+  # A non-primary-currency cash POSITION is a real holding -- Security.cash_for
+  # creates one per currency -- and its classification columns are empty until
+  # the defaults slice populates them. Reading the column alone filed the
+  # family's euros under Unclassified while the account's own euro cash balance
+  # sat under Liquidity: two answers for the same money on one chart.
+  test "a cash holding is liquidity, whatever its classification columns say" do
+    account = create_investment_account(balance: 2000, cash_balance: 0)
+    cash_security = Security.create!(ticker: "CASH-EUR-#{SecureRandom.hex(3)}", kind: "cash", offline: true)
+    assert_nil cash_security.asset_class, "precondition: the taxonomy is not populated here"
+    Holding.create!(account: account, security: cash_security, date: Date.current,
+                    qty: 1, price: 2000, amount: 2000, currency: "USD")
+
+    by_class = @statement.allocation_by("asset_class").index_by(&:id)
+    by_sub = @statement.allocation_by("asset_sub_class").index_by(&:id)
+
+    assert_equal 2000, by_class["liquidity"]&.amount&.amount,
+                 "a cash holding was filed as Unclassified"
+    assert_equal 2000, by_sub["cash"]&.amount&.amount
+
+    # And the drill-down agrees, or the parent row and its children disagree.
+    children = @statement.allocation_children("asset_class", "liquidity").index_by(&:id)
+    assert_equal 2000, children["cash"]&.amount&.amount
+  end
+
   test "allocation groups by sector and region from the security's own columns" do
     account = create_investment_account(balance: 2000, cash_balance: 0)
     tech = create_classified_security(sector: "Technology", region: "north_america")

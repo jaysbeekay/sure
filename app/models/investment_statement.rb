@@ -216,7 +216,7 @@ class InvestmentStatement
   def allocation_children(by, bucket)
     case by.to_s
     when "asset_class" then allocation_sub_classes_within(bucket)
-    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket)
+    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, "cash")
     else []
     end
   end
@@ -840,7 +840,7 @@ class InvestmentStatement
       grouped = Hash.new(0)
 
       current_holdings.each do |holding|
-        bucket = holding.security.public_send(column).presence || UNCLASSIFIED
+        bucket = classification_bucket(holding.security, column, cash_bucket)
         grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
       end
 
@@ -860,8 +860,8 @@ class InvestmentStatement
     def allocation_sub_classes_within(asset_class)
       grouped = Hash.new(0)
 
-      holdings_classified_as(:asset_class, asset_class).each do |holding|
-        bucket = holding.security.asset_sub_class.presence || UNCLASSIFIED
+      holdings_classified_as(:asset_class, asset_class, "liquidity").each do |holding|
+        bucket = classification_bucket(holding.security, :asset_sub_class, "cash")
         grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
       end
 
@@ -877,17 +877,32 @@ class InvestmentStatement
 
     # The holdings themselves, the bottom of the ladder. Named by security so
     # the row reads as a position rather than as another bucket.
-    def allocation_holdings_within(column, bucket)
-      rows = holdings_classified_as(column, bucket).map do |holding|
+    def allocation_holdings_within(column, bucket, cash_bucket = nil)
+      rows = holdings_classified_as(column, bucket, cash_bucket).map do |holding|
         [ holding.security_id, holding.security.name.presence || holding.security.ticker,
           convert_to_family_currency(holding.amount, holding.currency) ]
       end
       build_segments(rows)
     end
 
-    def holdings_classified_as(column, bucket)
+    # One rule for which bucket a holding falls in, shared by the grouping, the
+    # drill-down and the filter, so the three cannot disagree.
+    #
+    # A cash security is answered from `cash?` rather than from its columns. A
+    # non-primary-currency cash position is a real holding -- `Security.cash_for`
+    # creates one per currency -- and until the defaults slice populates the
+    # taxonomy its `asset_class` is nil. Reading the column alone would file the
+    # family's euros under Unclassified while the account's own euro cash
+    # balance sat under Liquidity: two answers for the same money on one chart.
+    def classification_bucket(security, column, cash_bucket)
+      return cash_bucket if security.cash? && cash_bucket.present?
+
+      security.public_send(column).presence || UNCLASSIFIED
+    end
+
+    def holdings_classified_as(column, bucket, cash_bucket = nil)
       current_holdings.select do |holding|
-        (holding.security.public_send(column).presence || UNCLASSIFIED) == bucket
+        classification_bucket(holding.security, column, cash_bucket) == bucket
       end
     end
 
