@@ -18,10 +18,16 @@ module Provider::SecurityConcept
   # defaults `currency:`. This Data has eleven implementers; without the
   # defaults every one of them would raise at construction the day these
   # fields were added.
+  #
+  # `constituents` is a fund's own holdings -- an array of
+  # `{ticker:, name:, weight:}`, weight being the provider's percentage of fund
+  # assets. Nil for anything that is not a fund, which is most securities, and
+  # nil rather than `[]` so "not a fund" and "a fund we could not read" are the
+  # same answer to the caller: neither is worth asking about again.
   SecurityInfo = Data.define(:symbol, :name, :links, :logo_url, :description, :kind, :exchange_operating_mic,
-                             :sector, :industry) do
+                             :sector, :industry, :constituents) do
     def initialize(symbol:, name:, links:, logo_url:, description:, kind:, exchange_operating_mic:,
-                   sector: nil, industry: nil)
+                   sector: nil, industry: nil, constituents: nil)
       super
     end
   end
