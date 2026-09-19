@@ -84,6 +84,9 @@ en:
       net_contributions: Net contributions
       no_data: Not enough data
       period_return: Period return
+      period_return_unconvertible:
+        one: excludes 1 account with no exchange rate
+        other: excludes %{count} accounts with no exchange rate
       unrealized_pnl: Unrealised P&L
       value: Value
     realized_gains:

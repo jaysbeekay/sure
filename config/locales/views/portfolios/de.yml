@@ -84,6 +84,9 @@ de:
       net_contributions: Nettoeinzahlungen
       no_data: Nicht genug Daten
       period_return: Rendite im Zeitraum
+      period_return_unconvertible:
+        one: ohne 1 Konto ohne Wechselkurs
+        other: ohne %{count} Konten ohne Wechselkurs
       unrealized_pnl: Nicht realisiertes Ergebnis
       value: Wert
     realized_gains:
