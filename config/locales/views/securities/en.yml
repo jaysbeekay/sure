@@ -14,3 +14,50 @@ en:
       binance_public: Binance
       moex_public: MOEX
       mansa: Mansa
+    classification:
+      saved: Classification saved.
+      reset_done: Classification reset. Providers may classify it again on next sync.
+      title: Classification
+      description: What this instrument is. Saving your own answer stops providers
+        and defaults from changing it.
+      asset_class_label: Asset class
+      asset_sub_class_label: Sub-class
+      sector_label: Sector
+      region_label: Region
+      sector_placeholder: e.g. Technology
+      unset: "Not set"
+      save: Save classification
+      shared_note: Securities are shared, so this classification applies wherever
+        this instrument is held.
+      manual_label: Set by you
+      reset: Reset classification
+      reset_confirm_title: Reset classification?
+      reset_confirm_body: This clears your answer and lets providers classify this
+        security again on the next sync.
+    taxonomy:
+      asset_classes:
+        alternative_investment: Alternative
+        commodity: Commodity
+        equity: Equity
+        fixed_income: Fixed income
+        liquidity: Liquidity
+        real_estate: Real estate
+      asset_sub_classes:
+        bond: Bond
+        cash: Cash
+        collectible: Collectible
+        commodity: Commodity
+        cryptocurrency: Cryptocurrency
+        etf: ETF
+        loan: Loan
+        mutual_fund: Mutual fund
+        precious_metal: Precious metal
+        private_equity: Private equity
+        real_estate: Real estate
+        stock: Stock
+      regions:
+        asia_pacific: Asia-Pacific
+        europe: Europe
+        latin_america: Latin America
+        middle_east_africa: Middle East & Africa
+        north_america: North America

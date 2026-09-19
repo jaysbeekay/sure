@@ -1,8 +1,8 @@
 class HoldingsController < ApplicationController
   include StreamExtensions
 
-  before_action :set_holding, only: %i[show update destroy unlock_cost_basis remap_security reset_security sync_prices]
-  before_action :require_holding_write_permission!, only: %i[update destroy unlock_cost_basis remap_security reset_security sync_prices]
+  before_action :set_holding, only: %i[show update destroy unlock_cost_basis remap_security reset_security sync_prices classification reset_classification]
+  before_action :require_holding_write_permission!, only: %i[update destroy unlock_cost_basis remap_security reset_security sync_prices classification reset_classification]
 
   def index
     @account = accessible_accounts.find(params[:account_id])
@@ -28,6 +28,49 @@ class HoldingsController < ApplicationController
     end
 
     # Redirect to account page holdings tab to refresh list and close drawer
+    redirect_to account_path(@holding.account, tab: "holdings")
+  end
+
+  # The user's own answer about what an instrument is. `"manual"` outranks every
+  # other writer in `Security::Provided`, and `classification_locked` stops
+  # `Security#apply_classification_defaults` -- but until this action existed
+  # nothing in the application could set either, so both rules were unreachable
+  # and a security the providers will not classify (an ETF, or a country the
+  # region config does not name) stayed in the "Unclassified" bucket for good.
+  #
+  # `securities` has no `family_id`, so this writes a row every family holding
+  # the security shares. That is what the slice specifies and it is harmless on
+  # a self-hosted instance; a managed one wants a family-scoped override table
+  # instead, tracked on #122.
+  def classification
+    security = @holding.security
+    security.assign_attributes(classification_params)
+    security.classification_source = "manual"
+    security.classification_locked = true
+
+    if security.save
+      flash[:notice] = t("securities.classification.saved")
+    else
+      # The vocabularies are also database check constraints, so an
+      # out-of-vocabulary value that reached Postgres would be a 500 rather
+      # than a refusal. The model validations are what keep it a refusal.
+      flash[:alert] = security.errors.full_messages.to_sentence
+    end
+
+    redirect_to account_path(@holding.account, tab: "holdings")
+  end
+
+  # Clears the classification outright rather than only lifting the lock. The
+  # provider path only fills a field it finds EMPTY -- a sector the user set is
+  # never restated -- so leaving the old values in place would lift the lock and
+  # still leave the user's answer standing for ever.
+  def reset_classification
+    @holding.security.update!(
+      asset_class: nil, asset_sub_class: nil, sector: nil, region: nil,
+      classification_source: nil, classification_locked: false
+    )
+    flash[:notice] = t("securities.classification.reset_done")
+
     redirect_to account_path(@holding.account, tab: "holdings")
   end
 
@@ -182,5 +225,16 @@ class HoldingsController < ApplicationController
 
     def holding_params
       params.require(:holding).permit(:cost_basis)
+    end
+
+    # Blank is stored as nil, not "". `Security::Provided`'s skip gate asks
+    # `sector.blank?` -- which an empty string satisfies -- while a `WHERE
+    # sector IS NULL` would not, so the two would disagree about whether the
+    # security is classified. One shape in the column keeps them agreeing.
+    def classification_params
+      params.require(:security)
+            .permit(:asset_class, :asset_sub_class, :sector, :region)
+            .to_h
+            .transform_values { |value| value.is_a?(String) ? value.strip.presence : value }
     end
 end
