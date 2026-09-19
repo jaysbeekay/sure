@@ -79,7 +79,13 @@ PT:
 SE:
   region: europe
   development: developed
-NO:
+# Quoted, and it has to be. `NO` is a YAML 1.1 boolean literal, so an unquoted
+# key here loads as the boolean `false` rather than the string "NO" -- which
+# silently left every Norwegian-listed security with no region, because the
+# lookup is by string. The test "every country code is a two-letter string"
+# catches this and any other literal that YAML would rather read as a value
+# (ON, OFF, YES, Y, N, TRUE, FALSE).
+"NO":
   region: europe
   development: developed
 DK:

@@ -98,6 +98,10 @@ class Security < ApplicationRecord
   validates :asset_class, inclusion: { in: ASSET_CLASSES }, allow_nil: true
   validates :asset_sub_class, inclusion: { in: ASSET_SUB_CLASSES }, allow_nil: true
   validates :classification_source, inclusion: { in: CLASSIFICATION_SOURCES }, allow_nil: true
+  # `region` has no check constraint, so this is the only thing keeping it a
+  # vocabulary rather than free text. Nil is allowed: a country the config does
+  # not name leaves the region unanswered rather than guessed.
+  validates :region, inclusion: { in: REGION_KEYS }, allow_nil: true
 
   scope :online, -> { where(offline: false) }
   scope :standard, -> { where(kind: "standard") }
@@ -131,6 +135,8 @@ class Security < ApplicationRecord
   # so there is no column for it and nothing to keep in sync. Nil for a country
   # the config does not name.
   def development_status
+    return nil if offline?
+
     REGIONS.dig(country_code.to_s.upcase, "development")
   end
 
@@ -310,7 +316,7 @@ class Security < ApplicationRecord
     # it `default` and make the provider's later answer look like an
     # overwrite rather than the first real classification.
     def apply_default_asset_class
-      return if asset_class.present? || asset_sub_class.present?
+      return if asset_class.present? && asset_sub_class.present?
 
       defaults =
         if cash?
@@ -320,7 +326,11 @@ class Security < ApplicationRecord
         end
       return if defaults.nil?
 
-      self.asset_class, self.asset_sub_class = defaults
+      # Each field is filled on its own. Guarding on "either is set" left a
+      # half-classified security half-classified for good -- an asset class
+      # with no sub-class is not a state anything downstream can group by.
+      self.asset_class = defaults.first if asset_class.blank?
+      self.asset_sub_class = defaults.last if asset_sub_class.blank?
       # Claimed only when this actually classified the instrument. Filling a
       # region does not make the classification ours.
       self.classification_source ||= "default"
@@ -328,6 +338,16 @@ class Security < ApplicationRecord
 
     def apply_default_region
       return if region.present?
+      # An offline security's `country_code` is not the instrument's listing
+      # country. `Security::Resolver#offline_security` persists whatever the
+      # caller passed, and the resolver's own ranking calls that value
+      # `user_country` -- it is a search hint about the person, not a fact
+      # about the instrument. Securities are global rather than family-scoped,
+      # so deriving a region from it would publish one family's guess to
+      # everyone holding that security. Provider-matched securities take
+      # `match.country_code`, which is the listing country, and those do
+      # classify.
+      return if offline?
 
       self.region = REGIONS.dig(country_code.to_s.upcase, "region")
     end
