@@ -72,6 +72,30 @@ class RecurringTransaction::PipelineTest < ActiveSupport::TestCase
     end
   end
 
+  # The config key this test depends on, asserted directly rather than through
+  # the failure it causes.
+  #
+  # `database.yml` used to say `user:` where Rails' key is `username:`. The
+  # PostgreSQL adapter passes unrecognised keys through to libpq, which does
+  # understand `user`, so Rails connected fine and nothing looked wrong --
+  # but `configuration_hash` carried no `:username`, the test below
+  # `.compact`-dropped the nil, and libpq fell back to the OS user. In the dev
+  # container that is `root`, which produced "password authentication failed
+  # for user root" on every local run, on every branch, for months.
+  #
+  # Deliberately NOT guarded with `config[:username] || config[:user]` in the
+  # test: that would make the test pass again if the key regressed, which is
+  # the failure mode that hid this in the first place. Assert the config
+  # instead, so a revert fails here and says why.
+  test "the database config exposes the username key Rails documents" do
+    config = ActiveRecord::Base.connection_pool.db_config.configuration_hash
+
+    assert config.key?(:username),
+           "database.yml must use `username:`, not `user:` -- otherwise " \
+           "libpq silently falls back to the OS user"
+    assert_nil config[:user], "`user:` is not a Rails config key; use `username:`"
+  end
+
   test "run_with_lock! refuses to stack on a held family lock" do
     key = Pipeline.advisory_lock_key(@family.id)
     # Transactional tests hand every checkout the same shared fixture
