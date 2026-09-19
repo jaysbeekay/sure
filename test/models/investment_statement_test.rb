@@ -533,6 +533,27 @@ class InvestmentStatementTest < ActiveSupport::TestCase
   # "defaulting to 1 when unavailable" and shared with the balance sheet and
   # `Accountable`. That is a wider defect than this fix, tracked by #167, and
   # this test does not claim to cover it.
+  # The behavioural half of the guard below. The regex catches one spelling;
+  # this catches the effect however it is spelled -- `1::numeric`, a CASE with
+  # an ELSE 1, different whitespace. If a parity default returns in any form,
+  # the unconvertible account stops being excluded and this fails.
+  test "an unconvertible account is excluded however a parity default might be spelled" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    usd = create_investment_account(balance: 10_500)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+
+    [ [ usd, "USD" ], [ eur, "EUR" ] ].each do |account, currency|
+      account.balances.create!(date: period.date_range.begin - 1.day, balance: 10_000,
+                               currency: currency, start_non_cash_balance: 10_000, net_market_flows: 0)
+    end
+
+    trend = @statement.period_return_trend(period: period)
+
+    assert_equal 10_000, trend.previous.amount,
+                 "the EUR account contributed, so something converted it without a rate"
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
+  end
+
   test "no COALESCE parity conversion survives in this model's SQL" do
     source = File.read(Rails.root.join("app/models/investment_statement.rb"))
 
