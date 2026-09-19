@@ -13,3 +13,10 @@ de:
       mfapi: MFAPI.in
       binance_public: Binance
       moex_public: MOEX
+    tags:
+      saved: Tags gespeichert.
+      title: Tags
+      description: Deine eigene Einteilung für dieses Instrument. Tags sind privat
+        für deinen Haushalt, anders als die Klassifizierung darüber.
+      label: Tags
+      save: Tags speichern

@@ -214,6 +214,32 @@
         </dl>
       </div>
     <% end %>
+    <%# The family-scoped counterpart to the shared classification columns: a
+        Tag carries family_id, so nothing here is visible to another family
+        holding the same security. %>
+    <% dialog.with_section(title: t("securities.tags.title"), open: false) do %>
+      <div class="px-3 py-2 space-y-3">
+        <p class="text-xs text-secondary"><%= t("securities.tags.description") %></p>
+        <%= styled_form_with url: tags_holding_path(@holding),
+              method: :patch,
+              scope: :security,
+              class: "space-y-3",
+              data: { turbo: false } do |f| %>
+          <%# @family_tags is Current.family.tags -- never Tag.all. The security
+              row is shared, so listing another family's tags here would
+              disclose their names to this one. %>
+          <%= render DS::TagSelect.new(
+                form: f,
+                tags: @family_tags,
+                selected_ids: @holding.security.tags.where(family: Current.family).pluck(:id),
+                label: t("securities.tags.label")
+              ) %>
+          <div class="flex justify-end">
+            <%= f.submit t("securities.tags.save") %>
+          </div>
+        <% end %>
+      </div>
+    <% end %>
     <% dialog.with_section(title: t(".history"), open: true) do %>
       <div class="space-y-2">
         <div class="px-3 py-4">
