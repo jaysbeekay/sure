@@ -524,9 +524,16 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 3000, @statement.period_return_trend(period: period).previous.amount
   end
 
-  # The contract rule itself, so the pattern cannot come back by a different
-  # route. R13 names this method as the exception; after this it does not.
-  test "no parity conversion survives anywhere in this model" do
+  # The SQL pattern R13 names, so it cannot come back by a different route.
+  #
+  # Scoped to the SQL conversions deliberately, and the scope is worth stating:
+  # this model ALSO converts at parity in Ruby, at
+  # `convert_to_family_currency` -> `exchange_rates[from_currency] || 1`, which
+  # reads the `ExchangeRate.rates_for` batch helper -- documented as
+  # "defaulting to 1 when unavailable" and shared with the balance sheet and
+  # `Accountable`. That is a wider defect than this fix, tracked by #167, and
+  # this test does not claim to cover it.
+  test "no COALESCE parity conversion survives in this model's SQL" do
     source = File.read(Rails.root.join("app/models/investment_statement.rb"))
 
     assert_no_match(/COALESCE\(\s*\w+\.rate\s*,\s*1\s*\)/, source,
