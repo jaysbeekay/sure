@@ -1,0 +1,78 @@
+require "test_helper"
+
+# The tool writes PROPOSALS, never classifications. It is registered through
+# `Assistant.function_classes`, which also feeds `/mcp` -- so it is callable by an
+# external agent and re-checks the family scope itself rather than trusting the
+# caller.
+class Assistant::Function::SuggestSecurityClassificationTest < ActiveSupport::TestCase
+  setup do
+    @user = users(:family_admin)
+    @family = @user.family
+    @security = securities(:aapl)
+    @function = Assistant::Function::SuggestSecurityClassification.new(@user)
+  end
+
+  test "a proposal is recorded, and the security is left alone" do
+    result = @function.call("proposals" => [ {
+      "ticker" => "AAPL", "asset_class" => "equity", "asset_sub_class" => "stock",
+      "sector" => "Technology", "rationale" => "Common stock listed on XNAS."
+    } ])
+
+    proposal = Security::ClassificationProposal.sole
+    assert_equal @security, proposal.security
+    assert_equal @family, proposal.family
+    assert_equal "equity", proposal.asset_class
+    assert proposal.pending?
+
+    assert_nil @security.reload.asset_class, "the tool classified a security directly"
+    assert_equal 1, result[:recorded]
+  end
+
+  # The tool is reachable over /mcp, so the ticker is resolved within the family's
+  # own securities rather than across the table. Otherwise an external caller
+  # could queue a proposal against an instrument this family does not hold.
+  test "a ticker the family does not hold is refused" do
+    Security.create!(ticker: "NVDA", exchange_operating_mic: "XNAS", country_code: "US")
+
+    result = @function.call("proposals" => [ {
+      "ticker" => "NVDA", "asset_class" => "equity"
+    } ])
+
+    assert_equal 0, result[:recorded]
+    assert_empty Security::ClassificationProposal.all
+    assert_match(/not held/i, result[:skipped].first[:reason])
+  end
+
+  test "a security the user has already classified is skipped, with a reason" do
+    @security.update!(asset_class: "fixed_income", classification_source: "manual")
+
+    result = @function.call("proposals" => [ {
+      "ticker" => "AAPL", "asset_class" => "equity"
+    } ])
+
+    assert_equal 0, result[:recorded]
+    assert_empty Security::ClassificationProposal.all
+    assert_match(/by hand/i, result[:skipped].first[:reason])
+  end
+
+  test "an invalid value is skipped rather than raising" do
+    result = nil
+    assert_nothing_raised do
+      result = @function.call("proposals" => [ {
+        "ticker" => "AAPL", "asset_class" => "nonsense"
+      } ])
+    end
+
+    assert_equal 0, result[:recorded]
+    assert_empty Security::ClassificationProposal.all
+  end
+
+  test "the tool is registered for preview users only" do
+    assert_includes Assistant::PREVIEW_FUNCTION_CLASSES,
+                    Assistant::Function::SuggestSecurityClassification
+
+    plain = Assistant.function_classes(users(:family_member))
+    assert_not_includes plain, Assistant::Function::SuggestSecurityClassification,
+                        "a preview tool reached the default surface, which /mcp also serves"
+  end
+end
