@@ -1552,7 +1552,13 @@ class InvestmentStatementTest < ActiveSupport::TestCase
   test "a cash holding is liquidity, whatever its classification columns say" do
     account = create_investment_account(balance: 2000, cash_balance: 0)
     cash_security = Security.create!(ticker: "CASH-EUR-#{SecureRandom.hex(3)}", kind: "cash", offline: true)
-    assert_nil cash_security.asset_class, "precondition: the taxonomy is not populated here"
+    # The columns are emptied deliberately. Since the defaults slice landed,
+    # `Security#apply_default_asset_class` fills a cash security with
+    # liquidity/cash on create -- so leaving them populated would test the
+    # DEFAULTS, not the fallback this test exists for. `update_columns` bypasses
+    # the callback that would put them straight back.
+    cash_security.update_columns(asset_class: nil, asset_sub_class: nil, classification_source: nil)
+    assert_nil cash_security.reload.asset_class, "precondition: the taxonomy is empty here"
     Holding.create!(account: account, security: cash_security, date: Date.current,
                     qty: 1, price: 2000, amount: 2000, currency: "USD")
 

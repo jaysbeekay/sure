@@ -198,7 +198,7 @@ class InvestmentStatement
   # kind groupings against the holdings plus each account's positive cash
   # balance, so a stale or negative cash balance never pushes a grouping
   # past 100. Segments are sorted by amount, largest first.
-  ALLOCATION_GROUPINGS = %w[security asset_class asset_sub_class sector region account currency kind].freeze
+  ALLOCATION_GROUPINGS = %w[security asset_class asset_sub_class sector region tag account currency kind].freeze
 
   # The bucket a holding falls into when the column it is grouped by is empty.
   # It is a real segment, not a gap: `Portfolio::SectionRegistry` hides the
@@ -221,15 +221,28 @@ class InvestmentStatement
     end
   end
 
-  def allocation_by(by)
+  # Whether anything in the portfolio can BE looked through. Asked by the
+  # section registry so the toggle is not offered to someone holding no funds,
+  # where it would be a control that visibly does nothing.
+  def holds_any_fund_constituents?
+    Security::Constituent.where(security_id: current_holdings.map(&:security_id).uniq).exists?
+  end
+
+  # `look_through` expands a fund into what it actually holds. It applies only to
+  # the classification axes: account, currency and kind are properties of the
+  # POSITION, not of the instrument, and a fund's constituents do not have their
+  # own account. Grouping by security with look-through would also be wrong -- the
+  # security IS the fund.
+  def allocation_by(by, look_through: false)
     case by.to_s
     when "account" then allocation_by_account
     when "currency" then allocation_by_currency
     when "kind" then allocation_by_kind
-    when "asset_class" then allocation_by_classification(:asset_class, cash_bucket: "liquidity")
-    when "asset_sub_class" then allocation_by_classification(:asset_sub_class, cash_bucket: "cash")
-    when "sector" then allocation_by_classification(:sector)
-    when "region" then allocation_by_classification(:region)
+    when "tag" then allocation_by_tag
+    when "asset_class" then allocation_by_classification(:asset_class, cash_bucket: "liquidity", look_through: look_through)
+    when "asset_sub_class" then allocation_by_classification(:asset_sub_class, cash_bucket: "cash", look_through: look_through)
+    when "sector" then allocation_by_classification(:sector, look_through: look_through)
+    when "region" then allocation_by_classification(:region, look_through: look_through)
     else
       allocation.map do |row|
         AllocationSegment.new(id: row.cash? ? "cash" : row.security.id, name: row.name, amount: row.amount, weight: row.weight)
@@ -836,12 +849,18 @@ class InvestmentStatement
     # the honest answer differs. A cash balance IS liquidity, and IS cash as a
     # sub-class. It has no sector and no region, so for those it falls to
     # UNCLASSIFIED rather than being invented into someone's slice.
-    def allocation_by_classification(column, cash_bucket: nil)
+    def allocation_by_classification(column, cash_bucket: nil, look_through: false)
       grouped = Hash.new(0)
 
       current_holdings.each do |holding|
-        bucket = classification_bucket(holding.security, column, cash_bucket)
-        grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
+        value = convert_to_family_currency(holding.amount, holding.currency)
+        split = look_through ? look_through_split(holding.security, column, value) : nil
+
+        if split
+          split.each { |bucket, portion| grouped[bucket] += portion }
+        else
+          grouped[classification_bucket(holding.security, column, cash_bucket)] += value
+        end
       end
 
       investment_accounts.each do |account|
@@ -852,6 +871,89 @@ class InvestmentStatement
       end
 
       build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
+    end
+
+    # A fund's value spread across the classification of what it actually holds.
+    # Returns nil -- not an empty hash -- for anything that is not a fund, so the
+    # caller can tell "look through to nothing" from "not a fund", and an
+    # ordinary holding is left entirely alone by the toggle.
+    #
+    # A constituent is stored as a bare ticker, so its classification comes from
+    # a `Security` row when one exists. When it does not, the portion is carried
+    # as UNCLASSIFIED rather than dropped: dropping it would shrink the portfolio
+    # total by the weight of every constituent we happen not to hold, which for a
+    # broad index fund is nearly all of it.
+    def look_through_split(security, column, value)
+      weights = security.look_through_weights
+      return nil if weights.empty?
+
+      known = constituent_securities(weights.keys)
+
+      weights.each_with_object(Hash.new(0)) do |(ticker, weight), split|
+        constituent = known[ticker.to_s.upcase]
+        bucket = constituent ? classification_bucket(constituent, column, nil) : UNCLASSIFIED
+        split[bucket] += value * weight
+      end
+    end
+
+    def constituent_securities(tickers)
+      @constituent_securities ||= {}
+      missing = tickers.map { |t| t.to_s.upcase } - @constituent_securities.keys
+      if missing.any?
+        found = Security.where("upper(ticker) IN (?)", missing).index_by { |s| s.ticker.to_s.upcase }
+        missing.each { |t| @constituent_securities[t] = found[t] }
+      end
+      @constituent_securities
+    end
+
+    # Grouping by the household's own scheme rather than by a taxonomy everyone
+    # shares. Scoped to `family.tags`, which is what keeps one family's scheme off
+    # another's chart -- the security row itself is shared.
+    #
+    # Unlike a taxonomy, a security may carry SEVERAL tags, and that has to be
+    # resolved rather than waved through. Counting the holding once per tag makes
+    # the segments sum to more than the portfolio, and this section renders as a
+    # donut: segments that overrun the total draw a chart that is simply wrong,
+    # and `allocation_by` is covered by an invariant test asserting every grouping
+    # adds up to `portfolio_value`.
+    #
+    # So a multi-tagged holding is SPLIT evenly across its tags. "Half in pension,
+    # half in tech bet" is an answer a reader can act on; a donut summing to 140%
+    # is not.
+    #
+    # Account cash is carried the same way the classification groupings carry it,
+    # under UNCLASSIFIED -- cash is not tagged, and leaving it out would drop it
+    # from this grouping alone.
+    def allocation_by_tag
+      family_tags = family.tags.index_by(&:id)
+      grouped = Hash.new(0)
+      names = { UNCLASSIFIED => UNCLASSIFIED }
+
+      current_holdings.each do |holding|
+        value = convert_to_family_currency(holding.amount, holding.currency)
+        ids = holding.security.taggings.map(&:tag_id).select { |id| family_tags.key?(id) }
+
+        if ids.empty?
+          grouped[UNCLASSIFIED] += value
+          next
+        end
+
+        share = value / ids.length
+        ids.each do |id|
+          key = id.to_s
+          grouped[key] += share
+          names[key] = family_tags[id].name
+        end
+      end
+
+      investment_accounts.each do |account|
+        cash = account.cash_balance.to_d
+        next unless cash.positive?
+
+        grouped[UNCLASSIFIED] += convert_to_family_currency(cash, account.currency)
+      end
+
+      build_segments(grouped.map { |key, value| [ key, names[key], value ] })
     end
 
     # Sub-classes inside one asset class. Cash is carried here too: it belongs
