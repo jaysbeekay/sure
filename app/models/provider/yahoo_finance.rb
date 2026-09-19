@@ -281,7 +281,9 @@ class Provider::YahooFinance < Provider
         logo_url: nil, # Yahoo doesn't provide reliable logo URLs
         description: asset_profile["longBusinessSummary"],
         kind: map_security_type(quote_type["quoteType"]),
-        exchange_operating_mic: exchange_operating_mic
+        exchange_operating_mic: exchange_operating_mic,
+        sector: asset_profile["sector"],
+        industry: asset_profile["industry"]
       )
 
       security_info

@@ -214,7 +214,21 @@ module Security::Provided
     price
   end
 
-  def import_provider_details(clear_cache: false)
+  # `include_classification` widens the refetch gate below so a security that
+  # already has a name and a logo -- which is most of them -- can still be
+  # asked for its classification.
+  #
+  # It defaults to FALSE because the unbounded shape is the importers' cadence,
+  # not any single call. `Account::MarketDataImporter` and `MarketDataImporter`
+  # walk every security on every sync, so a widened gate that never closes
+  # costs one provider request per security per sync, indefinitely. The gate
+  # closing is what bounds that, and the importers opt in on that basis.
+  #
+  # The third caller, `HoldingsController#sync_prices`, is a POST behind
+  # `require_holding_write_permission!` -- a user asking for one holding's
+  # prices, not a page view; `#show` makes no provider call at all. It keeps
+  # the narrow gate because the user asked for prices, not for classification.
+  def import_provider_details(clear_cache: false, include_classification: false, include_constituents: false)
     unless price_data_provider.present?
       Rails.logger.warn("No provider configured for Security.import_provider_details")
       return
@@ -224,7 +238,33 @@ module Security::Provided
     # already have a name plus a logo or website. This gate must be evaluated
     # before any brand-logo enrichment, otherwise setting logo_url first would
     # trip it and skip website_url backfill from providers that return links.
-    unless self.name.present? && (self.logo_url.present? || self.website_url.present?) && !clear_cache
+    has_metadata = self.name.present? && (self.logo_url.present? || self.website_url.present?)
+    # Both halves are needed, and each closes a hole the other leaves.
+    #
+    # `classification_source.blank?` alone stayed OPEN for ever on a wrapper the
+    # type map deliberately does not classify: an ETF never gets a source, so
+    # every sync would have asked again for an answer already in hand.
+    #
+    # `sector.blank? && industry.blank?` alone reopened the gate on the things
+    # 3.2 classifies from their own shape. Cash and crypto carry `default` and
+    # no sector, and no provider has a sector for them -- `price_data_provider`
+    # falls back to the first configured provider, which answers nothing for a
+    # crypto pair -- so keying on sector alone would have asked, for ever, on
+    # exactly the securities a provider cannot help with.
+    #
+    # Together: ask only when nothing at all is known, and stop as soon as
+    # anything is -- a source, or the sector the provider just supplied.
+    wants_classification = include_classification && !classification_locked? &&
+      classification_source.blank? && sector.blank? && industry.blank?
+
+    # Keyed on the TIMESTAMP, not on whether constituents are present. Most
+    # securities are not funds, so the provider returns nothing for them -- and a
+    # presence-keyed gate would re-ask every one of those on every sync, for
+    # ever. The timestamp is written whether or not anything came back, which is
+    # what lets "never asked" be told from "asked, nothing there".
+    wants_constituents = include_constituents && constituents_fetched_at.nil?
+
+    unless has_metadata && !wants_classification && !wants_constituents && !clear_cache
       response = price_data_provider.fetch_security_info(
         symbol: ticker,
         exchange_operating_mic: exchange_operating_mic
@@ -237,7 +277,9 @@ module Security::Provided
         attrs[:name]        = response.data.name    if response.data.name.present?
         attrs[:logo_url]    = response.data.logo_url if response.data.logo_url.present?
         attrs[:website_url] = response.data.links   if response.data.links.present?
+        attrs.merge!(classification_attributes_from(response.data))
         update(attrs) if attrs.any?
+        store_constituents(response.data.constituents) if wants_constituents
       else
         Rails.logger.warn("Failed to fetch security info for #{ticker} from #{price_data_provider.class.name}: #{response.error.message}")
         DebugLogEntry.capture(
@@ -310,5 +352,78 @@ module Security::Provided
       clear_cache: clear_cache
     )
     [ importer.import_provider_prices, importer.provider_error ]
+  end
+
+  # A provider's type says what the wrapper is, not what it holds. "Common
+  # stock" is an equity whatever else is true of it, so it maps. An ETF or a
+  # fund does NOT: a bond ETF and an equity ETF are the same wrapper around
+  # different asset classes, and answering "equity" for both would fill the
+  # allocation chart with a figure no one can justify. Those are left for the
+  # fund look-through (3.7), which can see what they hold.
+  ASSET_CLASS_FROM_PROVIDER_KIND = {
+    "common stock" => [ "equity", "stock" ],
+    "equity" => [ "equity", "stock" ],
+    "stock" => [ "equity", "stock" ]
+  }.freeze
+
+  # The provider is the second-weakest writer: it may fill what nothing has
+  # answered, and may replace a `default`, but never a `manual` classification,
+  # and never anything at all on a locked security.
+  # Replaces the fund's holdings wholesale rather than merging: a constituent
+  # that has left the fund must leave the table with it, and a merge would leave
+  # it behind for ever.
+  #
+  # The timestamp is written even when `list` is nil -- that is the whole point
+  # of the gate above.
+  def store_constituents(list)
+    transaction do
+      constituents.destroy_all
+
+      Array(list).each do |entry|
+        weight = entry[:weight] || entry["weight"]
+        constituents.create!(
+          ticker: entry[:ticker] || entry["ticker"],
+          name: entry[:name] || entry["name"],
+          weight: weight.present? ? BigDecimal(weight.to_s) : nil
+        )
+      end
+
+      update_column(:constituents_fetched_at, Time.current)
+    end
+  end
+
+  # The fund expanded into what it actually holds, as fractions summing to 1.
+  #
+  # Normalised against the ACTUAL sum rather than against 100. A fund's reported
+  # holdings routinely fall short -- cash, rounding, securities lending -- so
+  # dividing by 100 silently under-reports every constituent and the expansion
+  # does not add up to the position it replaces.
+  def look_through_weights
+    weighted = constituents.where.not(weight: nil)
+    total = weighted.sum(:weight)
+    return {} if total.zero?
+
+    weighted.each_with_object({}) do |constituent, map|
+      map[constituent.ticker] = constituent.weight / total
+    end
+  end
+
+  def classification_attributes_from(data)
+    return {} if classification_locked?
+
+    attrs = {}
+    # Free text with no other writer, so "already set" is the only guard it
+    # needs -- a value a user corrected in 3.3 is not re-stated here.
+    attrs[:sector] = data.sector if data.sector.present? && sector.blank?
+    attrs[:industry] = data.industry if data.industry.present? && industry.blank?
+
+    mapped_class, mapped_sub_class = ASSET_CLASS_FROM_PROVIDER_KIND[data.kind.to_s.downcase]
+    if mapped_class.present? && classification_source.in?([ nil, "default" ])
+      attrs[:asset_class] = mapped_class
+      attrs[:asset_sub_class] = mapped_sub_class
+      attrs[:classification_source] = "provider"
+    end
+
+    attrs
   end
 end

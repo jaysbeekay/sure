@@ -530,6 +530,7 @@ Rails.application.routes.draw do
       patch :remap_security
       post :reset_security
       post :sync_prices
+      patch :tags
     end
   end
   resources :trades, only: %i[show new create update destroy] do

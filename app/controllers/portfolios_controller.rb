@@ -19,6 +19,9 @@ class PortfoliosController < ApplicationController
     @sort = params[:sort].presence_in(InvestmentStatement::HOLDINGS_SORT_KEYS)
     @dir = params[:dir].presence_in(InvestmentStatement::HOLDINGS_SORT_DIRECTIONS)
     @by = params[:by].presence_in(InvestmentStatement::ALLOCATION_GROUPINGS)
+    # Query-string state, per Convention 3, so the view a user links to or
+    # reloads is the one they were looking at.
+    @look_through = params[:look_through] == "1"
     @sections = Portfolio::SectionRegistry.new(
       statement: @statement,
       period: @period,
@@ -26,7 +29,8 @@ class PortfoliosController < ApplicationController
       user: Current.user,
       sort: @sort,
       dir: @dir,
-      by: @by
+      by: @by,
+      look_through: @look_through
     ).sections
 
     @breadcrumbs = [ [ t("breadcrumbs.home"), root_path ], [ t("breadcrumbs.portfolio"), nil ] ]
