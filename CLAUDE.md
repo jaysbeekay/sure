@@ -90,17 +90,8 @@ from this fork.
 8. **Upstream PRs open as drafts and link both ways** *(both repos)*. A PR raised
    on `we-promise/sure` opens as a **draft**, and its description carries **two
    separate links**: the upstream issue it answers (or the coordination issue for
-   programme work), and its **fork pre-flight PR**.
-
-   *When this applies.* Whenever an upstream PR exists -- which, for programme
-   work under #118, is not the same moment for every layer. Schema, model and
-   ingestion PRs go up as they are built, so the pre-flight and the cross-links
-   are created then. **UI work is held on fork `main` behind the preview gate
-   until its drop is sent**, so its pre-flight branch is cut at drop time, from
-   merged fork history, and the cross-links are written then rather than months
-   earlier. A pre-flight created before its PR is due has nothing to point at
-   and rots against a mirror that resets daily. The fork PR links back to the
-   upstream one. These are two obligations, not one -- satisfying the issue link
+   programme work), and its **fork pre-flight PR**. The fork PR links back to
+   the upstream one. These are two obligations, not one -- satisfying the issue link
    does not satisfy the fork link, which the audit in the PR that introduced this
    rule found across every upstream PR then open. The issue link shows a maintainer
    which programme a slice belongs to; the fork link shows where its CI, Gatekeeper
@@ -118,10 +109,22 @@ from this fork.
    the PR's, by `/pull/<n>` or by opening it; an issue number does not count.
    Checking only the fork link would pass a PR that never named its issue --
    which is the older half of this rule and the one that was being followed all
-   along. Say how the two relate IN THE PR DESCRIPTION, beside the links rather than in a commit message
-   or a comment, since the reader who needs it is the one deciding whether the two
-   PRs are the same change: where they share a branch, "same branch, same commit";
-   where the fork pre-flight is a cherry-pick onto the mirror, say that instead.
+   along.
+
+   *When this applies.* Whenever an upstream PR exists -- which, for programme
+   work under #118, is not the same moment for every layer. Schema, model and
+   ingestion PRs go up as they are built, so the pre-flight and the cross-links
+   are created then. **UI work is held on fork `main` behind the preview gate
+   until its drop is sent**, so its pre-flight branch is cut at drop time, from
+   merged fork history, and the cross-links are written then rather than months
+   earlier. A pre-flight created before its PR is due has nothing to point at
+   and rots against a mirror that resets daily.
+
+   Say how the two relate IN THE PR DESCRIPTION, beside the links rather than
+   in a commit message or a comment, since the reader who needs it is the one
+   deciding whether the two PRs are the same change: where they share a branch,
+   "same branch, same commit"; where the fork pre-flight is a cherry-pick onto
+   the mirror, say that instead.
 
 ### Issue and pull request sequence (this fork)
 
