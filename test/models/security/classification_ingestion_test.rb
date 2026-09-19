@@ -67,23 +67,27 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
     @security.import_provider_details(include_classification: true)
   end
 
-  # The other direction. A `default` is what 3.2 guessed from the instrument's
-  # shape; the precedence rule below lets a provider replace one, so the gate
-  # has to open for it. Keyed on the source it did not, which contradicted the
-  # rule it was supposed to serve.
-  test "a default classification does not close the gate against the provider" do
+  # The other direction, and the reason the gate needs BOTH halves. A `default`
+  # is written by 3.2 for cash, crypto and region -- things classified from
+  # their own shape, which no provider has a sector for. `price_data_provider`
+  # falls back to the first configured provider, which answers nothing for a
+  # crypto pair, so opening the gate on a blank sector alone would ask on every
+  # sync for ever, on exactly the securities a provider cannot help with.
+  test "a default classification closes the gate, since no provider improves on it" do
     @security.update!(
       name: "Apple", logo_url: "https://example.com/aapl.png",
-      asset_class: "equity", asset_sub_class: "etf", classification_source: "default"
+      asset_class: "alternative_investment", asset_sub_class: "cryptocurrency",
+      classification_source: "default"
     )
-    import(info(kind: "Common Stock", sector: "Technology"))
+    provider = mock("provider")
+    provider.expects(:fetch_security_info).never
+    @security.stubs(:price_data_provider).returns(provider)
 
-    assert_equal "Technology", @security.reload.sector
-    assert_equal "provider", @security.classification_source
+    @security.import_provider_details(include_classification: true)
   end
 
   # A user who has answered is not asked again, whatever is still missing.
-  test "a manually classified security is not asked for the rest" do
+  test "a manually classified security is not asked again" do
     @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png",
                       asset_class: "equity", classification_source: "manual")
     provider = mock("provider")

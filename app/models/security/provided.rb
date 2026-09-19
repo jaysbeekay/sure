@@ -218,7 +218,7 @@ module Security::Provided
   # already has a name and a logo -- which is most of them -- can still be
   # asked for its classification. It defaults to FALSE because the gate is what
   # stands between this method and a provider call, and one of the three
-  # callers is `HoldingsController#show`: widening it unconditionally would put
+  # callers is `HoldingsController#sync_prices`: widening it unconditionally would put
   # a provider request on every holding page view, forever, for any security
   # whose provider returns no sector. The two importers pass true, so
   # classification backfills at sync cadence instead.
@@ -233,20 +233,23 @@ module Security::Provided
     # before any brand-logo enrichment, otherwise setting logo_url first would
     # trip it and skip website_url backfill from providers that return links.
     has_metadata = self.name.present? && (self.logo_url.present? || self.website_url.present?)
-    # Keyed on sector/industry rather than on `classification_source`, because
-    # those are what a provider actually supplies and they are the only fields
-    # that tell us whether it has already been asked.
+    # Both halves are needed, and each closes a hole the other leaves.
     #
-    # Keying on the source was wrong twice over. It closed the gate on a
-    # `default` classification, so a cash or crypto security could never have a
-    # provider improve on the guess -- contradicting the precedence rule below,
-    # which explicitly allows a provider to replace a `default`. And it stayed
-    # OPEN forever for a wrapper the type map deliberately does not classify:
-    # an ETF never gets a source, so every sync would have asked again.
+    # `classification_source.blank?` alone stayed OPEN for ever on a wrapper the
+    # type map deliberately does not classify: an ETF never gets a source, so
+    # every sync would have asked again for an answer already in hand.
     #
-    # `manual` is excluded outright: a user who has answered is not asked again.
+    # `sector.blank? && industry.blank?` alone reopened the gate on the things
+    # 3.2 classifies from their own shape. Cash and crypto carry `default` and
+    # no sector, and no provider has a sector for them -- `price_data_provider`
+    # falls back to the first configured provider, which answers nothing for a
+    # crypto pair -- so keying on sector alone would have asked, for ever, on
+    # exactly the securities a provider cannot help with.
+    #
+    # Together: ask only when nothing at all is known, and stop as soon as
+    # anything is -- a source, or the sector the provider just supplied.
     wants_classification = include_classification && !classification_locked? &&
-      classification_source != "manual" && sector.blank? && industry.blank?
+      classification_source.blank? && sector.blank? && industry.blank?
 
     unless has_metadata && !wants_classification && !clear_cache
       response = price_data_provider.fetch_security_info(
