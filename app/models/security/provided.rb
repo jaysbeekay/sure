@@ -214,7 +214,15 @@ module Security::Provided
     price
   end
 
-  def import_provider_details(clear_cache: false)
+  # `include_classification` widens the refetch gate below so a security that
+  # already has a name and a logo -- which is most of them -- can still be
+  # asked for its classification. It defaults to FALSE because the gate is what
+  # stands between this method and a provider call, and one of the three
+  # callers is `HoldingsController#show`: widening it unconditionally would put
+  # a provider request on every holding page view, forever, for any security
+  # whose provider returns no sector. The two importers pass true, so
+  # classification backfills at sync cadence instead.
+  def import_provider_details(clear_cache: false, include_classification: false)
     unless price_data_provider.present?
       Rails.logger.warn("No provider configured for Security.import_provider_details")
       return
@@ -224,7 +232,10 @@ module Security::Provided
     # already have a name plus a logo or website. This gate must be evaluated
     # before any brand-logo enrichment, otherwise setting logo_url first would
     # trip it and skip website_url backfill from providers that return links.
-    unless self.name.present? && (self.logo_url.present? || self.website_url.present?) && !clear_cache
+    has_metadata = self.name.present? && (self.logo_url.present? || self.website_url.present?)
+    wants_classification = include_classification && classification_source.blank? && !classification_locked?
+
+    unless has_metadata && !wants_classification && !clear_cache
       response = price_data_provider.fetch_security_info(
         symbol: ticker,
         exchange_operating_mic: exchange_operating_mic
@@ -237,6 +248,7 @@ module Security::Provided
         attrs[:name]        = response.data.name    if response.data.name.present?
         attrs[:logo_url]    = response.data.logo_url if response.data.logo_url.present?
         attrs[:website_url] = response.data.links   if response.data.links.present?
+        attrs.merge!(classification_attributes_from(response.data))
         update(attrs) if attrs.any?
       else
         Rails.logger.warn("Failed to fetch security info for #{ticker} from #{price_data_provider.class.name}: #{response.error.message}")
@@ -310,5 +322,39 @@ module Security::Provided
       clear_cache: clear_cache
     )
     [ importer.import_provider_prices, importer.provider_error ]
+  end
+
+  # A provider's type says what the wrapper is, not what it holds. "Common
+  # stock" is an equity whatever else is true of it, so it maps. An ETF or a
+  # fund does NOT: a bond ETF and an equity ETF are the same wrapper around
+  # different asset classes, and answering "equity" for both would fill the
+  # allocation chart with a figure no one can justify. Those are left for the
+  # fund look-through (3.7), which can see what they hold.
+  ASSET_CLASS_FROM_PROVIDER_KIND = {
+    "common stock" => [ "equity", "stock" ],
+    "equity" => [ "equity", "stock" ],
+    "stock" => [ "equity", "stock" ]
+  }.freeze
+
+  # The provider is the second-weakest writer: it may fill what nothing has
+  # answered, and may replace a `default`, but never a `manual` classification,
+  # and never anything at all on a locked security.
+  def classification_attributes_from(data)
+    return {} if classification_locked?
+
+    attrs = {}
+    # Free text with no other writer, so "already set" is the only guard it
+    # needs -- a value a user corrected in 3.3 is not re-stated here.
+    attrs[:sector] = data.sector if data.sector.present? && sector.blank?
+    attrs[:industry] = data.industry if data.industry.present? && industry.blank?
+
+    mapped_class, mapped_sub_class = ASSET_CLASS_FROM_PROVIDER_KIND[data.kind.to_s.downcase]
+    if mapped_class.present? && classification_source.in?([ nil, "default" ])
+      attrs[:asset_class] = mapped_class
+      attrs[:asset_sub_class] = mapped_sub_class
+      attrs[:classification_source] = "provider"
+    end
+
+    attrs
   end
 end

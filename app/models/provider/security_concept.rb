@@ -9,7 +9,22 @@ module Provider::SecurityConcept
       super
     end
   end
-  SecurityInfo = Data.define(:symbol, :name, :links, :logo_url, :description, :kind, :exchange_operating_mic)
+  # `sector` and `industry` are free text by design. Provider taxonomies
+  # disagree -- EODHD's `General.Sector` is not GICS, and no two agree on
+  # wording -- so a constraint here would reject a value a provider
+  # legitimately returns and break ingestion for that provider.
+  #
+  # Defaulted in an `initialize` override, the same way the `Security` above
+  # defaults `currency:`. This Data has eleven implementers; without the
+  # defaults every one of them would raise at construction the day these
+  # fields were added.
+  SecurityInfo = Data.define(:symbol, :name, :links, :logo_url, :description, :kind, :exchange_operating_mic,
+                             :sector, :industry) do
+    def initialize(symbol:, name:, links:, logo_url:, description:, kind:, exchange_operating_mic:,
+                   sector: nil, industry: nil)
+      super
+    end
+  end
   Price = Data.define(:symbol, :date, :price, :currency, :exchange_operating_mic)
 
   def search_securities(symbol, country_code: nil, exchange_operating_mic: nil)
