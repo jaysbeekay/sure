@@ -199,6 +199,7 @@ class Portfolio::SectionRegistry
         day_change: statement.day_change,
         unrealized: statement.unrealized_gains_trend,
         period_return: statement.period_return_trend(period: period),
+        period_return_unconvertible: statement.period_return_unconvertible_count(period: period),
         net_contributions: statement.net_contributions(period: period),
         income: statement.totals(period: period).total_income
       }
