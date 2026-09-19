@@ -13,6 +13,53 @@ de:
       mfapi: MFAPI.in
       binance_public: Binance
       moex_public: MOEX
+    classification:
+      saved: Klassifizierung gespeichert.
+      reset_done: Klassifizierung zurückgesetzt. Anbieter können sie beim nächsten Abgleich wieder setzen.
+      title: Klassifizierung
+      description: Was dieses Instrument ist. Deine eigene Angabe verhindert, dass
+        Anbieter und Standardwerte sie überschreiben.
+      asset_class_label: Anlageklasse
+      asset_sub_class_label: Unterklasse
+      sector_label: Sektor
+      region_label: Region
+      sector_placeholder: z. B. Technologie
+      unset: "Nicht gesetzt"
+      save: Klassifizierung speichern
+      shared_note: Wertpapiere werden geteilt, daher gilt diese Klassifizierung
+        überall dort, wo dieses Instrument gehalten wird.
+      manual_label: Von dir gesetzt
+      reset: Klassifizierung zurücksetzen
+      reset_confirm_title: Klassifizierung zurücksetzen?
+      reset_confirm_body: Damit wird deine Angabe gelöscht und Anbieter können
+        dieses Wertpapier beim nächsten Abgleich wieder klassifizieren.
+    taxonomy:
+      asset_classes:
+        alternative_investment: Alternative Anlagen
+        commodity: Rohstoffe
+        equity: Aktien
+        fixed_income: Anleihen
+        liquidity: Liquidität
+        real_estate: Immobilien
+      asset_sub_classes:
+        bond: Anleihe
+        cash: Bargeld
+        collectible: Sammlerstück
+        commodity: Rohstoff
+        cryptocurrency: Kryptowährung
+        etf: ETF
+        loan: Darlehen
+        mutual_fund: Investmentfonds
+        precious_metal: Edelmetall
+        private_equity: Private Equity
+        real_estate: Immobilien
+        stock: Aktie
+      regions:
+        asia_pacific: Asien-Pazifik
+        europe: Europa
+        latin_america: Lateinamerika
+        middle_east_africa: Naher Osten & Afrika
+        north_america: Nordamerika
     tags:
       saved: Tags gespeichert.
       title: Tags
