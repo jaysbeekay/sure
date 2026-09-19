@@ -59,14 +59,64 @@
       </div>
       <div class="py-1 shadow-border-xs rounded-lg bg-container font-medium text-sm divide-y divide-divider" data-portfolio-allocation="<%= active_by %>">
         <% segments.each_with_index do |segment, index| %>
-          <div class="flex items-center gap-3 px-4 py-2" data-portfolio-segment="<%= segment.id %>">
-            <span class="h-3 w-3 rounded-full shrink-0" style="background-color: <%= allocation_color(index) %>"></span>
-            <p class="text-primary truncate"><%= allocation_segment_name(segment, active_by) %></p>
-            <div class="ml-auto text-right flex items-center gap-6">
-              <p class="w-24 @2xl:w-32 privacy-sensitive"><%= format_money(segment.amount) %></p>
-              <p class="w-16 text-secondary privacy-sensitive"><%= number_to_percentage(segment.weight, precision: 1) %></p>
+          <%# Only the asset-class ladder nests. Everything else renders the same
+              row without a disclosure, so a sector is not dressed up as
+              something you can open. A <details> rather than a Stimulus
+              controller, per the Hotwire-first convention. %>
+          <% children = statement.allocation_children(active_by, segment.id) %>
+          <% if children.any? %>
+            <details class="group" data-portfolio-segment="<%= segment.id %>">
+              <summary class="flex items-center gap-3 px-4 py-2 cursor-pointer list-none">
+                <%= icon("chevron-right", size: "sm", class: "shrink-0 transition-transform group-open:rotate-90") %>
+                <span class="h-3 w-3 rounded-full shrink-0" style="background-color: <%= allocation_color(index) %>"></span>
+                <%# Phrasing content only: <summary> may not contain <p> or <div>,
+                    and block children make the disclosure label inconsistent for
+                    assistive technologies. Same flex classes on spans. %>
+                <span class="text-primary truncate"><%= allocation_segment_name(segment, active_by) %></span>
+                <span class="ml-auto text-right flex items-center gap-6">
+                  <span class="w-24 @2xl:w-32 privacy-sensitive"><%= format_money(segment.amount) %></span>
+                  <span class="w-16 text-secondary privacy-sensitive"><%= number_to_percentage(segment.weight, precision: 1) %></span>
+                </span>
+              </summary>
+              <div class="pl-10 pr-4 pb-2 space-y-1 text-secondary">
+                <% children.each do |child| %>
+                  <% child_by = allocation_child_grouping(active_by) %>
+                  <% grandchildren = statement.allocation_children(child_by, child.id) %>
+                  <div data-portfolio-child="<%= child.id %>">
+                    <div class="flex items-center gap-3 py-1">
+                      <p class="truncate"><%= allocation_segment_name(child, child_by) %></p>
+                      <div class="ml-auto text-right flex items-center gap-6">
+                        <p class="w-24 @2xl:w-32 privacy-sensitive"><%= format_money(child.amount) %></p>
+                        <p class="w-16 privacy-sensitive"><%= number_to_percentage(child.weight, precision: 1) %></p>
+                      </div>
+                    </div>
+                    <% if grandchildren.any? %>
+                      <div class="pl-4 space-y-1 text-subdued">
+                        <% grandchildren.each do |position| %>
+                          <div class="flex items-center gap-3 py-1" data-portfolio-grandchild="<%= position.id %>">
+                            <p class="truncate"><%= position.name %></p>
+                            <div class="ml-auto text-right flex items-center gap-6">
+                              <p class="w-24 @2xl:w-32 privacy-sensitive"><%= format_money(position.amount) %></p>
+                              <p class="w-16 privacy-sensitive"><%= number_to_percentage(position.weight, precision: 1) %></p>
+                            </div>
+                          </div>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                <% end %>
+              </div>
+            </details>
+          <% else %>
+            <div class="flex items-center gap-3 px-4 py-2" data-portfolio-segment="<%= segment.id %>">
+              <span class="h-3 w-3 rounded-full shrink-0" style="background-color: <%= allocation_color(index) %>"></span>
+              <p class="text-primary truncate"><%= allocation_segment_name(segment, active_by) %></p>
+              <div class="ml-auto text-right flex items-center gap-6">
+                <p class="w-24 @2xl:w-32 privacy-sensitive"><%= format_money(segment.amount) %></p>
+                <p class="w-16 text-secondary privacy-sensitive"><%= number_to_percentage(segment.weight, precision: 1) %></p>
+              </div>
             </div>
-          </div>
+          <% end %>
         <% end %>
       </div>
     </div>
