@@ -1,0 +1,20 @@
+---
+de:
+  security_classification_proposals:
+    index:
+      title: Klassifizierungsvorschläge
+      description: Was der Assistent für diese Wertpapiere annimmt. Es ändert sich
+        nichts, bis du zustimmst.
+      empty: Keine Vorschläge offen. Bitte den Assistenten, Klassifizierungen für
+        deine nicht klassifizierten Positionen vorzuschlagen.
+      shared_warning: Wertpapiere werden geteilt, daher gilt eine bestätigte
+        Klassifizierung überall dort, wo das Instrument gehalten wird — und sie hat
+        ab dann Vorrang vor den Datenanbietern. Im Positions-Drawer zurücksetzen.
+      approve: Bestätigen
+      reject: Ablehnen
+    approve:
+      success: "%{ticker} klassifiziert."
+      superseded: "%{ticker} wurde seit dem Vorschlag von Hand klassifiziert und
+        daher nicht verändert."
+    reject:
+      success: "Vorschlag für %{ticker} verworfen."

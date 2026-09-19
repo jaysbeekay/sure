@@ -32,7 +32,10 @@ module Assistant
     Function::GetBillAudit,
     Function::CreateBill,
     Function::UpdateBill,
-    Function::RecordBillPayment
+    Function::RecordBillPayment,
+    # Writes PROPOSALS, never classifications -- see the class comment. Preview
+    # because the portfolio classification surfaces it feeds are preview-gated.
+    Function::SuggestSecurityClassification
   ].freeze
 
   class << self

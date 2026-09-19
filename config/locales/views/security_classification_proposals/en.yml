@@ -1,0 +1,20 @@
+---
+en:
+  security_classification_proposals:
+    index:
+      title: Classification proposals
+      description: What the assistant thinks these securities are. Nothing changes
+        until you approve it.
+      empty: No proposals waiting. Ask the assistant to suggest classifications for
+        your unclassified holdings.
+      shared_warning: Securities are shared, so an approved classification applies
+        wherever the instrument is held — and it takes precedence over the data
+        providers from then on. Reset it from the holding drawer to hand it back.
+      approve: Approve
+      reject: Reject
+    approve:
+      success: "%{ticker} classified."
+      superseded: "%{ticker} was classified by hand since this was proposed, so it
+        was left alone."
+    reject:
+      success: "%{ticker} proposal dismissed."
