@@ -34,13 +34,58 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
     assert_equal "Technology", @security.reload.sector
   end
 
-  # The mirror. Once it has an answer the gate closes again, so this is one
+  # The mirror. Once the provider has answered, the gate closes, so this is one
   # call per security rather than one per sync forever.
-  test "a security that already has a classification is not asked again" do
+  test "a security that already has sector and industry is not asked again" do
     @security.update!(
       name: "Apple", logo_url: "https://example.com/aapl.png",
-      asset_class: "equity", asset_sub_class: "stock", classification_source: "provider"
+      sector: "Technology", industry: "Consumer Electronics"
     )
+    provider = mock("provider")
+    provider.expects(:fetch_security_info).never
+    @security.stubs(:price_data_provider).returns(provider)
+
+    @security.import_provider_details(include_classification: true)
+  end
+
+  # The case that made keying the gate on `classification_source` wrong in both
+  # directions. An ETF is deliberately left without an asset class -- the
+  # wrapper does not imply one -- so it never gets a source. Keyed on the
+  # source, the gate would have stayed open and asked the provider again on
+  # every sync, for ever. Keyed on what the provider actually supplies, its
+  # answer closes the gate.
+  test "a wrapper the type map will not classify is still only asked once" do
+    @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png")
+    import(info(kind: "ETF", sector: "Technology", industry: "Consumer Electronics"))
+
+    assert_nil @security.reload.classification_source, "an ETF is deliberately left unsourced"
+
+    provider = mock("provider")
+    provider.expects(:fetch_security_info).never
+    @security.stubs(:price_data_provider).returns(provider)
+
+    @security.import_provider_details(include_classification: true)
+  end
+
+  # The other direction. A `default` is what 3.2 guessed from the instrument's
+  # shape; the precedence rule below lets a provider replace one, so the gate
+  # has to open for it. Keyed on the source it did not, which contradicted the
+  # rule it was supposed to serve.
+  test "a default classification does not close the gate against the provider" do
+    @security.update!(
+      name: "Apple", logo_url: "https://example.com/aapl.png",
+      asset_class: "equity", asset_sub_class: "etf", classification_source: "default"
+    )
+    import(info(kind: "Common Stock", sector: "Technology"))
+
+    assert_equal "Technology", @security.reload.sector
+    assert_equal "provider", @security.classification_source
+  end
+
+  # A user who has answered is not asked again, whatever is still missing.
+  test "a manually classified security is not asked for the rest" do
+    @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png",
+                      asset_class: "equity", classification_source: "manual")
     provider = mock("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)

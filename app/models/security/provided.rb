@@ -233,7 +233,20 @@ module Security::Provided
     # before any brand-logo enrichment, otherwise setting logo_url first would
     # trip it and skip website_url backfill from providers that return links.
     has_metadata = self.name.present? && (self.logo_url.present? || self.website_url.present?)
-    wants_classification = include_classification && classification_source.blank? && !classification_locked?
+    # Keyed on sector/industry rather than on `classification_source`, because
+    # those are what a provider actually supplies and they are the only fields
+    # that tell us whether it has already been asked.
+    #
+    # Keying on the source was wrong twice over. It closed the gate on a
+    # `default` classification, so a cash or crypto security could never have a
+    # provider improve on the guess -- contradicting the precedence rule below,
+    # which explicitly allows a provider to replace a `default`. And it stayed
+    # OPEN forever for a wrapper the type map deliberately does not classify:
+    # an ETF never gets a source, so every sync would have asked again.
+    #
+    # `manual` is excluded outright: a user who has answered is not asked again.
+    wants_classification = include_classification && !classification_locked? &&
+      classification_source != "manual" && sector.blank? && industry.blank?
 
     unless has_metadata && !wants_classification && !clear_cache
       response = price_data_provider.fetch_security_info(
