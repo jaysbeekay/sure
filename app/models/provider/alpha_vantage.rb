@@ -155,7 +155,9 @@ class Provider::AlphaVantage < Provider
         logo_url: nil,
         description: parsed["Description"].presence,
         kind: parsed["AssetType"]&.downcase,
-        exchange_operating_mic: exchange_operating_mic
+        exchange_operating_mic: exchange_operating_mic,
+        sector: parsed["Sector"].presence,
+        industry: parsed["Industry"].presence
       )
     end
   end
