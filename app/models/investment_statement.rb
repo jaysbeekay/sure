@@ -198,13 +198,38 @@ class InvestmentStatement
   # kind groupings against the holdings plus each account's positive cash
   # balance, so a stale or negative cash balance never pushes a grouping
   # past 100. Segments are sorted by amount, largest first.
-  ALLOCATION_GROUPINGS = %w[security account currency kind].freeze
+  ALLOCATION_GROUPINGS = %w[security asset_class asset_sub_class sector region account currency kind].freeze
+
+  # The bucket a holding falls into when the column it is grouped by is empty.
+  # It is a real segment, not a gap: `Portfolio::SectionRegistry` hides the
+  # whole allocation section when a grouping returns no segments, so without
+  # this a portfolio of unclassified securities would lose the section rather
+  # than be told it has nothing classified yet.
+  UNCLASSIFIED = "unclassified".freeze
+
+  # One level down from a classification segment, for the drill-down.
+  #
+  # Only the asset-class ladder has a natural child level: sub-classes inside a
+  # class, then the holdings inside a sub-class. Sector, region, currency and
+  # account do not nest -- a sector has no sub-sector here -- so they return
+  # nothing and render flat, rather than having a level invented for them.
+  def allocation_children(by, bucket)
+    case by.to_s
+    when "asset_class" then allocation_sub_classes_within(bucket)
+    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, "cash")
+    else []
+    end
+  end
 
   def allocation_by(by)
     case by.to_s
     when "account" then allocation_by_account
     when "currency" then allocation_by_currency
     when "kind" then allocation_by_kind
+    when "asset_class" then allocation_by_classification(:asset_class, cash_bucket: "liquidity")
+    when "asset_sub_class" then allocation_by_classification(:asset_sub_class, cash_bucket: "cash")
+    when "sector" then allocation_by_classification(:sector)
+    when "region" then allocation_by_classification(:region)
     else
       allocation.map do |row|
         AllocationSegment.new(id: row.cash? ? "cash" : row.security.id, name: row.name, amount: row.amount, weight: row.weight)
@@ -800,6 +825,85 @@ class InvestmentStatement
         grouped["cash"] += convert_to_family_currency(cash, account.currency) if cash.positive?
       end
       build_segments(grouped.map { |kind, value| [ kind, kind, value ] })
+    end
+
+    # One shape for all four classification groupings: read the column off the
+    # security, fall back to UNCLASSIFIED, and place each account's positive
+    # cash balance where that grouping says it belongs.
+    #
+    # `cash_bucket` is the argument that matters. Cash is not a holding -- it
+    # sits on the account -- so every grouping has to say where it goes, and
+    # the honest answer differs. A cash balance IS liquidity, and IS cash as a
+    # sub-class. It has no sector and no region, so for those it falls to
+    # UNCLASSIFIED rather than being invented into someone's slice.
+    def allocation_by_classification(column, cash_bucket: nil)
+      grouped = Hash.new(0)
+
+      current_holdings.each do |holding|
+        bucket = classification_bucket(holding.security, column, cash_bucket)
+        grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
+      end
+
+      investment_accounts.each do |account|
+        cash = account.cash_balance.to_d
+        next unless cash.positive?
+
+        grouped[cash_bucket || UNCLASSIFIED] += convert_to_family_currency(cash, account.currency)
+      end
+
+      build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
+    end
+
+    # Sub-classes inside one asset class. Cash is carried here too: it belongs
+    # to `liquidity`/`cash`, so expanding Liquidity has to show it rather than
+    # an empty list that contradicts the parent row's amount.
+    def allocation_sub_classes_within(asset_class)
+      grouped = Hash.new(0)
+
+      holdings_classified_as(:asset_class, asset_class, "liquidity").each do |holding|
+        bucket = classification_bucket(holding.security, :asset_sub_class, "cash")
+        grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
+      end
+
+      if asset_class == "liquidity"
+        investment_accounts.each do |account|
+          cash = account.cash_balance.to_d
+          grouped["cash"] += convert_to_family_currency(cash, account.currency) if cash.positive?
+        end
+      end
+
+      build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
+    end
+
+    # The holdings themselves, the bottom of the ladder. Named by security so
+    # the row reads as a position rather than as another bucket.
+    def allocation_holdings_within(column, bucket, cash_bucket = nil)
+      rows = holdings_classified_as(column, bucket, cash_bucket).map do |holding|
+        [ holding.security_id, holding.security.name.presence || holding.security.ticker,
+          convert_to_family_currency(holding.amount, holding.currency) ]
+      end
+      build_segments(rows)
+    end
+
+    # One rule for which bucket a holding falls in, shared by the grouping, the
+    # drill-down and the filter, so the three cannot disagree.
+    #
+    # A cash security is answered from `cash?` rather than from its columns. A
+    # non-primary-currency cash position is a real holding -- `Security.cash_for`
+    # creates one per currency -- and until the defaults slice populates the
+    # taxonomy its `asset_class` is nil. Reading the column alone would file the
+    # family's euros under Unclassified while the account's own euro cash
+    # balance sat under Liquidity: two answers for the same money on one chart.
+    def classification_bucket(security, column, cash_bucket)
+      return cash_bucket if security.cash? && cash_bucket.present?
+
+      security.public_send(column).presence || UNCLASSIFIED
+    end
+
+    def holdings_classified_as(column, bucket, cash_bucket = nil)
+      current_holdings.select do |holding|
+        classification_bucket(holding.security, column, cash_bucket) == bucket
+      end
     end
 
     def build_segments(rows)
