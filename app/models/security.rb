@@ -90,6 +90,12 @@ class Security < ApplicationRecord
 
   has_many :trades, dependent: :nullify, class_name: "Trade"
   has_many :prices, dependent: :destroy
+  # A security row is shared by every family that holds the instrument, but a
+  # `Tag` carries `family_id` -- so a tagging is only reachable through its
+  # owning family's tags. That makes tags the family-scoped counterpart to the
+  # classification columns, which are shared.
+  has_many :taggings, as: :taggable, dependent: :destroy
+  has_many :tags, through: :taggings
   has_many :constituents, class_name: "Security::Constituent", dependent: :destroy
 
   validates :ticker, presence: true
@@ -130,6 +136,26 @@ class Security < ApplicationRecord
 
   def cash?
     kind == "cash"
+  end
+
+  # Replaces only `family`'s tags on this security.
+  #
+  # `tags` spans every family, because the security row does -- so the obvious
+  # `security.tags = ...` would delete other families' taggings on the same
+  # instrument. Ids are resolved through `family.tags` rather than `Tag`, which
+  # is also what stops a crafted request attaching a tag this family does not
+  # own: the security is shared, so that would publish the tag's name to
+  # everyone else holding it.
+  def set_tags_for(family, tag_ids)
+    wanted = family.tags.where(id: Array(tag_ids).reject(&:blank?)).pluck(:id)
+    mine = family.tags.select(:id)
+
+    transaction do
+      taggings.where(tag_id: mine).where.not(tag_id: wanted).destroy_all
+      (wanted - taggings.reload.pluck(:tag_id)).each { |id| taggings.create!(tag_id: id) }
+    end
+
+    tags.reset
   end
 
   # Derived rather than stored: developed/emerging is a property of the country,
