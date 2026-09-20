@@ -112,6 +112,49 @@ class InvestmentStatement::AllocationTagsAndLookThroughTest < ActiveSupport::Tes
                     "the tag grouping does not measure the same portfolio as the others"
   end
 
+  # Codacy's review of this PR called the split a rounding risk: `value / n` for
+  # an n that does not divide the value leaves the parts summing to less than
+  # the whole. The invariant tests above could not have seen it -- they compare
+  # groupings with `assert_in_delta … 0.01`, which is exactly the slop a lost
+  # fraction hides in. Three tags is the smallest case that divides badly, and
+  # this asserts the parts reconcile EXACTLY rather than nearly.
+  test "a three-way tag split sums back to the holding's value exactly" do
+    second = @family.tags.create!(name: "Second scheme")
+    third = @family.tags.create!(name: "Third scheme")
+    @aapl.set_tags_for(@family, [ @tag.id, second.id, third.id ])
+
+    segments = @statement.allocation_by("tag").index_by(&:id)
+    parts = [ @tag, second, third ].map { |tag| segments.fetch(tag.id.to_s).amount.amount }
+
+    assert_equal 3, parts.compact.size, "all three tags must carry a slice, or this proves nothing"
+    assert_equal @holding_value, parts.sum,
+                 "the three parts do not add back to the whole: #{parts.map(&:to_s).join(' + ')}"
+  end
+
+  # Also Codacy's, and the one part of its N+1 finding the tests above do not
+  # cover: they grow the HOLDING count, and the concern was a rate lookup per
+  # CURRENCY inside the loop. InvestmentStatement#exchange_rates is memoised and
+  # batched, so the count must not move when the portfolio gains two more
+  # currencies -- and this is the assertion that fails if a later change starts
+  # converting per holding instead.
+  test "adding foreign currencies does not add queries to the tag grouping" do
+    @aapl.set_tags_for(@family, [ @tag.id ])
+    hold_foreign_security(0, "EUR")
+    # A FRESH family both times. Reusing one leaves `family.tags` loaded on the
+    # association after the first call, so the second runs one query fewer and
+    # the comparison measures the cache rather than the currencies. I wrote that
+    # version first and watched it report 9 against 8.
+    one_currency = count_queries { InvestmentStatement.new(Family.find(@family.id)).allocation_by("tag") }
+
+    hold_foreign_security(1, "GBP")
+    hold_foreign_security(2, "JPY")
+    three_currencies = count_queries { InvestmentStatement.new(Family.find(@family.id)).allocation_by("tag") }
+
+    assert_equal one_currency, three_currencies,
+                 "one foreign currency cost #{one_currency} queries and three cost " \
+                 "#{three_currencies}; the rates are being fetched per currency"
+  end
+
   # --------------------------------------------- 3.7: look-through
 
   test "without look-through a fund reports its own sector" do
@@ -256,6 +299,20 @@ class InvestmentStatement::AllocationTagsAndLookThroughTest < ActiveSupport::Tes
       @account.holdings.create!(
         security: security, date: Date.current, qty: 1,
         price: 100, amount: 100, currency: "USD"
+      )
+    end
+
+    def hold_foreign_security(index, currency)
+      security = Security.create!(
+        ticker: "FX#{currency}#{index}", exchange_operating_mic: "XNAS",
+        country_code: "US", sector: "Foreign #{index}"
+      )
+      ExchangeRate.find_or_create_by!(
+        from_currency: currency, to_currency: @family.currency, date: Date.current
+      ) { |rate| rate.rate = 1.1 }
+      @account.holdings.create!(
+        security: security, date: Date.current, qty: 1,
+        price: 100, amount: 100, currency: currency
       )
     end
 

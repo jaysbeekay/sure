@@ -1051,10 +1051,19 @@ class InvestmentStatement
           next
         end
 
+        # The last slice takes the remainder rather than another `share`.
+        # BigDecimal division of a value that does not divide evenly leaves the
+        # parts summing to slightly more than the whole -- 2150 over three tags
+        # came back as 2150.000000000000000000000000000001 -- and an allocation
+        # whose parts do not add back to the portfolio is wrong even when the
+        # gap is 1e-27. The invariant tests could not see it: they compare
+        # groupings with a 0.01 delta, which is exactly where a lost or gained
+        # fraction hides. Raised by Codacy on #201.
         share = value / ids.length
-        ids.each do |id|
+        ids.each_with_index do |id, index|
           key = id.to_s
-          grouped[key] += share
+          portion = index == ids.length - 1 ? value - (share * (ids.length - 1)) : share
+          grouped[key] += portion
           names[key] = family_tags[id].name
         end
       end
