@@ -17,4 +17,5 @@ de:
       superseded: "%{ticker} wurde seit dem Vorschlag von Hand klassifiziert und
         daher nicht verändert."
     reject:
+      superseded: "%{ticker} wurde bereits bestätigt und daher nicht verändert."
       success: "Vorschlag für %{ticker} verworfen."

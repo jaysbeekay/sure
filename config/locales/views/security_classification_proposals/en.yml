@@ -17,4 +17,5 @@ en:
       superseded: "%{ticker} was classified by hand since this was proposed, so it
         was left alone."
     reject:
+      superseded: "%{ticker} was already approved, so it was left alone."
       success: "%{ticker} proposal dismissed."

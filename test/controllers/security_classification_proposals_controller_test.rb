@@ -41,6 +41,22 @@ class SecurityClassificationProposalsControllerTest < ActionDispatch::Integratio
     assert @proposal.reload.approved?
   end
 
+  # The guard in `reject!` is correct -- the proposal stays approved and the
+  # security stays classified -- but the controller ignored its return value, so
+  # a stale reject from a second tab still reported success. A flash that says
+  # "dismissed" about a proposal still in force is worse than no flash.
+  test "rejecting an already-approved proposal reports that it was superseded" do
+    @proposal.approve!
+
+    post reject_security_classification_proposal_path(@proposal)
+
+    assert @proposal.reload.approved?
+    assert_equal "ai", @security.reload.classification_source
+    assert_equal I18n.t("security_classification_proposals.reject.superseded", ticker: @security.ticker),
+                 flash[:alert]
+    assert_nil flash[:notice], "a refused rejection still reported success"
+  end
+
   test "rejecting from the screen leaves the security alone" do
     post reject_security_classification_proposal_path(@proposal)
 

@@ -20,8 +20,14 @@ class SecurityClassificationProposalsController < ApplicationController
   end
 
   def reject
-    @proposal.reject!
-    flash[:notice] = t(".success", ticker: @proposal.security.ticker)
+    # `reject!` refuses an already-approved proposal, and the return value is
+    # the only way to know: without checking it a stale form from a second tab
+    # reported "dismissed" about a classification still in force.
+    if @proposal.reject!
+      flash[:notice] = t(".success", ticker: @proposal.security.ticker)
+    else
+      flash[:alert] = t(".superseded", ticker: @proposal.security.ticker)
+    end
 
     redirect_to security_classification_proposals_path
   end
