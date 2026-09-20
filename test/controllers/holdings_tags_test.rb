@@ -113,6 +113,28 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
                  "a read_write member could not annotate, though they can tag a transaction"
   end
 
+  # The other half of the picker's rule, and the half nothing asserted. Every
+  # existing test survives the view's list losing `read_write`: the hidden-picker
+  # test below only drives a read_only member, and the save test above POSTs
+  # straight to the action without rendering the drawer. So the control could
+  # vanish for exactly the members this slice was widened to include, silently.
+  #
+  # Raised by Codacy as a drift risk between the view's list and the action's
+  # `:annotate` gate; both now read AccountAuthorizable::PERMISSION_LEVELS, and
+  # this is the assertion that fails if they are ever answered separately again.
+  test "a read-write member is offered the picker they are allowed to submit" do
+    member = family_guest
+    @holding.account.unshare_with!(member)
+    @holding.account.share_with!(member, permission: "read_write")
+
+    sign_in member
+    get holding_path(@holding)
+
+    assert_response :success
+    assert_select "form[action=?]", tags_holding_path(@holding), { count: 1 },
+                  "a read_write member may tag, but was not offered the picker"
+  end
+
   # The picker must not be offered to someone whose save will be refused: it
   # reads as a working control and fails on submit.
   test "the picker is hidden from a member who cannot annotate" do
