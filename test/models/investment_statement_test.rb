@@ -1671,14 +1671,22 @@ class InvestmentStatementTest < ActiveSupport::TestCase
   end
 
   # A non-primary-currency cash POSITION is a real holding -- Security.cash_for
-  # creates one per currency -- and its classification columns are empty until
-  # the defaults slice populates them. Reading the column alone filed the
-  # family's euros under Unclassified while the account's own euro cash balance
-  # sat under Liquidity: two answers for the same money on one chart.
+  # creates one per currency -- and reading its classification column alone
+  # filed the family's euros under Unclassified while the account's own euro
+  # cash balance sat under Liquidity: two answers for the same money on one
+  # chart.
+  #
+  # The columns are emptied deliberately. When this test was written nothing
+  # populated them; `Security#apply_default_asset_class` now fills a cash
+  # security with liquidity/cash on create, so leaving them as created would
+  # exercise the DEFAULTS rather than the `cash?` fallback this test is for --
+  # and the original precondition (`assert_nil` on a fresh row) fails outright.
+  # `update_columns` bypasses the callback that would put them straight back.
   test "a cash holding is liquidity, whatever its classification columns say" do
     account = create_investment_account(balance: 2000, cash_balance: 0)
     cash_security = Security.create!(ticker: "CASH-EUR-#{SecureRandom.hex(3)}", kind: "cash", offline: true)
-    assert_nil cash_security.asset_class, "precondition: the taxonomy is not populated here"
+    cash_security.update_columns(asset_class: nil, asset_sub_class: nil, classification_source: nil)
+    assert_nil cash_security.reload.asset_class, "precondition: the taxonomy is empty here"
     Holding.create!(account: account, security: cash_security, date: Date.current,
                     qty: 1, price: 2000, amount: 2000, currency: "USD")
 

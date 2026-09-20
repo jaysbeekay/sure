@@ -871,11 +871,26 @@ class InvestmentStatement
     # value leg takes the last row before it. Dropping rows independently would
     # let an account contribute flows without contributing the start value they
     # are measured against.
+    #
+    # The row set is deliberately WIDER than the rows those two legs read: every
+    # balance up to the period end, not just the in-period rows plus the last
+    # pre-period one. An account that held an unconvertible currency years ago
+    # is therefore excluded even though both legs could convert everything they
+    # actually read, and the card says so.
+    #
+    # That is the conservative side to err on, and it is a deliberate choice
+    # rather than an oversight: the alternative is to decide per period which
+    # historical rows "count", and a balance the account still carries forward
+    # is exactly the kind of row that looks irrelevant until it is not.
+    # Narrowing it is tracked rather than done here, because it changes which
+    # accounts appear in a figure users have already seen.
     def period_return_unconvertible_account_ids(period)
       @period_return_unconvertible ||= {}
       @period_return_unconvertible[period.date_range] ||= begin
+        # No `joins(:account)`: every column read here (`account_id`,
+        # `currency`) is on `balances` itself, so the join added a scan and
+        # nothing else.
         rows = Balance
-          .joins(:account)
           .where(account_id: investment_account_ids)
           .where("balances.date <= ?", period.date_range.end)
           .where.not(currency: family.currency)
