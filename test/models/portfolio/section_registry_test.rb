@@ -461,7 +461,7 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
     assert_equal names.sort, names, "sort: \"name\" must order by security name, not ticker"
     assert_equal "ZZZA", rows.first.ticker, "the name sort must put Aardvark first despite its ticker"
     assert sections["data_quality"][:locals].key?(:issues)
-    assert_equal %i[value day_change unrealized period_return net_contributions income], sections["kpis"][:locals][:kpis].keys
+    assert_equal %i[value day_change unrealized period_return period_return_unconvertible net_contributions income], sections["kpis"][:locals][:kpis].keys
     assert_kind_of Series, sections["value_chart"][:locals][:series]
   end
 
