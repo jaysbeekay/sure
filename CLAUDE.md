@@ -187,6 +187,47 @@ Two corollaries:
   the new test fail. A test written after a fix tends to assert the author's
   mental model, which is the thing that was wrong.
 
+### Assert the delta, not the presence
+
+**A test that asserts a thing EXISTS passes when something else put it there.**
+Assert the change the code under test causes, measured against the state
+without it.
+
+This produced five vacuous tests in a single delivery cycle, four of them found
+by review rather than by the author. Every one asserted presence, every one
+passed while the behaviour it named was deleted:
+
+- *"an untagged holding falls into the unclassified bucket"* asserted an
+  `unclassified` segment existed. The fixture account's positive cash balance
+  produces one on its own, so deleting the untagged branch outright left all
+  eleven tests in the file passing.
+- *"a cash constituent lands in liquidity"* asserted a `liquidity` segment
+  existed -- again produced by the account's own cash. Rewritten to assert the
+  delta, it still passed, because the defaults slice fills a fresh cash security
+  with `liquidity`/`cash` and the bucket then resolves correctly either way.
+  Only emptying those columns first exercises what the fix decides.
+- *"a blank sector is stored as nil"* asserted `nil` on a column that was `nil`
+  before the request, and the request had been rejected by an unrelated
+  validation.
+- *"a proposal that only answers the region"* asserted `nil` on columns the
+  security never had.
+- Two importer tests asserted constituents were stored while the importer
+  returned early on `return unless Security.provider`, which is unset in test --
+  so they passed against an importer that did nothing, which was the defect.
+
+**How to apply.**
+
+- **Measure against the alternative.** Capture the value with the behaviour off,
+  then with it on, and assert the difference. `before`/`after` beats `present?`.
+- **Ask what else could produce this.** Fixtures, defaults, callbacks, another
+  holding, cash balances. If anything else can, presence proves nothing.
+- **Set the precondition rather than assuming it.** If the state the test needs
+  is one the code would create anyway, force it -- `update_columns` to bypass a
+  callback, an explicit value rather than a fixture default.
+- **A test that passes before the fix is written is not evidence.** This is the
+  fail-first rule, and presence assertions are how it gets skipped by accident:
+  they fail on a missing method, then pass for the wrong reason once it exists.
+
 ### Reference dates are injected, never derived
 
 Anything under `app/models/loan/` and its view components takes its "today" as
