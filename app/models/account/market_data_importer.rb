@@ -87,7 +87,13 @@ class Account::MarketDataImporter
       end
 
       security.import_provider_prices(start_date: start_dates[security_id], end_date: end_date)
-      security.import_provider_details(include_classification: true)
+      # Both flags ride the SAME `fetch_security_info` call -- the gate in
+      # `import_provider_details` makes one request and reads classification and
+      # constituents from the one response -- so asking for constituents here
+      # costs no additional provider request. Without it nothing in production
+      # ever sets `constituents_fetched_at`, and the fund look-through is dead
+      # code: `holds_any_fund_constituents?` is false for every real portfolio.
+      security.import_provider_details(include_classification: true, include_constituents: true)
     end
   end
 
