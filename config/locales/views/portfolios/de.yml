@@ -5,9 +5,40 @@ de:
       grouping_aria_label: Allokation gruppieren nach
       groupings:
         account: Konto
+        asset_class: Anlageklasse
+        asset_sub_class: Unterklasse
         currency: Währung
         kind: Art
+        region: Region
+        sector: Sektor
         security: Wertpapier
+      asset_classes:
+        alternative_investment: Alternative Anlagen
+        commodity: Rohstoffe
+        equity: Aktien
+        fixed_income: Anleihen
+        liquidity: Liquidität
+        real_estate: Immobilien
+      asset_sub_classes:
+        bond: Anleihe
+        cash: Bargeld
+        collectible: Sammlerstück
+        commodity: Rohstoff
+        cryptocurrency: Kryptowährung
+        etf: ETF
+        loan: Darlehen
+        mutual_fund: Investmentfonds
+        precious_metal: Edelmetall
+        private_equity: Private Equity
+        real_estate: Immobilien
+        stock: Aktie
+      regions:
+        asia_pacific: Asien-Pazifik
+        europe: Europa
+        latin_america: Lateinamerika
+        middle_east_africa: Naher Osten & Afrika
+        north_america: Nordamerika
+      unclassified: Nicht klassifiziert
       kinds:
         cash: Bargeld
         crypto: Krypto
@@ -15,6 +46,9 @@ de:
       total: Gesamt
       value: Wert
       weight: Gewichtung
+    comparison:
+      explainer: Deine größten Konten im Vergleich zum Gesamtportfolio, auf 100 normiert und ohne Einzahlungseffekte. Es geht um den Verlauf, nicht um die Größe.
+      whole_portfolio: Gesamtportfolio
     data_quality:
       kinds:
         missing_cost_basis:
@@ -81,6 +115,9 @@ de:
       net_contributions: Nettoeinzahlungen
       no_data: Nicht genug Daten
       period_return: Rendite im Zeitraum
+      period_return_unconvertible:
+        one: 1 Konto ohne Wechselkurs ausgeschlossen
+        other: "%{count} Konten ohne Wechselkurs ausgeschlossen"
       unrealized_pnl: Nicht realisiertes Ergebnis
       value: Wert
     realized_gains:
@@ -118,6 +155,7 @@ de:
     sections:
       accounts: Konten
       allocation: Aufteilung
+      comparison: Kontenvergleich
       data_quality: Datenqualität
       drivers: Was den Wert bewegt hat
       holdings: Bestände

@@ -30,7 +30,7 @@ class MarketDataImporter
         clear_cache: clear_cache
       )
 
-      security.import_provider_details(clear_cache: clear_cache)
+      security.import_provider_details(clear_cache: clear_cache, include_classification: true)
     end
   end
 

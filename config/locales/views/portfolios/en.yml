@@ -5,9 +5,40 @@ en:
       grouping_aria_label: Group allocation by
       groupings:
         account: Account
+        asset_class: Asset class
+        asset_sub_class: Sub-class
         currency: Currency
         kind: Kind
+        region: Region
+        sector: Sector
         security: Security
+      asset_classes:
+        alternative_investment: Alternative
+        commodity: Commodity
+        equity: Equity
+        fixed_income: Fixed income
+        liquidity: Liquidity
+        real_estate: Real estate
+      asset_sub_classes:
+        bond: Bond
+        cash: Cash
+        collectible: Collectible
+        commodity: Commodity
+        cryptocurrency: Cryptocurrency
+        etf: ETF
+        loan: Loan
+        mutual_fund: Mutual fund
+        precious_metal: Precious metal
+        private_equity: Private equity
+        real_estate: Real estate
+        stock: Stock
+      regions:
+        asia_pacific: Asia-Pacific
+        europe: Europe
+        latin_america: Latin America
+        middle_east_africa: Middle East & Africa
+        north_america: North America
+      unclassified: Unclassified
       kinds:
         cash: Cash
         crypto: Crypto
@@ -15,6 +46,9 @@ en:
       total: Total
       value: Value
       weight: Weight
+    comparison:
+      explainer: Each of your largest accounts against the portfolio as a whole, rebased to 100 with contributions removed. Shape, not size.
+      whole_portfolio: Whole portfolio
     data_quality:
       kinds:
         missing_cost_basis:
@@ -81,6 +115,9 @@ en:
       net_contributions: Net contributions
       no_data: Not enough data
       period_return: Period return
+      period_return_unconvertible:
+        one: excludes 1 account with no exchange rate
+        other: excludes %{count} accounts with no exchange rate
       unrealized_pnl: Unrealised P&L
       value: Value
     realized_gains:
@@ -118,6 +155,7 @@ en:
     sections:
       accounts: Accounts
       allocation: Allocation
+      comparison: Account comparison
       data_quality: Data quality
       drivers: What moved the value
       holdings: Holdings
