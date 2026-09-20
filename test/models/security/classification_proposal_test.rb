@@ -75,6 +75,65 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
     assert_equal "Second answer", proposal.sector
   end
 
+  # An empty proposal was valid, storable AND approvable, and approval stamped
+  # `classification_source: "ai"` on a security with nothing classified. Because
+  # "ai" is not in the `[nil, "default"]` set `classification_attributes_from`
+  # will overwrite, that security could then never be classified by a provider
+  # again -- a permanent lock-out bought with no information at all. The tool's
+  # params_schema requires only `ticker`, so the model can send exactly this.
+  test "a proposal that answers nothing is refused" do
+    proposal = Security::ClassificationProposal.new(security: @security, family: @family)
+
+    assert_not proposal.valid?
+    assert_includes proposal.errors[:base], "must propose at least one classification"
+  end
+
+  test "a proposal carrying only a rationale is refused" do
+    proposal = Security::ClassificationProposal.new(
+      security: @security, family: @family, rationale: "Looks like a tech stock."
+    )
+
+    assert_not proposal.valid?
+  end
+
+  test "a proposal answering a single field is enough" do
+    assert Security::ClassificationProposal.new(
+      security: @security, family: @family, region: "europe"
+    ).valid?
+  end
+
+  # ------------------------------------------------------- lifecycle safety
+
+  # `family.destroy` is reached by User#purge, InactiveFamilyCleanerJob,
+  # Admin::FamiliesController#destroy and Demo::DataCleaner. A proposal row held
+  # a foreign key nothing cascaded, so any family that had ever been offered a
+  # classification became undeletable.
+  test "a family with a proposal can still be destroyed" do
+    family = Family.create!(name: "Doomed", currency: "USD")
+    Security::ClassificationProposal.propose!(
+      security: @security, family: family, asset_class: "equity"
+    )
+
+    assert_difference "Security::ClassificationProposal.count", -1 do
+      family.destroy!
+    end
+
+    assert Security.exists?(@security.id), "destroying the family took the shared security with it"
+  end
+
+  # Same shape from the other side: the duplicate-security merge in
+  # lib/tasks/securities.rake destroys a security.
+  test "a security with a proposal can still be destroyed" do
+    doomed = Security.create!(ticker: "DOOMED", exchange_operating_mic: "XNAS")
+    Security::ClassificationProposal.propose!(
+      security: doomed, family: @family, asset_class: "equity"
+    )
+
+    assert_difference "Security::ClassificationProposal.count", -1 do
+      doomed.destroy!
+    end
+  end
+
   # -------------------------------------------------------------- approving
 
   test "approving writes the security and records the source as ai" do
@@ -148,6 +207,18 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
   end
 
   # -------------------------------------------------------------- rejecting
+
+  # Rejection was unconditional, so a stale reject form from another tab moved an
+  # already-approved proposal to `rejected` while the security stayed "ai" --
+  # the row then denied a classification that is still in force.
+  test "rejecting an already-approved proposal is refused" do
+    proposal = propose(asset_class: "equity", asset_sub_class: "stock")
+    proposal.approve!
+
+    assert_not proposal.reject!
+    assert proposal.reload.approved?, "an approved proposal was moved back to rejected"
+    assert_equal "ai", @security.reload.classification_source
+  end
 
   test "rejecting leaves the security untouched" do
     proposal = propose(asset_class: "equity", asset_sub_class: "stock")
