@@ -150,7 +150,12 @@ class Security < ApplicationRecord
     wanted = family.tags.where(id: Array(tag_ids).reject(&:blank?)).pluck(:id)
     mine = family.tags.select(:id)
 
-    transaction do
+    # `with_lock` rather than a bare transaction: this is a check-then-insert on
+    # a row every family shares, and `taggings` has no unique index to refuse a
+    # duplicate. Two concurrent saves could both pass the `reload.pluck` check
+    # and both create the same tagging. Locking the security serialises edits to
+    # one instrument without touching anyone else's.
+    with_lock do
       taggings.where(tag_id: mine).where.not(tag_id: wanted).destroy_all
       (wanted - taggings.reload.pluck(:tag_id)).each { |id| taggings.create!(tag_id: id) }
     end

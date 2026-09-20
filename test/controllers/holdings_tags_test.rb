@@ -97,6 +97,37 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
     assert_empty @security.reload.tags
   end
 
+  # A security tag is a family-scoped ANNOTATION, not a change to the holding --
+  # the same shape as a transaction's tags, which `TransactionsController#update_tags`
+  # gates at `:annotate` so a read_write member can apply them. Gating this at
+  # `:write` made the two inconsistent for no stated reason.
+  test "a read-write member can tag a holding" do
+    member = family_guest
+    @holding.account.unshare_with!(member)
+    @holding.account.share_with!(member, permission: "read_write")
+
+    sign_in member
+    patch tags_holding_path(@holding), params: { security: { tag_ids: [ @tag.id ] } }
+
+    assert_equal [ @tag ], @security.reload.tags.to_a,
+                 "a read_write member could not annotate, though they can tag a transaction"
+  end
+
+  # The picker must not be offered to someone whose save will be refused: it
+  # reads as a working control and fails on submit.
+  test "the picker is hidden from a member who cannot annotate" do
+    guest = family_guest
+    @holding.account.unshare_with!(guest)
+    @holding.account.share_with!(guest, permission: "read_only")
+
+    sign_in guest
+    get holding_path(@holding)
+
+    assert_response :success
+    assert_select "form[action=?]", tags_holding_path(@holding), { count: 0 },
+                  "a read-only member was offered a picker whose save is refused"
+  end
+
   test "a read-only member cannot tag a holding" do
     guest = family_guest
     @holding.account.unshare_with!(guest)

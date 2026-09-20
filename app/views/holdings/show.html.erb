@@ -296,6 +296,7 @@
     <%# The family-scoped counterpart to the shared classification columns: a
         Tag carries family_id, so nothing here is visible to another family
         holding the same security. %>
+    <% if @can_annotate_holding %>
     <% dialog.with_section(title: t("securities.tags.title"), open: false) do %>
       <div class="px-3 py-2 space-y-3">
         <p class="text-xs text-secondary"><%= t("securities.tags.description") %></p>
@@ -318,6 +319,7 @@
           </div>
         <% end %>
       </div>
+    <% end %>
     <% end %>
     <% dialog.with_section(title: t(".history"), open: true) do %>
       <div class="space-y-2">
