@@ -1,19 +1,23 @@
 require "test_helper"
 
 class TagTest < ActiveSupport::TestCase
-  test "replace and destroy" do
+  test "replace and destroy does not double-tag an object that already carries the replacement" do
     old_tag = tags(:one)
     new_tag = tags(:two)
 
-    assert_difference "Tag.count", -1 do
+    # The taggings fixtures give transaction one both tags: without the
+    # skip in replace_and_destroy! (and with no index to refuse it), the
+    # merge would leave it tagged twice with the replacement.
+    txn = transactions(:one)
+    assert_equal 2, txn.taggings.count
+
+    assert_difference "Tag.count", -1, "Tagging.count", -1 do
       old_tag.replace_and_destroy!(new_tag)
     end
 
-    old_tag.transactions.each do |txn|
-      txn.reload
-      assert_includes txn.tags, new_tag
-      assert_not_includes txn.tags, old_tag
-    end
+    txn.reload
+    assert_equal 1, txn.taggings.count
+    assert_equal [ new_tag ], txn.tags
   end
 
   test "rejects the reserved Untagged filter sentinel as a name" do
