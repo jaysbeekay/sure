@@ -45,11 +45,19 @@ class Tag < ApplicationRecord
       raise ActiveRecord::RecordInvalid, "Replacement tag cannot be the same as the tag being destroyed" if replacement == self
 
       if replacement
-        # The object may already carry the replacement; re-pointing that
-        # tag would produce a duplicate row (refused by
-        # index_taggings_unique). Skip it, so each object ends up tagged
-        # exactly once with the replacement.
-        taggings.where.not(tag_id: replacement.id).update_all tag_id: replacement.id
+        # An object may already carry the replacement tag. Re-pointing that
+        # object's old-tag row as well would create a second row for the same
+        # taggable, which index_taggings_unique refuses (RecordNotUnique).
+        # Skip the taggables that already carry the replacement (a subquery
+        # over its own taggables) so each object ends up tagged exactly once
+        # with it; its old-tag row then falls away via dependent: :destroy.
+        #
+        # NOTE: the skip is a taggable check, not where.not(tag_id: replacement.id);
+        # inside self.taggings every row already has tag_id == self.id, and the
+        # self-merge guard above guarantees self.id != replacement.id for all of
+        # them, so a tag_id filter matches every row and skips nothing.
+        taggables_already_carrying = replacement.taggings.select(:taggable_id)
+        taggings.where.not(taggable_id: taggables_already_carrying).update_all tag_id: replacement.id
       end
 
       destroy!
