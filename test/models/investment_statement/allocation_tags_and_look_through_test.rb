@@ -17,6 +17,9 @@ class InvestmentStatement::AllocationTagsAndLookThroughTest < ActiveSupport::Tes
     @statement = InvestmentStatement.new(@family)
     @aapl = securities(:aapl)
     @tag = tags(:one)
+    # The fixture holding's value, so the untagged test can assert that THIS
+    # holding reached the bucket rather than that the bucket merely exists.
+    @holding_value = @account.holdings.where(security: @aapl).order(:date).last.amount
   end
 
   # ------------------------------------------------------- 3.5: by tag
@@ -52,11 +55,26 @@ class InvestmentStatement::AllocationTagsAndLookThroughTest < ActiveSupport::Tes
   # A tag is not a taxonomy: a security can carry several, and one that carries
   # none still has to be somewhere or the amounts stop reconciling with the
   # portfolio total.
-  test "an untagged holding falls into the unclassified bucket" do
-    segments = @statement.allocation_by("tag")
+  #
+  # Asserted by VALUE against another grouping, not by the presence of an
+  # unclassified segment. The fixture investment account carries a positive cash
+  # balance which `allocation_by_tag` also routes into UNCLASSIFIED, so a
+  # presence assertion held even when the untagged branch was deleted outright --
+  # the daily sweep caught that, and it is the same vacuity two other tests in
+  # this file were already rewritten for.
+  test "an untagged holding is carried, not dropped" do
+    @aapl.set_tags_for(@family, [])
 
-    assert segments.any? { |s| s.id == InvestmentStatement::UNCLASSIFIED },
-           "an untagged holding vanished from the allocation"
+    tagged_total = @statement.allocation_by("tag").sum { |s| s.amount.amount }
+    sector_total = @statement.allocation_by("sector").sum { |s| s.amount.amount }
+
+    assert_in_delta sector_total.to_f, tagged_total.to_f, 0.01,
+                    "the untagged holding's value is missing from the tag grouping"
+
+    unclassified = @statement.allocation_by("tag").find { |s| s.id == InvestmentStatement::UNCLASSIFIED }
+    assert unclassified, "an untagged holding had nowhere to go"
+    assert unclassified.amount.amount >= @holding_value,
+           "the untagged holding's own value did not reach the unclassified bucket"
   end
 
   # A security can carry several tags, unlike a taxonomy column. Counting it once
@@ -170,7 +188,88 @@ class InvestmentStatement::AllocationTagsAndLookThroughTest < ActiveSupport::Tes
                  with.map { |s| [ s.id, s.amount ] }.sort
   end
 
+  # ------------------------------------------------- query counts
+
+  # Both groupings lazy-loaded per holding: `holding.security.taggings` and
+  # `security.look_through_weights`. Measured at 19 and 42 queries against 5 for
+  # `sector` on 13 holdings. Asserted against the `sector` grouping rather than
+  # an absolute number, so the guard survives an unrelated change in how
+  # holdings are loaded and only fails if these two start scaling again.
+  test "grouping by tag does not query per holding" do
+    5.times { |i| hold_another_security(i) }
+    @aapl.set_tags_for(@family, [ @tag.id ])
+
+    baseline = count_queries { @statement.allocation_by("sector") }
+    tagged = count_queries { InvestmentStatement.new(@family).allocation_by("tag") }
+
+    assert tagged <= baseline + 2,
+           "tag grouping ran #{tagged} queries against #{baseline} for sector; it is querying per holding"
+  end
+
+  test "look-through does not query per holding" do
+    5.times { |i| hold_another_security(i) }
+    fund_with_constituents
+
+    baseline = count_queries { InvestmentStatement.new(@family).allocation_by("sector") }
+    looked = count_queries { InvestmentStatement.new(@family).allocation_by("sector", look_through: true) }
+
+    assert looked <= baseline + 2,
+           "look-through ran #{looked} queries against #{baseline} without it; it is querying per holding"
+  end
+
+  # A constituent that is itself a cash security belongs in liquidity/cash, the
+  # same as a directly held one. Passing nil as the cash bucket filed it under
+  # UNCLASSIFIED, so the same money answered differently depending on how it was
+  # held.
+  test "a cash constituent lands in liquidity, as a directly held one would" do
+    fund = create_fund
+    cash = Security.create!(ticker: "CASHC", exchange_operating_mic: "XNAS", kind: "cash", offline: true)
+    # Emptied deliberately. The defaults slice fills a cash security with
+    # liquidity/cash on create, and with those columns set the bucket resolves
+    # correctly whether or not `cash_bucket` is carried through -- so the test
+    # would pass either way. A row predating that slice, or written by
+    # `update_columns`, is the case the carry-through actually decides.
+    cash.update_columns(asset_class: nil, asset_sub_class: nil, classification_source: nil)
+    fund.constituents.create!(ticker: "CASHC", name: "Cash holding", weight: 100)
+
+    # By VALUE, not by presence: the fixture account's own cash balance already
+    # produces a `liquidity` segment, so "is there one" passed whether or not
+    # the constituent reached it. Asserted as the DELTA the look-through adds.
+    assert cash.cash?
+    before = liquidity_amount(@statement.allocation_by("asset_class", look_through: false))
+    after = liquidity_amount(InvestmentStatement.new(@family).allocation_by("asset_class", look_through: true))
+
+    assert_in_delta 1000.0, (after - before).to_f, 0.01,
+                    "the cash constituent did not reach liquidity; it was filed as unclassified"
+  end
+
   private
+    def liquidity_amount(segments)
+      segments.find { |s| s.id == "liquidity" }&.amount&.amount || 0
+    end
+
+    def hold_another_security(index)
+      security = Security.create!(
+        ticker: "FILL#{index}", exchange_operating_mic: "XNAS",
+        country_code: "US", sector: "Filler #{index}"
+      )
+      @account.holdings.create!(
+        security: security, date: Date.current, qty: 1,
+        price: 100, amount: 100, currency: "USD"
+      )
+    end
+
+    def count_queries
+      count = 0
+      sub = ActiveSupport::Notifications.subscribe("sql.active_record") do |_, _, _, _, payload|
+        count += 1 unless payload[:name].to_s.in?([ "SCHEMA", "TRANSACTION" ])
+      end
+      yield
+      count
+    ensure
+      ActiveSupport::Notifications.unsubscribe(sub)
+    end
+
     def create_fund
       fund = Security.create!(
         ticker: "VWRA", name: "World ETF", exchange_operating_mic: "XLON",

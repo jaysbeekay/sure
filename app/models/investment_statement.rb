@@ -934,7 +934,7 @@ class InvestmentStatement
 
       current_holdings.each do |holding|
         value = convert_to_family_currency(holding.amount, holding.currency)
-        split = look_through ? look_through_split(holding.security, column, value) : nil
+        split = look_through ? look_through_split(holding.security, column, value, cash_bucket) : nil
 
         if split
           split.each { |bucket, portion| grouped[bucket] += portion }
@@ -963,17 +963,40 @@ class InvestmentStatement
     # as UNCLASSIFIED rather than dropped: dropping it would shrink the portfolio
     # total by the weight of every constituent we happen not to hold, which for a
     # broad index fund is nearly all of it.
-    def look_through_split(security, column, value)
-      weights = security.look_through_weights
+    def look_through_split(security, column, value, cash_bucket = nil)
+      weights = constituent_weights_for(security)
       return nil if weights.empty?
 
       known = constituent_securities(weights.keys)
 
       weights.each_with_object(Hash.new(0)) do |(ticker, weight), split|
         constituent = known[ticker.to_s.upcase]
-        bucket = constituent ? classification_bucket(constituent, column, nil) : UNCLASSIFIED
+        # `cash_bucket` is carried through: a constituent whose own Security row
+        # is `kind: "cash"` belongs in liquidity/cash exactly as a directly held
+        # cash security does. Passing nil filed it under UNCLASSIFIED, so the
+        # same money answered differently depending on how it was held.
+        bucket = constituent ? classification_bucket(constituent, column, cash_bucket) : UNCLASSIFIED
         split[bucket] += value * weight
       end
+    end
+
+    # Constituent rows for every security in scope, fetched once. Asking each
+    # security for `look_through_weights` runs a query per holding -- 42 against
+    # 5 on 13 holdings -- and most holdings are not funds, so nearly all of them
+    # were queries that returned nothing.
+    def constituent_weights_for(security)
+      @constituents_by_security ||= Security::Constituent
+        .where(security_id: current_holdings.map(&:security_id).uniq)
+        .where.not(weight: nil)
+        .group_by(&:security_id)
+
+      rows = @constituents_by_security[security.id]
+      return {} if rows.blank?
+
+      total = rows.sum(&:weight)
+      return {} if total.zero?
+
+      rows.each_with_object({}) { |row, map| map[row.ticker] = row.weight / total }
     end
 
     def constituent_securities(tickers)
@@ -1009,9 +1032,19 @@ class InvestmentStatement
       grouped = Hash.new(0)
       names = { UNCLASSIFIED => UNCLASSIFIED }
 
+      # One query for every security in scope rather than one per holding.
+      # `holding.security.taggings` lazy-loads, so the obvious loop is an N+1 --
+      # measured at 19 queries against 5 for `sector` on 13 holdings.
+      tag_ids_by_security = Tagging
+        .where(taggable_type: "Security", taggable_id: current_holdings.map(&:security_id).uniq)
+        .where(tag_id: family_tags.keys)
+        .pluck(:taggable_id, :tag_id)
+        .group_by(&:first)
+        .transform_values { |rows| rows.map(&:last) }
+
       current_holdings.each do |holding|
         value = convert_to_family_currency(holding.amount, holding.currency)
-        ids = holding.security.taggings.map(&:tag_id).select { |id| family_tags.key?(id) }
+        ids = tag_ids_by_security.fetch(holding.security_id, [])
 
         if ids.empty?
           grouped[UNCLASSIFIED] += value
