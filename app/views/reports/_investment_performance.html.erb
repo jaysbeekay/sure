@@ -158,9 +158,21 @@
                 </div>
                 <div class="flex justify-between">
                   <span class="text-secondary"><%= t("reports.investment_performance.realized_gains") %></span>
-                  <span class="text-primary privacy-sensitive"><%= format_money(data[:realized_gain]) %></span>
+                  <span class="text-primary privacy-sensitive" data-testid="realized-total"><%= format_money(data[:realized_gain]) %></span>
                 </div>
               </div>
+
+              <%# What the realised total leaves out, and why. Named rather than
+                  dropped silently: a card that quietly skips an unmeasurable
+                  disposal reads exactly like one that had nothing to skip. Same
+                  reasons, same order, as the portfolio hub's own section. %>
+              <% if data[:excluded_trades].present? %>
+                <ul class="text-xs text-secondary space-y-1" data-testid="realized-exclusions">
+                  <% data[:excluded_trades].each do |reason, count| %>
+                    <li><%= t("reports.investment_performance.excluded.#{reason}", count: count) %></li>
+                  <% end %>
+                </ul>
+              <% end %>
 
               <% if treatment == :taxable && data[:realized_gain].amount > 0 %>
                 <p class="text-xs text-warning flex items-center gap-1">
