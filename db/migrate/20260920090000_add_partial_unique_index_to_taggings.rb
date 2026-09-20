@@ -1,4 +1,4 @@
-# Issue #202 — `taggings` has no uniqueness constraint, so a tag can be
+# Issue #202 — `taggings` has no uniqueness constraint, so a tag can
 # applied twice to one object. `Tag#replace_and_destroy!` merges by
 # `taggings.update_all tag_id: replacement.id`, which for an object that
 # already carries the replacement produces two identical rows, and a
@@ -28,7 +28,7 @@ class AddPartialUniqueIndexToTaggings < ActiveRecord::Migration[8.1]
         AND duplicate.taggable_id IS NOT NULL
     SQL
 
-    add_index :taggings, [:tag_id, :taggable_type, :taggable_id],
+    add_index :taggings, [ :tag_id, :taggable_type, :taggable_id ],
       name: "index_taggings_unique",
       unique: true,
       where: "taggable_id IS NOT NULL"
