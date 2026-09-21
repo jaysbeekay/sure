@@ -193,9 +193,9 @@ Two corollaries:
 Assert the change the code under test causes, measured against the state
 without it.
 
-This produced five vacuous tests in a single delivery cycle, four of them found
-by review rather than by the author. Every one asserted presence, every one
-passed while the behaviour it named was deleted:
+This produced six vacuous tests in a single delivery cycle, at least four of
+them found by review rather than by the author. Every one asserted presence,
+every one passed while the behaviour it named was deleted:
 
 - *"an untagged holding falls into the unclassified bucket"* asserted an
   `unclassified` segment existed. The fixture account's positive cash balance
@@ -211,9 +211,11 @@ passed while the behaviour it named was deleted:
   validation.
 - *"a proposal that only answers the region"* asserted `nil` on columns the
   security never had.
-- Two importer tests asserted constituents were stored while the importer
-  returned early on `return unless Security.provider`, which is unset in test --
-  so they passed against an importer that did nothing, which was the defect.
+- *"a fund's holdings land in the table when the per-account importer runs"* and
+  *"...when the family importer runs"* asserted constituents were stored while
+  the importer returned early on `return unless Security.provider`, which is
+  unset in test -- so they passed against an importer that did nothing, which
+  was the defect.
 
 **How to apply.**
 
