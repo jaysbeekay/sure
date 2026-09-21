@@ -224,8 +224,25 @@ class InvestmentStatement
   # Whether anything in the portfolio can BE looked through. Asked by the
   # section registry so the toggle is not offered to someone holding no funds,
   # where it would be a control that visibly does nothing.
+  # Does the portfolio hold a fund look-through could actually expand?
+  #
+  # Existence of constituent ROWS is not enough. `Security#look_through_weights`
+  # divides by the sum of the non-nil weights and returns {} when that sum is
+  # zero, so a fund whose constituents carry nil or zero weights expands to
+  # nothing and the toggle renders as a control that visibly does nothing
+  # (raised by cubic on #201).
+  #
+  # The condition mirrors that method's own rule rather than approximating it:
+  # non-nil weights, summed PER SECURITY, greater than zero. A row-level
+  # `weight > 0` would disagree with it for a fund whose weights cancel out.
   def holds_any_fund_constituents?
-    Security::Constituent.where(security_id: current_holdings.map(&:security_id).uniq).exists?
+    Security::Constituent
+      .where(security_id: current_holdings.map(&:security_id).uniq)
+      .where.not(weight: nil)
+      .group(:security_id)
+      .having("SUM(weight) > 0")
+      .pick(:security_id)
+      .present?
   end
 
   # `look_through` expands a fund into what it actually holds. It applies only to

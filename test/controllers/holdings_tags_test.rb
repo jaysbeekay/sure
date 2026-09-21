@@ -163,10 +163,18 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
 
   # Another family's tag names must not be rendered into a page this family sees,
   # for the same reason they must not be attachable.
-  test "the picker lists only this family's tags" do
+  #
+  # The positive half is what stops this passing vacuously. Asserting only the
+  # other family's absence is satisfied by a picker rendering NO tags at all --
+  # losing `@family_tags` in `#show` would leave an empty select and every
+  # assertion here green (raised by cubic on #201). So this family's tag has to
+  # be present in the same breath.
+  test "the picker lists this family's tags and only this family's tags" do
     get holding_path(@holding)
 
     assert_select "form[action=?]", tags_holding_path(@holding) do
+      assert_select "*", { text: /#{Regexp.escape(@tag.name)}/, minimum: 1 },
+                    "this family's tag is not in the picker, so the other family's absence proves nothing"
       assert_select "*", { text: /#{Regexp.escape(@other_tag.name)}/, count: 0 },
                     "another family's tag name was rendered in the picker"
     end

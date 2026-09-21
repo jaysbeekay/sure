@@ -31,6 +31,35 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
     assert_select "a", { text: /See through funds/, minimum: 1 }
   end
 
+  # Constituent ROWS are not the same as a fund look-through can expand.
+  # Security#look_through_weights divides by the sum of the non-nil weights and
+  # returns {} when that sum is zero, so a fund whose holdings carry no usable
+  # weight expands to nothing -- and the toggle was still offered, as a control
+  # that visibly does nothing (raised by cubic on #201).
+  test "the toggle is not offered for a fund whose constituents carry no usable weight" do
+    fund = Security.create!(
+      ticker: "WGHTLESS", name: "Weightless ETF", exchange_operating_mic: "XLON",
+      country_code: "GB", sector: "Fund wrapper"
+    )
+    Security.create!(ticker: "MSFT3", exchange_operating_mic: "XNAS", country_code: "US", sector: "Technology")
+    Security.create!(ticker: "JNJ3", exchange_operating_mic: "XNAS", country_code: "US", sector: "Healthcare")
+    # One of each kind of unusable weight: absent, and present but zero.
+    fund.constituents.create!(ticker: "MSFT3", name: "Microsoft", weight: nil)
+    fund.constituents.create!(ticker: "JNJ3", name: "J&J", weight: 0)
+    @account.holdings.create!(
+      security: fund, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD"
+    )
+
+    assert_empty fund.look_through_weights,
+                 "the fixture must expand to nothing, or the toggle is right to be offered"
+
+    get portfolio_path(by: "sector")
+
+    assert_response :success
+    assert_select "a", { text: /See through funds/, count: 0 },
+                  "a toggle was offered for a fund that expands to nothing"
+  end
+
   # The axes the look-through does not apply to must not offer it: a fund's
   # constituents have no account of their own, and grouping by security with
   # look-through is meaningless because the security IS the fund.
