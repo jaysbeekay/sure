@@ -136,6 +136,36 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
 
   # -------------------------------------------------------------- approving
 
+  # The status check used to run against whatever the in-memory object last
+  # read, so two requests on one proposal both passed it. An approve racing a
+  # reject then left the security classified "ai" behind a row saying
+  # "rejected" -- the state #reject!'s own comment says it prevents (raised by
+  # Codacy on #199).
+  #
+  # Simulated deterministically rather than with threads: the row is moved
+  # underneath the object, which is exactly what the losing request sees.
+  test "rejecting a proposal another request already approved changes nothing" do
+    proposal = propose(asset_class: "equity", asset_sub_class: "stock")
+
+    # Another request wins the race and approves it.
+    Security::ClassificationProposal.where(id: proposal.id).update_all(status: "approved")
+
+    assert_not proposal.reject!, "the stale request must not be told it rejected anything"
+    assert_equal "approved", proposal.reload.status,
+                 "a rejection overwrote a status set by a request that had already finished"
+  end
+
+  test "approving a proposal another request already rejected changes nothing" do
+    proposal = propose(asset_class: "equity", asset_sub_class: "stock")
+
+    Security::ClassificationProposal.where(id: proposal.id).update_all(status: "rejected")
+
+    assert_not proposal.approve!, "the stale request must not be told it approved anything"
+    assert_equal "rejected", proposal.reload.status
+    assert_nil @security.reload.asset_class,
+               "the security was written by an approve that lost the race"
+  end
+
   test "approving writes the security and records the source as ai" do
     proposal = propose(
       asset_class: "equity", asset_sub_class: "stock",

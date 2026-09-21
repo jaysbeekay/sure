@@ -85,23 +85,31 @@ class Assistant::Function::SuggestSecurityClassification < Assistant::Function
         next
       end
 
-      proposal = Security::ClassificationProposal.new(
-        security: security, family: family,
+      # Mapped ONCE. This was written twice -- once to validate, once to write --
+      # and two copies of one mapping is how a field gets added to the check and
+      # not to the write (raised by Codacy on #199).
+      attributes = {
         asset_class: entry["asset_class"], asset_sub_class: entry["asset_sub_class"],
         sector: entry["sector"].presence, region: entry["region"],
         rationale: entry["rationale"].presence
-      )
+      }
 
-      if proposal.valid?
-        Security::ClassificationProposal.propose!(
-          security: security, family: family,
-          asset_class: entry["asset_class"], asset_sub_class: entry["asset_sub_class"],
-          sector: entry["sector"].presence, region: entry["region"],
-          rationale: entry["rationale"].presence
-        )
-        recorded += 1
-      else
+      proposal = Security::ClassificationProposal.new(security: security, family: family, **attributes)
+
+      unless proposal.valid?
         skipped << { ticker: ticker, reason: proposal.errors.full_messages.to_sentence }
+        next
+      end
+
+      begin
+        Security::ClassificationProposal.propose!(security: security, family: family, **attributes)
+        recorded += 1
+      rescue ActiveRecord::RecordInvalid => e
+        # The pre-check makes this unlikely, not impossible: `propose!` updates
+        # an existing row, and a validation that depends on persisted state can
+        # refuse there. One security the assistant cannot record must not cost
+        # the user the other forty it can.
+        skipped << { ticker: ticker, reason: e.record.errors.full_messages.to_sentence }
       end
     end
 

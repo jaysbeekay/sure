@@ -67,6 +67,31 @@ class Assistant::Function::SuggestSecurityClassificationTest < ActiveSupport::Te
     assert_empty Security::ClassificationProposal.all
   end
 
+  # `propose!` writes with a bang, and the pre-check makes a failure there
+  # unlikely rather than impossible -- it updates an existing row, so a
+  # validation that depends on persisted state can still refuse. Before, that
+  # raised out of the loop and the user lost every proposal after the bad one
+  # (raised by Codacy on #199).
+  test "a security that cannot be recorded does not cost the user the rest of the batch" do
+    other = Security.create!(ticker: "MSFT9", exchange_operating_mic: "XNAS", country_code: "US")
+    accounts(:investment).holdings.create!(
+      security: other, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD"
+    )
+
+    # The first ticker refuses at write time; the second must still land.
+    Security::ClassificationProposal.stubs(:propose!).raises(
+      ActiveRecord::RecordInvalid.new(Security::ClassificationProposal.new)
+    ).then.returns(Security::ClassificationProposal.new)
+
+    result = @function.call("proposals" => [
+      { "ticker" => "AAPL", "asset_class" => "equity", "asset_sub_class" => "stock" },
+      { "ticker" => "MSFT9", "asset_class" => "equity", "asset_sub_class" => "stock" }
+    ])
+
+    assert_equal 1, result[:recorded], "the batch stopped at the first security it could not record"
+    assert_equal [ "AAPL" ], result[:skipped].map { |entry| entry[:ticker] }
+  end
+
   test "the tool is registered for preview users only" do
     assert_includes Assistant::PREVIEW_FUNCTION_CLASSES,
                     Assistant::Function::SuggestSecurityClassification

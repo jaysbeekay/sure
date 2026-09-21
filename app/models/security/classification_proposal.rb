@@ -46,24 +46,33 @@ class Security::ClassificationProposal < ApplicationRecord
   # the proposal was made -- that window is exactly where a user can pick up the
   # drawer and classify it by hand, and their answer wins.
   def approve!
-    return false unless pending?
-
-    # The veto is re-checked INSIDE the row lock, not before it. Checked outside,
-    # a concurrent manual save can commit between the check and the write, and
-    # `security.update!` then silently overwrites the answer a person had just
-    # given -- the precise case the veto exists to prevent, surviving only
-    # because the two requests did not overlap.
+    # `pending?` is checked inside THIS row's lock, not against whatever the
+    # in-memory object last read. Checked outside, two requests on one proposal
+    # both pass it, and an approve racing a reject leaves the security
+    # classified "ai" behind a row that says "rejected" -- the state #reject!'s
+    # own comment says it exists to prevent (raised by Codacy on #199).
+    #
+    # The veto is then re-checked inside the SECURITY's lock for the same
+    # reason: a concurrent manual save committing between check and write would
+    # otherwise be overwritten silently, which is the case the veto exists for.
+    #
+    # Lock order is proposal then security, and nothing takes them the other way
+    # round.
     approved = false
 
-    security.with_lock do
-      security.reload
-      next if security.classification_locked? || security.classification_source == "manual"
+    with_lock do
+      next unless pending?
 
-      security.update!(
-        proposed_attributes.merge(classification_source: "ai", classification_locked: false)
-      )
-      update!(status: "approved")
-      approved = true
+      security.with_lock do
+        security.reload
+        next if security.classification_locked? || security.classification_source == "manual"
+
+        security.update!(
+          proposed_attributes.merge(classification_source: "ai", classification_locked: false)
+        )
+        update!(status: "approved")
+        approved = true
+      end
     end
 
     approved
@@ -74,9 +83,16 @@ class Security::ClassificationProposal < ApplicationRecord
   # security stays classified `"ai"`, leaving a row that denies a classification
   # still in force.
   def reject!
-    return false unless pending?
+    rejected = false
 
-    update!(status: "rejected")
+    with_lock do
+      next unless pending?
+
+      update!(status: "rejected")
+      rejected = true
+    end
+
+    rejected
   end
 
   private
