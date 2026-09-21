@@ -56,7 +56,12 @@ class Tag < ApplicationRecord
         # inside self.taggings every row already has tag_id == self.id, and the
         # self-merge guard above guarantees self.id != replacement.id for all of
         # them, so a tag_id filter matches every row and skips nothing.
-        taggables_already_carrying = replacement.taggings.select(:taggable_id)
+        # `where.not(taggable_id: <subquery>)` compiles to NOT IN, and NOT IN
+        # against a set containing NULL is NULL for every row -- so a single
+        # replacement tagging with a NULL taggable_id would make this update
+        # match nothing and silently merge no tags at all. The columns are
+        # nullable (db/schema.rb), so the subquery excludes them explicitly.
+        taggables_already_carrying = replacement.taggings.where.not(taggable_id: nil).select(:taggable_id)
         taggings.where.not(taggable_id: taggables_already_carrying).update_all tag_id: replacement.id
       end
 
