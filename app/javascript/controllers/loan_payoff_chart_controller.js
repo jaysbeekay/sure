@@ -357,40 +357,41 @@ export default class extends Controller {
       crosshair.attr("x1", hoverX).attr("x2", hoverX).style("display", null);
       tooltipDate.textContent = dateFmt(hoverDate);
 
+      // The scheduled point either side of today: the original projection ahead
+      // of it, the scheduled history behind. Found ONCE -- the balance row and
+      // the composition row are two readings of the same point, and looking it
+      // up twice is how they would come to disagree about which date they are
+      // describing.
+      const scheduledPoint = isFuture
+        ? nearestValue(originalSeries, hoverDate)
+        : nearestValue(historySeries, hoverDate);
+
       if (isFuture) {
-        const originalPoint = nearestValue(originalSeries, hoverDate);
         const acceleratedPoint = nearestValue(acceleratedSeries, hoverDate);
-        tooltipOriginal.textContent = originalPoint
-          ? `${(data.labels?.original) || "Original"}: ${this._fmtMoney(originalPoint.balance)}`
+        tooltipOriginal.textContent = scheduledPoint
+          ? `${(data.labels?.original) || "Original"}: ${this._fmtMoney(scheduledPoint.balance)}`
           : "";
-        tooltipOriginal.style.display = originalPoint ? "" : "none";
+        tooltipOriginal.style.display = scheduledPoint ? "" : "none";
         tooltipAccelerated.textContent = acceleratedPoint
           ? `${(data.labels?.accelerated) || "Projected"}: ${this._fmtMoney(acceleratedPoint.balance)}`
           : "";
         tooltipAccelerated.style.display = acceleratedPoint ? "" : "none";
       } else {
-        const historyPoint = nearestValue(historySeries, hoverDate);
-        tooltipOriginal.textContent = historyPoint
-          ? `${(data.labels?.scheduled) || "Scheduled"}: ${this._fmtMoney(historyPoint.balance)}`
+        tooltipOriginal.textContent = scheduledPoint
+          ? `${(data.labels?.scheduled) || "Scheduled"}: ${this._fmtMoney(scheduledPoint.balance)}`
           : "";
-        tooltipOriginal.style.display = historyPoint ? "" : "none";
+        tooltipOriginal.style.display = scheduledPoint ? "" : "none";
         tooltipAccelerated.style.display = "none";
       }
 
-      // The composition belongs to the SCHEDULED point either side of today --
-      // the contracted schedule's own row. A future date reads it from the
-      // original projection, a past one from the scheduled history; the
-      // accelerated series is deliberately not composed (see the payload).
-      const scheduledPoint = isFuture
-        ? nearestValue(originalSeries, hoverDate)
-        : nearestValue(historySeries, hoverDate);
+      // The accelerated series is deliberately not composed (see the payload).
       const hasComposition =
         scheduledPoint &&
         scheduledPoint.principal != null &&
         scheduledPoint.interest != null;
       tooltipComposition.textContent = hasComposition
-        ? `${(data.labels?.principal) || "Principal"} ${this._fmtMoney(scheduledPoint.principal)} · ` +
-          `${(data.labels?.interest) || "Interest"} ${this._fmtMoney(scheduledPoint.interest)}`
+        ? `${(data.labels?.principal) || "Principal"}: ${this._fmtMoney(scheduledPoint.principal)} · ` +
+          `${(data.labels?.interest) || "Interest"}: ${this._fmtMoney(scheduledPoint.interest)}`
         : "";
       tooltipComposition.style.display = hasComposition ? "" : "none";
 
