@@ -134,10 +134,17 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     get reports_path
     assert_response :ok
 
-    # The disposal line, not the card's chrome: it proves the card rendered AND
-    # that the figure which earned it a place is on it.
+    # The card's own wrapper, which is what `has_investments` gates -- the
+    # sections inside it are individually conditional, so asserting one of them
+    # would confuse "the card is here" with "this part of it is" (raised by
+    # cubic).
+    assert_select "[data-section-key='investment_performance']", { minimum: 1 },
+                  "the card was not rendered for a family whose only broker is closed"
+
+    # And the disposal line, so the figure that earned the card its place is
+    # actually on it.
     lines = css_select("[data-testid='realized-gain-line']").map(&:text)
-    assert_not_empty lines, "the card was not rendered for a family whose only broker is closed"
+    assert_not_empty lines, "the card rendered with no disposal lines at all"
     assert lines.any? { |line| line.include?("$100.00") },
            "the card rendered but not the disposal that earned it a place: #{lines.inspect}"
   end
@@ -150,10 +157,13 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     get reports_path
     assert_response :ok
 
+    # The CARD's absence, not the absence of two sections inside it. A card that
+    # renders empty satisfies the narrower assertions while failing this one,
+    # which is the whole point of the gate (raised by cubic).
+    assert_select "[data-section-key='investment_performance']", { count: 0 },
+                  "the investment card was rendered for a family with nothing to show"
     assert_select "[data-testid='realized-gain-line']", { count: 0 },
-                  "a card was rendered for a family with nothing to show"
-    assert_select "h3,h4", { text: I18n.t("reports.investment_performance.gains_by_tax_treatment"), count: 0 },
-                  "the card's gains section rendered for a family with nothing to show"
+                  "a disposal line was rendered for a family with nothing to show"
   end
 
   # The Reports section controllers gained `url` and `preferenceKey` values so
