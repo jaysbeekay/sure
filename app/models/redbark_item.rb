@@ -55,13 +55,18 @@ class RedbarkItem < ApplicationRecord
   end
 
   # Process linked accounts after data import
-  def process_accounts
+  #
+  # `as_of` is captured ONCE here and passed down, so every account in one sync
+  # dates its findings the same way. A sync that starts at 23:59 must not write
+  # one loan's detected rate change under today and the next loan's under
+  # tomorrow (#142).
+  def process_accounts(as_of: Date.current)
     return [] if redbark_accounts.empty?
 
     results = []
     linked_redbark_accounts.includes(account_provider: :account).each do |redbark_account|
       begin
-        result = RedbarkAccount::Processor.new(redbark_account).process
+        result = RedbarkAccount::Processor.new(redbark_account, as_of: as_of).process
         results << { redbark_account_id: redbark_account.id, success: true, result: result }
       rescue => e
         DebugLogEntry.capture(

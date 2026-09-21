@@ -30,6 +30,7 @@ class RedbarkItem::Importer
     end
 
     import_balances(linked_accounts)
+    import_loan_account_details(linked_accounts)
 
     # Store import stats on the item as the raw snapshot
     redbark_item.upsert_redbark_snapshot!(stats)
@@ -191,6 +192,43 @@ class RedbarkItem::Importer
       rescue => e
         capture_failure("Balances fetch failed; keeping previous balances", e)
         register_error(e, context: "balances")
+      end
+    end
+
+    # Loans only, and only when there are any: `account-details` is the one
+    # endpoint that reports a rate (#142), and for every other account type it
+    # would be a request per sync for something nothing reads.
+    #
+    # A failure here leaves the payload untouched and the sync green, exactly as
+    # a failed balances fetch does. The processor treats "never fetched" and
+    # "fetch failed" alike, because for a rate they mean the same thing:
+    # nothing was reported.
+    def import_loan_account_details(linked_accounts)
+      eligible_accounts = balance_eligible_accounts(linked_accounts).select do |redbark_account|
+        redbark_account.current_account&.accountable_type == "Loan"
+      end
+      account_ids = eligible_accounts.map(&:redbark_account_id).compact
+      return if account_ids.empty?
+
+      begin
+        stats["api_requests"] = stats.fetch("api_requests", 0) + 1
+        details_by_id = redbark_provider.get_account_details(account_ids: account_ids)
+                                        .index_by { |detail| detail[:accountId].to_s }
+
+        eligible_accounts.each do |redbark_account|
+          detail = details_by_id[redbark_account.redbark_account_id]
+          # An account the provider has no detail for is omitted from `data`
+          # rather than erroring, so leave the last payload in place.
+          next if detail.blank?
+
+          redbark_account.update!(raw_account_details_payload: detail)
+          stats["account_details_updated"] = stats.fetch("account_details_updated", 0) + 1
+        end
+      rescue Provider::Redbark::AuthenticationError
+        raise
+      rescue => e
+        capture_failure("Account details fetch failed; keeping previous details", e)
+        register_error(e, context: "account_details")
       end
     end
 
