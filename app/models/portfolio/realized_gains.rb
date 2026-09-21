@@ -100,6 +100,20 @@ class Portfolio::RealizedGains
     end
   end
 
+  # Did this period crystallise anything at all? Deliberately cheaper than
+  # asking for the figures and counting them: this loads the period's sell
+  # trades and stops, where measuring computes a gain per trade against
+  # preloaded holdings and cost bases. The Reports card gates on this before
+  # deciding whether to render (jaysbeekay/sure#206), and it runs for families
+  # with no investments at all, so it must not do the measuring work to
+  # answer "no".
+  #
+  # Memoised through #sell_trades, so a caller that asks this and then goes on
+  # to measure pays for the trades query once.
+  def any_disposals?
+    sell_trades.any?
+  end
+
   def excluded_trade_count
     @excluded_trade_count ||= exclusions.size
   end

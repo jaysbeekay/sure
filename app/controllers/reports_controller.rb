@@ -490,7 +490,24 @@ class ReportsController < ApplicationController
       investment_statement = Current.family.investment_statement
       investment_accounts = investment_statement.investment_accounts
 
-      return { has_investments: false } unless investment_accounts.any?
+      # Gated on having something to SHOW, not on holding something today
+      # (jaysbeekay/sure#206). `investment_accounts` is the VISIBLE scope --
+      # draft and active -- while the realised figures inside this card have
+      # never had a status filter: they are measured over
+      # `included_in_reports`, which carries disabled accounts. A family whose
+      # only broker is closed therefore saw no card at all, while the card it
+      # was denied had a real realised figure for the period.
+      #
+      # The question is asked of Portfolio::RealizedGains rather than of a
+      # second hand-rolled trades query, so "is there a disposal" and "what
+      # was realised" cannot drift apart -- two implementations of one
+      # question is the shape of jaysbeekay/sure#167, and this is where it
+      # would come back.
+      #
+      # The cost, recorded on the issue: this runs one trades query for a
+      # family with no investments, which used to return on the accounts check
+      # alone, and the gate is now period-dependent where it was not.
+      return { has_investments: false } unless investment_accounts.any? || period_disposals?
 
       period_totals = investment_statement.totals(period: @period)
       {
@@ -504,6 +521,16 @@ class ReportsController < ApplicationController
         accounts: investment_accounts.to_a,
         gains_by_tax_treatment: build_gains_by_tax_treatment(investment_statement)
       }
+    end
+
+    # The disposals this page counts: the card's own account scope, which is
+    # `included_in_reports` with no status filter, over the chosen period.
+    def period_disposals?
+      Portfolio::RealizedGains.new(
+        accounts: Current.family.accounts.included_in_reports,
+        period: @period,
+        currency: Current.family.currency
+      ).any_disposals?
     end
 
     def build_gains_by_tax_treatment(investment_statement)
