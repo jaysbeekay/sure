@@ -75,7 +75,15 @@ export default class extends Controller {
       const [ y, m, d ] = s.split("-").map(Number);
       return new Date(y, m - 1, d);
     };
-    const toPoint = (p) => ({ date: parseLocalDate(p.date), balance: p.balance });
+    // `principal`/`interest` ride through for the tooltip's composition row.
+    // They are absent on `current_balance` and on the accelerated points,
+    // which is why the tooltip checks for them rather than assuming.
+    const toPoint = (p) => ({
+      date: parseLocalDate(p.date),
+      balance: p.balance,
+      principal: p.principal,
+      interest: p.interest,
+    });
 
     const today = parseLocalDate(data.today);
     const currentBalancePoint = data.current_balance ? toPoint(data.current_balance) : { date: today, balance: 0 };
@@ -316,7 +324,17 @@ export default class extends Controller {
     tooltipOriginal.className = CHART_TOOLTIP_VALUE_CLASSES;
     const tooltipAccelerated = document.createElement("div");
     tooltipAccelerated.className = `${CHART_TOOLTIP_VALUE_CLASSES} mt-0.5`;
-    tooltip.replaceChildren(tooltipDate, tooltipOriginal, tooltipAccelerated);
+    // What the payment on the hovered date is made of. Secondary styling: the
+    // balance is what the chart draws, and this is the answer to "why is it
+    // moving so slowly" that the line itself cannot give (#21).
+    const tooltipComposition = document.createElement("div");
+    tooltipComposition.className = `${CHART_TOOLTIP_CONTEXT_CLASSES} mt-0.5`;
+    tooltip.replaceChildren(
+      tooltipDate,
+      tooltipOriginal,
+      tooltipAccelerated,
+      tooltipComposition,
+    );
 
     const bisectDate = d3.bisector((d) => d.date).left;
     const dateFmt = d3.timeFormat("%b %d, %Y");
@@ -358,6 +376,23 @@ export default class extends Controller {
         tooltipOriginal.style.display = historyPoint ? "" : "none";
         tooltipAccelerated.style.display = "none";
       }
+
+      // The composition belongs to the SCHEDULED point either side of today --
+      // the contracted schedule's own row. A future date reads it from the
+      // original projection, a past one from the scheduled history; the
+      // accelerated series is deliberately not composed (see the payload).
+      const scheduledPoint = isFuture
+        ? nearestValue(originalSeries, hoverDate)
+        : nearestValue(historySeries, hoverDate);
+      const hasComposition =
+        scheduledPoint &&
+        scheduledPoint.principal != null &&
+        scheduledPoint.interest != null;
+      tooltipComposition.textContent = hasComposition
+        ? `${(data.labels?.principal) || "Principal"} ${this._fmtMoney(scheduledPoint.principal)} · ` +
+          `${(data.labels?.interest) || "Interest"} ${this._fmtMoney(scheduledPoint.interest)}`
+        : "";
+      tooltipComposition.style.display = hasComposition ? "" : "none";
 
       tooltip.style.display = "block";
       const tipRect = tooltip.getBoundingClientRect();
