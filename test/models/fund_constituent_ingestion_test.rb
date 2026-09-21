@@ -11,10 +11,6 @@ require "test_helper"
 class FundConstituentIngestionTest < ActiveSupport::TestCase
   include ProviderTestHelper
 
-  setup do
-    @security = securities(:aapl)
-  end
-
   # Both tests drive the importer end to end against a stubbed provider and
   # assert the CONSTITUENTS LAND, rather than asserting the keyword is passed.
   # A signature assertion would pass even if the gate downstream refused the
@@ -64,6 +60,10 @@ class FundConstituentIngestionTest < ActiveSupport::TestCase
 
     assert_equal %w[MSFT], fund.reload.constituents.pluck(:ticker),
                  "the family-wide importer stores no constituents, so look-through stays inert"
+    # The same gate the per-account test checks. The production gap was
+    # precisely that this stayed nil, so asserting the rows without the
+    # timestamp would leave half of what broke untested (raised by cubic).
+    assert_not_nil fund.constituents_fetched_at
   end
 
   private
