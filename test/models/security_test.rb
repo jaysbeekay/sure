@@ -67,7 +67,11 @@ class SecurityTest < ActiveSupport::TestCase
       "chk_securities_classification_source" => Security::CLASSIFICATION_SOURCES
     }.each do |name, values|
       expression = constraints.fetch(name).expression
-      assert_equal values.sort, expression.scan(/'([a-z_]+)'/).flatten.sort,
+      # Complete quoted literals, not [a-z_]+: a future taxonomy value with a
+      # digit, a hyphen or a space would be silently DROPPED by the narrower
+      # pattern, and the two sides would then compare equal while the database
+      # held a value the model does not -- the drift this test exists to catch.
+      assert_equal values.sort, expression.scan(/'([^']+)'/).flatten.sort,
         "#{name} and the model constant have drifted apart"
     end
   end
