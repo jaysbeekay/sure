@@ -110,8 +110,8 @@ jobs:
 
     env:
       PLAID_CLIENT_ID: foo
-      PLAID_SECRET: bar
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432 # pipelock:ignore
+      PLAID_SECRET: foo
+      DATABASE_URL: postgres://postgres:***@localhost:5432 # pipelock:ignore
       PGUSER: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -184,14 +184,14 @@ jobs:
           # months x 30-day offset points). Four runs of IDENTICAL code spanned
           # roughly p95 93-127 ms and p99 184-231 ms -- and each new run has so
           # far widened that span rather than settling inside it, on both ends.
-          # Treat those figures as indicative of the runner's noise, not as a
+          # Treat those figures as indicative of the runner's noise, not the
           # bound: this is a shared machine, so the spread is a property of the
           # environment, not of the calculation.
           #
           # The ceilings are therefore sized against that noise, not against any
           # one measurement -- comfortably above the worst yet seen, while still
           # far tighter than a real regression, which in this calculation shows
-          # up as a multiple rather than as a fifth. Do NOT retune them from a
+          # up as a multiple rather than a fifth. Do NOT retune them from a
           # single run in either direction: a number near a ceiling is evidence
           # of the runner until a second run agrees.
           #
@@ -215,7 +215,7 @@ jobs:
     env:
       PLAID_CLIENT_ID: foo
       PLAID_SECRET: bar
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432 # pipelock:ignore
+      DATABASE_URL: postgres://postgres:***@localhost:5432 # pipelock:ignore
       PGUSER: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -240,7 +240,17 @@ jobs:
 
     steps:
       - name: Install packages
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y google-chrome-stable curl libvips postgresql-client libpq-dev
+        # Do NOT install google-chrome-stable here: ubuntu-latest already ships
+        # Chrome and a matching chromedriver (e.g. 152.0.7977.82 for both).
+        # Installing the .deb upgrades the browser to whatever Google's repo
+        # serves (154 at the time of writing) while /usr/bin/chromedriver stays
+        # at the image's version; Selenium Manager finds that driver on PATH,
+        # uses it, and every system test dies with SessionNotCreatedError
+        # ("This version of ChromeDriver only supports Chrome version 152") —
+        # a version skew that drifts on its own with every Google release.
+        # The image's paired Chrome + driver is what the suite runs against.
+        # See issue #215.
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y curl libvips postgresql-client libpq-dev
 
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
