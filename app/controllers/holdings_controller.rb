@@ -15,7 +15,11 @@ class HoldingsController < ApplicationController
     @family_tags = Current.family.tags.alphabetically
     # Offered only to someone whose save would be accepted: a picker that
     # renders and then fails on submit reads as a broken feature.
-    @can_annotate_holding = @holding.account.permission_for(Current.user).in?(%i[owner full_control read_write])
+    # The same source the tags action gates on, not a second copy of its list
+    # (raised by Codacy on #198). A view deciding whether to render a control
+    # and an action deciding whether to accept it must not answer from two
+    # tables.
+    @can_annotate_holding = account_permission?(@holding.account, :annotate)
   end
 
   # The family-scoped half of classification. Unlike the classification columns,

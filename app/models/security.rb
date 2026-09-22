@@ -157,9 +157,19 @@ class Security < ApplicationRecord
     # one instrument without touching anyone else's.
     with_lock do
       taggings.where(tag_id: mine).where.not(tag_id: wanted).destroy_all
-      (wanted - taggings.reload.pluck(:tag_id)).each { |id| taggings.create!(tag_id: id) }
+      # Scoped to `wanted` rather than reloading every tagging on the security:
+      # a tag id outside `wanted` cannot change the subtraction, and this row is
+      # shared by every family holding the instrument, so the unscoped read grew
+      # with how popular the security is rather than with what this family asked
+      # for. Raised by Codacy on #198. `where` queries rather than reading the
+      # loaded association, so it still sees the destroy above.
+      already = taggings.where(tag_id: wanted).pluck(:tag_id)
+      (wanted - already).each { |id| taggings.create!(tag_id: id) }
     end
 
+    # Both associations, because the reload that used to refresh `taggings` is
+    # gone with the unscoped read.
+    taggings.reset
     tags.reset
   end
 
