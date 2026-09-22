@@ -61,3 +61,10 @@ en:
         latin_america: Latin America
         middle_east_africa: Middle East & Africa
         north_america: North America
+    tags:
+      saved: Tags saved.
+      title: Tags
+      description: Your own grouping for this instrument. Tags are private to your
+        household, unlike the classification above.
+      label: Tags
+      save: Save tags
