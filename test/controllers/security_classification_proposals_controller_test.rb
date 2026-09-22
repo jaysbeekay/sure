@@ -41,6 +41,27 @@ class SecurityClassificationProposalsControllerTest < ActionDispatch::Integratio
     assert @proposal.reload.approved?
   end
 
+  # The other half of the double guard, and the half no controller test drove.
+  # `approve!` returns false when the security was answered by hand, or locked,
+  # between the proposal being made and this click -- the window the veto exists
+  # for -- and the action's `else` branch is what tells the user so. Without
+  # this, that branch was reachable only through the model (raised by cubic on
+  # #199).
+  test "approving a proposal a person has since answered by hand reports that it was superseded" do
+    @security.update!(asset_class: "fixed_income", classification_source: "manual")
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    @security.reload
+    assert_equal "fixed_income", @security.asset_class,
+                 "the proposal overwrote an answer a person had just given"
+    assert_equal "manual", @security.classification_source
+    assert @proposal.reload.pending?, "a vetoed proposal was marked approved"
+    assert_equal I18n.t("security_classification_proposals.approve.superseded", ticker: @security.ticker),
+                 flash[:alert]
+    assert_nil flash[:notice], "a vetoed approval still reported success"
+  end
+
   # The guard in `reject!` is correct -- the proposal stays approved and the
   # security stays classified -- but the controller ignored its return value, so
   # a stale reject from a second tab still reported success. A flash that says

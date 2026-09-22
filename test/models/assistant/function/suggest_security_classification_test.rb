@@ -99,5 +99,16 @@ class Assistant::Function::SuggestSecurityClassificationTest < ActiveSupport::Te
     plain = Assistant.function_classes(users(:family_member))
     assert_not_includes plain, Assistant::Function::SuggestSecurityClassification,
                         "a preview tool reached the default surface, which /mcp also serves"
+
+    # The positive half. Membership of PREVIEW_FUNCTION_CLASSES is not the same
+    # as the gate letting a preview user through, and without this the test
+    # passes just as happily if the tool is registered for nobody at all
+    # (raised by cubic on #199).
+    preview_user = users(:family_admin)
+    preview_user.update!(preferences: (preview_user.preferences || {}).merge("preview_features_enabled" => true))
+
+    assert_includes Assistant.function_classes(preview_user.reload),
+                    Assistant::Function::SuggestSecurityClassification,
+                    "the tool is registered for preview users and the gate did not offer it to one"
   end
 end
