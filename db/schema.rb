@@ -2518,6 +2518,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_21_120000) do
     t.datetime "updated_at", null: false
     t.index ["tag_id"], name: "index_taggings_on_tag_id"
     t.index ["taggable_type", "taggable_id"], name: "index_taggings_on_taggable"
+    t.index ["tag_id", "taggable_type", "taggable_id"], name: "index_taggings_unique", nulls_not_distinct: true, unique: true, where: "taggable_id IS NOT NULL"
   end
 
   create_table "tags", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
