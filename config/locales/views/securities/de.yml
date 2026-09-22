@@ -60,3 +60,10 @@ de:
         latin_america: Lateinamerika
         middle_east_africa: Naher Osten & Afrika
         north_america: Nordamerika
+    tags:
+      saved: Tags gespeichert.
+      title: Tags
+      description: Deine eigene Einteilung für dieses Instrument. Tags sind privat
+        für deinen Haushalt, anders als die Klassifizierung darüber.
+      label: Tags
+      save: Tags speichern
