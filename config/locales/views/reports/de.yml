@@ -110,6 +110,13 @@ de:
       no_assets: Keine Vermögenswerte
       no_liabilities: Keine Verbindlichkeiten
     investment_performance:
+      excluded:
+        missing_cost_basis:
+          one: "1 Veräußerung hat keine bekannte Kostenbasis und wird nicht mitgezählt."
+          other: "%{count} Veräußerungen haben keine bekannte Kostenbasis und werden nicht mitgezählt."
+        missing_exchange_rate:
+          one: "1 Veräußerung hat keinen Wechselkurs für ihr Handelsdatum und wird nicht mitgezählt."
+          other: "%{count} Veräußerungen haben keinen Wechselkurs für ihr Handelsdatum und werden nicht mitgezählt."
       title: Anlageperformance
       view_portfolio: Portfolio ansehen
       portfolio_value: Portfoliowert
