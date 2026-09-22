@@ -532,6 +532,7 @@ Rails.application.routes.draw do
       post :sync_prices
       patch :classification
       post :reset_classification
+      patch :tags
     end
   end
   resources :security_classification_proposals, only: %i[index] do

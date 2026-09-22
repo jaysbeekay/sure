@@ -110,6 +110,129 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/\$0\.00/, line, "$0.00 reads as a disposal that broke even")
   end
 
+  # #167: one figure, measured twice, by two sets of rules. The card now reads
+  # Portfolio::RealizedGains -- the implementation the portfolio hub reads --
+  # so a disposal it cannot measure is excluded and NAMED, not dropped where
+  # nobody can see it. The hub has always said so on the page; this card said
+  # nothing, so a total missing a disposal looked exactly like a total with
+  # nothing to miss.
+  #
+  # Asserting the DELTA, not the presence: the unmeasurable disposal is added
+  # to a card that already has a measurable one, and the total must not move.
+  # A test that only asserted "$100.00 is on the page" would pass while the
+  # second disposal was folded in as a zero, which is the behaviour #166
+  # removed from the hub and this issue removes from here.
+  test "an unmeasurable disposal is named on the card and does not move the total" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family)
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: account, date: date, qty: 2, price: 150
+
+    get reports_path
+    assert_response :ok
+    measurable_total = realized_totals.first
+    assert_equal "$100.00", measurable_total, "the measurable disposal must be counted, or this proves nothing"
+    assert_empty exclusion_reasons, "nothing is excluded yet"
+
+    unmeasurable = Security.create!(ticker: "NOBASIS#{SecureRandom.hex(3)}", name: "No Basis")
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: nil, security: unmeasurable
+    sell_trade account: account, date: date, qty: 2, price: 150, security: unmeasurable
+
+    get reports_path
+    assert_response :ok
+
+    assert_equal measurable_total, realized_totals.first,
+                 "a disposal with no determinable cost basis is not a zero gain"
+    assert_includes exclusion_reasons.join(" "),
+                    I18n.t("reports.investment_performance.excluded.missing_cost_basis", count: 1),
+                    "and the card names what it left out"
+  end
+
+  # The parity fallback #167 exists to remove, and the one figure this change
+  # actually moves. The card's own positivity check (`return nil unless
+  # rate.to_d.positive?`) could not catch this, because the rate it checked had
+  # already been substituted: `ExchangeRate.rates_for` ends in
+  # `rate&.rate || 1`, so a pair with NO row for that date comes back as 1 --
+  # a positive number, indistinguishable from a genuine one-to-one rate.
+  #
+  # A EUR gain of 100 was therefore counted as $100.00 on a USD family. It is
+  # now excluded and named, which is what the hub has always done with it
+  # (Portfolio::RealizedGains reads the rate rows directly, deliberately not
+  # through that helper).
+  test "a disposal with no rate for its trade date is excluded, not converted at parity" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family, currency: "EUR")
+
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: account, date: date, qty: 2, price: 150
+    # Deliberately no EUR -> USD rate for `date`.
+
+    get reports_path
+    assert_response :ok
+
+    assert_equal "$0.00", realized_totals.first,
+                 "100 EUR with no rate for its date is not $100.00"
+    assert_includes exclusion_reasons.join(" "),
+                    I18n.t("reports.investment_performance.excluded.missing_exchange_rate", count: 1),
+                    "and the card names the rate it does not hold"
+  end
+
+  # The user-visible risk in sharing the hub's implementation is the card
+  # taking the hub's account membership along with its rules. This is the half
+  # of that a user chose deliberately: `included_in_reports` means "keep this
+  # account out of my reports", and the card passes its own scope in rather
+  # than deriving one. Asserting the delta: an identical disposal in an
+  # excluded account must move the figure by nothing. Watched fail with the
+  # scope mutated to `Current.family.accounts.historical` ($100 became $200).
+  test "a disposal in an account excluded from reports stays out of the card's total" do
+    date = Date.current.beginning_of_month
+    included = create_portfolio_account(family: @family)
+    holding_snapshot account: included, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: included, date: date, qty: 2, price: 150
+
+    get reports_path
+    assert_response :ok
+    before = realized_totals.first
+    assert_equal "$100.00", before
+
+    excluded = create_portfolio_account(family: @family)
+    excluded.update!(exclude_from_reports: true)
+    holding_snapshot account: excluded, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: excluded, date: date, qty: 2, price: 150
+
+    get reports_path
+    assert_response :ok
+
+    assert_equal before, realized_totals.first,
+                 "an account excluded from reports is excluded from this card"
+    assert_empty exclusion_reasons,
+                 "and it is not reported as an exclusion either -- it is not missing, it is not wanted"
+  end
+
+  # The other half: the hub drops a disposal made after a disabled account's
+  # cut-off date (`disabled_at - 1 day`), and this page never has. The card
+  # passes no `active_until_dates`, and this is the assertion that fails if a
+  # later change starts passing them.
+  #
+  # `disabled_at` is set AFTER the disposal's date on purpose. Disabling the
+  # account today puts the cut-off at yesterday, which a disposal earlier in
+  # the month is not after -- so the hub would keep it too and the test would
+  # prove nothing. I wrote that version first and watched the mutation pass it.
+  test "a disposal in a disabled account still counts on the card" do
+    date = Date.current.beginning_of_month
+    account = create_portfolio_account(family: @family)
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: account, date: date, qty: 2, price: 150
+    account.update!(status: "disabled", disabled_at: date)
+
+    get reports_path
+    assert_response :ok
+
+    assert_equal "$100.00", realized_totals.first,
+                 "a disabled account is still in this page's scope, as it was before #167"
+  end
+
   # The Reports section controllers gained `url` and `preferenceKey` values so
   # the portfolio hub can reuse them. Reports passes neither, so the page must
   # carry no override attributes and its endpoint must still accept the
@@ -832,5 +955,15 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
       )
 
       account
+    end
+
+    # The realised figure each tax-treatment card prints, in render order.
+    def realized_totals
+      css_select("[data-testid='realized-total']").map { |node| node.text.strip }
+    end
+
+    # The named exclusions under those cards, if any.
+    def exclusion_reasons
+      css_select("[data-testid='realized-exclusions'] li").map { |node| node.text.strip }
     end
 end

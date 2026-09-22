@@ -139,6 +139,13 @@ en:
       no_assets: No assets
       no_liabilities: No liabilities
     investment_performance:
+      excluded:
+        missing_cost_basis:
+          one: "1 disposal has no known cost basis and is left out."
+          other: "%{count} disposals have no known cost basis and are left out."
+        missing_exchange_rate:
+          one: "1 disposal has no exchange rate for its trade date and is left out."
+          other: "%{count} disposals have no exchange rate for their trade date and are left out."
       title: Investment Performance
       view_portfolio: View portfolio
       portfolio_value: Portfolio Value
