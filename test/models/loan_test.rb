@@ -524,6 +524,69 @@ class LoanTest < ActiveSupport::TestCase
       "the persisted rows must be untouched by reading the chart"
   end
 
+  # #21. The chart walks display_rows for ending_balance and used to drop the
+  # two payment fields on the same rows, so the one thing the picture could not
+  # say was what the payment is made of -- legible only in the 360-row table
+  # beside it.
+  #
+  # Asserted against the table's own source rather than against the payload's
+  # internal consistency: the point is that the chart and the table cannot
+  # disagree, which a self-comparison would not catch.
+  test "payoff_chart_payload composes each scheduled point from the rows the table prints" do
+    # Originated five years ago, so the schedule has PAST rows. `build_chart_loan`
+    # defaults to `start_date: Date.current`, which leaves scheduled_history
+    # empty and every point coming from original_projection -- I wrote that
+    # version first and watched the mutation that strips scheduled_history's
+    # composition pass it.
+    loan = build_chart_loan(balance: 500000, start_date: 5.years.ago.to_date)
+    loan.account.update!(balance: 450000)
+
+    payload = loan.reload.payoff_chart_payload
+    assert_not_nil payload
+
+    rows = loan.amortization_schedule.display_rows.index_by { |row| row.payment_date.iso8601 }
+    assert_not_empty payload[:scheduled_history], "the past series must be populated, or half the payload is untested"
+    assert_not_empty payload[:original_projection], "the future series must be populated too"
+
+    points = payload[:scheduled_history] + payload[:original_projection]
+    assert_operator points.size, :>, 1, "the schedule must have rows, or this proves nothing"
+
+    points.each do |point|
+      row = rows.fetch(point[:date])
+      assert_equal row.principal_payment.to_f, point[:principal]
+      assert_equal row.interest_payment.to_f, point[:interest]
+    end
+
+    # And the figures have to add up to the payment, or the composition is
+    # decorative: a split that does not reconcile is two numbers, not a split.
+    sample = points.first
+    row = rows.fetch(sample[:date])
+    assert_in_delta row.payment_amount.to_f, sample[:principal] + sample[:interest], 0.01
+  end
+
+  # The claim the feature rests on, asserted rather than assumed: on a long
+  # amortising loan the early payments are interest-dominant and the late ones
+  # are not. If this ever fails, either the schedule is wrong or the chart is
+  # composing the wrong rows -- and the tooltip would be telling users a
+  # comfortable falsehood.
+  test "payoff_chart_payload's composition shows interest front-loading" do
+    loan = build_chart_loan(balance: 500000, start_date: 5.years.ago.to_date)
+    loan.account.update!(balance: 450000)
+
+    payload = loan.reload.payoff_chart_payload
+    points = payload[:scheduled_history] + payload[:original_projection]
+
+    first = points.first
+    last = points.last
+
+    assert_operator first[:interest], :>, first[:principal],
+      "the first scheduled payment must be interest-dominant on a fresh long loan"
+    assert_operator last[:interest], :<, last[:principal],
+      "the last scheduled payment must be principal-dominant"
+    assert_operator first[:interest], :>, last[:interest],
+      "interest must fall over the life of the loan"
+  end
+
   test "payoff_chart_payload is produced for a variable rate loan" do
     loan = build_chart_loan(balance: 500000, rate_type: "variable")
     loan.account.update!(balance: 450000)
