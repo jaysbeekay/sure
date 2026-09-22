@@ -43,6 +43,18 @@ class Portfolio::RealizedGains
     end
   end
 
+  # One disposal's outcome. Exactly one of `amount` and `exclusion_reason` is
+  # set: a disposal either produced a figure in the statement's currency or a
+  # named reason it could not. Carried per trade because the Reports card
+  # groups the same disposals by tax treatment and lists them one by one
+  # (jaysbeekay/sure#167), and a second implementation of these rules is the
+  # thing that issue exists to remove.
+  Disposal = Data.define(:trade, :date, :amount, :exclusion_reason) do
+    def excluded?
+      !exclusion_reason.nil?
+    end
+  end
+
   # Why a sell trade could not be measured. Each is reported rather than folded
   # into the figures -- see notes 3 and 4 above. The order is the order the
   # partial lists them in, and #excluded_trades filters the tally through this
@@ -68,8 +80,8 @@ class Portfolio::RealizedGains
   # absent rather than present as a zero: an empty bar and a break-even month
   # are different facts.
   def buckets
-    @buckets ||= measured_rows
-      .group_by { |row| row[:date].beginning_of_month }
+    @buckets ||= measured_disposals
+      .group_by { |disposal| disposal.date.beginning_of_month }
       .sort_by(&:first)
       .map { |month, rows| build_bucket(month, rows) }
   end
@@ -94,10 +106,16 @@ class Portfolio::RealizedGains
   # no trades. The section surfaces this so a total that leaves trades out says
   # so on the page rather than only in this object.
   def excluded_trades
-    @excluded_trades ||= begin
-      counts = exclusions.tally
-      EXCLUSION_REASONS.filter_map { |reason| [ reason, counts[reason] ] if counts[reason] }.to_h
-    end
+    @excluded_trades ||= self.class.exclusion_tally(exclusions)
+  end
+
+  # The same tally for a SUBSET of these disposals -- the Reports card groups
+  # them by tax treatment and names the exclusions per group. Here rather than
+  # in the caller so both surfaces list the same reasons in the same order,
+  # and a reason added to EXCLUSION_REASONS reaches both.
+  def self.exclusion_tally(reasons)
+    counts = reasons.tally
+    EXCLUSION_REASONS.filter_map { |reason| [ reason, counts[reason] ] if counts[reason] }.to_h
   end
 
   # Did this period crystallise anything at all? Deliberately cheaper than
@@ -126,35 +144,39 @@ class Portfolio::RealizedGains
     buckets.any? || excluded_trade_count.positive?
   end
 
+  # Every disposal the period holds, measured or excluded, in query order.
+  # The buckets above are this list grouped by month; a consumer that needs the
+  # disposals themselves -- to group them by account, or to name an exclusion
+  # against the trade it belongs to -- reads them here rather than measuring
+  # them again to its own rules.
+  def disposals
+    measure!
+    @disposals
+  end
+
   private
     def build_bucket(month, rows)
       Bucket.new(
         month: month,
-        gains: rows.sum(BigDecimal(0)) { |row| row[:amount].positive? ? row[:amount] : BigDecimal(0) },
-        losses: rows.sum(BigDecimal(0)) { |row| row[:amount].negative? ? -row[:amount] : BigDecimal(0) },
+        gains: rows.sum(BigDecimal(0)) { |row| row.amount.positive? ? row.amount : BigDecimal(0) },
+        losses: rows.sum(BigDecimal(0)) { |row| row.amount.negative? ? -row.amount : BigDecimal(0) },
         trade_count: rows.size
       )
     end
 
-    # Each measurable disposal as { date:, amount: } in family currency.
-    # Computed once, because it also decides what lands in #exclusions.
-    def measured_rows
-      measure!
-      @measured_rows
+    # The disposals that produced a figure, in family currency.
+    def measured_disposals
+      disposals.reject(&:excluded?)
     end
 
     def exclusions
-      measure!
-      @exclusions
+      disposals.filter_map(&:exclusion_reason)
     end
 
     def measure!
-      return if defined?(@measured_rows)
+      return if defined?(@disposals)
 
-      @measured_rows = []
-      @exclusions = []
-
-      sell_trades.each do |trade|
+      @disposals = sell_trades.map do |trade|
         gain = trade.realized_gain_loss
 
         # nil is one of two facts the trade could not establish -- no cost
@@ -163,7 +185,7 @@ class Portfolio::RealizedGains
         # to different places, so the tally keeps them apart. Neither is a zero
         # gain.
         if gain.nil?
-          next @exclusions << (trade.realized_gain_loss_unavailable_reason || :missing_cost_basis)
+          next excluded_disposal(trade, trade.realized_gain_loss_unavailable_reason || :missing_cost_basis)
         end
 
         # The figure arrives in the currency the position is held in, which is
@@ -171,10 +193,14 @@ class Portfolio::RealizedGains
         # necessarily this statement's. Convert from the currency it actually
         # carries, at the trade's own date.
         amount = converted(gain.value, gain.value.currency.iso_code, trade.entry.date)
-        next @exclusions << :missing_exchange_rate if amount.nil?
+        next excluded_disposal(trade, :missing_exchange_rate) if amount.nil?
 
-        @measured_rows << { date: trade.entry.date, amount: amount }
+        Disposal.new(trade: trade, date: trade.entry.date, amount: amount, exclusion_reason: nil)
       end
+    end
+
+    def excluded_disposal(trade, reason)
+      Disposal.new(trade: trade, date: trade.entry.date, amount: nil, exclusion_reason: reason)
     end
 
     def sell_trades
@@ -199,7 +225,11 @@ class Portfolio::RealizedGains
           "trades.investment_activity_label IS NULL OR trades.investment_activity_label NOT IN (?)",
           Trade::INTERNAL_MOVEMENT_LABELS
         )
-        .includes(entry: :account)
+        # The security and the account's accountable are read by a consumer
+        # that lists the disposals (the Reports card names the ticker and
+        # groups by tax treatment). Two more preloads, not two more per
+        # disposal, so the flat query count P41 gates is unchanged.
+        .includes(:security, entry: { account: :accountable })
         .to_a
         .reject { |trade| after_cutoff?(trade) }
     end

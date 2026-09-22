@@ -283,3 +283,9 @@ P41:
     class: PortfoliosControllerTest
     tests:
       - the realised gains section renders its total, summary and exclusion alert
+  - file: test/controllers/reports_controller_test.rb
+    class: ReportsControllerTest
+    tests:
+      - an unmeasurable disposal is named on the card and does not move the total
+      - a disposal in an account excluded from reports stays out of the card's total
+      - a disposal in a disabled account still counts on the card

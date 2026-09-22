@@ -507,7 +507,16 @@ class ReportsController < ApplicationController
       # The cost, recorded on the issue: this runs one trades query for a
       # family with no investments, which used to return on the accounts check
       # alone, and the gate is now period-dependent where it was not.
-      return { has_investments: false } unless investment_accounts.any? || period_disposals?
+      #
+      # ONE instance, asked twice. #205 gave the card its shared measurement
+      # and #206 gave the gate its question; with both on main they use the
+      # same object, so the disposals the gate counts are the disposals the
+      # card reports -- and the sell trades are loaded once rather than by
+      # each in turn (raised by cubic and Codacy on #210, deferred until this
+      # merge could make it true).
+      realized_gains = build_realized_gains
+
+      return { has_investments: false } unless investment_accounts.any? || realized_gains.any_disposals?
 
       period_totals = investment_statement.totals(period: @period)
       {
@@ -519,21 +528,21 @@ class ReportsController < ApplicationController
         period_withdrawals: period_totals.withdrawals,
         top_holdings: investment_statement.top_holdings(limit: 5),
         accounts: investment_accounts.to_a,
-        gains_by_tax_treatment: build_gains_by_tax_treatment(investment_statement)
+        gains_by_tax_treatment: build_gains_by_tax_treatment(investment_statement, realized_gains)
       }
     end
 
     # The disposals this page counts: the card's own account scope, which is
     # `included_in_reports` with no status filter, over the chosen period.
-    def period_disposals?
+    def build_realized_gains
       Portfolio::RealizedGains.new(
         accounts: Current.family.accounts.included_in_reports,
         period: @period,
         currency: Current.family.currency
-      ).any_disposals?
+      )
     end
 
-    def build_gains_by_tax_treatment(investment_statement)
+    def build_gains_by_tax_treatment(investment_statement, realized_gains)
       currency = Current.family.currency
       # Eager-load account and accountable to avoid N+1 when accessing tax_treatment
       current_holdings = investment_statement.current_holdings
@@ -543,42 +552,34 @@ class ReportsController < ApplicationController
       # Group holdings by tax treatment (from account)
       holdings_by_treatment = current_holdings.group_by { |h| h.account.tax_treatment || :taxable }
 
-      # Get sell trades in period with realized gains
-      # Eager-load security, account, and accountable to avoid N+1
-      sell_trades = Current.family.trades
-        .joins(entry: :account)
-        .where(entries: { date: @period.date_range })
-        .merge(Account.included_in_reports)
-        .where("trades.qty < 0")
-        # A transfer out has the same negative quantity as a sale and would be
-        # counted and listed as one. Nothing was sold, so it belongs in neither.
-        .where(
-          "trades.investment_activity_label IS NULL OR trades.investment_activity_label NOT IN (?)",
-          Trade::INTERNAL_MOVEMENT_LABELS
-        )
-        .includes(:security, entry: { account: :accountable })
-        .to_a
-
-      # Preload holdings for all accounts that have sell trades to avoid N+1 in realized_gain_loss
-      account_ids = sell_trades.map { |t| t.entry.account_id }.uniq
-      holdings_by_account = Holding
-        .where(account_id: account_ids)
-        .where("date <= ?", @period.date_range.end)
-        .order(date: :desc)
-        .group_by(&:account_id)
-
-      # Inject preloaded holdings into trades for realized_gain_loss calculation.
-      # Through the writer, not instance_variable_set: the writer also clears
-      # any memoised realized_gain_loss, which is the whole reason it exists.
-      sell_trades.each do |trade|
-        trade.preloaded_holdings = holdings_by_account[trade.entry.account_id] || []
-      end
-
-      # The rates the proceeds conversion needs, in one query rather than one
-      # per foreign disposal.
-      Trade.preload_exchange_rates(sell_trades)
-
-      trades_by_treatment = sell_trades.group_by { |t| t.entry.account.tax_treatment || :taxable }
+      # The realised half is measured by Portfolio::RealizedGains, the same
+      # implementation the portfolio hub reads (jaysbeekay/sure#167). Two
+      # surfaces computing one figure to their own rules is how they came to
+      # disagree: a disposal with no determinable cost basis, or no rate for
+      # its trade date, is excluded and NAMED here rather than silently
+      # dropped from a total the user cannot audit.
+      #
+      # The SCOPE stays this page's own and is passed in rather than derived.
+      # Both scopes already honour `included_in_reports` (the hub's runs
+      # through BalanceSheet::HistoricalAccountScope#relation, which applies
+      # it), so that is not the difference. The differences are that the hub
+      # restricts to `historical` statuses, to Investment/Crypto accountables
+      # and to the accounts a user may see, and that it stops a disabled
+      # account on its cut-off date. This card has never applied any of those,
+      # and adopting the hub's RULES must not quietly adopt its membership:
+      # every one of those would move a figure on a page people already read,
+      # which is not what jaysbeekay/sure#167 is for.
+      #
+      # Hence no `active_until_dates` either: this page has never had a
+      # cut-off.
+      #
+      # The instance is the caller's: `build_investment_metrics` already asked
+      # it whether the period holds any disposals, and measuring them here from
+      # a second instance would load the same sell trades twice and let the
+      # gate and the figure answer from different reads.
+      disposals_by_treatment = realized_gains.disposals.group_by { |disposal|
+        disposal.trade.entry.account.tax_treatment || :taxable
+      }
 
       # Unwrap helper: Trend#value / realized_gain_loss#value are Money objects,
       # and this codebase's Money keeps the source currency through `*` and
@@ -594,49 +595,11 @@ class ReportsController < ApplicationController
         from == currency ? numeric : numeric * (holding_rates[from] || 1)
       }
 
-      # Realized gains are locked at trade time, so convert each at its own
-      # entry-date FX. Mirrors InvestmentStatement::Totals, which also uses
-      # entry-date rates for contributions/withdrawals on this same card.
-      # A realised figure arrives in the currency the POSITION is held in, not
-      # the one the disposal was priced in: Trade#realized_gain_loss converts
-      # the proceeds into the basis's currency before subtracting, so that the
-      # two sides are comparable (jaysbeekay/sure#169). Both sets of currencies
-      # are needed here -- the account's, which is what a gain usually carries,
-      # and the trade's, for a holding written in the security's currency.
-      # The holdings' own currencies join the list because a position can be
-      # carried in a third currency -- not the disposal's, not the account's --
-      # and a currency absent from this list converts at the `|| 1` parity
-      # below, which is the silent wrong answer #167 exists to remove.
-      foreign_trade_currencies = (
-        sell_trades.map(&:currency) +
-        sell_trades.map { |t| t.entry.account.currency } +
-        holdings_by_account.values.flatten.map(&:currency)
-      ).compact.uniq.reject { |c| c == currency }
-      rates_by_trade_date = sell_trades.map { |t| t.entry.date }.uniq.each_with_object({}) do |date, memo|
-        memo[date] = ExchangeRate.rates_for(foreign_trade_currencies, to: currency, date: date)
-      end
-      # nil, not a number, when the rate cannot convert. `ExchangeRate` validates
-      # presence and not usability, and `rates_for` returns `rate&.rate || 1`,
-      # so a stored 0 comes back as a 0 and multiplying by it reports a real
-      # gain as nothing -- in the total, and on the line, indistinguishable from
-      # a disposal that broke even. A negative one would flip the sign. Both are
-      # the missing-rate case wearing a number, and the hub already excludes
-      # them (Portfolio::RealizedGains#converted), so a card that tallied them
-      # made the two views of one disposal disagree.
-      convert_trade = ->(amount, from, date) {
-        numeric = to_numeric.call(amount)
-        return numeric if from == currency
-
-        rate = rates_by_trade_date.dig(date, from)
-        return nil unless rate.to_d.positive?
-
-        numeric * rate
-      }
-
       # Build metrics per treatment
       %i[taxable tax_deferred tax_exempt tax_advantaged].each_with_object({}) do |treatment, hash|
         holdings = holdings_by_treatment[treatment] || []
-        trades = trades_by_treatment[treatment] || []
+        disposals = disposals_by_treatment[treatment] || []
+        trades = disposals.map(&:trade)
 
         # Sum unrealized gains from holdings (only those with known cost basis)
         unrealized = holdings.sum do |h|
@@ -644,20 +607,12 @@ class ReportsController < ApplicationController
           trend ? convert_current.call(trend.value, h.currency) : 0
         end
 
-        # Sum realized gains from sell trades, each converted from the currency
-        # its own figure carries.
-        realized_by_trade = trades.each_with_object({}) do |t, memo|
-          gain = t.realized_gain_loss
-          next if gain.nil?
-
-          converted = convert_trade.call(gain.value, gain.value.currency.iso_code, t.entry.date)
-          # Left out of the memo rather than stored as zero: the partial already
-          # renders an absent figure as "no data", which is what an unusable
-          # rate means.
-          next if converted.nil?
-
-          memo[t.id] = Money.new(converted, currency)
-        end
+        # Already converted, each from the currency its own figure carries and
+        # at its own trade date, by the shared measurement above. Absent from
+        # the memo rather than stored as zero: the partial renders a missing
+        # figure as "no data", which is what an unmeasurable disposal is.
+        realized_by_trade = disposals.reject(&:excluded?)
+          .to_h { |disposal| [ disposal.trade.id, Money.new(disposal.amount, currency) ] }
 
         realized = realized_by_trade.values.sum(Money.new(0, currency)).amount
 
@@ -673,6 +628,11 @@ class ReportsController < ApplicationController
           # and the card's own total are the same arithmetic. The partial used
           # to re-label `gain.value` as family currency without converting it.
           realized_gain_by_trade: realized_by_trade,
+          # Which disposals this total leaves out, and why. The hub has always
+          # said so on the page; this card dropped them silently, so a total
+          # missing a disposal looked exactly like one that had none
+          # (jaysbeekay/sure#167).
+          excluded_trades: Portfolio::RealizedGains.exclusion_tally(disposals.filter_map(&:exclusion_reason)),
           total_gain: Money.new(unrealized + realized, currency)
         }
       end
