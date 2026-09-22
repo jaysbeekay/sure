@@ -59,6 +59,12 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
       process
     end
 
+    # The second sync REFRESHES the snapshot -- same payload, new stamp. Without
+    # this the freshness gate stops the second pass and the dedup this row is
+    # named for is never reached, which is what the sweep on #213 found: the
+    # test passed with the dedup deleted.
+    detail lendingRate: "0.0675", fetched_at: (@as_of + 1).to_time
+
     assert_no_enqueued_jobs only: LoanAmortizationRebuildJob do
       RedbarkAccount::LoanDetailsProcessor.new(@redbark_account.reload, as_of: @as_of + 1).process
     end
@@ -231,6 +237,19 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
 
     assert_empty schedule,
                  "a stale snapshot was recorded as though the bank had just reported it"
+  end
+
+  # The boundary, one second wide: a snapshot stamped at 23:59:59 yesterday is
+  # a previous sync's answer even though it is barely a moment old. Nothing in
+  # the gate measures age -- it asks which sync stored it -- and the same
+  # boundary is why RedbarkItem::Syncer now hands one clock to both phases.
+  test "a snapshot stamped a second before the sync date is not acted on" do
+    detail lendingRate: "0.0675", fetched_at: (@as_of - 1).end_of_day
+
+    process
+
+    assert_empty schedule,
+                 "a snapshot from the previous day was treated as this sync's"
   end
 
   test "a snapshot refreshed today is acted on" do

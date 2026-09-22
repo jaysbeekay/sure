@@ -32,14 +32,19 @@ class RedbarkItem < ApplicationRecord
   end
 
   # Import data from provider API
-  def import_latest_redbark_data(sync: nil)
+  # `fetched_at` is the sync's own clock, injected so that the account-details
+  # snapshot is stamped with the same instant the processing phase dates its
+  # findings by (see RedbarkItem::Syncer). A caller outside a sync -- the
+  # manual refresh in RedbarkItemsController -- stamps the real fetch time,
+  # which is what it means.
+  def import_latest_redbark_data(sync: nil, fetched_at: Time.current)
     provider = redbark_provider
     unless provider
       Rails.logger.error "RedbarkItem #{id} - Cannot import: provider is not configured"
       raise StandardError, I18n.t("redbark_items.errors.provider_not_configured")
     end
 
-    RedbarkItem::Importer.new(self, redbark_provider: provider, sync: sync).import
+    RedbarkItem::Importer.new(self, redbark_provider: provider, sync: sync, fetched_at: fetched_at).import
   rescue => e
     DebugLogEntry.capture(
       category: "provider_sync",

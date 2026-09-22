@@ -32,6 +32,36 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
                  "a failed fetch overwrote the details the last good sync stored")
   end
 
+  # The stamp is the sync's clock, injected, not the importer's own reading of
+  # it. Both phases of a sync have to agree on which day the snapshot belongs
+  # to; see RedbarkItem::SyncerTest for why they must not read the clock twice.
+  test "the injected clock stamps the snapshot, not the wall clock" do
+    redbark_account = redbark_accounts(:savings_account)
+    family = redbark_account.redbark_item.family
+    account = family.accounts.create!(
+      name: "Mortgage", balance: 400_000, currency: "AUD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 6.25)
+    )
+    redbark_account.ensure_account_provider!(account)
+
+    injected = Time.utc(2026, 9, 21, 23, 59, 30)
+    provider = mock
+    provider.stubs(:list_connections).returns([])
+    provider.stubs(:get_account_details).returns([
+      { accountId: redbark_account.redbark_account_id, lendingRate: "0.0675" }
+    ])
+    importer = RedbarkItem::Importer.new(
+      redbark_account.redbark_item, redbark_provider: provider, fetched_at: injected
+    )
+
+    travel_to Time.utc(2026, 9, 22, 0, 0, 30) do
+      importer.send(:import_loan_account_details, [ redbark_account.reload ])
+    end
+
+    assert_equal injected, redbark_account.reload.account_details_fetched_at.utc,
+                 "the importer stamped its own reading of the clock instead of the sync's"
+  end
+
   # The batch is rejected whole when one id is stale or of the wrong category,
   # so one bad account must not cost every other loan its rate. Mirrors
   # fetch_balances_with_fallback (raised on the #213 gate).

@@ -41,8 +41,12 @@ class RedbarkAccount::LoanDetailsProcessor
     # cubic on #213).
     #
     # Keyed to the sync's own date rather than to a duration, because `as_of`
-    # is the only notion of "now" this class is allowed. A second sync on the
-    # same day after a failed fetch re-reads a snapshot that was fresh this
+    # is the only notion of "now" this class is allowed. RedbarkItem::Syncer
+    # reads the clock ONCE and hands the same instant to the import that writes
+    # this stamp and to the processing that supplies `as_of`, so the comparison
+    # below is a clock against itself; two readings would make a sync that
+    # crosses midnight reject the snapshot it had just stored. A second sync on
+    # the same day after a failed fetch re-reads a snapshot that was fresh this
     # morning, which is harmless: the rate has not moved, so nothing is
     # recorded.
     def details_fetched_this_sync?
@@ -74,11 +78,7 @@ class RedbarkAccount::LoanDetailsProcessor
     def reported_rate
       return @reported_rate if defined?(@reported_rate)
 
-      @reported_rate = begin
-        headline = to_percentage(details[:lendingRate])
-        next_value = headline || single_variable_rate
-        next_value
-      end
+      @reported_rate = to_percentage(details[:lendingRate]) || single_variable_rate
     end
 
     def single_variable_rate

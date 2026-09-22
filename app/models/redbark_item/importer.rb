@@ -5,12 +5,16 @@ class RedbarkItem::Importer
   include RedbarkAccount::DataHelpers
   include CurrencyNormalizable
 
-  attr_reader :redbark_item, :redbark_provider, :sync
+  attr_reader :redbark_item, :redbark_provider, :sync, :fetched_at
 
-  def initialize(redbark_item, redbark_provider:, sync: nil)
+  # `fetched_at` stamps the account-details snapshot. It is injected rather
+  # than read here so that one sync's fetch and its processing share a clock;
+  # see RedbarkItem::Syncer.
+  def initialize(redbark_item, redbark_provider:, sync: nil, fetched_at: Time.current)
     @redbark_item = redbark_item
     @redbark_provider = redbark_provider
     @sync = sync
+    @fetched_at = fetched_at
   end
 
   def import
@@ -227,7 +231,7 @@ class RedbarkItem::Importer
 
           redbark_account.update!(
             raw_account_details_payload: detail,
-            account_details_fetched_at: Time.current
+            account_details_fetched_at: fetched_at
           )
           stats["account_details_updated"] = stats.fetch("account_details_updated", 0) + 1
         end
