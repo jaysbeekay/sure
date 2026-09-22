@@ -87,6 +87,49 @@ class SecurityClassificationProposalsControllerTest < ActionDispatch::Integratio
 
   # The scoping test. Another family's proposal must not be reachable at all --
   # approving it would write the shared security row on their behalf.
+  # The screen had NO role gate: `set_proposal` and nothing else. Approving
+  # writes the globally shared `securities` row, so a read-only member of one
+  # household could classify an instrument for every household holding it --
+  # the same write the holding drawer puts behind a write-permission check two
+  # clicks away (raised by the 2026-09-22 sweep, reproduced there).
+  test "a guest cannot approve, and the security is untouched" do
+    guest = users(:family_member)
+    guest.update!(role: :guest)
+    sign_in guest
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    @security.reload
+    assert_nil @security.asset_class, "a guest classified a security every household shares"
+    assert_nil @security.classification_source
+    assert @proposal.reload.pending?, "a guest's approval was recorded"
+  end
+
+  test "a guest cannot reject either" do
+    guest = users(:family_member)
+    guest.update!(role: :guest)
+    sign_in guest
+
+    post reject_security_classification_proposal_path(@proposal)
+
+    assert @proposal.reload.pending?, "a guest dismissed the household's proposal"
+  end
+
+  # The positive half: the gate must admit someone who may write to a position
+  # they can see the security in, or it has simply broken the screen.
+  test "a member who may write to a holding of the security can approve" do
+    member = users(:family_member)
+    member.update!(role: :member)
+    accounts(:investment).update!(owner: member)
+    sign_in member
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    assert_equal "equity", @security.reload.asset_class,
+                 "the gate refused someone who may write to a holding of this security"
+    assert @proposal.reload.approved?
+  end
+
   test "another family's proposal cannot be approved" do
     other_family = users(:josh).family
     other_security = Security.create!(ticker: "MSFT2", exchange_operating_mic: "XNAS", country_code: "US")
