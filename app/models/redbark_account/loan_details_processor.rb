@@ -26,12 +26,32 @@ class RedbarkAccount::LoanDetailsProcessor
   def process
     return unless loan
     return if details.blank?
+    return unless details_fetched_this_sync?
 
     apply_loan_terms
     apply_rate
   end
 
   private
+    # A payload the sync did not refresh is a previous answer, not a current
+    # one. Acting on it can record a change that never happened: the fetch
+    # fails, the stored snapshot still holds last week's rate, the user has
+    # since corrected the loan by hand, and the stale figure is written back
+    # over their correction as though the bank had just reported it (raised by
+    # cubic on #213).
+    #
+    # Keyed to the sync's own date rather than to a duration, because `as_of`
+    # is the only notion of "now" this class is allowed. A second sync on the
+    # same day after a failed fetch re-reads a snapshot that was fresh this
+    # morning, which is harmless: the rate has not moved, so nothing is
+    # recorded.
+    def details_fetched_this_sync?
+      fetched_at = redbark_account.account_details_fetched_at
+      return false if fetched_at.blank?
+
+      fetched_at.to_date == as_of.to_date
+    end
+
     def account
       @account ||= redbark_account.current_account
     end
@@ -92,7 +112,12 @@ class RedbarkAccount::LoanDetailsProcessor
       return nil if value.blank?
 
       decimal = BigDecimal(value.to_s)
-      (decimal * 100).round(4)
+      # THREE decimal places, because that is what the loan stores:
+      # Loan#quantize_variable_rate_schedule rounds every value it keeps to 3.
+      # Comparing a 4-decimal reading against a 3-decimal stored rate makes an
+      # unchanged rate look changed, and records a new row on EVERY sync
+      # (raised by cubic on #213).
+      (decimal * 100).round(3)
     rescue ArgumentError, TypeError
       capture("Redbark reported an unparseable rate", value: value.to_s)
       nil

@@ -221,6 +221,40 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
     assert_equal 100, @loan.initial_balance.to_f
   end
 
+  # A snapshot this sync did not refresh is a previous answer, not a current
+  # one. Acting on it writes last week's rate back over a correction the user
+  # has made since -- as though the bank had just reported it (cubic, #213).
+  test "a snapshot from an earlier sync is not acted on" do
+    detail lendingRate: "0.0675", fetched_at: (@as_of - 3).to_time
+
+    process
+
+    assert_empty schedule,
+                 "a stale snapshot was recorded as though the bank had just reported it"
+  end
+
+  test "a snapshot refreshed today is acted on" do
+    detail lendingRate: "0.0675", fetched_at: @as_of.to_time
+
+    process
+
+    assert_equal({ "2026-09-21" => BigDecimal("6.75") }, rates)
+  end
+
+  # The loan stores rates quantized to three decimals
+  # (Loan#quantize_variable_rate_schedule). Reading four and comparing against
+  # three makes an unchanged rate look changed EVERY sync, so the loan would
+  # gain a row a day for ever (cubic, #213).
+  test "a rate with more precision than the loan stores does not re-record every sync" do
+    @loan.update!(variable_rate_schedule: { "2026-09-01" => 6.499 })
+    detail lendingRate: "0.064994"
+
+    process
+
+    assert_equal [ "2026-09-01" ], schedule.keys,
+                 "the same rate was recorded again because it was compared at a precision the loan does not keep"
+  end
+
   # Row 14: an account the provider reported nothing for.
   test "no payload writes nothing and does not raise" do
     @redbark_account.update!(raw_account_details_payload: nil)
@@ -265,11 +299,15 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
   end
 
   private
-    def detail(**payload)
+    # Stamped as fetched on the sync's own date, which is what the importer
+    # does on a successful refresh. `fetched_at:` lets a test make the snapshot
+    # stale on purpose.
+    def detail(fetched_at: @as_of.to_time, **payload)
       @redbark_account.update!(
         raw_account_details_payload: { "accountId" => @redbark_account.redbark_account_id }.merge(
           payload.transform_keys(&:to_s)
-        )
+        ),
+        account_details_fetched_at: fetched_at
       )
     end
 

@@ -21,7 +21,10 @@ class RedbarkItem::Importer
 
     # Step 2: For linked accounts only, fetch transactions and balances.
     # Unlinked accounts just need basic info (name, institution) for the setup modal.
-    linked_accounts = redbark_item.linked_redbark_accounts.to_a
+    # `account_provider: :account` is preloaded because the loan filter in
+    # import_loan_account_details reads `current_account` for every linked
+    # account, which is a query each without it (raised by cubic on #213).
+    linked_accounts = redbark_item.linked_redbark_accounts.includes(account_provider: :account).to_a
 
     Rails.logger.info "RedbarkItem::Importer - Found #{linked_accounts.count} linked accounts to process"
 
@@ -211,17 +214,21 @@ class RedbarkItem::Importer
       return if account_ids.empty?
 
       begin
-        stats["api_requests"] = stats.fetch("api_requests", 0) + 1
-        details_by_id = redbark_provider.get_account_details(account_ids: account_ids)
-                                        .index_by { |detail| detail[:accountId].to_s }
+        details_by_id = fetch_account_details_with_fallback(account_ids)
+                          .index_by { |detail| detail[:accountId].to_s }
 
         eligible_accounts.each do |redbark_account|
           detail = details_by_id[redbark_account.redbark_account_id]
           # An account the provider has no detail for is omitted from `data`
-          # rather than erroring, so leave the last payload in place.
+          # rather than erroring, so leave the last payload in place -- and
+          # leave the stamp alone with it, so the processor knows the snapshot
+          # is not from this sync.
           next if detail.blank?
 
-          redbark_account.update!(raw_account_details_payload: detail)
+          redbark_account.update!(
+            raw_account_details_payload: detail,
+            account_details_fetched_at: Time.current
+          )
           stats["account_details_updated"] = stats.fetch("account_details_updated", 0) + 1
         end
       rescue Provider::Redbark::AuthenticationError
@@ -229,6 +236,34 @@ class RedbarkItem::Importer
       rescue => e
         capture_failure("Account details fetch failed; keeping previous details", e)
         register_error(e, context: "account_details")
+      end
+    end
+
+    # The batch is rejected whole when one id is stale or of the wrong
+    # category, exactly as the balances batch is, so one bad account must not
+    # cost every other loan its rate. Mirrors fetch_balances_with_fallback
+    # (raised as a non-blocking observation on the #213 gate).
+    def fetch_account_details_with_fallback(account_ids)
+      stats["api_requests"] = stats.fetch("api_requests", 0) + 1
+      redbark_provider.get_account_details(account_ids: account_ids)
+    rescue Provider::Redbark::AuthenticationError
+      raise
+    rescue Provider::Redbark::Error => e
+      raise unless %i[not_found bad_request].include?(e.error_type)
+      raise if account_ids.size <= 1
+
+      capture_failure("Batched account details call rejected; retrying per account", e)
+
+      account_ids.flat_map do |account_id|
+        begin
+          stats["api_requests"] = stats.fetch("api_requests", 0) + 1
+          redbark_provider.get_account_details(account_ids: [ account_id ])
+        rescue Provider::Redbark::AuthenticationError
+          raise
+        rescue Provider::Redbark::Error => account_error
+          capture_failure("Account details fetch failed for account; keeping previous details", account_error, account_id: account_id)
+          []
+        end
       end
     end
 

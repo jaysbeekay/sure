@@ -12,5 +12,10 @@
 class AddRawAccountDetailsPayloadToRedbarkAccounts < ActiveRecord::Migration[8.1]
   def change
     add_column :redbark_accounts, :raw_account_details_payload, :jsonb
+    # WHEN the payload was fetched, not just what it said. A stored snapshot
+    # that this sync did not refresh is last week's answer, and processing it
+    # as though the bank had just reported it can record a rate change that
+    # never happened -- back to a rate the user has since corrected by hand.
+    add_column :redbark_accounts, :account_details_fetched_at, :datetime
   end
 end

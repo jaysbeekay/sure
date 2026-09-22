@@ -2075,6 +2075,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_21_120000) do
   create_table "redbark_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "account_number"
     t.string "account_status"
+    t.datetime "account_details_fetched_at"
     t.string "account_type"
     t.string "connection_id"
     t.datetime "created_at", null: false

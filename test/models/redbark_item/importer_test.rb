@@ -32,6 +32,50 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
                  "a failed fetch overwrote the details the last good sync stored")
   end
 
+  # The batch is rejected whole when one id is stale or of the wrong category,
+  # so one bad account must not cost every other loan its rate. Mirrors
+  # fetch_balances_with_fallback (raised on the #213 gate).
+  #
+  # Two DISTINCT accounts, because the fallback only engages for a batch of
+  # more than one: with a single id there is nothing to demote to.
+  test "a rejected batch falls back to one call per account" do
+    first = redbark_accounts(:savings_account)
+    item = first.redbark_item
+    family = item.family
+    second = item.redbark_accounts.create!(
+      redbark_account_id: "rb_acc_loan_2", name: "Second loan", currency: "AUD"
+    )
+
+    [ first, second ].each_with_index do |redbark_account, index|
+      account = family.accounts.create!(
+        name: "Mortgage #{index}", balance: 400_000, currency: "AUD",
+        accountable: Loan.new(rate_type: "variable", interest_rate: 6.25)
+      )
+      redbark_account.ensure_account_provider!(account)
+    end
+
+    provider = mock
+    provider.stubs(:list_connections).returns([])
+    provider.expects(:get_account_details)
+            .with(account_ids: [ first.redbark_account_id, second.redbark_account_id ])
+            .raises(Provider::Redbark::Error.new("stale id", :not_found))
+    provider.expects(:get_account_details)
+            .with(account_ids: [ first.redbark_account_id ])
+            .returns([ { accountId: first.redbark_account_id, lendingRate: "0.0675" } ])
+    provider.expects(:get_account_details)
+            .with(account_ids: [ second.redbark_account_id ])
+            .returns([])
+
+    importer = RedbarkItem::Importer.new(item, redbark_provider: provider)
+    importer.send(:import_loan_account_details, [ first.reload, second.reload ])
+
+    assert_equal "0.0675", first.reload.raw_account_details_payload["lendingRate"],
+                 "the account the retry could serve never got its details stored"
+    assert_not_nil first.account_details_fetched_at, "a stored refresh was not stamped"
+    assert_nil second.reload.raw_account_details_payload,
+               "an account the retry could not serve was written anyway"
+  end
+
   # Only loans: every other account type would cost a request per sync for a
   # field nothing reads.
   test "account details are not fetched when no linked account is a loan" do
