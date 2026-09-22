@@ -1,7 +1,7 @@
 class HoldingsController < ApplicationController
   include StreamExtensions
 
-  before_action :set_holding, only: %i[show update destroy unlock_cost_basis remap_security reset_security sync_prices classification reset_classification]
+  before_action :set_holding, only: %i[show update destroy unlock_cost_basis remap_security reset_security sync_prices tags classification reset_classification]
   before_action :require_holding_write_permission!, only: %i[update destroy unlock_cost_basis remap_security reset_security sync_prices classification reset_classification]
 
   def index
@@ -12,6 +12,34 @@ class HoldingsController < ApplicationController
 
   def show
     @last_price_updated = @holding.security.prices.maximum(:updated_at)
+    @family_tags = Current.family.tags.alphabetically
+    # Offered only to someone whose save would be accepted: a picker that
+    # renders and then fails on submit reads as a broken feature.
+    # The same source the tags action gates on, not a second copy of its list
+    # (raised by Codacy on #198). A view deciding whether to render a control
+    # and an action deciding whether to accept it must not answer from two
+    # tables.
+    @can_annotate_holding = account_permission?(@holding.account, :annotate)
+  end
+
+  # The family-scoped half of classification. Unlike the classification columns,
+  # which live on the shared security row, a tagging is reachable only through
+  # the owning family's tags -- so this is where a household's own scheme goes.
+  #
+  # The write itself is `Security#set_tags_for`, which replaces only this
+  # family's taggings; `security.tags = ...` here would delete other families'.
+  def tags
+    # `:annotate`, not `:write`. A security tag is a family-scoped annotation
+    # rather than a change to the holding, which is exactly how a transaction's
+    # tags are treated -- `TransactionsController#update_tags` gates at
+    # `:annotate` so a read_write member can apply them. Gating this at `:write`
+    # made two identical operations disagree for no stated reason.
+    return unless require_account_permission!(@holding.account, :annotate)
+
+    @holding.security.set_tags_for(Current.family, params.dig(:security, :tag_ids))
+    flash[:notice] = t("securities.tags.saved")
+
+    redirect_to account_path(@holding.account, tab: "holdings")
   end
 
   def update
