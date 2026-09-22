@@ -34,12 +34,13 @@ class SimplefinAccount::Liabilities::LoanProcessor
     # one could appear, and it is optional and server-discretionary.
     #
     # So there is no provider-metadata path to build here. Rate and term for
-    # SimpleFIN users come from transaction text instead (#142 Phase 2), which
-    # never depended on the provider supplying them.
+    # SimpleFIN users come from transaction text instead
+    # (jaysbeekay/sure#142 phase 2), which never depended on the provider
+    # supplying them.
     #
     # One server answering for itself is not proof that no server populates
     # `extra`. If one ever turns up, this is the method that would read it --
-    # with a payload attached, the way #159 was settled.
+    # with a payload attached, the way jaysbeekay/sure#159 was settled.
     #
     # Balance normalization is handled by SimplefinAccount::Processor.process_account!
     def update_loan_attributes
