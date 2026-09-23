@@ -25,9 +25,15 @@ class SecurityClassificationProposalsController < ApplicationController
       flash[:alert] = t(".already_approved", ticker: proposal_ticker)
     elsif @proposal.rejected?
       flash[:alert] = t(".already_rejected", ticker: proposal_ticker)
+    elsif @proposal.security.reload.classification_locked?
+      # Still pending and the security is LOCKED. Not the same as having been
+      # classified by hand: a lock is the user's standing veto over every
+      # source, and telling them someone typed it in instead sends them looking
+      # for an edit that never happened (CodeRabbit, #199).
+      flash[:alert] = t(".locked", ticker: proposal_ticker)
     else
-      # Still pending, so the refusal came from the SECURITY rather than from
-      # the proposal: classified by hand, or locked, since this was proposed.
+      # Still pending and unlocked, so the security was classified by hand
+      # between this being proposed and this click.
       flash[:alert] = t(".superseded", ticker: proposal_ticker)
     end
 

@@ -16,6 +16,8 @@ en:
       success: "%{ticker} classified."
       already_approved: "%{ticker} was already classified from this proposal."
       already_rejected: "%{ticker}'s proposal was dismissed, so it was not applied."
+      locked: "%{ticker}'s classification is locked, so it was left alone. Unlock
+        it from the holding drawer to accept this."
       superseded: "%{ticker} was classified by hand since this was proposed, so it
         was left alone."
     reject:

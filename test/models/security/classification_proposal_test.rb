@@ -264,6 +264,46 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
                "the provider was locked out of the asset columns by a region"
   end
 
+  # `compact_blank` dropped a blank sub-class while keeping the class beside
+  # it, so re-classifying left the OLD sub-class under the NEW class. The model
+  # validates the two columns independently, so nothing rejects the pair
+  # (CodeRabbit, #199). Asserts the delta: the security starts with a full,
+  # valid pair, and the proposal answers only the class.
+  test "a proposal that changes the asset class clears a sub-class it does not answer" do
+    @security.update!(
+      asset_class: "equity", asset_sub_class: "stock", classification_source: "provider"
+    )
+
+    propose(asset_class: "fixed_income", asset_sub_class: nil).approve!
+
+    @security.reload
+    assert_equal "fixed_income", @security.asset_class
+    assert_nil @security.asset_sub_class,
+               "stock survived a move to fixed_income, a pair nothing validates"
+  end
+
+  # The other side, so the fix is not "always clear the sub-class": a proposal
+  # that answers both writes both.
+  test "a proposal that answers both asset columns writes both" do
+    @security.update!(asset_class: "equity", asset_sub_class: "stock")
+
+    propose(asset_class: "fixed_income", asset_sub_class: "bond").approve!
+
+    @security.reload
+    assert_equal %w[fixed_income bond], @security.values_at(:asset_class, :asset_sub_class)
+  end
+
+  # And a proposal that answers neither leaves the pair entirely alone.
+  test "a region-only proposal leaves both asset columns untouched" do
+    @security.update!(asset_class: "equity", asset_sub_class: "stock")
+
+    propose(asset_class: nil, asset_sub_class: nil, region: "europe").approve!
+
+    @security.reload
+    assert_equal %w[equity stock], @security.values_at(:asset_class, :asset_sub_class)
+    assert_equal "europe", @security.region
+  end
+
   # -------------------------------------------------------------- rejecting
 
   # Rejection was unconditional, so a stale reject form from another tab moved an

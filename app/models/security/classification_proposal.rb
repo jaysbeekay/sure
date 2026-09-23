@@ -97,9 +97,20 @@ class Security::ClassificationProposal < ApplicationRecord
     # Only the columns this proposal actually answered. A proposal that could
     # only name the region must not blank out an asset class the security
     # already holds.
+    #
+    # `asset_class` and `asset_sub_class` are the exception, and they move
+    # TOGETHER. `compact_blank` drops a blank sub-class while keeping the class
+    # beside it, so re-classifying a security from equity/stock to
+    # fixed_income with no sub-class left `stock` sitting under `fixed_income`
+    # -- a pair the model cannot reject, because it validates the two columns
+    # independently. Answering the class therefore writes the sub-class too,
+    # blank included, so the pair is always the proposal's own answer rather
+    # than half of it over half of someone else's (CodeRabbit, #199).
     def proposed_attributes
-      { asset_class: asset_class, asset_sub_class: asset_sub_class,
-        sector: sector, region: region }.compact_blank
+      attrs = { sector: sector, region: region }.compact_blank
+      return attrs if asset_class.blank?
+
+      attrs.merge(asset_class: asset_class, asset_sub_class: asset_sub_class.presence)
     end
 
     # `classification_source` says who set the ASSET classification, and

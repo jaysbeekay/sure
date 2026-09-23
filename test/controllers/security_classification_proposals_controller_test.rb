@@ -222,6 +222,30 @@ class SecurityClassificationProposalsControllerTest < ActionDispatch::Integratio
     assert_nil flash[:alert]
   end
 
+  # A lock is the user's standing veto over every source. Telling them the
+  # security was "classified by hand" sends them looking for an edit that never
+  # happened (CodeRabbit, #199).
+  test "approving a locked security says it is locked, not that it was hand-edited" do
+    @security.update!(classification_locked: true)
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    assert_equal I18n.t("security_classification_proposals.approve.locked",
+                        ticker: @security.ticker), flash[:alert]
+    assert @proposal.reload.pending?, "a refused approval was recorded anyway"
+  end
+
+  # The other half of the same branch: an unlocked security that someone
+  # classified by hand still reports the hand edit.
+  test "approving a hand-classified security still says it was classified by hand" do
+    @security.update!(classification_source: "manual")
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    assert_equal I18n.t("security_classification_proposals.approve.superseded",
+                        ticker: @security.ticker), flash[:alert]
+  end
+
   test "another family's proposal cannot be approved" do
     other_family = users(:josh).family
     other_security = Security.create!(ticker: "MSFT2", exchange_operating_mic: "XNAS", country_code: "US")
