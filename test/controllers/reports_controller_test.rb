@@ -233,6 +233,62 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
                  "a disabled account is still in this page's scope, as it was before #167"
   end
 
+  # #206. The card was gated on `investment_accounts` -- the VISIBLE scope --
+  # while the realised figures inside it are measured over
+  # `included_in_reports`, which carries disabled accounts. A family whose only
+  # broker is closed was therefore shown nothing, and what it was denied was a
+  # real realised figure for the period.
+  #
+  # This is the fixture the issue was opened with, and it renders nothing
+  # before the change.
+  test "a family whose only investment account is disabled still gets the card when the period has a disposal" do
+    date = Date.current.beginning_of_month
+
+    # Every pre-existing investment account out of the card's scope, so the one
+    # under test is the family's only one -- otherwise the fixtures' own
+    # accounts satisfy the old gate and the test proves nothing.
+    @family.accounts.where(accountable_type: %w[Investment Crypto]).update_all(exclude_from_reports: true)
+
+    account = create_portfolio_account(family: @family)
+    holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
+    sell_trade account: account, date: date, qty: 2, price: 150
+    account.update!(status: "disabled", disabled_at: date)
+
+    get reports_path
+    assert_response :ok
+
+    # The card's own wrapper, which is what `has_investments` gates -- the
+    # sections inside it are individually conditional, so asserting one of them
+    # would confuse "the card is here" with "this part of it is" (raised by
+    # cubic).
+    assert_select "[data-section-key='investment_performance']", { minimum: 1 },
+                  "the card was not rendered for a family whose only broker is closed"
+
+    # And the disposal line, so the figure that earned the card its place is
+    # actually on it.
+    lines = css_select("[data-testid='realized-gain-line']").map(&:text)
+    assert_not_empty lines, "the card rendered with no disposal lines at all"
+    assert lines.any? { |line| line.include?("$100.00") },
+           "the card rendered but not the disposal that earned it a place: #{lines.inspect}"
+  end
+
+  # The gate must WIDEN, not disappear. Nothing to hold and nothing disposed of
+  # is still nothing to show.
+  test "a family with no investment accounts and no disposals gets no card" do
+    @family.accounts.where(accountable_type: %w[Investment Crypto]).update_all(exclude_from_reports: true)
+
+    get reports_path
+    assert_response :ok
+
+    # The CARD's absence, not the absence of two sections inside it. A card that
+    # renders empty satisfies the narrower assertions while failing this one,
+    # which is the whole point of the gate (raised by cubic).
+    assert_select "[data-section-key='investment_performance']", { count: 0 },
+                  "the investment card was rendered for a family with nothing to show"
+    assert_select "[data-testid='realized-gain-line']", { count: 0 },
+                  "a disposal line was rendered for a family with nothing to show"
+  end
+
   # The Reports section controllers gained `url` and `preferenceKey` values so
   # the portfolio hub can reuse them. Reports passes neither, so the page must
   # carry no override attributes and its endpoint must still accept the
