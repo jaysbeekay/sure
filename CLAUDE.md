@@ -118,7 +118,9 @@ from this fork.
    until its drop is sent**, so its pre-flight branch is cut at drop time, from
    merged fork history, and the cross-links are written then rather than months
    earlier. A pre-flight created before its PR is due has nothing to point at
-   and rots against a mirror that resets daily.
+   and rots against **the mirror** -- `mirror/upstream-main`, this fork's
+   branch holding an exact copy of `we-promise/sure`'s `main`, which a workflow
+   force-resets daily, so anything built on it moves under you.
 
    Say how the two relate IN THE PR DESCRIPTION, beside the links rather than
    in a commit message or a comment, since the reader who needs it is the one

@@ -163,8 +163,4 @@ class Security::LookThroughTest < ActiveSupport::TestCase
       @security.stubs(:price_data_provider).returns(provider)
       @security.import_provider_details(include_constituents: true)
     end
-
-    def assert_not_in_delta(expected, actual, delta, message)
-      assert (expected - actual).abs > delta, message
-    end
 end
