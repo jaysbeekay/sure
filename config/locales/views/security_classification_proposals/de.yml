@@ -9,7 +9,8 @@ de:
         deine nicht klassifizierten Positionen vorzuschlagen.
       shared_warning: Wertpapiere werden geteilt, daher gilt eine bestätigte
         Klassifizierung überall dort, wo das Instrument gehalten wird — und sie hat
-        ab dann Vorrang vor den Datenanbietern. Im Positions-Drawer zurücksetzen.
+        ab dann Vorrang vor den Datenanbietern. Du kannst sie jederzeit im
+        Positions-Drawer ändern.
       approve: Bestätigen
       reject: Ablehnen
     approve:

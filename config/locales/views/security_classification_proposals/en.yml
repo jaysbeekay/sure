@@ -9,7 +9,8 @@ en:
         your unclassified holdings.
       shared_warning: Securities are shared, so an approved classification applies
         wherever the instrument is held — and it takes precedence over the data
-        providers from then on. Reset it from the holding drawer to hand it back.
+        providers from then on. You can change it from the holding drawer at any
+        time.
       approve: Approve
       reject: Reject
     approve:
