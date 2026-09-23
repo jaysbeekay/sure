@@ -124,6 +124,34 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
                   "a looked-through asset class opened onto the fund's own sub-class"
   end
 
+  # `build_segments` drops every zero-VALUE row, so a fund worth nothing can
+  # never contribute a segment however well-weighted its constituents are. The
+  # eligibility check counted it anyway, and the toggle appeared and did
+  # nothing (CodeRabbit, #201).
+  #
+  # The holding keeps a non-zero QTY on purpose: `current_holdings` already
+  # filters `qty: 0`, so zeroing the quantity removes the holding altogether
+  # and proves nothing about this fix. A worthless holding -- shares still
+  # held, priced at nothing -- is the state that reaches the gate.
+  #
+  # Asserts the delta: the SAME fund at a positive value still offers it.
+  test "a fund whose holding is worth nothing does not offer the toggle" do
+    fund = hold_a_fund
+    holding = @account.holdings.find_by(security: fund)
+
+    get portfolio_path(by: "sector")
+    assert_response :success
+    assert_select "a", { text: /See through funds/, minimum: 1 },
+                  "the toggle was already absent, so the assertion below proves nothing"
+
+    holding.update!(price: 0, amount: 0)
+
+    get portfolio_path(by: "sector")
+    assert_response :success
+    assert_select "a", { text: /See through funds/, count: 0 },
+                  "a fund worth nothing offered a toggle that can expand nothing"
+  end
+
   private
     # Local copy: the same helper in PortfoliosControllerTest is private to that
     # class, and the portfolio hub is preview-gated, so without it every request

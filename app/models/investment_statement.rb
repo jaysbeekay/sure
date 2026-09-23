@@ -254,9 +254,16 @@ class InvestmentStatement
   # The condition mirrors that method's own rule rather than approximating it:
   # non-nil weights, summed PER SECURITY, greater than zero. A row-level
   # `weight > 0` would disagree with it for a fund whose weights cancel out.
+  #
+  # The holding has to be worth something too. `build_segments` drops every
+  # zero-value row, so a fund held at zero contributes nothing to any segment
+  # however well-weighted its constituents are -- and if another holding keeps
+  # the section on screen, the toggle appeared beside it and did nothing. Same
+  # defect as the zero-weight case above, reached from the value side rather
+  # than the weight side (CodeRabbit, #201).
   def holds_any_fund_constituents?
     Security::Constituent
-      .where(security_id: current_holdings.map(&:security_id).uniq)
+      .where(security_id: contributing_security_ids)
       .where.not(weight: nil)
       .group(:security_id)
       .having("SUM(weight) > 0")
@@ -606,6 +613,16 @@ class InvestmentStatement
   end
 
   private
+    # The securities behind holdings that actually contribute value, measured
+    # the way `build_segments` measures them, so the eligibility check and the
+    # segments cannot disagree about what counts as present.
+    def contributing_security_ids
+      current_holdings
+        .select { |holding| convert_to_family_currency(holding.amount, holding.currency).to_d.positive? }
+        .map(&:security_id)
+        .uniq
+    end
+
     # Two layers of caching, mirroring BalanceSheet::NetWorthSeriesBuilder:
     # Rails.cache across requests, plus a per-instance memo so a single
     # dashboard render that asks for the same series twice runs one query.
