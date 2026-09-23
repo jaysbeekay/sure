@@ -535,6 +535,12 @@ Rails.application.routes.draw do
       patch :tags
     end
   end
+  resources :security_classification_proposals, only: %i[index] do
+    member do
+      post :approve
+      post :reject
+    end
+  end
   resources :trades, only: %i[show new create update destroy] do
     member do
       post :unlock

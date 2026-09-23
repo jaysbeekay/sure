@@ -1,0 +1,64 @@
+<div class="space-y-4">
+  <div class="space-y-1">
+    <%= tag.h1 t(".title"), class: "text-2xl font-medium text-primary" %>
+    <p class="text-sm text-secondary"><%= t(".description") %></p>
+  </div>
+
+  <% if @proposals.empty? %>
+    <div class="bg-container rounded-lg border border-primary p-6 text-center">
+      <p class="text-secondary text-sm"><%= t(".empty") %></p>
+    </div>
+  <% else %>
+    <%# Approving writes the shared securities row and outranks the providers
+        from then on, so the consequence is stated here rather than discovered. %>
+    <%= render DS::Alert.new(message: t(".shared_warning"), variant: :warning) %>
+
+    <ul class="space-y-2">
+      <% @proposals.each do |proposal| %>
+        <li class="bg-container rounded-lg border border-primary p-4"
+            data-proposal-id="<%= proposal.id %>">
+          <div class="flex items-start justify-between gap-4">
+            <div class="space-y-1 text-sm">
+              <h2 class="text-primary font-medium">
+                <%= proposal.security.ticker %>
+                <span class="text-secondary font-normal"><%= proposal.security.name %></span>
+              </h2>
+              <dl class="flex flex-wrap gap-x-4 gap-y-1 text-secondary">
+                <% {
+                     asset_class: proposal.asset_class && t("securities.taxonomy.asset_classes.#{proposal.asset_class}"),
+                     asset_sub_class: proposal.asset_sub_class && t("securities.taxonomy.asset_sub_classes.#{proposal.asset_sub_class}"),
+                     sector: proposal.sector,
+                     region: proposal.region && t("securities.taxonomy.regions.#{proposal.region}")
+                   }.each do |field, value| %>
+                  <% next if value.blank? %>
+                  <div class="flex items-center gap-1">
+                    <dt><%= t("securities.classification.#{field}_label") %>:</dt>
+                    <dd class="text-primary"><%= value %></dd>
+                  </div>
+                <% end %>
+              </dl>
+              <% if proposal.rationale.present? %>
+                <p class="text-secondary italic"><%= proposal.rationale %></p>
+              <% end %>
+            </div>
+
+            <div class="flex items-center gap-2 shrink-0">
+              <%= render DS::Button.new(
+                    text: t(".reject"),
+                    variant: "secondary",
+                    href: reject_security_classification_proposal_path(proposal),
+                    method: :post
+                  ) %>
+              <%= render DS::Button.new(
+                    text: t(".approve"),
+                    variant: "primary",
+                    href: approve_security_classification_proposal_path(proposal),
+                    method: :post
+                  ) %>
+            </div>
+          </div>
+        </li>
+      <% end %>
+    </ul>
+  <% end %>
+</div>
