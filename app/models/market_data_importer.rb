@@ -30,7 +30,11 @@ class MarketDataImporter
         clear_cache: clear_cache
       )
 
-      security.import_provider_details(clear_cache: clear_cache, include_classification: true)
+      # See the note in Account::MarketDataImporter: constituents ride the same
+      # provider call as the classification, so the two never cost two
+      # requests -- which is not the same as costing nothing, and that note
+      # says why.
+      security.import_provider_details(clear_cache: clear_cache, include_classification: true, include_constituents: true)
     end
   end
 

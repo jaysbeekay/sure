@@ -87,7 +87,24 @@ class Account::MarketDataImporter
       end
 
       security.import_provider_prices(start_date: start_dates[security_id], end_date: end_date)
-      security.import_provider_details(include_classification: true)
+      # Both flags ride the SAME `fetch_security_info` call: the gate in
+      # `import_provider_details` makes one request and reads classification and
+      # constituents from the one response, so the two never cost two requests.
+      #
+      # That is NOT the same as costing nothing, and an earlier version of this
+      # comment said it was. A security that already has metadata and a
+      # classification used to skip the fetch entirely; a nil
+      # `constituents_fetched_at` reopens it. So the first sync after this
+      # deploys asks once for every such security, and a security whose
+      # response keeps failing is asked again every sync -- the unbounded case
+      # the gate's own comment in `Security::Provided` exists to bound. The
+      # trade is deliberate: one pass over the existing catalogue in exchange
+      # for a feature that is otherwise inert.
+      #
+      # Without the flag nothing in production ever sets
+      # `constituents_fetched_at`, and the fund look-through is dead code --
+      # every look-through path reads an empty table.
+      security.import_provider_details(include_classification: true, include_constituents: true)
     end
   end
 
