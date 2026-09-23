@@ -63,7 +63,7 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
     # this the freshness gate stops the second pass and the dedup this row is
     # named for is never reached, which is what the sweep on #213 found: the
     # test passed with the dedup deleted.
-    detail lendingRate: "0.0675", fetched_at: (@as_of + 1).to_time
+    detail lendingRate: "0.0675", fetched_at: (@as_of + 1).in_time_zone
 
     assert_no_enqueued_jobs only: LoanAmortizationRebuildJob do
       RedbarkAccount::LoanDetailsProcessor.new(@redbark_account.reload, as_of: @as_of + 1).process
@@ -231,7 +231,7 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
   # one. Acting on it writes last week's rate back over a correction the user
   # has made since -- as though the bank had just reported it (cubic, #213).
   test "a snapshot from an earlier sync is not acted on" do
-    detail lendingRate: "0.0675", fetched_at: (@as_of - 3).to_time
+    detail lendingRate: "0.0675", fetched_at: (@as_of - 3).in_time_zone
 
     process
 
@@ -253,11 +253,58 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
   end
 
   test "a snapshot refreshed today is acted on" do
-    detail lendingRate: "0.0675", fetched_at: @as_of.to_time
+    detail lendingRate: "0.0675", fetched_at: @as_of.in_time_zone
 
     process
 
     assert_equal({ "2026-09-21" => BigDecimal("6.75") }, rates)
+  end
+
+  # Terms are applied BEFORE the rate, and `enrich_attributes` leaves a refused
+  # value assigned on the loan. So a bank reporting an absurd `loanEndDate`
+  # used to cost the loan its rate as well as its term: the rate write was
+  # refused for the term it was still carrying. Asserts the rate lands, which
+  # is the thing the refusal was taking away (CodeRabbit, #213).
+  test "a term the model refuses does not cost the loan its rate" do
+    @loan.update!(start_date: nil, initial_balance: nil, term_months: nil)
+    detail(
+      lendingRate: "0.0675",
+      loanDetails: {
+        "originalStartDate" => "1900-01-01",
+        "loanEndDate" => "3000-01-01",
+        "originalLoanAmount" => "400000"
+      }
+    )
+
+    process
+
+    @loan.reload
+    assert_nil @loan.term_months,
+               "a term of 13,200 months was stored despite MAX_TERM_MONTHS being #{Loan::MAX_TERM_MONTHS}"
+    assert_equal({ "2026-09-21" => BigDecimal("6.75") }, rates,
+                 "the rate was refused for the term the loan was still carrying")
+  end
+
+  # The other half: a refusal must not leave its ERRORS behind for the next
+  # write to find. `enrich_attributes` returns early WITHOUT saving when every
+  # attribute is locked, so the write that follows a refusal never clears them
+  # itself -- it reports the previous attribute's errors as its own refusal.
+  #
+  # The loan here has a LOCKED schedule, so the rate write is a genuine no-op:
+  # exactly one thing was refused, so exactly one line belongs in the log.
+  test "a refusal does not leave its errors for a locked write to report" do
+    @loan.update!(start_date: nil, initial_balance: nil, term_months: nil)
+    @loan.lock_attr!(:variable_rate_schedule)
+    detail(
+      lendingRate: "0.0675",
+      loanDetails: { "originalStartDate" => "1900-01-01", "loanEndDate" => "3000-01-01" }
+    )
+
+    assert_difference -> { DebugLogEntry.count }, 1 do
+      process
+    end
+
+    assert_empty schedule, "a locked schedule was written by the provider"
   end
 
   # The loan stores rates quantized to three decimals
@@ -321,7 +368,13 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
     # Stamped as fetched on the sync's own date, which is what the importer
     # does on a successful refresh. `fetched_at:` lets a test make the snapshot
     # stale on purpose.
-    def detail(fetched_at: @as_of.to_time, **payload)
+    # `in_time_zone`, never `Date#to_time`. `to_time` builds midnight in the
+    # SYSTEM zone, which the database stores as UTC and reads back shifted: on
+    # a machine at UTC+10, midnight on the 21st comes back as 14:00 on the
+    # 20th, `details_fetched_this_sync?` compares the 20th against an `as_of`
+    # of the 21st, and every test that expects a write fails -- locally only,
+    # while passing on a UTC CI runner (raised by CodeRabbit on #213).
+    def detail(fetched_at: @as_of.in_time_zone, **payload)
       @redbark_account.update!(
         raw_account_details_payload: { "accountId" => @redbark_account.redbark_account_id }.merge(
           payload.transform_keys(&:to_s)

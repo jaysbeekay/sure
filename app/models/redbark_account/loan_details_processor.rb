@@ -250,6 +250,22 @@ class RedbarkAccount::LoanDetailsProcessor
         attributes: attrs.keys.map(&:to_s),
         errors: loan.errors.full_messages
       )
+
+      # A refusal is not tidied up by Enrichable: it assigns, calls `save`, and
+      # when `save` returns false the REJECTED VALUES ARE STILL ON THE LOAN and
+      # its errors are still populated. Terms are applied before the rate, so a
+      # bank reporting an absurd `loanEndDate` would leave an out-of-range
+      # `term_months` assigned, the rate write would then be refused for the
+      # term rather than for the rate, and the loan would lose a rate change it
+      # had every right to. The log would name the rate attributes and carry
+      # the term's errors, which is how it would be misread.
+      #
+      # Clearing the errors matters on its own: `enrich_attributes` returns
+      # early without saving when every attribute is locked or unchanged, so a
+      # later no-op write would find these errors still sitting there and
+      # report a refusal that did not happen (raised by CodeRabbit on #213).
+      loan.restore_attributes(attrs.keys.map(&:to_s))
+      loan.errors.clear
     end
 
     def capture(message, **metadata)

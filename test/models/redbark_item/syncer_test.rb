@@ -25,26 +25,38 @@ class RedbarkItem::SyncerTest < ActiveSupport::TestCase
   # discards the snapshot it has just stored, and the rate change in it is lost
   # until the bank happens to move the rate again (found on the #213 sweep).
   #
-  # Asserting the two agree is the whole of it: one reading cannot disagree
-  # with itself, two readings can.
+  # THE SYNC IS MADE TO CROSS MIDNIGHT, and that is the whole design of the
+  # test. Comparing the two values alone proves nothing: two separate readings
+  # of the clock return the same date on all but one run in 86,400, so a test
+  # that merely compared them would pass against the very defect it names --
+  # which is what the first version of this test did (CodeRabbit, #213). The
+  # clock is moved past midnight while the import is in flight, so a second
+  # reading taken afterwards can only disagree with the first.
   test "the account details stamp and the processing date come from one clock" do
     stamped = nil
     dated = nil
+    before_midnight = Time.zone.local(2026, 9, 21, 23, 59, 59)
 
-    @redbark_item.expects(:import_latest_redbark_data).with { |**kwargs|
-      stamped = kwargs[:fetched_at]
-      true
-    }.returns({})
+    travel_to before_midnight do
+      @redbark_item.expects(:import_latest_redbark_data).with { |**kwargs|
+        stamped = kwargs[:fetched_at]
+        # The fetch takes two seconds and the day turns while it runs.
+        travel_to Time.zone.local(2026, 9, 22, 0, 0, 1)
+        true
+      }.returns({})
 
-    @redbark_item.expects(:process_accounts).with { |**kwargs|
-      dated = kwargs[:as_of]
-      true
-    }.returns([])
+      @redbark_item.expects(:process_accounts).with { |**kwargs|
+        dated = kwargs[:as_of]
+        true
+      }.returns([])
 
-    @syncer.perform_sync(mock_sync)
+      @syncer.perform_sync(mock_sync)
+    end
 
     assert_kind_of Date, dated, "the processing phase was not given a date at all"
     assert_not_nil stamped, "the import phase was not given a clock to stamp with"
+    assert_equal Date.new(2026, 9, 21), stamped.to_date,
+                 "the stamp was not taken before midnight, so the test is not exercising the crossing"
     assert_equal stamped.to_date, dated,
                  "the import stamped one date and the processing dated its findings by another"
   end
