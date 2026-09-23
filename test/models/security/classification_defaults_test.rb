@@ -120,7 +120,12 @@ class Security::ClassificationDefaultsTest < ActiveSupport::TestCase
     assert_nil security.development_status
   end
 
-  test "a provider-matched security still gets one" do
+  # Named for what it verifies, not for a path it never takes. There is no
+  # provider match and no Security::Resolver here -- a plain create with
+  # `offline: false` exercises the `offline?` guard in `apply_default_region`
+  # and nothing more, and the old name implied coverage that does not exist
+  # (raised by cubic on #201).
+  test "an online security gets a region from its country" do
     security = Security.create!(ticker: "REG-ONLINE", country_code: "US", offline: false)
 
     assert_equal "north_america", security.region
