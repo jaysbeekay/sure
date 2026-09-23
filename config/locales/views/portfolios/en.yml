@@ -11,6 +11,7 @@ en:
         kind: Kind
         region: Region
         sector: Sector
+        tag: Tag
         security: Security
       asset_classes:
         alternative_investment: Alternative
@@ -38,6 +39,8 @@ en:
         latin_america: Latin America
         middle_east_africa: Middle East & Africa
         north_america: North America
+      look_through: See through funds
+      look_through_hint: Expands each fund into the holdings it reports.
       unclassified: Unclassified
       kinds:
         cash: Cash

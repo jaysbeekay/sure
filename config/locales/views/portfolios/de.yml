@@ -11,6 +11,7 @@ de:
         kind: Art
         region: Region
         sector: Sektor
+        tag: Tag
         security: Wertpapier
       asset_classes:
         alternative_investment: Alternative Anlagen
@@ -38,6 +39,8 @@ de:
         latin_america: Lateinamerika
         middle_east_africa: Naher Osten & Afrika
         north_america: Nordamerika
+      look_through: Fonds aufschlüsseln
+      look_through_hint: Zeigt jeden Fonds als die Positionen, die er meldet.
       unclassified: Nicht klassifiziert
       kinds:
         cash: Bargeld

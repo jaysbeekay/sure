@@ -1774,6 +1774,21 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     end
   end
 
+  # The drill-down reads the fund's own columns while the parent rows under
+  # look-through come from the constituents, so the two contradict each other.
+  # Held at the model rather than only through the view, because the view is
+  # what forgot to pass the flag in the first place (CodeRabbit, #201).
+  test "no grouping offers a child level while look-through is on" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    security = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: security, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    assert_not_empty @statement.allocation_children("asset_class", "equity"),
+                     "the ladder stopped opening without look-through, so the assertion below proves nothing"
+    assert_empty @statement.allocation_children("asset_class", "equity", look_through: true),
+                 "a looked-through asset class opened onto the holding's own sub-class"
+  end
+
   test "every classification grouping is reachable through allocation_by" do
     %w[asset_class asset_sub_class sector region].each do |grouping|
       assert_includes InvestmentStatement::ALLOCATION_GROUPINGS, grouping

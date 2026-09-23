@@ -22,7 +22,7 @@ class Portfolio::SectionRegistry
   # carry arbitrary strings into the user's preferences.
   KEYS = %w[kpis performance index_chart comparison drivers value_chart realized_gains holdings accounts allocation data_quality].freeze
 
-  attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :extra_sections
+  attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :look_through, :extra_sections
 
   # `sort`, `dir` and `by` are the query-string state of the holdings table
   # and the allocation donut, passed through as given: the statement
@@ -32,7 +32,7 @@ class Portfolio::SectionRegistry
   # `extra_sections` are appended after the built-ins, in the order given. It
   # is the seam that keeps this list open: a later drop (or a test) can add a
   # section without editing the built-in list.
-  def initialize(statement:, period:, as_of:, user:, sort: nil, dir: nil, by: nil, extra_sections: [])
+  def initialize(statement:, period:, as_of:, user:, sort: nil, dir: nil, by: nil, look_through: false, extra_sections: [])
     @statement = statement
     @period = period
     @as_of = as_of
@@ -40,6 +40,7 @@ class Portfolio::SectionRegistry
     @sort = sort
     @dir = dir
     @by = by
+    @look_through = look_through
     @extra_sections = extra_sections || []
   end
 
@@ -174,7 +175,8 @@ class Portfolio::SectionRegistry
           key: "allocation",
           title: "portfolios.sections.allocation",
           partial: "portfolios/allocation",
-          locals: shared_locals.merge(segments: allocation_segments, by: by, sort: sort, dir: dir),
+          locals: shared_locals.merge(segments: allocation_segments, by: by, sort: sort, dir: dir,
+            look_through: look_through, look_through_available: look_through_available?),
           visible: allocation_segments.any?,
           collapsible: true
         },
@@ -527,8 +529,18 @@ class Portfolio::SectionRegistry
       end
     end
 
+    # The toggle is only offered when the portfolio actually holds a fund we have
+    # constituents for. Shown unconditionally it would be a control that visibly
+    # does nothing for most people, and the look-through axes do not apply to
+    # account, currency, kind, tag or security anyway.
+    def look_through_available?
+      return false unless by.to_s.in?(%w[asset_class asset_sub_class sector region])
+
+      statement.holds_any_fund_constituents?
+    end
+
     def allocation_segments
-      @allocation_segments ||= statement.allocation_by(by)
+      @allocation_segments ||= statement.allocation_by(by, look_through: look_through)
     end
 
     def data_quality_issues

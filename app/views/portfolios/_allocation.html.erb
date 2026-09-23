@@ -1,4 +1,4 @@
-<%# locals: (statement:, period:, as_of:, segments:, by:, sort:, dir:) %>
+<%# locals: (statement:, period:, as_of:, segments:, by:, sort:, dir:, look_through:, look_through_available:) %>
 
 <%
   active_by = by.presence || "security"
@@ -12,10 +12,26 @@
       <% sc.with_segment(
         t("portfolios.allocation.groupings.#{grouping}"),
         active: active_by == grouping,
-        href: portfolio_path({ period: period.key, by: grouping, sort: sort, dir: dir }.compact),
+        href: portfolio_path({ period: period.key, by: grouping, sort: sort, dir: dir,
+                                look_through: ("1" if look_through) }.compact),
         data: { turbo_frame: "portfolio_sections" }
       ) %>
     <% end %>
+  <% end %>
+
+  <%# Only offered where it applies and where the portfolio actually holds a
+      fund we have constituents for -- see SectionRegistry#look_through_available?. %>
+  <% if look_through_available %>
+    <div class="flex items-center justify-end gap-2">
+      <%= link_to portfolio_path({ period: period.key, by: by, sort: sort, dir: dir,
+                                   look_through: ("1" unless look_through) }.compact),
+            class: "text-sm #{look_through ? "text-primary font-medium" : "text-secondary"} hover:text-primary",
+            data: { turbo_frame: "portfolio_sections" } do %>
+        <%= icon look_through ? "eye" : "eye-off", size: "xs", class: "inline" %>
+        <%= t("portfolios.allocation.look_through") %>
+      <% end %>
+      <span class="text-xs text-secondary"><%= t("portfolios.allocation.look_through_hint") %></span>
+    </div>
   <% end %>
 
   <div class="flex flex-col @2xl:flex-row gap-8 items-center">
@@ -63,7 +79,7 @@
               row without a disclosure, so a sector is not dressed up as
               something you can open. A <details> rather than a Stimulus
               controller, per the Hotwire-first convention. %>
-          <% children = statement.allocation_children(active_by, segment.id) %>
+          <% children = statement.allocation_children(active_by, segment.id, look_through: look_through) %>
           <% if children.any? %>
             <details class="group" data-portfolio-segment="<%= segment.id %>">
               <summary class="flex items-center gap-3 px-4 py-2 cursor-pointer list-none">
@@ -81,7 +97,7 @@
               <div class="pl-10 pr-4 pb-2 space-y-1 text-secondary">
                 <% children.each do |child| %>
                   <% child_by = allocation_child_grouping(active_by) %>
-                  <% grandchildren = statement.allocation_children(child_by, child.id) %>
+                  <% grandchildren = statement.allocation_children(child_by, child.id, look_through: look_through) %>
                   <div data-portfolio-child="<%= child.id %>">
                     <div class="flex items-center gap-3 py-1">
                       <p class="truncate"><%= allocation_segment_name(child, child_by) %></p>
