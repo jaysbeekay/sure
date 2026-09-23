@@ -490,7 +490,33 @@ class ReportsController < ApplicationController
       investment_statement = Current.family.investment_statement
       investment_accounts = investment_statement.investment_accounts
 
-      return { has_investments: false } unless investment_accounts.any?
+      # Gated on having something to SHOW, not on holding something today
+      # (jaysbeekay/sure#206). `investment_accounts` is the VISIBLE scope --
+      # draft and active -- while the realised figures inside this card have
+      # never had a status filter: they are measured over
+      # `included_in_reports`, which carries disabled accounts. A family whose
+      # only broker is closed therefore saw no card at all, while the card it
+      # was denied had a real realised figure for the period.
+      #
+      # The question is asked of Portfolio::RealizedGains rather than of a
+      # second hand-rolled trades query, so "is there a disposal" and "what
+      # was realised" cannot drift apart -- two implementations of one
+      # question is the shape of jaysbeekay/sure#167, and this is where it
+      # would come back.
+      #
+      # The cost, recorded on the issue: this runs one trades query for a
+      # family with no investments, which used to return on the accounts check
+      # alone, and the gate is now period-dependent where it was not.
+      #
+      # ONE instance, asked twice. #205 gave the card its shared measurement
+      # and #206 gave the gate its question; with both on main they use the
+      # same object, so the disposals the gate counts are the disposals the
+      # card reports -- and the sell trades are loaded once rather than by
+      # each in turn (raised by cubic and Codacy on #210, deferred until this
+      # merge could make it true).
+      realized_gains = build_realized_gains
+
+      return { has_investments: false } unless investment_accounts.any? || realized_gains.any_disposals?
 
       period_totals = investment_statement.totals(period: @period)
       {
@@ -502,11 +528,21 @@ class ReportsController < ApplicationController
         period_withdrawals: period_totals.withdrawals,
         top_holdings: investment_statement.top_holdings(limit: 5),
         accounts: investment_accounts.to_a,
-        gains_by_tax_treatment: build_gains_by_tax_treatment(investment_statement)
+        gains_by_tax_treatment: build_gains_by_tax_treatment(investment_statement, realized_gains)
       }
     end
 
-    def build_gains_by_tax_treatment(investment_statement)
+    # The disposals this page counts: the card's own account scope, which is
+    # `included_in_reports` with no status filter, over the chosen period.
+    def build_realized_gains
+      Portfolio::RealizedGains.new(
+        accounts: Current.family.accounts.included_in_reports,
+        period: @period,
+        currency: Current.family.currency
+      )
+    end
+
+    def build_gains_by_tax_treatment(investment_statement, realized_gains)
       currency = Current.family.currency
       # Eager-load account and accountable to avoid N+1 when accessing tax_treatment
       current_holdings = investment_statement.current_holdings
@@ -536,12 +572,11 @@ class ReportsController < ApplicationController
       #
       # Hence no `active_until_dates` either: this page has never had a
       # cut-off.
-      realized_gains = Portfolio::RealizedGains.new(
-        accounts: Current.family.accounts.included_in_reports,
-        period: @period,
-        currency: currency
-      )
-
+      #
+      # The instance is the caller's: `build_investment_metrics` already asked
+      # it whether the period holds any disposals, and measuring them here from
+      # a second instance would load the same sell trades twice and let the
+      # gate and the figure answer from different reads.
       disposals_by_treatment = realized_gains.disposals.group_by { |disposal|
         disposal.trade.entry.account.tax_treatment || :taxable
       }
