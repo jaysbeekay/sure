@@ -213,7 +213,26 @@ class InvestmentStatement
   # class, then the holdings inside a sub-class. Sector, region, currency and
   # account do not nest -- a sector has no sub-sector here -- so they return
   # nothing and render flat, rather than having a level invented for them.
-  def allocation_children(by, bucket)
+  #
+  # **Look-through renders flat too, and that is the honest answer rather than
+  # a shortcut.** With it on, the parent segments come from `look_through_split`
+  # -- portions of a fund, filed by what the fund HOLDS -- while every method
+  # below reads the fund's OWN columns. A fund classified equity/etf holding
+  # 60% shares and 40% bonds would show an `equity` parent at 60% of it, open
+  # to an `etf` child at 100% of it, and a `fixed_income` parent at 40% with no
+  # children at all: two different answers for the same money on one screen,
+  # against this file's own rule that the grouping and the drill-down cannot
+  # disagree (CodeRabbit, #201).
+  #
+  # Decomposing a looked-through parent is not a smaller version of this
+  # method. It needs a split by a PAIR of columns to say which sub-classes sit
+  # inside the equity portion, and at the bottom it would list constituents --
+  # securities the user does not hold -- where the row today means a position.
+  # That is a product decision, so it is raised rather than guessed at; until
+  # it is made, the parent rows are the whole answer look-through has.
+  def allocation_children(by, bucket, look_through: false)
+    return [] if look_through
+
     case by.to_s
     when "asset_class" then allocation_sub_classes_within(bucket)
     when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, "cash")

@@ -68,6 +68,10 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
 
     get portfolio_path(by: "account")
 
+    # `assert_select ... count: 0` passes against a redirect or an error page
+    # too, so it proves nothing until the page is known to have rendered
+    # (CodeRabbit, #201). The same omission was in two tests below.
+    assert_response :success
     assert_select "a", { text: /See through funds/, count: 0 }
   end
 
@@ -77,9 +81,11 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
     hold_a_fund
 
     get portfolio_path(by: "sector")
+    assert_response :success
     assert_includes response.body, "Fund wrapper"
 
     get portfolio_path(by: "sector", look_through: "1")
+    assert_response :success
     assert_includes response.body, "Technology",
                     "the look_through parameter never reached the statement"
     assert_not_includes response.body, "Fund wrapper",
@@ -91,8 +97,31 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
 
     get portfolio_path(by: "sector", look_through: "1")
 
+    assert_response :success
     assert_select "a[href*=?]", "look_through=1", { minimum: 1 },
                   "changing axis would silently drop the look-through"
+  end
+
+  # The drill-down reads the fund's OWN columns, so with look-through on it
+  # contradicted the parent it hangs under: a fund holding shares and bonds
+  # showed an `equity` parent at a fraction of the fund and an `etf` child at
+  # all of it, while the `fixed_income` parent had no children at all. Two
+  # answers for the same money on one screen (CodeRabbit, #201).
+  #
+  # Asserts the DELTA: the same request without look-through still opens, so
+  # this cannot pass by the disclosure having gone missing for another reason.
+  test "asset-class rows do not open onto the fund's own columns under look-through" do
+    hold_a_mixed_fund
+
+    get portfolio_path(by: "asset_class")
+    assert_response :success
+    assert_select "details[data-portfolio-segment]", { minimum: 1 },
+                  "the asset-class ladder stopped opening at all, so the test below proves nothing"
+
+    get portfolio_path(by: "asset_class", look_through: "1")
+    assert_response :success
+    assert_select "details[data-portfolio-segment]", { count: 0 },
+                  "a looked-through asset class opened onto the fund's own sub-class"
   end
 
   private
@@ -101,6 +130,30 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
     # here redirects to the dashboard and the assertions never run.
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
+    end
+
+    # A fund whose OWN classification disagrees with what it holds, which is
+    # the only shape that shows the contradiction: classified equity/etf, but
+    # holding half shares and half bonds.
+    def hold_a_mixed_fund
+      fund = Security.create!(
+        ticker: "VBAL", name: "Balanced ETF", exchange_operating_mic: "XLON",
+        country_code: "GB", asset_class: "equity", asset_sub_class: "etf"
+      )
+      Security.create!(
+        ticker: "SHR1", exchange_operating_mic: "XNAS", country_code: "US",
+        asset_class: "equity", asset_sub_class: "stock"
+      )
+      Security.create!(
+        ticker: "BND1", exchange_operating_mic: "XNAS", country_code: "US",
+        asset_class: "fixed_income", asset_sub_class: "bond"
+      )
+      fund.constituents.create!(ticker: "SHR1", name: "A share", weight: 60)
+      fund.constituents.create!(ticker: "BND1", name: "A bond", weight: 40)
+      @account.holdings.create!(
+        security: fund, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD"
+      )
+      fund
     end
 
     def hold_a_fund
