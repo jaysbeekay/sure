@@ -233,7 +233,35 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
     assert_equal "equity", @security.asset_class, "a column the proposal did not answer was blanked"
     assert_equal "stock", @security.asset_sub_class
     assert_equal "Technology", @security.sector
+    # NOT "ai". `classification_source` names who set the ASSET classification,
+    # and this proposal did not set one -- the provider's asset columns are
+    # untouched above. Claiming the source here would also shut the provider
+    # out of those columns for good, since `classification_attributes_from`
+    # writes them only while the source is nil or "default". This assertion
+    # read "ai" until CodeRabbit pointed out what that costs (#199).
+    assert_equal "provider", @security.classification_source,
+                 "a region-only approval claimed an asset classification it did not make"
+  end
+
+  # The same rule from the other side, so the fix cannot be "never stamp ai":
+  # a proposal that DOES answer the asset class claims the classification.
+  test "a proposal that answers the asset class claims the classification" do
+    propose(asset_class: "equity", asset_sub_class: "stock").approve!
+
+    @security.reload
+    assert_equal "equity", @security.asset_class
     assert_equal "ai", @security.classification_source
+  end
+
+  # And a security nothing has classified stays unclaimed when the proposal
+  # only answers a region, so a provider can still fill the asset columns.
+  test "a region-only approval leaves an unclassified security open to a provider" do
+    propose(region: "europe").approve!
+
+    @security.reload
+    assert_equal "europe", @security.region
+    assert_nil @security.classification_source,
+               "the provider was locked out of the asset columns by a region"
   end
 
   # -------------------------------------------------------------- rejecting

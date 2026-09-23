@@ -14,6 +14,9 @@ de:
       reject: Ablehnen
     approve:
       success: "%{ticker} klassifiziert."
+      already_approved: "%{ticker} wurde aus diesem Vorschlag bereits klassifiziert."
+      already_rejected: "Der Vorschlag für %{ticker} wurde verworfen und daher nicht
+        angewendet."
       superseded: "%{ticker} wurde seit dem Vorschlag von Hand klassifiziert und
         daher nicht verändert."
     reject:

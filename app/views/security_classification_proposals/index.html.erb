@@ -43,14 +43,18 @@
             </div>
 
             <div class="flex items-center gap-2 shrink-0">
-              <%= button_to t(".reject"),
-                    reject_security_classification_proposal_path(proposal),
-                    method: :post,
-                    class: "inline-flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium text-primary button-bg-secondary-strong hover:button-bg-secondary-strong-hover" %>
-              <%= button_to t(".approve"),
-                    approve_security_classification_proposal_path(proposal),
-                    method: :post,
-                    class: "inline-flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium bg-inverse text-inverse hover:bg-inverse-hover" %>
+              <%= render DS::Button.new(
+                    text: t(".reject"),
+                    variant: "secondary",
+                    href: reject_security_classification_proposal_path(proposal),
+                    method: :post
+                  ) %>
+              <%= render DS::Button.new(
+                    text: t(".approve"),
+                    variant: "primary",
+                    href: approve_security_classification_proposal_path(proposal),
+                    method: :post
+                  ) %>
             </div>
           </div>
         </li>

@@ -14,6 +14,8 @@ en:
       reject: Reject
     approve:
       success: "%{ticker} classified."
+      already_approved: "%{ticker} was already classified from this proposal."
+      already_rejected: "%{ticker}'s proposal was dismissed, so it was not applied."
       superseded: "%{ticker} was classified by hand since this was proposed, so it
         was left alone."
     reject:

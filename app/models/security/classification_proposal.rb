@@ -67,9 +67,7 @@ class Security::ClassificationProposal < ApplicationRecord
         security.reload
         next if security.classification_locked? || security.classification_source == "manual"
 
-        security.update!(
-          proposed_attributes.merge(classification_source: "ai", classification_locked: false)
-        )
+        security.update!(proposed_attributes.merge(source_attributes))
         update!(status: "approved")
         approved = true
       end
@@ -102,6 +100,23 @@ class Security::ClassificationProposal < ApplicationRecord
     def proposed_attributes
       { asset_class: asset_class, asset_sub_class: asset_sub_class,
         sector: sector, region: region }.compact_blank
+    end
+
+    # `classification_source` says who set the ASSET classification, and
+    # `Security#classification_attributes_from` writes `asset_class` and
+    # `asset_sub_class` only while the source is `nil` or `"default"`. So
+    # stamping `"ai"` for a proposal that answered only a sector or a region
+    # would shut the provider out of the asset columns FOR GOOD, leaving the
+    # security permanently half-classified -- a lock-out bought with a region.
+    #
+    # This is `answers_something`'s reasoning applied one step further in.
+    # That guard refuses a proposal answering nothing; this one declines to
+    # claim the classification for a proposal that answered something else
+    # (CodeRabbit, #199).
+    def source_attributes
+      return { classification_locked: false } if asset_class.blank?
+
+      { classification_source: "ai", classification_locked: false }
     end
 
     # A proposal with nothing in it was valid, storable AND approvable, and

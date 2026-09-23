@@ -130,6 +130,98 @@ class SecurityClassificationProposalsControllerTest < ActionDispatch::Integratio
     assert @proposal.reload.approved?
   end
 
+  # Family scope is not the same as visibility. `accessible_accounts` excludes
+  # another member's PRIVATE accounts, so a reader could be shown the ticker,
+  # name and rationale for a position they are not allowed to open. Asserts
+  # both sides: the viewer's own proposal still lists, the private one does not
+  # (CodeRabbit, #199).
+  test "a proposal for a security held only in another member's account is not listed" do
+    other = users(:family_member)
+    private_account = @family.accounts.create!(
+      name: "Their broker", balance: 1000, currency: "USD",
+      accountable: Investment.new, owner: other
+    )
+    hidden_security = Security.create!(
+      ticker: "HIDDEN", exchange_operating_mic: "XNAS", country_code: "US"
+    )
+    Holding.create!(
+      account: private_account, security: hidden_security, date: Date.current,
+      qty: 1, price: 10, amount: 10, currency: "USD"
+    )
+    hidden = Security::ClassificationProposal.propose!(
+      security: hidden_security, family: @family, asset_class: "equity"
+    )
+
+    get security_classification_proposals_path
+
+    assert_select "[data-proposal-id=?]", @proposal.id, { count: 1 },
+                  "the viewer's own proposal stopped being listed"
+    assert_select "[data-proposal-id=?]", hidden.id, { count: 0 },
+                  "a proposal for a holding in another member's account was listed"
+  end
+
+  # `classification_source` says who set the ASSET classification, and
+  # `classification_attributes_from` writes the asset columns only while the
+  # source is nil or "default". Stamping "ai" for a proposal that answered only
+  # a region would shut the provider out of those columns permanently
+  # (CodeRabbit, #199).
+  test "a region-only approval does not claim the classification as ai" do
+    region_only = Security::ClassificationProposal.propose!(
+      security: @security, family: @family,
+      asset_class: nil, asset_sub_class: nil, sector: nil, region: "north_america"
+    )
+
+    post approve_security_classification_proposal_path(region_only)
+
+    @security.reload
+    assert_equal "north_america", @security.region, "the region the proposal answered was not written"
+    assert_nil @security.classification_source,
+               "a region-only approval claimed the classification and locked the provider out"
+    assert_nil @security.asset_class
+  end
+
+  # The other side of the same rule, so the fix cannot be "never stamp ai".
+  test "an approval that answers the asset class does claim it as ai" do
+    post approve_security_classification_proposal_path(@proposal)
+
+    @security.reload
+    assert_equal "equity", @security.asset_class
+    assert_equal "ai", @security.classification_source
+  end
+
+  # `approve!` returns false for three different reasons and the screen used to
+  # report the same "classified by hand" message for all of them, including for
+  # a proposal this user had already approved in another tab.
+  test "approving an already-approved proposal says so rather than blaming a hand edit" do
+    @proposal.approve!
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    assert_equal I18n.t("security_classification_proposals.approve.already_approved",
+                        ticker: @security.ticker), flash[:alert]
+  end
+
+  test "approving a dismissed proposal says it was dismissed" do
+    @proposal.reject!
+
+    post approve_security_classification_proposal_path(@proposal)
+
+    assert_equal I18n.t("security_classification_proposals.approve.already_rejected",
+                        ticker: @security.ticker), flash[:alert]
+  end
+
+  # Dismissing twice leaves the proposal in exactly the state asked for, so
+  # reporting a failure would tell the user their own action did not happen.
+  test "dismissing twice reports the dismissal rather than a failure" do
+    @proposal.reject!
+
+    post reject_security_classification_proposal_path(@proposal)
+
+    assert_equal I18n.t("security_classification_proposals.reject.success",
+                        ticker: @security.ticker), flash[:notice]
+    assert_nil flash[:alert]
+  end
+
   test "another family's proposal cannot be approved" do
     other_family = users(:josh).family
     other_security = Security.create!(ticker: "MSFT2", exchange_operating_mic: "XNAS", country_code: "US")
