@@ -592,6 +592,25 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#portfolio-allocation [data-portfolio-allocation='kind'] p", text: I18n.t("portfolios.allocation.kinds.standard")
   end
 
+  # The partial dereferences `issue.security.ticker` unconditionally, so a kind
+  # carrying no security would 500 the whole page. #214's kind carries the FUND
+  # -- the thing the user actually holds -- with the unresolvable tickers in
+  # `detail`. Rendered through the controller precisely because that
+  # dereference is where a nil would bite (#214).
+  test "an ambiguous constituent is named on the data quality section" do
+    Security.create!(ticker: "DUAL", name: "London line", exchange_operating_mic: "XLON", asset_class: "equity", offline: true)
+    Security.create!(ticker: "DUAL", name: "New York line", exchange_operating_mic: "XNAS", asset_class: "fixed_income", offline: true)
+    fund = Security.create!(ticker: "VBAL", name: "Balanced ETF", exchange_operating_mic: "XLON", asset_class: "equity", asset_sub_class: "etf", offline: true)
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+    Holding.create!(account: accounts(:investment), security: fund, date: Date.current, qty: 1, price: 100, amount: 100, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-issue-kind='ambiguous_constituent'] li", text: /VBAL/
+    assert_select "[data-portfolio-issue-kind='ambiguous_constituent'] li", text: /DUAL/
+  end
+
   test "data quality lists the reasons and hides itself when there is nothing to fix" do
     unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
     offline = Security.create!(ticker: "OFFL", name: "Offline", offline: true)
