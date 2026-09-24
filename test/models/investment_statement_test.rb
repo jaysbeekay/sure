@@ -1560,7 +1560,38 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     @statement.current_holdings.to_a
 
     queries = capture_sql_queries { @statement.data_quality_issues(as_of: Date.current) }
-    assert_operator queries.size, :<=, 3, "expected the cost-basis preload and latest prices queries only, got:\n#{queries.join("\n")}"
+    # Four, not three: #214 made this section report constituents whose ticker
+    # is listed on more than one exchange, and learning whether the portfolio
+    # holds any fund at all costs one grouped read of `security_constituents`.
+    # It is one query whether the answer is none or many -- the test below
+    # holds that -- and it is the floor for knowing the answer at all.
+    assert_operator queries.size, :<=, 4, "expected the cost-basis preload, latest prices and constituent queries only, got:\n#{queries.join("\n")}"
+  end
+
+  # The anti-N+1 for #214/#219. Resolving constituent tickers per fund cost a
+  # query each, and this section has a query budget, so a portfolio holding a
+  # dozen funds would have paid a dozen queries on every page load.
+  #
+  # Measured as ONE fund against THREE, so the comparison isolates fund count:
+  # a baseline taken on an empty portfolio would differ for a dozen unrelated
+  # reasons and prove nothing. Same queries, longer IN lists, is the whole
+  # claim.
+  test "constituent resolution does not add a query per fund" do
+    account = create_investment_account(balance: 5000)
+    add_colliding_fund(account, 0)
+
+    one_fund = capture_sql_queries { InvestmentStatement.new(@family).data_quality_issues(as_of: Date.current) }.size
+
+    add_colliding_fund(account, 1)
+    add_colliding_fund(account, 2)
+
+    statement = InvestmentStatement.new(@family)
+    three_funds = capture_sql_queries { statement.data_quality_issues(as_of: Date.current) }.size
+
+    assert_equal 3, statement.data_quality_issues.count { |i| i.kind == :ambiguous_constituent },
+                 "the three colliding funds were not all reported, so the query count means nothing"
+    assert_equal one_fund, three_funds,
+                 "tripling the funds changed the query count, so resolution is still per fund"
   end
 
   test "average costs are preloaded in one query and agree with Holding#calculate_avg_cost" do
@@ -1789,6 +1820,132 @@ class InvestmentStatementTest < ActiveSupport::TestCase
                  "a looked-through asset class opened onto the holding's own sub-class"
   end
 
+  # ---------------------------------------- #214 ambiguous constituent tickers
+
+  # `securities` allows one ticker on several exchanges, and the resolver used
+  # `index_by`, which keeps whichever row Postgres returned last. The surviving
+  # row supplied the asset class the fund's slice was filed under, so the same
+  # portfolio could classify the same money differently on two runs while the
+  # total stayed right.
+  #
+  # The household's own position is the best evidence of which listing is meant.
+  test "a colliding ticker resolves to the listing the family holds" do
+    account = create_investment_account(balance: 2000, cash_balance: 0)
+    held = create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON",
+                                      asset_class: "fixed_income", asset_sub_class: "bond")
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS",
+                               asset_class: "equity", asset_sub_class: "stock")
+    fund = create_classified_security(ticker: "FUND1", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+
+    Holding.create!(account: account, security: held, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    segments = @statement.allocation_by("asset_class", look_through: true).index_by(&:id)
+
+    assert_equal 2000, segments["fixed_income"].amount.amount.to_i,
+                 "the fund's slice was not filed under the listing the family holds"
+    assert_nil segments["equity"], "the fund's own class survived a look-through"
+  end
+
+  # No held position to decide it, so the honest answer is no answer. Asserts
+  # UNCLASSIFIED rather than "not equity", so the test does not depend on which
+  # row Postgres happens to return.
+  test "a colliding ticker the family does not hold is left unclassified" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON",
+                               asset_class: "fixed_income", asset_sub_class: "bond")
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS",
+                               asset_class: "equity", asset_sub_class: "stock")
+    fund = create_classified_security(ticker: "FUND2", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    segments = @statement.allocation_by("asset_class", look_through: true).index_by(&:id)
+
+    assert_equal 1000, segments[InvestmentStatement::UNCLASSIFIED].amount.amount.to_i,
+                 "an ambiguous constituent was filed under one of the candidates"
+    assert_nil segments["fixed_income"]
+    assert_nil segments["equity"]
+  end
+
+  # The guard against reading "exclude" as "drop". Excluding the value would
+  # shrink the portfolio by the weight of every colliding ticker.
+  test "an ambiguous constituent still counts toward the total" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON", asset_class: "fixed_income")
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS", asset_class: "equity")
+    fund = create_classified_security(ticker: "FUND3", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    with_lt = @statement.allocation_by("asset_class", look_through: true).sum { |seg| seg.amount.amount }
+    without = @statement.allocation_by("asset_class").sum { |seg| seg.amount.amount }
+
+    assert_equal without, with_lt, "look-through changed the portfolio total"
+    assert_equal 1000, with_lt.to_i
+  end
+
+  # Holding BOTH candidates is still ambiguous: owning the London and the New
+  # York line says nothing about which one the fund reported.
+  test "holding both candidates does not resolve the ambiguity" do
+    account = create_investment_account(balance: 3000, cash_balance: 0)
+    a = create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON", asset_class: "fixed_income")
+    b = create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS", asset_class: "equity")
+    fund = create_classified_security(ticker: "FUND4", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+    [ a, b ].each { |sec| Holding.create!(account: account, security: sec, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD") }
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    segments = @statement.allocation_by("asset_class", look_through: true).index_by(&:id)
+
+    assert_equal 1000, segments[InvestmentStatement::UNCLASSIFIED].amount.amount.to_i,
+                 "the fund's slice was resolved although both listings are held"
+  end
+
+  # A single match is untouched, so the fix is not "never resolve".
+  test "a constituent with one listing still resolves" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    create_classified_security(ticker: "SOLO", exchange_operating_mic: "XNAS", asset_class: "fixed_income")
+    fund = create_classified_security(ticker: "FUND5", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "SOLO", name: "Only listing", weight: 100)
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    segments = @statement.allocation_by("asset_class", look_through: true).index_by(&:id)
+
+    assert_equal 1000, segments["fixed_income"].amount.amount.to_i
+  end
+
+  # The two cases stay distinct: a ticker we have never heard of is not the same
+  # as one we have heard of twice, and only the second is worth telling the user.
+  test "a constituent with no security row is unclassified and raises no issue" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    fund = create_classified_security(ticker: "FUND6", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "NOSUCH", name: "Unknown", weight: 100)
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    segments = @statement.allocation_by("asset_class", look_through: true).index_by(&:id)
+
+    assert_equal 1000, segments[InvestmentStatement::UNCLASSIFIED].amount.amount.to_i
+    assert_empty @statement.data_quality_issues.select { |i| i.kind == :ambiguous_constituent },
+                 "an unknown ticker was reported as an ambiguity"
+  end
+
+  test "an ambiguous constituent is named in data quality" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON", asset_class: "fixed_income")
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS", asset_class: "equity")
+    fund = create_classified_security(ticker: "FUND7", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    issue = @statement.data_quality_issues.find { |i| i.kind == :ambiguous_constituent }
+
+    assert_not_nil issue, "an ambiguous constituent was resolved silently"
+    assert_equal fund, issue.security, "the row does not name the fund the user actually holds"
+    assert_equal [ "DUAL" ], issue.detail
+  end
+
   test "every classification grouping is reachable through allocation_by" do
     %w[asset_class asset_sub_class sector region].each do |grouping|
       assert_includes InvestmentStatement::ALLOCATION_GROUPINGS, grouping
@@ -1797,6 +1954,17 @@ class InvestmentStatementTest < ActiveSupport::TestCase
   end
 
   private
+    # A fund whose single constituent's ticker is listed on two exchanges, so
+    # it cannot be resolved and is reported (#214).
+    def add_colliding_fund(account, index)
+      create_classified_security(ticker: "COLL#{index}", exchange_operating_mic: "XLON", asset_class: "equity")
+      create_classified_security(ticker: "COLL#{index}", exchange_operating_mic: "XNAS", asset_class: "fixed_income")
+      fund = create_classified_security(ticker: "MULTI#{index}", asset_class: "equity", asset_sub_class: "etf")
+      fund.constituents.create!(ticker: "COLL#{index}", name: "Collision #{index}", weight: 100)
+      Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 100, amount: 100, currency: "USD")
+      fund
+    end
+
     def create_classified_security(**attrs)
       Security.create!(
         { ticker: "T#{SecureRandom.hex(6)}", exchange_operating_mic: "XNAS", offline: true }.merge(attrs)

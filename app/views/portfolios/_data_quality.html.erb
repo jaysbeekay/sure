@@ -40,6 +40,11 @@
                 <%= issue.detail ? t("portfolios.data_quality.last_priced", date: l(issue.detail, format: :long)) : t("portfolios.data_quality.never_priced") %>
               <% when :provider %>
                 <%= t("portfolios.data_quality.provider_statuses.#{issue.detail}", default: issue.detail.to_s) %>
+              <% when :ambiguous_constituent %>
+                <%# Names the tickers rather than only counting them: the user
+                    cannot act on "2 constituents", and the ticker is the one
+                    thing they can look up for themselves. %>
+                <%= t("portfolios.data_quality.unresolved_constituents", count: issue.detail.size, tickers: issue.detail.join(", ")) %>
               <% end %>
             </div>
           </li>

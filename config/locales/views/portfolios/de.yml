@@ -57,12 +57,18 @@ de:
         missing_cost_basis:
           description: Für diese Positionen ist keine Kostenbasis gespeichert oder berechenbar, daher kann keine Rendite angezeigt werden. Lege sie in der Position fest.
           title: Fehlende Kostenbasis
+        ambiguous_constituent:
+          description: Diese Fondsbestandteile teilen sich ein Kürzel mit einer Notierung an einer anderen Börse, und deine eigenen Positionen sagen nicht, welche gemeint ist. Ihr Wert zählt weiterhin, wird aber nicht klassifiziert, statt geraten zu werden.
+          title: Bestandteile an mehreren Börsen
         provider:
           description: Der Kursanbieter dieser Wertpapiere ist nicht erreichbar, daher werden ihre Werte möglicherweise nicht aktualisiert.
           title: Probleme mit dem Kursanbieter
         stale_price:
           description: Der letzte Kurs ist älter als %{days} Tage oder es gibt gar keinen Kurs, daher kann der Wert veraltet sein.
           title: Veraltete Kurse
+      unresolved_constituents:
+        one: "%{tickers} — an mehr als einer Börse notiert"
+        other: "%{tickers} — jeweils an mehr als einer Börse notiert"
       last_priced: Zuletzt bewertet am %{date}
       never_priced: Nie bewertet
       read_only: Schreibgeschützt

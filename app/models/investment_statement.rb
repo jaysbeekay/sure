@@ -328,10 +328,45 @@ class InvestmentStatement
       issues << DataQualityIssue.new(kind: :provider, holding: nil, security: security, detail: status) unless status == :ok
     end
 
+    issues.concat(ambiguous_constituent_issues)
+
     issues.sort_by { |issue| [ DATA_QUALITY_KINDS.index(issue.kind), issue.security.ticker.to_s ] }
   end
 
-  DATA_QUALITY_KINDS = %i[missing_cost_basis stale_price provider].freeze
+  DATA_QUALITY_KINDS = %i[missing_cost_basis stale_price provider ambiguous_constituent].freeze
+
+  # Funds holding a constituent whose ticker exists on more than one exchange,
+  # where the family's own positions do not say which listing is meant (#214).
+  #
+  # Computed HERE rather than as a side effect of the look-through, so the row
+  # does not depend on which portfolio sections happened to render first. The
+  # resolver is memoised, so a look-through later in the same request pays
+  # nothing for this.
+  #
+  # Gated on `holds_any_fund_constituents?`, which is one cheap query: a
+  # portfolio with no expandable fund does no work at all, rather than every
+  # portfolio page paying for a feature most of them do not use.
+  def ambiguous_constituent_issues
+    return [] if constituent_rows_by_security.empty?
+
+    ambiguous = ambiguous_constituent_tickers
+    return [] if ambiguous.empty?
+
+    current_holdings.filter_map do |holding|
+      weights = constituent_weights_for(holding.security)
+      next if weights.empty?
+
+      unresolved = weights.keys.map { |t| t.to_s.upcase }.select { |ticker| ambiguous.include?(ticker) }
+      next if unresolved.empty?
+
+      DataQualityIssue.new(
+        kind: :ambiguous_constituent,
+        holding: holding,
+        security: holding.security,
+        detail: unresolved.sort
+      )
+    end
+  end
 
   # Unrealized gains across all holdings, summed in family currency
   def unrealized_gains
@@ -1020,7 +1055,7 @@ class InvestmentStatement
       weights = constituent_weights_for(security)
       return nil if weights.empty?
 
-      known = constituent_securities(weights.keys)
+      known = constituent_securities
 
       weights.each_with_object(Hash.new(0)) do |(ticker, weight), split|
         constituent = known[ticker.to_s.upcase]
@@ -1038,12 +1073,7 @@ class InvestmentStatement
     # 5 on 13 holdings -- and most holdings are not funds, so nearly all of them
     # were queries that returned nothing.
     def constituent_weights_for(security)
-      @constituents_by_security ||= Security::Constituent
-        .where(security_id: current_holdings.map(&:security_id).uniq)
-        .where.not(weight: nil)
-        .group_by(&:security_id)
-
-      rows = @constituents_by_security[security.id]
+      rows = constituent_rows_by_security[security.id]
       return {} if rows.blank?
 
       total = rows.sum(&:weight)
@@ -1052,14 +1082,83 @@ class InvestmentStatement
       rows.each_with_object({}) { |row, map| map[row.ticker] = row.weight / total }
     end
 
-    def constituent_securities(tickers)
-      @constituent_securities ||= {}
-      missing = tickers.map { |t| t.to_s.upcase } - @constituent_securities.keys
-      if missing.any?
-        found = Security.where("upper(ticker) IN (?)", missing).index_by { |s| s.ticker.to_s.upcase }
-        missing.each { |t| @constituent_securities[t] = found[t] }
-      end
+    # Extracted so the ticker resolver can read the same rows without triggering
+    # a second load, and so "does this portfolio hold any fund at all" is one
+    # query rather than one per asker.
+    def constituent_rows_by_security
+      @constituents_by_security ||= Security::Constituent
+        .where(security_id: current_holdings.map(&:security_id).uniq)
+        .where.not(weight: nil)
+        .group_by(&:security_id)
+    end
+
+    # A constituent is stored as a bare ticker, and `securities` deliberately
+    # allows one ticker on several exchanges -- `Security` scopes its uniqueness
+    # to `exchange_operating_mic`. The previous `index_by` kept ONE arbitrary row
+    # per ticker and discarded the rest, and since the query has no ORDER BY the
+    # survivor was whichever Postgres returned last. That row then supplied the
+    # asset class, sector and region the fund's slice was filed under, so the
+    # same portfolio could classify the same money differently on two runs while
+    # the total stayed right and nothing said so (#214).
+    #
+    # The rule, decided on that issue: prefer the listing the FAMILY HOLDS,
+    # because a household's own positions are the best evidence available of
+    # which listing a fund means. Where that does not decide it, resolve to
+    # nothing and NAME it -- visible incompleteness over invisible wrongness.
+    #
+    # "Resolve to nothing" is about classification, not about the total. The
+    # caller files an unresolved constituent under UNCLASSIFIED and still counts
+    # its value, exactly as it already does for a ticker with no `Security` row.
+    # Dropping it would shrink the portfolio by the weight of every colliding
+    # ticker.
+    #
+    # Resolved for the WHOLE PORTFOLIO in one query rather than per fund (#219).
+    # Per-fund resolution cost a query each, which `data_quality_issues` -- a
+    # section with a deliberate query budget -- would have paid on every page
+    # load once it started consulting this.
+    def constituent_securities
+      return @constituent_securities if defined?(@constituent_securities)
+
+      tickers = all_constituent_tickers
+      @constituent_securities = {}
+      return @constituent_securities if tickers.empty?
+
+      candidates = Security.where("upper(ticker) IN (?)", tickers).group_by { |s| s.ticker.to_s.upcase }
+      tickers.each { |ticker| @constituent_securities[ticker] = resolve_constituent(ticker, candidates[ticker] || []) }
       @constituent_securities
+    end
+
+    # Every constituent ticker across every held security, from the rows
+    # `constituent_weights_for` already loads in one query.
+    def all_constituent_tickers
+      constituent_rows_by_security.values.flatten.map { |row| row.ticker.to_s.upcase }.uniq
+    end
+
+    # One row resolves. Several resolve only if the family holds exactly one of
+    # them; otherwise the ticker is recorded as ambiguous and resolves to nil.
+    #
+    # Holding SEVERAL of the candidates is still ambiguous: the household owning
+    # both the London and the Sydney line is no evidence about which one a fund
+    # reported, and picking either would be the same silent guess in a smaller
+    # set.
+    def resolve_constituent(ticker, rows)
+      return nil if rows.empty?
+      return rows.first if rows.one?
+
+      held = rows.select { |row| held_security_ids.include?(row.id) }
+      return held.first if held.one?
+
+      ambiguous_constituent_tickers << ticker
+      nil
+    end
+
+    def held_security_ids
+      @held_security_ids ||= current_holdings.map(&:security_id).to_set
+    end
+
+    def ambiguous_constituent_tickers
+      constituent_securities
+      @ambiguous_constituent_tickers ||= Set.new
     end
 
     # Grouping by the household's own scheme rather than by a taxonomy everyone
