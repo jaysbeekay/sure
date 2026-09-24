@@ -254,15 +254,36 @@ module Security::Provided
     #
     # Together: ask only when nothing at all is known, and stop as soon as
     # anything is -- a source, or the sector the provider just supplied.
-    wants_classification = include_classification && !classification_locked? &&
-      classification_source.blank? && sector.blank? && industry.blank?
+    # `supplies_classification?` FIRST, because the rest of this condition can
+    # only ever be satisfied by a provider that answers. A provider with no
+    # sector or industry to give never fills those columns, so the gate never
+    # closes and the security is re-asked on every sync for ever -- nine of the
+    # ten security providers are in that position (#212).
+    wants_classification = include_classification && price_data_provider.supplies_classification? &&
+      !classification_locked? && classification_source.blank? && sector.blank? && industry.blank?
 
     # Keyed on the TIMESTAMP, not on whether constituents are present. Most
     # securities are not funds, so the provider returns nothing for them -- and a
     # presence-keyed gate would re-ask every one of those on every sync, for
     # ever. The timestamp is written whether or not anything came back, which is
     # what lets "never asked" be told from "asked, nothing there".
-    wants_constituents = include_constituents && constituents_fetched_at.nil?
+    #
+    # CAPABILITY GATES THE ASK, not the stamp, and the order matters (#212). The
+    # stamp alone could not tell "asked, nothing there" from "asked a provider
+    # with nothing to give", so a security first synced under an incapable
+    # provider was stamped with an empty table and never asked again, even after
+    # a capable provider was configured -- `price_data_provider` falls back to
+    # the first configured one, so no action on the security is needed to land
+    # in that state.
+    #
+    # Gating the STAMP instead would be worse than the defect: this flag is read
+    # below as `!wants_constituents`, a separate AND-term that `has_metadata`
+    # cannot short-circuit, so a permanently-nil stamp would re-fetch every
+    # security on every sync for nine of the ten providers. With the ask gated
+    # on capability, a nil stamp under an incapable provider is harmless, and
+    # the day a capable one is configured it re-asks exactly once and settles.
+    wants_constituents = include_constituents && price_data_provider.supplies_constituents? &&
+      constituents_fetched_at.nil?
 
     unless has_metadata && !wants_classification && !wants_constituents && !clear_cache
       response = price_data_provider.fetch_security_info(
@@ -374,8 +395,18 @@ module Security::Provided
   # it behind for ever.
   #
   # The timestamp is written even when `list` is nil -- that is the whole point
-  # of the gate above.
+  # of the gate above: "asked, nothing there" has to be distinguishable from
+  # "never asked", and only a stamp can say so.
+  #
+  # `destroy_all` runs BEFORE that decision, so this method must only ever be
+  # reached for a provider that can actually answer. The caller gates the ask on
+  # `supplies_constituents?`, and this guard is the second lock on the same
+  # door: an incapable provider reaching here would wipe a stored set it was
+  # never in a position to replace, and then stamp the emptiness as fact
+  # (raised on the #212 gate review).
   def store_constituents(list)
+    return unless price_data_provider&.supplies_constituents?
+
     transaction do
       constituents.destroy_all
 

@@ -341,7 +341,7 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
         kind: "Common Stock", exchange_operating_mic: "XNAS",
         sector: "Provider sector", industry: "Consumer Electronics"
       )
-      provider = mock("provider")
+      provider = capable_provider("provider")
       provider.stubs(:class).returns(Provider::TwelveData)
       provider.stubs(:fetch_security_info).returns(provider_success_response(info))
       provider

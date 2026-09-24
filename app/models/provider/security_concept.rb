@@ -49,6 +49,36 @@ module Provider::SecurityConcept
     raise NotImplementedError, "Subclasses must implement #fetch_security_prices"
   end
 
+  # Whether this provider can answer at all for a fund's own holdings, and for a
+  # security's sector/industry. DECLARED, not inferred from a response, because
+  # the caller has to decide whether to ASK before it has one (#212).
+  #
+  # `Security::Provided#import_provider_details` gates both fetches on evidence
+  # that it has already asked -- a `constituents_fetched_at` stamp, or a filled
+  # `sector`/`industry`. Without a capability to consult, those gates conflate
+  # "asked, nothing there" with "asked a provider that has nothing to give", and
+  # the two need opposite handling: the first should never be asked again, the
+  # second should be asked as soon as a capable provider is configured.
+  #
+  # DEFAULTS ARE FALSE, and that is a trade rather than an obvious choice. Nine
+  # of the ten security providers supply neither, so false is right for almost
+  # all of them today and stops a per-sync fetch that answers nothing. The cost:
+  # a provider added later that DOES supply them, and forgets to say so, is
+  # silently never asked -- look-through simply never populates for its users,
+  # and it reads as missing data rather than a missing line here. A new provider
+  # that returns `constituents:` or `sector:` from `fetch_security_info` must
+  # override the matching predicate.
+  #
+  # Same shape as `max_history_days` below: declared on the concept, safely
+  # defaulted, overridden by the providers it applies to.
+  def supplies_constituents?
+    false
+  end
+
+  def supplies_classification?
+    false
+  end
+
   # Maximum number of calendar days of historical data the provider can return.
   # Callers should clamp start_date to avoid requesting data beyond this window.
   # Override in subclasses with provider-specific limits.

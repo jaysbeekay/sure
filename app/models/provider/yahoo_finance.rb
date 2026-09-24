@@ -34,6 +34,12 @@ class Provider::YahooFinance < Provider
   # Maximum lookback window for historical data (configurable)
   MAX_LOOKBACK_WINDOW = 10.years
 
+  # Returns `sector` and `industry` from its own metadata response, so the
+  # classification gate must ask it (#212). Constituents it does not supply.
+  def supplies_classification?
+    true
+  end
+
   def max_history_days
     (MAX_LOOKBACK_WINDOW / 1.day).to_i
   end

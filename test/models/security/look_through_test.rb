@@ -25,7 +25,7 @@ class Security::LookThroughTest < ActiveSupport::TestCase
   # --------------------------------------------------------------- the gate
 
   test "a fund is asked once, and not asked again" do
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.stubs(:class).returns(Provider::TwelveData)
     provider.expects(:fetch_security_info).once.returns(
       provider_success_response(info(constituents: [ constituent("MSFT", "Microsoft", 10) ]))
@@ -35,7 +35,7 @@ class Security::LookThroughTest < ActiveSupport::TestCase
     @security.import_provider_details(include_constituents: true)
     assert_equal 1, @security.reload.constituents.count
 
-    second = mock("provider")
+    second = capable_provider("provider")
     second.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(second)
     @security.import_provider_details(include_constituents: true)
@@ -51,7 +51,7 @@ class Security::LookThroughTest < ActiveSupport::TestCase
     assert_empty @security.reload.constituents
     assert_not_nil @security.constituents_fetched_at, "nothing recorded that we asked"
 
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -62,7 +62,7 @@ class Security::LookThroughTest < ActiveSupport::TestCase
   # opted in must not inherit that cost -- the same reason
   # `include_classification:` defaults to false.
   test "a caller that has not opted in makes no provider call" do
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -144,6 +144,69 @@ class Security::LookThroughTest < ActiveSupport::TestCase
     assert_in_delta 0.6, @security.look_through_weights["MSFT"].to_f, 0.000001
   end
 
+  # ------------------------------------------------ #212 provider capability
+
+  # THE REPORTED DEFECT. A security first synced under a provider that supplies
+  # no constituents was stamped with an empty table, and the stamp then closed
+  # the gate for ever -- so configuring a capable provider later never filled
+  # it. `price_data_provider` falls back to the first configured provider, so no
+  # action on the security is needed to land in that state.
+  #
+  # Asserts the DELTA: empty after the incapable sync, filled after the capable
+  # one. Asserting "constituents exist" at the end would pass without the fix,
+  # because the capable provider would have been asked on a fresh security.
+  test "a security stamped under an incapable provider is filled when a capable one arrives" do
+    incapable = capable_provider("incapable", constituents: false)
+    incapable.stubs(:class).returns(Provider::TwelveData)
+    incapable.stubs(:fetch_security_info).returns(provider_success_response(info(constituents: nil)))
+    @security.stubs(:price_data_provider).returns(incapable)
+    @security.import_provider_details(include_constituents: true)
+
+    assert_empty @security.reload.constituents, "an incapable provider stored constituents"
+
+    capable = capable_provider("capable")
+    capable.stubs(:class).returns(Provider::Eodhd)
+    capable.stubs(:fetch_security_info).returns(
+      provider_success_response(info(constituents: [ constituent("MSFT", "Microsoft", 10) ]))
+    )
+    @security.stubs(:price_data_provider).returns(capable)
+    @security.import_provider_details(include_constituents: true)
+
+    assert_equal 1, @security.reload.constituents.count,
+                 "a capable provider was never asked, because the incapable one had stamped the gate shut"
+  end
+
+  # The cost half of the same rule. Gating the STAMP rather than the ask would
+  # have left this flag true on every sync, and `!wants_constituents` is a
+  # separate AND-term that `has_metadata` cannot short-circuit -- so nine of the
+  # ten providers would have re-fetched every security, for ever.
+  test "an incapable provider is not asked at all" do
+    incapable = capable_provider("incapable", constituents: false, classification: false)
+    incapable.stubs(:class).returns(Provider::TwelveData)
+    incapable.expects(:fetch_security_info).never
+    @security.stubs(:price_data_provider).returns(incapable)
+
+    @security.import_provider_details(include_constituents: true)
+
+    assert_nil @security.reload.constituents_fetched_at,
+               "an incapable provider left a stamp, which would close the gate against a capable one"
+  end
+
+  # The second lock on the same door. `store_constituents` runs `destroy_all`
+  # before deciding whether to stamp, so an incapable provider reaching it would
+  # wipe a set it was never in a position to replace (raised on the #212 gate).
+  test "an incapable provider cannot wipe a stored set" do
+    import(info(constituents: [ constituent("MSFT", "Microsoft", 10) ]))
+    assert_equal 1, @security.reload.constituents.count
+
+    incapable = capable_provider("incapable", constituents: false)
+    @security.stubs(:price_data_provider).returns(incapable)
+    @security.send(:store_constituents, nil)
+
+    assert_equal 1, @security.reload.constituents.count,
+                 "an incapable provider emptied the table and stamped the emptiness as fact"
+  end
+
   private
     def constituent(ticker, name, weight)
       { ticker: ticker, name: name, weight: weight }
@@ -157,7 +220,7 @@ class Security::LookThroughTest < ActiveSupport::TestCase
     end
 
     def import(data)
-      provider = mock("provider")
+      provider = capable_provider("provider")
       provider.stubs(:class).returns(Provider::TwelveData)
       provider.stubs(:fetch_security_info).returns(provider_success_response(data))
       @security.stubs(:price_data_provider).returns(provider)

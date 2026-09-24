@@ -14,6 +14,18 @@ class Provider::Eodhd < Provider
   MAX_REQUESTS_PER_DAY = 20
 
   # EODHD free tier provides ~1 year of EOD data
+  # The fundamentals response carries `ETF_Data.Holdings` and `General.Sector`
+  # / `General.Industry`, so this provider can answer both -- see
+  # `fetch_security_info` below. Without these two declarations #212's gates
+  # would never ask it (#212).
+  def supplies_constituents?
+    true
+  end
+
+  def supplies_classification?
+    true
+  end
+
   def max_history_days
     365
   end

@@ -15,7 +15,7 @@ class MarketDataImporterTest < ActiveSupport::TestCase
     Holding.delete_all
     Security.delete_all
 
-    @provider = mock("provider")
+    @provider = capable_provider("provider")
     Provider::Registry.any_instance
                       .stubs(:get_provider)
                       .with(:twelve_data)
