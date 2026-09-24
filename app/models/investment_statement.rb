@@ -352,17 +352,26 @@ class InvestmentStatement
     ambiguous = ambiguous_constituent_tickers
     return [] if ambiguous.empty?
 
-    current_holdings.filter_map do |holding|
-      weights = constituent_weights_for(holding.security)
+    # By SECURITY, not by holding, and `holding: nil` -- the same shape the
+    # `stale_price` and `provider` kinds above already use, and for the same
+    # reason. `current_holdings` returns a row per (account, security), so a
+    # family holding one fund in two accounts got two identical rows naming the
+    # same fund and the same tickers. The ambiguity is a property of the fund's
+    # constituents, resolved once for the whole portfolio; it has nothing to do
+    # with which account the position sits in (CodeRabbit, #220).
+    current_holdings.map(&:security).uniq.filter_map do |security|
+      weights = constituent_weights_for(security)
       next if weights.empty?
 
-      unresolved = weights.keys.map { |t| t.to_s.upcase }.select { |ticker| ambiguous.include?(ticker) }
+      # `uniq` after upcasing: a fund reporting both "dual" and "DUAL" is one
+      # ambiguous ticker, not two.
+      unresolved = weights.keys.map { |t| t.to_s.upcase }.uniq.select { |ticker| ambiguous.include?(ticker) }
       next if unresolved.empty?
 
       DataQualityIssue.new(
         kind: :ambiguous_constituent,
-        holding: holding,
-        security: holding.security,
+        holding: nil,
+        security: security,
         detail: unresolved.sort
       )
     end

@@ -1946,6 +1946,50 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal [ "DUAL" ], issue.detail
   end
 
+  # `current_holdings` returns a row per (account, security), so a fund held in
+  # two accounts produced two identical rows naming the same fund and the same
+  # tickers. The ambiguity belongs to the fund's constituents -- resolved once
+  # for the whole portfolio -- not to the position (CodeRabbit, #220).
+  #
+  # Asserts the DELTA: the same fund in ONE account already yields one row, so
+  # the count is only meaningful measured against the two-account case.
+  test "a fund held in two accounts is reported once, not once per position" do
+    first = create_investment_account(balance: 1000, cash_balance: 0)
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON", asset_class: "fixed_income")
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS", asset_class: "equity")
+    fund = create_classified_security(ticker: "TWICE", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "DUAL", name: "Dual listing", weight: 100)
+    Holding.create!(account: first, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    one_account = InvestmentStatement.new(@family).data_quality_issues.count { |i| i.kind == :ambiguous_constituent }
+    assert_equal 1, one_account, "the single-account case is not one row, so the assertion below means nothing"
+
+    second = create_investment_account(balance: 1000, cash_balance: 0)
+    Holding.create!(account: second, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    issues = InvestmentStatement.new(@family).data_quality_issues.select { |i| i.kind == :ambiguous_constituent }
+
+    assert_equal 1, issues.size, "the same fund was reported once per account position"
+    assert_equal fund, issues.first.security
+    assert_nil issues.first.holding,
+               "an ambiguity is a property of the fund, so it should name no single position"
+  end
+
+  # A fund reporting the same ticker in two cases is one ambiguous ticker.
+  test "a constituent ticker differing only in case is reported once" do
+    account = create_investment_account(balance: 1000, cash_balance: 0)
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XLON", asset_class: "fixed_income")
+    create_classified_security(ticker: "DUAL", exchange_operating_mic: "XNAS", asset_class: "equity")
+    fund = create_classified_security(ticker: "CASED", asset_class: "equity", asset_sub_class: "etf")
+    fund.constituents.create!(ticker: "dual", name: "Lower case", weight: 50)
+    fund.constituents.create!(ticker: "DUAL", name: "Upper case", weight: 50)
+    Holding.create!(account: account, security: fund, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    issue = InvestmentStatement.new(@family).data_quality_issues.find { |i| i.kind == :ambiguous_constituent }
+
+    assert_equal [ "DUAL" ], issue.detail, "the same ticker was listed twice because of its case"
+  end
+
   test "every classification grouping is reachable through allocation_by" do
     %w[asset_class asset_sub_class sector region].each do |grouping|
       assert_includes InvestmentStatement::ALLOCATION_GROUPINGS, grouping
