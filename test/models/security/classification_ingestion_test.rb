@@ -41,7 +41,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
       name: "Apple", logo_url: "https://example.com/aapl.png",
       sector: "Technology", industry: "Consumer Electronics"
     )
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -60,7 +60,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
 
     assert_nil @security.reload.classification_source, "an ETF is deliberately left unsourced"
 
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -79,7 +79,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
       asset_class: "alternative_investment", asset_sub_class: "cryptocurrency",
       classification_source: "default"
     )
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -90,7 +90,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
   test "a manually classified security is not asked again" do
     @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png",
                       asset_class: "equity", classification_source: "manual")
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -105,7 +105,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
   # than for classification.
   test "a caller that has not opted in makes no provider call" do
     @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png")
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -116,7 +116,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
 
   test "a locked security is not asked, even when it has no classification" do
     @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png", classification_locked: true)
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.expects(:fetch_security_info).never
     @security.stubs(:price_data_provider).returns(provider)
 
@@ -224,6 +224,49 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
     assert_nil built.industry
   end
 
+  # The folded-in half of #212. The classification gate has no timestamp at all:
+  # it closes only when `classification_source`, `sector` or `industry` fills.
+  # A provider that supplies none of them never closes it, so that security was
+  # re-asked on EVERY sync, for ever -- the opposite failure to the constituents
+  # gate, from the same missing fact about what the provider can answer.
+  test "a provider that cannot classify is not asked again and again" do
+    # Metadata present from the outset, or `import_provider_details` refetches
+    # for a METADATA reason -- a missing name plus logo -- and the test would be
+    # asserting something other than the classification gate. Same precaution
+    # `Security::LookThroughTest` takes in its setup, for the same reason.
+    @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png")
+
+    incapable = capable_provider("incapable", classification: false, constituents: false)
+    incapable.stubs(:class).returns(Provider::TwelveData)
+    incapable.expects(:fetch_security_info).never
+    @security.stubs(:price_data_provider).returns(incapable)
+
+    @security.import_provider_details(include_classification: true)
+
+    assert_nil @security.reload.sector, "an incapable provider somehow classified the security"
+  end
+
+  # The other side, so the fix is not "never classify".
+  test "a provider that can classify is still asked" do
+    @security.update!(name: "Apple", logo_url: "https://example.com/aapl.png")
+
+    capable = capable_provider("capable")
+    capable.stubs(:class).returns(Provider::Eodhd)
+    capable.expects(:fetch_security_info).once.returns(
+      provider_success_response(
+        Provider::SecurityConcept::SecurityInfo.new(
+          symbol: "AAPL", name: nil, links: nil, logo_url: nil, description: nil,
+          kind: nil, exchange_operating_mic: "XNAS", sector: "Technology", industry: "Consumer Electronics"
+        )
+      )
+    )
+    @security.stubs(:price_data_provider).returns(capable)
+
+    @security.import_provider_details(include_classification: true)
+
+    assert_equal "Technology", @security.reload.sector
+  end
+
   private
     def info(sector: nil, industry: nil, kind: nil)
       Provider::SecurityConcept::SecurityInfo.new(
@@ -233,7 +276,7 @@ class Security::ClassificationIngestionTest < ActiveSupport::TestCase
     end
 
     def stub_provider(data)
-      provider = mock("provider")
+      provider = capable_provider("provider")
       provider.stubs(:class).returns(Provider::TwelveData)
       provider.stubs(:fetch_security_info).returns(provider_success_response(data))
       provider

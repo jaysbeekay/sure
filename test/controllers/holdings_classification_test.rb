@@ -213,7 +213,7 @@ class HoldingsClassificationTest < ActionDispatch::IntegrationTest
     end
 
     def stub_provider(data)
-      provider = mock("provider")
+      provider = capable_provider("provider")
       provider.stubs(:class).returns(Provider::TwelveData)
       provider.stubs(:fetch_security_info).returns(provider_success_response(data))
       provider

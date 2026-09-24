@@ -45,7 +45,7 @@ class Security::ProvidedTest < ActiveSupport::TestCase
   end
 
   test "search_provider deduplicates same ticker+exchange+provider" do
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.stubs(:class).returns(Provider::TwelveData)
 
     dup_result = Provider::SecurityConcept::Security.new(
@@ -154,7 +154,7 @@ class Security::ProvidedTest < ActiveSupport::TestCase
   end
 
   test "import_provider_details logs provider metadata failures to debug log" do
-    provider = mock("provider")
+    provider = capable_provider("provider")
     provider.stubs(:class).returns(Provider::TwelveData)
     provider.stubs(:fetch_security_info).returns(
       provider_error_response(Provider::Error.new("metadata unavailable"))
@@ -188,7 +188,7 @@ class Security::ProvidedTest < ActiveSupport::TestCase
   end
 
   test "provider_status returns ok for healthy security" do
-    provider = mock("provider")
+    provider = capable_provider("provider")
     Security.stubs(:provider_for).with("twelve_data").returns(provider)
 
     @security.update!(price_provider: "twelve_data", offline: false, failed_fetch_count: 0)

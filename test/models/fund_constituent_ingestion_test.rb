@@ -73,7 +73,7 @@ class FundConstituentIngestionTest < ActiveSupport::TestCase
         kind: "ETF", exchange_operating_mic: "XLON",
         constituents: [ { ticker: "MSFT", name: "Microsoft", weight: 100 } ]
       )
-      provider = mock("provider")
+      provider = capable_provider("provider")
       provider.stubs(:class).returns(Provider::TwelveData)
       provider.stubs(:fetch_security_info).returns(provider_success_response(info))
       provider
