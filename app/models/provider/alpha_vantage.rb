@@ -15,6 +15,12 @@ class Provider::AlphaVantage < Provider
 
   # Free tier "compact" returns ~100 trading days (~140 calendar days).
   # "full" requires a paid plan.
+  # Returns `sector` and `industry` from its own metadata response, so the
+  # classification gate must ask it (#212). Constituents it does not supply.
+  def supplies_classification?
+    true
+  end
+
   def max_history_days
     140
   end
