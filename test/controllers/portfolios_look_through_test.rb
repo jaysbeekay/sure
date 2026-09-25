@@ -102,26 +102,31 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
                   "changing axis would silently drop the look-through"
   end
 
-  # The drill-down reads the fund's OWN columns, so with look-through on it
-  # contradicted the parent it hangs under: a fund holding shares and bonds
-  # showed an `equity` parent at a fraction of the fund and an `etf` child at
-  # all of it, while the `fixed_income` parent had no children at all. Two
-  # answers for the same money on one screen (CodeRabbit, #201).
+  # #201 shipped this level flat and #217 decided to build it, so this test now
+  # asserts the ladder OPENS and opens onto the right thing. It asserted
+  # `count: 0` until #217 -- correct for the interim state, wrong for the decided
+  # one.
   #
-  # Asserts the DELTA: the same request without look-through still opens, so
-  # this cannot pass by the disclosure having gone missing for another reason.
-  test "asset-class rows do not open onto the fund's own columns under look-through" do
+  # Rendered through the controller because the partial is where the two levels
+  # are stitched together: it calls `allocation_children` once for the parent and
+  # again for the grandchild, and #220 wired the second call's `look_through:`
+  # while it was still unreachable.
+  test "a looked-through asset class opens onto its constituents in the rendered page" do
     hold_a_mixed_fund
-
-    get portfolio_path(by: "asset_class")
-    assert_response :success
-    assert_select "details[data-portfolio-segment]", { minimum: 1 },
-                  "the asset-class ladder stopped opening at all, so the test below proves nothing"
 
     get portfolio_path(by: "asset_class", look_through: "1")
     assert_response :success
-    assert_select "details[data-portfolio-segment]", { count: 0 },
-                  "a looked-through asset class opened onto the fund's own sub-class"
+
+    assert_select "details[data-portfolio-segment]", { minimum: 1 },
+                  "the looked-through asset-class ladder did not open"
+    # The fund holds a share and a bond, so the equity portion must open onto
+    # `stock` -- the constituent's sub-class -- and never onto the fund's `etf`.
+    assert_select "[data-portfolio-child='stock']", { minimum: 1 },
+                  "the equity portion did not open onto its constituent's sub-class"
+    assert_select "[data-portfolio-child='etf']", { count: 0 },
+                  "the equity portion opened onto the fund's own sub-class"
+    assert_select "[data-portfolio-child='bond']", { minimum: 1 },
+                  "the fixed-income portion had no child of its own"
   end
 
   # `build_segments` drops every zero-VALUE row, so a fund worth nothing can
