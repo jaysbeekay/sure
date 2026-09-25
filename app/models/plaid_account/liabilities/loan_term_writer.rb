@@ -56,5 +56,20 @@ module PlaidAccount::Liabilities::LoanTermWriter
           errors: loan.errors.full_messages
         }
       )
+
+      # Put the loan back the way it was found. `enrich_attributes` assigns and
+      # then calls `save`; a refusal leaves the REJECTED VALUES on the in-memory
+      # loan with its errors populated, so anything reading it later in the same
+      # sync sees a figure the model would not store. Clearing the errors
+      # matters separately: `enrich_attributes` returns early without saving
+      # when every attribute is locked or unchanged, so a later write in the
+      # same pass would find these errors sitting there and report a refusal
+      # that never happened.
+      #
+      # The same fix `RedbarkAccount::LoanDetailsProcessor#write` carries -- it
+      # was raised there first and should have been carried across with the
+      # pattern rather than waiting to be raised again here (cubic, #222).
+      loan.restore_attributes(present.keys.map(&:to_s))
+      loan.errors.clear
     end
 end

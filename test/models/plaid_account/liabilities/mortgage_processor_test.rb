@@ -109,12 +109,19 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
   end
 
   # Row 10. A repeat sync of the same payload is not a change.
+  #
+  # BOTH halves are asserted. The first version of this test only checked that
+  # the SECOND sync queued nothing, which passes just as well if a changed write
+  # stops queueing rebuilds at all -- the test was named for a guarantee it did
+  # not hold (cubic, #222).
   test "the same payload twice records one enrichment and queues one rebuild" do
     loan_with(interest_rate: 4.5, rate_type: "variable")
     payload(type: "fixed", percentage: 5.2)
 
     assert_difference -> { DataEnrichment.count }, 2 do
-      process
+      assert_enqueued_jobs 1, only: LoanAmortizationRebuildJob do
+        process
+      end
     end
 
     assert_no_difference -> { DataEnrichment.count } do
@@ -137,6 +144,49 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
     end
 
     assert_equal 4.5, loan.reload.interest_rate.to_f, "an invalid rate was stored anyway"
+  end
+
+  # A refusal must not leave its REJECTED VALUE or its ERRORS on the loan for the
+  # rest of the sync (cubic, #222). Observed through a second write on the same
+  # processor instance, because that is the only place the leftovers are visible:
+  # `enrich_attributes` returns early without saving when the attribute is
+  # locked, so it never clears the errors itself, and the stale ones get reported
+  # as a refusal that did not happen.
+  #
+  # Asserting on the test's own `loan` object proves nothing here -- the
+  # processor resolves its own instance through `plaid_account.current_account`,
+  # so the test's copy is never the one that was mutated. My first attempt at
+  # this test did exactly that and passed with the fix removed.
+  test "a refusal leaves nothing behind for a locked write to report" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "variable")
+    loan.lock_attr!(:rate_type)
+    writer = PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account.reload)
+
+    assert_difference -> { DebugLogEntry.count }, 1 do
+      writer.send(:write_loan_terms, interest_rate: 150)
+      writer.send(:write_loan_terms, rate_type: "fixed")
+    end
+
+    assert_equal 4.5, loan.reload.interest_rate.to_f
+    assert_equal "variable", loan.rate_type
+  end
+
+  # And the cost of NOT restoring, which is the half `errors.clear` does not
+  # cover: the rejected value stays assigned, so the record is still invalid and
+  # the NEXT write fails too -- a legitimate change lost to an unrelated refusal.
+  # `interest_rate` and `rate_type` arrive in separate calls here, which is what
+  # makes the second one observable.
+  test "a refused value does not cost the next write its change" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "variable")
+    writer = PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account.reload)
+
+    writer.send(:write_loan_terms, interest_rate: 150)
+    writer.send(:write_loan_terms, rate_type: "fixed")
+
+    loan.reload
+    assert_equal "fixed", loan.rate_type,
+                 "a valid change was refused because the loan still carried a rejected value"
+    assert_equal 4.5, loan.interest_rate.to_f, "the rejected rate was stored after all"
   end
 
   private
