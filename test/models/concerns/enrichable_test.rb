@@ -89,7 +89,7 @@ class EnrichableTest < ActiveSupport::TestCase
     # record's save to fail and assert the guard now skips the log. The
     # setter itself (self.name = "…") still runs in memory so the code path
     # is exercised, but no row reaches the database.
-    @enrichable.save.stubs(:save).returns(false)
+    @enrichable.stubs(:save).returns(false)
 
     assert_no_difference "DataEnrichment.count" do
       @enrichable.enrich_attribute(:name, "Refused Save", source: "plaid")
@@ -112,13 +112,13 @@ class EnrichableTest < ActiveSupport::TestCase
     )
 
     assert new_record.new_record?
-    new_record.save.stubs(:save).returns(true)
+    new_record.stubs(:save).returns(true)
 
     assert_no_difference "DataEnrichment.count" do
       new_record.enrich_attribute(:name, "Still Unsaved", source: "plaid")
     end
 
-    # Save was stubbed to true but no id was assigned — the record is
+    # Save was stubbed — no id was assigned, so the record is
     # still new from our side's point of view.
     assert new_record.new_record?
   end
