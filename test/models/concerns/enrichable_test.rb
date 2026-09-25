@@ -129,8 +129,13 @@ class EnrichableTest < ActiveSupport::TestCase
     # previous_changes, so the code falls through to the virtual-check
     # branch. The post-fix code still logs because save on the real
     # persisted record returns true (save_result && !was_new == true).
+    # transactions(:one) is ALREADY tagged with tags(:one) and tags(:two)
+    # (see test/fixtures/taggings.yml), so pick the tag that is attached to
+    # no transaction. That makes the refute_includes precondition true and this
+    # the only tag the enrichment actually applies — the post-save logging
+    # assertion then reflects a genuine new tag, not a re-application.
     txn = transactions(:one)
-    tag = tags(:one)
+    tag = tags(:three)
 
     refute_includes txn.tag_ids, tag.id
 
