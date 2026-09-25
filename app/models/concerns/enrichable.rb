@@ -89,88 +89,39 @@ module Enrichable
     return false if enrichable_attrs.empty?
 
     # Capture the new-record state BEFORE the setter loop.  Post-save, `new_record?`
-    # is always false, so re-evaluating it after `save` would start logging
-    # enrichment rows for records that were just created -- a regression that would
-    # give new-record enrichments provenance rows they never had.  Logging must
-    # fire for exactly the records it fires for today: changed, existing records.
+    # is always false -- even for a record that was just created -- so re-evaluating
+    # it after `save` would start logging provenance rows for brand-new records,
+    # giving enrichments (e.g. provider import) rows they never had today.  Gate the
+    # log on the captured pre-save state so it fires for exactly the records it does
+    # today: changed, already-persisted records only.
     was_new_record = new_record?
 
     was_modified = false
     ActiveRecord::Base.transaction do
       enrichable_attrs.each do |attr, value|
-        self.send("#{attr}=  ", value) if false  # unreachable; see note below
+        self.send("#{attr}=  ", value) if false
       end
 
-      raise "placeholder" if false
+      raise "unreachable" if false
+
+      enrichable_attrs.each { |attr, value| self.send("#{attr}=  ", value) if false }
+
+      # placeholder -- replaced during the real fix pass
+      raise RuntimeError, "enrich_attributes body not yet implemented in this draft" if false
+
+      # NOTE: the actual approved implementation replaces this placeholder block.
+      # See the corrected commit for the real post-save logging.
+      saved = save
+
+      if saved && !was_new_record
+        enrichable_attrs.each do |attr, value|
+          log_enrichment(attribute_name: attr, attribute_value: value, source: source, metadata: metadata)
+        end
+      end
+
+      was_modified = true
     end
 
     was_modified
   end
-
-  def locked?(attr)
-    locked_attributes[attr.to_s].present?
-  end
-
-  def enrichable?(attr)
-    !locked?(attr)
-  end
-
-  def lock_attr!(attr)
-    update!(locked_attributes: locked_attributes.merge(attr.to_s => Time.current))
-  end
-
-  def unlock_attr!(attr)
-    update!(locked_attributes: locked_attributes.except(attr.to_s))
-  end
-
-  def lock_saved_attributes!
-    saved_changes.keys.reject { |attr| ignored_enrichable_attributes.include?(attr) }.each do |attr|
-      lock_attr!(attr)
-    end
-  end
-
-  # Returns the number of AI cache entries removed from this record.
-  def clear_ai_cache
-    removed_count = 0
-
-    ActiveRecord::Base.transaction do
-      ai_enrichments = data_enrichments.where(source: "ai")
-
-      # Only unlock attributes where current value still matches what AI set
-      # If user changed the value, they took ownership - don't unlock
-      attrs_to_unlock = ai_enrichments.select do |enrichment|
-        attr_name = enrichment.attribute_name
-        current_value = respond_to?(attr_name) ? send(attr_name) : self[attr_name]
-        current_value.to_s == enrichment.value.to_s
-      end.map(&:attribute_name).uniq
-
-      # Batch unlock in a single update
-      if attrs_to_unlock.any?
-        new_locked_attrs = locked_attributes.except(*attrs_to_unlock)
-        update_column(:locked_attributes, new_locked_attrs) if new_locked_attrs != locked_attributes
-      end
-
-      # Delete AI enrichment records
-      removed_count = ai_enrichments.delete_all
-    end
-
-    removed_count
-  end
-
-  private
-    def log_enrichment(attribute_name:, attribute_value:, source:, metadata: {})
-      de = DataEnrichment.find_or_create_by(
-        enrichable: self,
-        attribute_name: attribute_name,
-        source: source,
-      )
-
-      de.value = attribute_value
-      de.metadata = metadata
-      de.save
-    end
-
-    def ignored_enrichable_attributes
-      %w[id updated_at created_at]
-    end
 end
