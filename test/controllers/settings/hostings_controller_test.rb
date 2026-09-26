@@ -421,7 +421,7 @@ class Settings::HostingsControllerTest < ActionDispatch::IntegrationTest
   # rather than the admin, because that is who the endpoint must not reach.
   test "the jev panel shows a member the endpoint without its credentials" do
     with_self_hosting do
-      Setting.jev_endpoint = "https://gw-user:gw-secret@gw.example.com/v1/jev?api_key=qk-secret"
+      Setting.jev_endpoint = "https://gw-user:gw-secret@gw.example.com/v1/jev?api_key=qk-secret" # pipelock:ignore Credential in URL
       member = users(:family_member)
       member.family.update!(categorization_provider: "jev")
       member.update!(preferences: (member.preferences || {}).merge("preview_features_enabled" => true))
@@ -439,7 +439,7 @@ class Settings::HostingsControllerTest < ActionDispatch::IntegrationTest
   # straight back. Saving it would silently strip the operator's credentials.
   test "submitting the redacted jev endpoint back keeps the stored one" do
     with_self_hosting do
-      stored = "https://gw-user:gw-secret@gw.example.com/v1/jev?api_key=qk-secret"
+      stored = "https://gw-user:gw-secret@gw.example.com/v1/jev?api_key=qk-secret" # pipelock:ignore Credential in URL
       Setting.jev_endpoint = stored
 
       patch settings_hosting_url, params: { setting: { jev_endpoint: "https://gw.example.com/v1/jev" } }
