@@ -214,28 +214,21 @@ class InvestmentStatement
   # account do not nest -- a sector has no sub-sector here -- so they return
   # nothing and render flat, rather than having a level invented for them.
   #
-  # **Look-through renders flat too, and that is the honest answer rather than
-  # a shortcut.** With it on, the parent segments come from `look_through_split`
-  # -- portions of a fund, filed by what the fund HOLDS -- while every method
-  # below reads the fund's OWN columns. A fund classified equity/etf holding
-  # 60% shares and 40% bonds would show an `equity` parent at 60% of it, open
-  # to an `etf` child at 100% of it, and a `fixed_income` parent at 40% with no
-  # children at all: two different answers for the same money on one screen,
-  # against this file's own rule that the grouping and the drill-down cannot
-  # disagree (CodeRabbit, #201).
+  # **Look-through nests too, through the same rows the parents come from.**
+  # #201 shipped this flat, because the parents were filed by what a fund HOLDS
+  # while every method below read the fund's OWN columns -- a fund classified
+  # equity/etf holding 60% shares and 40% bonds showed an `equity` parent at 60%
+  # opening onto an `etf` child at 100%, and a `fixed_income` parent with no
+  # children. Two answers for the same money on one screen.
   #
-  # Decomposing a looked-through parent is not a smaller version of this
-  # method. It needs a split by a PAIR of columns to say which sub-classes sit
-  # inside the equity portion, and at the bottom it would list constituents --
-  # securities the user does not hold -- where the row today means a position.
-  # That is a product decision, so it is raised rather than guessed at; until
-  # it is made, the parent rows are the whole answer look-through has.
+  # #217 settled the product question (show the constituents) and the fix is to
+  # slice ONE row set at every level rather than derive each level separately:
+  # see `look_through_rows`. The parent and the child then cannot disagree,
+  # because they are two groupings of the same rows.
   def allocation_children(by, bucket, look_through: false)
-    return [] if look_through
-
     case by.to_s
-    when "asset_class" then allocation_sub_classes_within(bucket)
-    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, "cash")
+    when "asset_class" then allocation_sub_classes_within(bucket, look_through: look_through)
+    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, "cash", look_through: look_through)
     else []
     end
   end
@@ -1077,6 +1070,62 @@ class InvestmentStatement
       end
     end
 
+    # ONE row set that every look-through level slices, rather than each level
+    # deriving its own answer (#217). A fund contributes a row per constituent;
+    # anything that is not a fund contributes one row for itself. Both carry the
+    # SAME pair of buckets, so the asset-class level and the sub-class level are
+    # two groupings of the same rows and cannot come to disagree -- which is
+    # exactly how #201's contradiction arose, with parents from the constituents
+    # and children from the fund's own columns.
+    #
+    # Costs no query of its own: `constituent_rows_by_security` and
+    # `constituent_securities` are both memoised and both already paid for by
+    # the parent segments, which is only true because #219 made the resolution
+    # one query for the whole portfolio rather than one per fund.
+    #
+    # The NAME comes from the constituent row, never from the resolved
+    # `Security`. `Security::Constituent` carries its own ticker and name, so a
+    # constituent whose listing is ambiguous (#214) is still labelled correctly
+    # even though its classification is unknown -- naming it from the resolved
+    # row would print the wrong listing's name for precisely the case that
+    # ambiguity rule exists to handle.
+    def look_through_rows
+      @look_through_rows ||= current_holdings.flat_map do |holding|
+        value = convert_to_family_currency(holding.amount, holding.currency)
+        weights = constituent_weights_for(holding.security)
+
+        if weights.empty?
+          [ {
+            asset_class: classification_bucket(holding.security, :asset_class, "liquidity"),
+            asset_sub_class: classification_bucket(holding.security, :asset_sub_class, "cash"),
+            id: holding.security_id,
+            name: holding.security.name.presence || holding.security.ticker,
+            value: value
+          } ]
+        else
+          names = constituent_names_for(holding.security)
+          weights.map do |ticker, weight|
+            key = ticker.to_s.upcase
+            constituent = constituent_securities[key]
+            {
+              asset_class: constituent ? classification_bucket(constituent, :asset_class, "liquidity") : UNCLASSIFIED,
+              asset_sub_class: constituent ? classification_bucket(constituent, :asset_sub_class, "cash") : UNCLASSIFIED,
+              id: key,
+              name: names[key].presence || key,
+              value: value * weight
+            }
+          end
+        end
+      end
+    end
+
+    # Constituent labels by upcased ticker, from the rows themselves.
+    def constituent_names_for(security)
+      (constituent_rows_by_security[security.id] || []).each_with_object({}) do |row, map|
+        map[row.ticker.to_s.upcase] ||= row.name
+      end
+    end
+
     # Constituent rows for every security in scope, fetched once. Asking each
     # security for `look_through_weights` runs a query per holding -- 42 against
     # 5 on 13 holdings -- and most holdings are not funds, so nearly all of them
@@ -1242,12 +1291,20 @@ class InvestmentStatement
     # Sub-classes inside one asset class. Cash is carried here too: it belongs
     # to `liquidity`/`cash`, so expanding Liquidity has to show it rather than
     # an empty list that contradicts the parent row's amount.
-    def allocation_sub_classes_within(asset_class)
+    def allocation_sub_classes_within(asset_class, look_through: false)
       grouped = Hash.new(0)
 
-      holdings_classified_as(:asset_class, asset_class, "liquidity").each do |holding|
-        bucket = classification_bucket(holding.security, :asset_sub_class, "cash")
-        grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
+      if look_through
+        look_through_rows.each do |row|
+          next unless row[:asset_class] == asset_class
+
+          grouped[row[:asset_sub_class]] += row[:value]
+        end
+      else
+        holdings_classified_as(:asset_class, asset_class, "liquidity").each do |holding|
+          bucket = classification_bucket(holding.security, :asset_sub_class, "cash")
+          grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
+        end
       end
 
       if asset_class == "liquidity"
@@ -1260,9 +1317,28 @@ class InvestmentStatement
       build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
     end
 
-    # The holdings themselves, the bottom of the ladder. Named by security so
-    # the row reads as a position rather than as another bucket.
-    def allocation_holdings_within(column, bucket, cash_bucket = nil)
+    # The bottom of the ladder. Named by security so the row reads as a position
+    # rather than as another bucket.
+    #
+    # Under look-through it is the CONSTITUENTS instead, which is the whole point
+    # of #217: the toggle exists to answer "what am I actually exposed to", and
+    # the classes above it never answer "to what". Several funds holding the same
+    # ticker collapse into one row, because the exposure is one exposure however
+    # many wrappers it arrives through -- which is the most useful thing this
+    # level says.
+    def allocation_holdings_within(column, bucket, cash_bucket = nil, look_through: false)
+      if look_through
+        grouped = Hash.new(0)
+        names = {}
+        look_through_rows.each do |row|
+          next unless row[column] == bucket
+
+          grouped[row[:id]] += row[:value]
+          names[row[:id]] ||= row[:name]
+        end
+        return build_segments(grouped.map { |id, value| [ id, names[id], value ] })
+      end
+
       rows = holdings_classified_as(column, bucket, cash_bucket).map do |holding|
         [ holding.security_id, holding.security.name.presence || holding.security.ticker,
           convert_to_family_currency(holding.amount, holding.currency) ]
