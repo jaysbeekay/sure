@@ -57,12 +57,18 @@ en:
         missing_cost_basis:
           description: No cost basis is stored or computable for these positions, so their return cannot be shown. Set one from the position.
           title: Missing cost basis
+        ambiguous_constituent:
+          description: These fund holdings share a ticker with a listing on another exchange, and your own positions do not say which one is meant. Their value still counts, but it is left unclassified rather than filed under a guess.
+          title: Constituents on more than one exchange
         provider:
           description: The price provider for these securities is not healthy, so their values may not refresh.
           title: Price provider issues
         stale_price:
           description: The latest price is older than %{days} days or there is no price at all, so the value may be out of date.
           title: Stale prices
+      unresolved_constituents:
+        one: "%{tickers} — listed on more than one exchange"
+        other: "%{tickers} — each listed on more than one exchange"
       last_priced: Last priced %{date}
       never_priced: Never priced
       read_only: Read-only
