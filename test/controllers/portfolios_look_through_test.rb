@@ -112,7 +112,7 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
   # again for the grandchild, and #220 wired the second call's `look_through:`
   # while it was still unreachable.
   test "a looked-through asset class opens onto its constituents in the rendered page" do
-    hold_a_mixed_fund
+    fund = hold_a_mixed_fund
 
     get portfolio_path(by: "asset_class", look_through: "1")
     assert_response :success
@@ -127,6 +127,18 @@ class PortfoliosLookThroughTest < ActionDispatch::IntegrationTest
                   "the equity portion opened onto the fund's own sub-class"
     assert_select "[data-portfolio-child='bond']", { minimum: 1 },
                   "the fixed-income portion had no child of its own"
+
+    # The bottom level comes from the partial's SECOND `allocation_children`
+    # call. Without `look_through:` on it, `stock` and `bond` find no directly
+    # held position -- SHR1 and BND1 exist only as constituents -- so the
+    # grandchild rows simply vanish and every assertion above still passes
+    # (cubic and CodeRabbit, #226).
+    assert_select "[data-portfolio-child='stock'] [data-portfolio-grandchild='SHR1']", { count: 1, text: /A share/ },
+                  "the stock sub-class did not open onto the constituent it came from"
+    assert_select "[data-portfolio-child='bond'] [data-portfolio-grandchild='BND1']", { count: 1, text: /A bond/ },
+                  "the bond sub-class did not open onto the constituent it came from"
+    assert_select "[data-portfolio-grandchild='#{fund.id}']", { count: 0 },
+                  "the bottom level showed the fund in place of what it holds"
   end
 
   # `build_segments` drops every zero-VALUE row, so a fund worth nothing can
