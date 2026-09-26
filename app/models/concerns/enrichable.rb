@@ -95,12 +95,22 @@ module Enrichable
 
     was_modified = false
     save_result = false
-    ActiveRecord::Base.transaction do
+    # requires_new: several callers (e.g. Account::ProviderImportAdapter) already
+    # hold a transaction. Without a savepoint the Rollback below would be
+    # swallowed by the joined outer block and undo nothing.
+    ActiveRecord::Base.transaction(requires_new: true) do
       enrichable_attrs.each do |attr, value|
         self.send("#{attr}=", value)
       end
 
       save_result = save
+
+      # A refused save must leave nothing behind. Virtual setters on a
+      # persisted record (tag_ids=) write their join rows immediately, before
+      # save runs, so roll the savepoint back rather than let them commit.
+      # Rollback is swallowed by the transaction block, so the method still
+      # returns (false) instead of raising, and the record keeps its errors.
+      raise ActiveRecord::Rollback unless save_result
 
       # Issue #224 (option 1, correction b): only log enrichment AFTER a
       # successful save, and only for records that were already persisted when

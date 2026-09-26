@@ -96,31 +96,71 @@ class EnrichableTest < ActiveSupport::TestCase
     end
   end
 
-  test "does not log enrichment for a new record" do
-    # Build a genuinely new (unpersisted) Enrichable model. Stub save to
-    # return true so that "new-record guard" is the ONLY thing preventing
-    # the log — if we let a real save run, validation/refusal would ALSO
-    # yield assert_no_difference and we could not distinguish the two
-    # causes. With save stubbed true and the guard in place, the pre-fix
-    # code (logging before save) would have created a row; the post-fix
-    # code (save_result && !was_new) must skip it.
+  test "does not log enrichment for a new record that a real save persists" do
+    # A genuinely new, valid record goes through a REAL first save, so it
+    # crosses from new to persisted inside enrich_attributes. The log
+    # decision must use the state captured before the save: re-reading
+    # new_record? after the save would see false and log a row for a
+    # first-time write, which the pre-#224 code deliberately never did.
     new_record = Account.new(
       family: families(:dylan_family),
       name: "Unsaved Account",
       balance: 0,
       currency: "USD",
+      accountable: Depository.new
     )
 
     assert new_record.new_record?
-    new_record.stubs(:save).returns(true)
 
     assert_no_difference "DataEnrichment.count" do
-      new_record.enrich_attribute(:name, "Still Unsaved", source: "plaid")
+      assert new_record.enrich_attribute(:name, "Named On Create", source: "plaid")
     end
 
-    # Save was stubbed — no id was assigned, so the record is
-    # still new from our side's point of view.
-    assert new_record.new_record?
+    # The save really happened: the record is persisted with the enriched
+    # name, so the absence of a row is the guard's doing, not a refusal.
+    assert new_record.persisted?
+    assert_equal "Named On Create", Account.find(new_record.id).name
+    assert_empty DataEnrichment.where(enrichable: new_record)
+  end
+
+  test "a refused save keeps the previously accepted provenance value" do
+    # log_enrichment is find_or_create_by on (enrichable, attribute, source)
+    # and then overwrites value, so a refused second write that still logged
+    # would REPLACE the accepted row's value without changing the row count.
+    # Assert the stored value, not the count.
+    @enrichable.enrich_attribute(:name, "Accepted Name", source: "plaid")
+    row = DataEnrichment.find_by!(enrichable: @enrichable, attribute_name: "name", source: "plaid")
+    assert_equal "Accepted Name", row.value
+
+    @enrichable.stubs(:save).returns(false)
+    @enrichable.enrich_attribute(:name, "Refused Name", source: "plaid")
+
+    assert_equal "Accepted Name", row.reload.value
+    assert_equal "Accepted Name", Account.find(@enrichable.id).name
+  end
+
+  test "a refused save rolls back association writes made by a virtual setter" do
+    # On a persisted record, tag_ids= inserts the join rows immediately,
+    # before save runs. If save then refuses, those rows must not commit
+    # either, or the record carries a tag with no provenance for it.
+    # The call runs inside a caller-held transaction, as the provider import
+    # adapter's do, so the rollback must not depend on being the outermost.
+    txn = transactions(:one)
+    tag = tags(:three)
+    tags_before = txn.tag_ids.sort
+    refute_includes tags_before, tag.id
+
+    txn.stubs(:save).returns(false)
+
+    result = nil
+    assert_no_difference -> { DataEnrichment.where(enrichable: txn).count } do
+      Transaction.transaction do
+        result = txn.enrich_attribute(:tag_ids, tags_before + [ tag.id ], source: "rule")
+      end
+    end
+
+    assert_equal false, result
+    assert_equal tags_before, Transaction.find(txn.id).tag_ids.sort
   end
 
   test "enriches a virtual attribute (tag_ids) on an Enrichable model and logs after save" do
