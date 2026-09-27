@@ -903,4 +903,53 @@ class LoanTest < ActiveSupport::TestCase
       # to perform_enqueued_jobs just to exercise the chart payload.
       account.loan.tap(&:rebuild_amortization_schedule)
     end
+
+    # #223. The dated-rate rules, shared by every provider that reports a
+    # variable rate. The loan only answers what should be written; the provider
+    # writes it, so locks and provenance stay with the provider's writer.
+    test "variable_rate_update_for sets the base rate on a first sighting" do
+      loan = Loan.new(rate_type: "variable", interest_rate: nil)
+
+      assert_equal({ interest_rate: BigDecimal("5.2") },
+                   loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15)))
+    end
+
+    test "variable_rate_update_for dates a moved rate to as_of, not today" do
+      loan = Loan.new(rate_type: "variable", interest_rate: 4.5)
+
+      update = loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
+
+      assert_equal({ "2026-01-15" => "5.2" }, update[:variable_rate_schedule])
+      assert_not update.key?(:interest_rate), "the base rate must not move"
+    end
+
+    test "variable_rate_update_for keeps the rows already on the schedule" do
+      loan = Loan.new(rate_type: "variable", interest_rate: 4.5,
+                      variable_rate_schedule: { "2025-06-01" => 4.8 })
+
+      update = loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
+
+      assert_equal %w[2025-06-01 2026-01-15], update[:variable_rate_schedule].keys.sort
+    end
+
+    test "variable_rate_update_for records nothing when the rate in force is unchanged" do
+      loan = Loan.new(rate_type: "variable", interest_rate: 4.5,
+                      variable_rate_schedule: { "2025-06-01" => 5.125 })
+
+      # A four-decimal reading of the three-decimal stored rate is not a change.
+      assert_nil loan.variable_rate_update_for(BigDecimal("5.1249"), as_of: Date.new(2026, 1, 15))
+    end
+
+    test "variable_rate_update_for records nothing when today's row already holds the rate" do
+      loan = Loan.new(rate_type: "variable", interest_rate: 4.5,
+                      variable_rate_schedule: { "2026-01-15" => 5.2 })
+
+      assert_nil loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
+    end
+
+    test "variable_rate_update_for leaves a fixed loan to its caller" do
+      loan = Loan.new(rate_type: "fixed", interest_rate: 4.5)
+
+      assert_nil loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
+    end
 end

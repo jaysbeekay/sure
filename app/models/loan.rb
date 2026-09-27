@@ -483,6 +483,38 @@ class Loan < ApplicationRecord
     rate.nil? ? interest_rate : normalized_rate(rate)
   end
 
+  # What a provider should write when it reports this loan's rate on `as_of`,
+  # or nil when there is nothing to write (#223). Writes nothing itself: the
+  # provider's writer applies it, so locks and provenance stay with it.
+  #
+  # - A first sighting (no base rate yet) sets the base rate. A first reading
+  #   is not evidence that anything changed, so it gets no dated row.
+  # - A rate equal to the one in force on `as_of` is not a change.
+  # - Otherwise the change is a row dated `as_of`; the base rate stays, since
+  #   overwriting it would re-price every period before the change.
+  # - A loan that is not variable gets nil: what a fixed loan does with a
+  #   reported rate is the provider's decision, not a schedule question.
+  #
+  # Rounded to three places first because that is what the schedule stores
+  # (quantize_variable_rate_schedule): comparing an unrounded reading against a
+  # rounded stored rate makes an unchanged rate look changed on every sync
+  # (cubic, #213).
+  def variable_rate_update_for(reported_rate, as_of:)
+    return nil if reported_rate.nil? || !variable_rate_type?
+
+    rate = BigDecimal(reported_rate.to_s).round(3)
+    return { interest_rate: rate } if interest_rate.blank?
+
+    # A row already dated `as_of` is the rate in force on `as_of`, so this also
+    # covers a same-day repeat; Redbark's separate same-day check could never
+    # fire and was dropped when the rules moved here.
+    in_force = current_variable_rate(as_of)
+    return nil if in_force.present? && BigDecimal(in_force.to_s) == rate
+
+    schedule = (variable_rate_schedule || {}).stringify_keys
+    { variable_rate_schedule: schedule.merge(as_of.to_date.iso8601 => rate.to_s) }
+  end
+
   # This is derived rather than stored because a persisted "next" date becomes
   # stale when the current date passes it.
   def next_rate_change_date

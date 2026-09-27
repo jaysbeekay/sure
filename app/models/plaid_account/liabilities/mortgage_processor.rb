@@ -1,8 +1,9 @@
 class PlaidAccount::Liabilities::MortgageProcessor
   include PlaidAccount::Liabilities::LoanTermWriter
 
-  def initialize(plaid_account)
+  def initialize(plaid_account, as_of: Date.current)
     @plaid_account = plaid_account
+    @as_of = as_of
   end
 
   def process
@@ -15,7 +16,7 @@ class PlaidAccount::Liabilities::MortgageProcessor
   end
 
   private
-    attr_reader :plaid_account
+    attr_reader :plaid_account, :as_of
 
     def account
       plaid_account.current_account

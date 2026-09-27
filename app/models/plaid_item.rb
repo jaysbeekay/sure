@@ -118,9 +118,9 @@ class PlaidItem < ApplicationRecord
   # Reads the fetched data and updates internal domain objects
   # Generally, this should only be called within a "sync", but can be called
   # manually to "re-sync" the already fetched data
-  def process_accounts
+  def process_accounts(as_of: Date.current)
     plaid_accounts.each do |plaid_account|
-      PlaidAccount::Processor.new(plaid_account).process
+      PlaidAccount::Processor.new(plaid_account, as_of: as_of).process
     end
   end
 

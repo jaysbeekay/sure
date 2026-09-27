@@ -15,7 +15,9 @@
 #
 # `Enrichable#enrich_attributes` answers the first two: it skips locked
 # attributes and records a `DataEnrichment` per attribute it writes. The third
-# is `compact` below -- an omitted value is not a value.
+# is `compact` below -- an omitted value is not a value. A variable loan's rate
+# change is dated rather than overwritten (#223), using the sync's `as_of`,
+# which each including processor supplies.
 module PlaidAccount::Liabilities::LoanTermWriter
   extend ActiveSupport::Concern
 
@@ -30,6 +32,30 @@ module PlaidAccount::Liabilities::LoanTermWriter
 
       present = attrs.compact
       return if present.empty?
+
+      # A variable loan's new rate is a dated schedule row, not a new base rate
+      # (#223): overwriting the base rate re-prices every period before the
+      # change. The other terms go first, so a payload that reclassifies the
+      # loan is applied before its rate is judged.
+      rate = present[:interest_rate]
+      if rate && variable_after_write?(loan, present)
+        write_enriched(loan, present.except(:interest_rate))
+        write_enriched(loan, loan.variable_rate_update_for(rate, as_of: as_of))
+      else
+        write_enriched(loan, present)
+      end
+    end
+
+    # Whether the loan will be variable once this payload's `rate_type` is
+    # applied. A locked `rate_type` is the user's and is not replaced.
+    def variable_after_write?(loan, present)
+      applied = present.key?(:rate_type) && !loan.locked?(:rate_type)
+      rate_type = applied ? present[:rate_type] : loan.rate_type
+      Loan::VARIABLE_RATE_TYPES.include?(rate_type.to_s)
+    end
+
+    def write_enriched(loan, present)
+      return if present.blank?
 
       loan.enrich_attributes(present, source: "plaid")
       return if loan.errors.empty?
