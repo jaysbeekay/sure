@@ -53,7 +53,7 @@ class Portfolio::SectionRegistry
     # disappearing until the next drag. Same rule as Reports.
     # `uniq` before the lookup: a saved order that repeats a key would
     # otherwise render that section once per occurrence. The endpoint
-    # deduplicates what it writes, so an order stored before it did -- or
+    # deduplicates what it writes, but an order stored before it did -- or
     # written by anything else -- still has to render once.
     ordered = Array(user&.section_order("portfolio")).uniq.filter_map do |key|
       all.find { |section| section[:key] == key }
@@ -139,14 +139,14 @@ class Portfolio::SectionRegistry
           collapsible: true
         },
         # Always shown, and it says so when nothing was realised, rather than
-        # disappearing. An earlier revision hid the section on an empty period,
-        # reasoning that a timeline with no disposals is an empty chart rather
-        # than a finding. That holds for the chart and not for the section --
-        # a buy-and-hold portfolio realises nothing in most periods, so the
-        # section was absent for those users always, and absence reads as
-        # "this page does not do returns" rather than "you disposed of nothing"
-        # The value chart answers the same question the same way (`no_data`),
-        # and the partial keeps the figure and the chart out of an empty period.
+        # disappearing. An earlier revision hid it on an empty period, reasoning
+        # that a timeline with no disposals is an empty chart rather than a
+        # finding. That holds for the chart and not for the section: a
+        # buy-and-hold portfolio realises nothing in most periods, so the
+        # section was absent for those users always, and absence reads as "this
+        # page does not do that" rather than "you disposed of nothing". The
+        # value chart answers the same question the same way (`no_data`), and
+        # the partial keeps the figure and the chart out of an empty period.
         {
           key: "realized_gains",
           title: "portfolios.sections.realized_gains",
@@ -196,15 +196,16 @@ class Portfolio::SectionRegistry
     # The six KPI figures, read from the statement here so the partial only
     # formats them.
     def kpis
-      @kpis ||= {
-        value: statement.portfolio_value_money,
-        day_change: statement.day_change,
-        unrealized: statement.unrealized_gains_trend,
-        period_return: statement.period_return_trend(period: period),
-        period_return_unconvertible: statement.period_return_unconvertible_count(period: period),
-        net_contributions: statement.net_contributions(period: period),
-        income: statement.totals(period: period).total_income
-      }
+      @kpis ||=
+        {
+          value: statement.portfolio_value_money,
+          day_change: statement.day_change,
+          unrealized: statement.unrealized_gains_trend,
+          period_return: statement.period_return_trend(period: period),
+          period_return_unconvertible: statement.period_return_unconvertible_count(period: period),
+          net_contributions: statement.net_contributions(period: period),
+          income: statement.totals(period: period).total_income
+        }
     end
 
     # One Portfolio::Performance for the request, so the six figures below and
@@ -214,20 +215,21 @@ class Portfolio::SectionRegistry
       @performance ||= statement.performance(period: period)
     end
 
-    # The six return figures, read here so the partial only formats them. Each
-    # may be nil by contract -- R13 (missing rate), R15 (fewer than two
-    # balance days), R16 (no money-weighted return for a valuation-only scope)
-    # -- and nil is passed through rather than defaulted, because a zero return
-    # and no return are different statements.
+    # The six return figures, read here so the partial only formats. Each may
+    # be nil by contract -- R13 (missing rate), R15 (fewer than two balance
+    # days), R16 (no money-weighted return for a valuation-only scope) -- and
+    # nil is passed through rather than defaulted, because a zero return and no
+    # return are different statements.
     def returns
-      @returns ||= {
-        twr: performance.time_weighted_return,
-        annualized_twr: performance.annualized_time_weighted_return,
-        mwr: performance.money_weighted_return,
-        annualized_mwr: performance.annualized_money_weighted_return,
-        volatility: performance.volatility,
-        max_drawdown: performance.max_drawdown
-      }
+      @returns ||=
+        {
+          twr: performance.time_weighted_return,
+          annualized_twr: performance.annualized_time_weighted_return,
+          mwr: performance.money_weighted_return,
+          annualized_mwr: performance.annualized_money_weighted_return,
+          volatility: performance.volatility,
+          max_drawdown: performance.max_drawdown
+        }
     end
 
     # The flow-adjusted index as a Series the time-series chart can draw.
@@ -239,9 +241,9 @@ class Portfolio::SectionRegistry
     #
     # `index_series` is [[date, level], ...] rebased on 100, so the values are
     # plain BigDecimals rather than Money. Series passes a non-Money value
-    # through untouched (`display_amount`), and the chart's tooltip then reads a
-    # level and a percentage change -- which is what an index is, and why this
-    # is not the value chart with different numbers in it.
+    # through untouched (`display_amount`), and the chart's tooltip then reads
+    # a level and a percentage change -- which is what an index is, and why
+    # this is not the value chart with different numbers in it.
     #
     # from_raw_values demands two values, and a period with one day or none has
     # no line to draw; nil here is what hides the section.
@@ -272,8 +274,8 @@ class Portfolio::SectionRegistry
     # metrics, so it stores `drivers.to_h` rather than the object -- which also
     # means `reconciles?` is not available here and has to be re-derived from
     # `unexplained` (see driver_reconciles? below).
-    # D7's cap. Five is a product decision; see the `comparison` entry above for
-    # what it buys.
+    # D7's cap. Five is a product decision; see the `comparison` entry above
+    # for what it buys.
     COMPARISON_LIMIT = 5
 
     # The flow-adjusted index for each of the largest five accounts, plus the
@@ -319,10 +321,10 @@ class Portfolio::SectionRegistry
         if whole.size < 2
           []
         else
-          # Rounded for the same reason index_chart_series rounds, and it matters
-          # more here: a chained level is a BigDecimal division result carrying
-          # ~35 digits, nothing downstream trims it, and up to six lines of them
-          # are serialised into a data attribute on every render.
+          # Rounded for the same reason index_chart_series rounds, and it
+          # matters more here: a chained level is a BigDecimal division result
+          # carrying ~35 digits, nothing downstream trims it, and up to six
+          # lines of them are serialised into a data attribute on every render.
           lines.unshift(label: I18n.t("portfolios.comparison.whole_portfolio"),
                         values: whole.map { |date, level| { date: date, value: level.round(2) } })
           lines
@@ -330,18 +332,18 @@ class Portfolio::SectionRegistry
       end
     end
 
-    # The largest five by closing value on the period's END date, tie-broken by
-    # name so the set is stable between renders rather than left to whatever
-    # order the database returns.
+    # The largest five by closing value on the period's END date, tie-broken
+    # by name so the set is stable between renders rather than left to
+    # whatever order the database returns.
     #
     # One query for the balances and one for the rates, so the selection does
     # not grow with the account count either -- the cap would be pointless if
     # choosing what to cap cost a query per account.
     #
     # An account whose currency has no rate is ranked last rather than
-    # converted at parity (R13). It is still listed if it reaches the cap; what
-    # it must not do is outrank a real figure on the strength of a fabricated
-    # one.
+    # converted at parity (R13). It is still listed if it reaches the cap;
+    # what it must not do is outrank a real figure on the strength of a
+    # fabricated one.
     def comparison_accounts
       @comparison_accounts ||= begin
         # Only accounts still contributing value at the period's end.
@@ -407,9 +409,9 @@ class Portfolio::SectionRegistry
 
       # R13's lookup, both sides: the most recent rate on or before the date,
       # and failing that the earliest one after it. A one-sided lookup would
-      # report a currency whose first stored rate falls after the period end as
-      # having no rate at all, and push a perfectly measurable account behind
-      # the cap.
+      # report a currency whose first stored rate falls after the period end
+      # as having no rate at all, and push a perfectly measurable account
+      # behind the cap.
       on_or_before = ExchangeRate.where(from_currency: foreign, to_currency: statement.family.currency)
                                  .where(date: ..date)
                                  .order(:from_currency, date: :desc)
@@ -433,10 +435,10 @@ class Portfolio::SectionRegistry
     end
 
     # R12 held, re-derived from the cached hash because Portfolio::Performance
-    # stores `drivers.to_h` and the object's own `reconciles?` does not
-    # survive that. Re-derived at the SAME tolerance the contract defines -- a
-    # cent, per Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01"))
-    # -- and not at exact zero.
+    # stores `drivers.to_h` and the object's own `reconciles?` does not survive
+    # that. Re-derived at the SAME tolerance the contract defines -- a cent,
+    # per Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and
+    # not at exact zero.
     #
     # Read from Portfolio::Drivers rather than written out again. This was a
     # second literal, and the two had already drifted once -- exact zero here,
@@ -452,7 +454,7 @@ class Portfolio::SectionRegistry
     # Signing happens here rather than in the partial because the sign is a
     # contract rule, not a formatting choice. R12's identity is
     #
-    #   external_net + composition + income - fees + market - revaluations
+    #   external_net + composition + income - fees + market + revaluations
     #     + fx_effect == value_close - value_open
     #
     # and `fees` is reported by Portfolio::Drivers as a POSITIVE magnitude
@@ -481,10 +483,10 @@ class Portfolio::SectionRegistry
           [ :unexplained, drivers[:unexplained] ]
         ]
 
-        # Dropped when it rounds away as well as when it is exactly zero:
-        # an "Unexplained $0.00" row states a gap the figure itself denies,
-        # and sub-cent residue is normal in a multi-currency scope. "Rounds
-        # away" is true at two decimal places; see
+        # Dropped when it rounds away as well as when it is exactly zero: an
+        # "Unexplained $0.00" row states a gap the figure itself denies, and
+        # sub-cent residue is normal in a multi-currency scope. "Rounds away"
+        # is true at two decimal places; see
         # Portfolio::Drivers::RECONCILE_TOLERANCE for the zero-decimal
         # currencies where it is not.
         signed.reject { |key, amount|
@@ -504,20 +506,20 @@ class Portfolio::SectionRegistry
     end
 
     # The bar payload, built here rather than in the partial so the view only
-    # formats, and rather than on Portfolio::RealizedGains so that model stays
-    # free of presentation. Same shape PagesController#build_money_flow_data
-    # passes, including the short-label fallback for locales where "%b %Y"
-    # is not short.
+    # formats them, and rather than on Portfolio::RealizedGains so that model
+    # stays free of presentation. Same shape PagesController#build_money_flow_data
+    # passes, including the short-label fallback for locales where "%b %Y" is
+    # not short.
     #
     # `income` and `expense` are bar_chart_controller's wire format, not a
     # claim about these figures: the two series are positional, and the labels
-    # the reader actually sees are passed separately as "Gains" and "Losses"
-    # An earlier revision renamed the keys in generalising that controller;
-    # the generalisation is not worth the blast radius on a widget the
-    # dashboard also renders, so the payload speaks its format instead.
+    # the reader actually sees are passed separately as "Gains" and "Losses".
+    # An earlier revision renamed the keys by generalising that controller; the
+    # generalisation is not worth the blast radius on a widget the dashboard
+    # also renders, so the payload speaks its format instead.
     #
     # Losses are already a positive magnitude on the bucket, which is what the
-    # chart's scale expects; `net` carries the sign for the figures beside it;
+    # chart's scale expects; `net` carries the sign for the figures beside it.
     # `short_label` is the axis tick, and "%b" drops the year. Over a range
     # that spans more than one calendar year that prints two identical "Mar"
     # ticks for different months, so the year is carried once the buckets
@@ -538,8 +540,8 @@ class Portfolio::SectionRegistry
       end
     end
 
-    # The toggle is only offered when the portfolio actually holds a fund we have
-    # constituents for. Shown unconditionally it would be a control that
+    # The toggle is only offered when the portfolio actually holds a fund we
+    # have constituents for. Shown unconditionally it would be a control that
     # visibly does nothing for most people, and the look-through axes do not
     # apply to account, currency, kind, tag or security anyway.
     def look_through_available?
@@ -560,11 +562,12 @@ class Portfolio::SectionRegistry
     # offer the cost-basis drawer: one query here rather than a permission
     # lookup per row, and none when there is nothing to list.
     def writable_account_ids
-      @writable_account_ids ||= if user && data_quality_issues.any?
-        statement.family.accounts.writable_by(user).pluck(:id).to_set
-      else
-        Set.new
-      end
+      @writable_account_ids ||=
+        if user && data_quality_issues.any?
+          statement.family.accounts.writable_by(user).pluck(:id).to_set
+        else
+          Set.new
+        end
     end
 
     def shared_locals
