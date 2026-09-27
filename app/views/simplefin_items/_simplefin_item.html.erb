@@ -1,4 +1,4 @@
-<%# locals: (simplefin_item:) %>
+<%# locals: (simplefin_item:, visible_accounts: simplefin_item.accounts) %>
 
 <%= tag.div id: dom_id(simplefin_item) do %>
   <% accounts = simplefin_item.accounts %>
@@ -193,8 +193,8 @@
                      suggestions: suggestions %>
         <% end %>
 
-        <% if accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component

@@ -100,6 +100,79 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     unregister_fake_chain!
   end
 
+  # #235. A provider card is admitted for a member as soon as ONE of its
+  # accounts is shared with them, so the card must list only the accounts this
+  # viewer may see. The unshared account is renamed to something no other part
+  # of the page can print, so its absence proves the card filtered it.
+  test "a partially shared member sees only their account on a Plaid card" do
+    shared, unshared = link_two_accounts_to(plaid_items(:one)) do |item, index|
+      item.plaid_accounts.create!(
+        name: "Second Plaid Account", plaid_id: "acc_235_#{index}", plaid_type: "investment",
+        currency: "USD", current_balance: 10
+      )
+    end
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_select "##{dom_id(plaid_items(:one))}"
+    assert_select "turbo-frame##{dom_id(shared)}", count: 1
+    assert_select "turbo-frame##{dom_id(unshared)}", count: 0
+    assert_not_includes response.body, unshared.name
+  end
+
+  test "an admin still sees every account on a Plaid card" do
+    shared, unshared = link_two_accounts_to(plaid_items(:one)) do |item, index|
+      item.plaid_accounts.create!(
+        name: "Second Plaid Account", plaid_id: "acc_235_#{index}", plaid_type: "investment",
+        currency: "USD", current_balance: 10
+      )
+    end
+
+    get accounts_url
+
+    assert_response :success
+    assert_select "turbo-frame##{dom_id(shared)}", count: 1
+    assert_select "turbo-frame##{dom_id(unshared)}", count: 1
+  end
+
+  test "a partially shared member sees only their account on a SimpleFIN card" do
+    item = SimplefinItem.create!(family: families(:dylan_family), name: "Conn 235", access_url: "https://example.com/access")
+    shared, unshared = link_two_accounts_to(item) do |sf_item, index|
+      sf_item.simplefin_accounts.create!(
+        name: "SF #{index}", account_id: "sf_235_#{index}", currency: "USD",
+        current_balance: 1, account_type: "depository"
+      )
+    end
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_select "turbo-frame##{dom_id(shared)}", count: 1
+    assert_select "turbo-frame##{dom_id(unshared)}", count: 0
+  end
+
+  test "a partially shared member sees only their account on a Kraken card" do
+    item = kraken_items(:one)
+    shared, unshared = link_two_accounts_to(item) do |k_item, index|
+      k_item.kraken_accounts.create!(
+        name: "Kraken #{index}", account_id: "kraken_235_#{index}", account_type: "combined",
+        currency: "USD", current_balance: 1, extra: {}
+      )
+    end
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_select "turbo-frame##{dom_id(shared)}", count: 1
+    assert_select "turbo-frame##{dom_id(unshared)}", count: 0
+  end
+
   test "index renders trading212 items" do
     trading212_item = trading212_items(:configured_item)
     get accounts_url
@@ -1350,6 +1423,25 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
   end
 
   private
+    # #235. Links a shared and an unshared account to +item+ through two fresh
+    # provider rows built by the block, and returns them in that order. Shares
+    # are reset first so the member's access is exactly the one granted here.
+    def link_two_accounts_to(item)
+      admin = users(:family_admin)
+      member = users(:family_member)
+      shared = accounts(:depository)
+      unshared = accounts(:investment)
+      unshared.update!(name: "Unshared Brokerage 235")
+
+      [ shared, unshared ].each_with_index do |account, index|
+        account.update!(owner: admin)
+        account.account_shares.destroy_all
+        AccountProvider.create!(account: account, provider: yield(item, index))
+      end
+      shared.account_shares.create!(user: member, permission: "read_only")
+
+      [ shared, unshared ]
+    end
 
     def variable_rate_loan_account
       account = Account.create!(

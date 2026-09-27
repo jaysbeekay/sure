@@ -1,4 +1,4 @@
-<%# locals: (fio_item:) %>
+<%# locals: (fio_item:, visible_accounts: fio_item.accounts) %>
 
 <%= tag.div id: dom_id(fio_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -65,8 +65,8 @@
 
     <% unless fio_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if fio_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: fio_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# The accounts index preloads one stats row per item; a standalone render (the %>

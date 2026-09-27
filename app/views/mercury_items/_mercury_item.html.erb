@@ -1,4 +1,4 @@
-<%# locals: (mercury_item:) %>
+<%# locals: (mercury_item:, visible_accounts: mercury_item.accounts) %>
 
 <%= tag.div id: dom_id(mercury_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -74,8 +74,8 @@
 
     <% unless mercury_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if mercury_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: mercury_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>

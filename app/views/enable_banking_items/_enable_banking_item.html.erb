@@ -1,4 +1,4 @@
-<%# locals: (enable_banking_item:) %>
+<%# locals: (enable_banking_item:, visible_accounts: enable_banking_item.accounts) %>
 
 <%= tag.div id: dom_id(enable_banking_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -77,8 +77,8 @@
 
     <% unless enable_banking_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if enable_banking_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: enable_banking_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>

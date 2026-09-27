@@ -1,4 +1,4 @@
-<%# locals: (up_item:) %>
+<%# locals: (up_item:, visible_accounts: up_item.accounts) %>
 
 <%= tag.div id: dom_id(up_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -62,8 +62,8 @@
 
     <% unless up_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if up_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: up_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <% stats = if defined?(@up_sync_stats_map) && @up_sync_stats_map

@@ -1,4 +1,4 @@
-<%# locals: (lunchflow_item:) %>
+<%# locals: (lunchflow_item:, visible_accounts: lunchflow_item.accounts) %>
 
 <%= tag.div id: dom_id(lunchflow_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -74,8 +74,8 @@
 
     <% unless lunchflow_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if lunchflow_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: lunchflow_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>

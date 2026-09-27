@@ -1,4 +1,4 @@
-<%# locals: (brex_item:) %>
+<%# locals: (brex_item:, visible_accounts: brex_item.accounts) %>
 <% render_locals = brex_item_render_locals(
      brex_item,
      sync_stats_map: @brex_sync_stats_map,
@@ -85,8 +85,8 @@
 
     <% unless brex_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if brex_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: brex_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%= render ProviderSyncSummary.new(

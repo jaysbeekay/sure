@@ -1,4 +1,4 @@
-<%# locals: (indexa_capital_item:) %>
+<%# locals: (indexa_capital_item:, visible_accounts: indexa_capital_item.accounts) %>
 
 <%= tag.div id: dom_id(indexa_capital_item) do %>
   <% unlinked_count = indexa_capital_item.unlinked_accounts_count %>
@@ -97,8 +97,8 @@
 
     <% unless indexa_capital_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if indexa_capital_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: indexa_capital_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>

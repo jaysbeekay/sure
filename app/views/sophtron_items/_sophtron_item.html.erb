@@ -1,4 +1,4 @@
-<%# locals: (sophtron_item:) %>
+<%# locals: (sophtron_item:, visible_accounts: sophtron_item.accounts) %>
 
 <%= tag.div id: dom_id(sophtron_item) do %>
   <% provider_display_name = sophtron_item.provider_display_name %>
@@ -106,8 +106,8 @@
 
     <% unless sophtron_item.scheduled_for_deletion? %>
       <div class="space-y-4 mt-4">
-        <% if sophtron_item.accounts.any? %>
-          <%= render "accounts/index/account_groups", accounts: sophtron_item.accounts %>
+        <% if visible_accounts.any? %>
+          <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
