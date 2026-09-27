@@ -197,15 +197,15 @@ class Portfolio::SectionRegistry
     # formats them.
     def kpis
       @kpis ||=
-        {
-          value: statement.portfolio_value_money,
-          day_change: statement.day_change,
-          unrealized: statement.unrealized_gains_trend,
-          period_return: statement.period_return_trend(period: period),
-          period_return_unconvertible: statement.period_return_unconvertible_count(period: period),
-          net_contributions: statement.net_contributions(period: period),
-          income: statement.totals(period: period).total_income
-        }
+      {
+        value: statement.portfolio_value_money,
+        day_change: statement.day_change,
+        unrealized: statement.unrealized_gains_trend,
+        period_return: statement.period_return_trend(period: period),
+        period_return_unconvertible: statement.period_return_unconvertible_count(period: period),
+        net_contributions: statement.net_contributions(period: period),
+        income: statement.totals(period: period).total_income
+      }
     end
 
     # One Portfolio::Performance for the request, so the six figures below and
@@ -222,14 +222,14 @@ class Portfolio::SectionRegistry
     # return are different statements.
     def returns
       @returns ||=
-        {
-          twr: performance.time_weighted_return,
-          annualized_twr: performance.annualized_time_weighted_return,
-          mwr: performance.money_weighted_return,
-          annualized_mwr: performance.annualized_money_weighted_return,
-          volatility: performance.volatility,
-          max_drawdown: performance.max_drawdown
-        }
+      {
+        twr: performance.time_weighted_return,
+        annualized_twr: performance.annualized_time_weighted_return,
+        mwr: performance.money_weighted_return,
+        annualized_mwr: performance.annualized_money_weighted_return,
+        volatility: performance.volatility,
+        max_drawdown: performance.max_drawdown
+      }
     end
 
     # The flow-adjusted index as a Series the time-series chart can draw.
@@ -321,10 +321,10 @@ class Portfolio::SectionRegistry
         if whole.size < 2
           []
         else
-          # Rounded for the same reason index_chart_series rounds, and it
-          # matters more here: a chained level is a BigDecimal division result
-          # carrying ~35 digits, nothing downstream trims it, and up to six
-          # lines of them are serialised into a data attribute on every render.
+          # Rounded for the same reason index_chart_series rounds, and it matters
+          # more here: a chained level is a BigDecimal division result carrying
+          # ~35 digits, nothing downstream trims it, and up to six lines of them
+          # are serialised into a data attribute on every render.
           lines.unshift(label: I18n.t("portfolios.comparison.whole_portfolio"),
                         values: whole.map { |date, level| { date: date, value: level.round(2) } })
           lines
@@ -332,9 +332,9 @@ class Portfolio::SectionRegistry
       end
     end
 
-    # The largest five by closing value on the period's END date, tie-broken
-    # by name so the set is stable between renders rather than left to
-    # whatever order the database returns.
+    # The largest five by closing value on the period's END date, tie-broken by
+    # name so the set is stable between renders rather than left to whatever
+    # order the database returns.
     #
     # One query for the balances and one for the rates, so the selection does
     # not grow with the account count either -- the cap would be pointless if
@@ -359,13 +359,14 @@ class Portfolio::SectionRegistry
           cutoff.present? && cutoff < period_end
         }
         values = closing_values_for(accounts)
-        # [MUTATION-PROOF #240] One COUNT per historical account in the pool.
-        # Uncapped and proportional to the pool: at 11 accounts the query count
-        # is +11 over baseline; at 14 it is +14, so `at_cap` and `beyond_cap`
-        # drift apart and `assert_equal at_cap, beyond_cap` fires exactly like
-        # the one-shot CI flake (#236 head 629b780, job 108388208043, 89 vs 88).
-        # This is the class of N+1 the guard exists to catch; the test MUST
-        # red on this branch. Revert on PR close.
+        # [MUTATION-PROOF #240] One COUNT per historical account, uncapped and
+        # proportional to the pool: at 11 accounts that is +11 queries over the
+        # baseline, at 14 it is +14, so `beyond_cap` drifts past `at_cap` by +3
+        # and `assert_equal at_cap, beyond_cap` fires -- the same shape as the
+        # one-shot CI flake on PR #236 (job 108388208043, 89 vs 88). This is
+        # the exact class of per-account N+1 the D7 cap and the flatness
+        # assertion exist to catch, so the test MUST be red on this branch.
+        # Revert on PR close; the real fix is the companion setup PR.
         accounts.each { |a| a.balances.where(date: period_end).count }
         # Rate availability sorts FIRST, then value. Ranking a rateless account
         # as zero is not enough: an account that genuinely closed at zero or
@@ -409,9 +410,9 @@ class Portfolio::SectionRegistry
 
       # R13's lookup, both sides: the most recent rate on or before the date,
       # and failing that the earliest one after it. A one-sided lookup would
-      # report a currency whose first stored rate falls after the period end
-      # as having no rate at all, and push a perfectly measurable account
-      # behind the cap.
+      # report a currency whose first stored rate falls after the period end as
+      # having no rate at all, and push a perfectly measurable account behind
+      # the cap.
       on_or_before = ExchangeRate.where(from_currency: foreign, to_currency: statement.family.currency)
                                  .where(date: ..date)
                                  .order(:from_currency, date: :desc)
@@ -436,9 +437,9 @@ class Portfolio::SectionRegistry
 
     # R12 held, re-derived from the cached hash because Portfolio::Performance
     # stores `drivers.to_h` and the object's own `reconciles?` does not survive
-    # that. Re-derived at the SAME tolerance the contract defines -- a cent,
-    # per Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and
-    # not at exact zero.
+    # that. Re-derived at the SAME tolerance the contract defines -- a cent, per
+    # Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and not
+    # at exact zero.
     #
     # Read from Portfolio::Drivers rather than written out again. This was a
     # second literal, and the two had already drifted once -- exact zero here,
@@ -457,9 +458,9 @@ class Portfolio::SectionRegistry
     #   external_net + composition + income - fees + market + revaluations
     #     + fx_effect == value_close - value_open
     #
-    # and `fees` is reported by Portfolio::Drivers as a POSITIVE magnitude
-    # that REDUCES the change (R7). A table that rendered each component as
-    # given would show fees adding to the portfolio and not sum to the change
+    # and `fees` is reported by Portfolio::Drivers as a POSITIVE magnitude that
+    # REDUCES the change (R7). A table that rendered each component as given
+    # would show fees adding to the portfolio and would not sum to the change
     # it sits under. Negating it here keeps the one place that knows the rule
     # next to the comment that states it.
     #
@@ -486,9 +487,8 @@ class Portfolio::SectionRegistry
         # Dropped when it rounds away as well as when it is exactly zero: an
         # "Unexplained $0.00" row states a gap the figure itself denies, and
         # sub-cent residue is normal in a multi-currency scope. "Rounds away"
-        # is true at two decimal places; see
-        # Portfolio::Drivers::RECONCILE_TOLERANCE for the zero-decimal
-        # currencies where it is not.
+        # is true at two decimal places; see Portfolio::Drivers::RECONCILE_TOLERANCE
+        # for the zero-decimal currencies where it is not.
         signed.reject { |key, amount|
           next true if amount.nil? || amount.zero?
 
@@ -506,17 +506,17 @@ class Portfolio::SectionRegistry
     end
 
     # The bar payload, built here rather than in the partial so the view only
-    # formats them, and rather than on Portfolio::RealizedGains so that model
-    # stays free of presentation. Same shape PagesController#build_money_flow_data
+    # formats, and rather than on Portfolio::RealizedGains so that model stays
+    # free of presentation. Same shape PagesController#build_money_flow_data
     # passes, including the short-label fallback for locales where "%b %Y" is
     # not short.
     #
     # `income` and `expense` are bar_chart_controller's wire format, not a
-    # claim about these figures: the two series are positional, and the labels
-    # the reader actually sees are passed separately as "Gains" and "Losses".
-    # An earlier revision renamed the keys by generalising that controller; the
-    # generalisation is not worth the blast radius on a widget the dashboard
-    # also renders, so the payload speaks its format instead.
+    # claim about what these figures are: the two series are positional, and
+    # the labels the reader actually sees are passed separately as "Gains" and
+    # "Losses". An earlier revision renamed the keys by generalising that
+    # controller; the generalisation is not worth the blast radius on a widget
+    # the dashboard also renders, so the payload speaks its format instead.
     #
     # Losses are already a positive magnitude on the bucket, which is what the
     # chart's scale expects; `net` carries the sign for the figures beside it.
@@ -540,10 +540,10 @@ class Portfolio::SectionRegistry
       end
     end
 
-    # The toggle is only offered when the portfolio actually holds a fund we
-    # have constituents for. Shown unconditionally it would be a control that
-    # visibly does nothing for most people, and the look-through axes do not
-    # apply to account, currency, kind, tag or security anyway.
+    # The toggle is only offered when the portfolio actually holds a fund we have
+    # constituents for. Shown unconditionally it would be a control that visibly
+    # does nothing for most people, and the look-through axes do not apply to
+    # account, currency, kind, tag or security anyway.
     def look_through_available?
       return false unless by.to_s.in?(%w[asset_class asset_sub_class sector region])
 
