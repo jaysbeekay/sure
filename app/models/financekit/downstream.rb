@@ -95,6 +95,6 @@ class Financekit::Downstream
 
     def advisory_lock_key
       # Matches the keying used by the other advisory-locked jobs in this app.
-      @advisory_lock_key ||= Digest::SHA256.hexdigest("#{ADVISORY_LOCK_SCOPE}:#{@item.id}").to_i(16) % (2**62)
+      @advisory_lock_key ||= Digest::MD5.hexdigest("#{ADVISORY_LOCK_SCOPE}:#{@item.id}").to_i(16) % (2**62)
     end
 end
