@@ -81,7 +81,7 @@ class DemoFamilyRefreshJob < ApplicationJob
     end
 
     def advisory_lock_key
-      Digest::MD5.hexdigest("demo_family_refresh").to_i(16) % (2**62)
+      Digest::SHA256.hexdigest("demo_family_refresh").to_i(16) % (2**62)
     end
 
     def deleted_email_for(user)
@@ -95,10 +95,10 @@ class DemoFamilyRefreshJob < ApplicationJob
           super_admin:,
           old_family_id: old_family&.id,
           old_family_name: old_family&.name,
-          old_family_session_count:,
-          newly_created_families_count:,
-          period_start:,
-          period_end:
+          old_family_session_count: old_family_session_count,
+          newly_created_families_count: newly_created_families_count,
+          period_start: period_start,
+          period_end: period_end
         ).completed.deliver_later
       end
     end
