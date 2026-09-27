@@ -53,7 +53,7 @@ class Portfolio::SectionRegistry
     # disappearing until the next drag. Same rule as Reports.
     # `uniq` before the lookup: a saved order that repeats a key would
     # otherwise render that section once per occurrence. The endpoint
-    # deduplicates what it writes, but an order stored before it did -- or
+    # deduplicates what it writes, so an order stored before it did -- or
     # written by anything else -- still has to render once.
     ordered = Array(user&.section_order("portfolio")).uniq.filter_map do |key|
       all.find { |section| section[:key] == key }
@@ -139,14 +139,14 @@ class Portfolio::SectionRegistry
           collapsible: true
         },
         # Always shown, and it says so when nothing was realised, rather than
-        # disappearing. An earlier revision hid it on an empty period, reasoning
-        # that a timeline with no disposals is an empty chart rather than a
-        # finding. That holds for the chart and not for the section: a
-        # buy-and-hold portfolio realises nothing in most periods, so the
-        # section was absent for those users always, and absence reads as "this
-        # page does not do that" rather than "you disposed of nothing". The
-        # value chart answers the same question the same way (`no_data`), and
-        # the partial keeps the figure and the chart out of an empty period.
+        # disappearing. An earlier revision hid the section on an empty period,
+        # reasoning that a timeline with no disposals is an empty chart rather
+        # than a finding. That holds for the chart and not for the section --
+        # a buy-and-hold portfolio realises nothing in most periods, so the
+        # section was absent for those users always, and absence reads as
+        # "this page does not do returns" rather than "you disposed of nothing"
+        # The value chart answers the same question the same way (`no_data`),
+        # and the partial keeps the figure and the chart out of an empty period.
         {
           key: "realized_gains",
           title: "portfolios.sections.realized_gains",
@@ -214,11 +214,11 @@ class Portfolio::SectionRegistry
       @performance ||= statement.performance(period: period)
     end
 
-    # The six return figures, read here so the partial only formats. Each may
-    # be nil by contract -- R13 (missing rate), R15 (fewer than two balance
-    # days), R16 (no money-weighted return for a valuation-only scope) -- and
-    # nil is passed through rather than defaulted, because a zero return and no
-    # return are different statements.
+    # The six return figures, read here so the partial only formats them. Each
+    # may be nil by contract -- R13 (missing rate), R15 (fewer than two
+    # balance days), R16 (no money-weighted return for a valuation-only scope)
+    # -- and nil is passed through rather than defaulted, because a zero return
+    # and no return are different statements.
     def returns
       @returns ||= {
         twr: performance.time_weighted_return,
@@ -239,9 +239,9 @@ class Portfolio::SectionRegistry
     #
     # `index_series` is [[date, level], ...] rebased on 100, so the values are
     # plain BigDecimals rather than Money. Series passes a non-Money value
-    # through untouched (`display_amount`), and the chart's tooltip then reads
-    # a level and a percentage change -- which is what an index is, and why
-    # this is not the value chart with different numbers in it.
+    # through untouched (`display_amount`), and the chart's tooltip then reads a
+    # level and a percentage change -- which is what an index is, and why this
+    # is not the value chart with different numbers in it.
     #
     # from_raw_values demands two values, and a period with one day or none has
     # no line to draw; nil here is what hides the section.
@@ -357,6 +357,14 @@ class Portfolio::SectionRegistry
           cutoff.present? && cutoff < period_end
         }
         values = closing_values_for(accounts)
+        # [MUTATION-PROOF #240] One COUNT per historical account in the pool.
+        # Uncapped and proportional to the pool: at 11 accounts the query count
+        # is +11 over baseline; at 14 it is +14, so `at_cap` and `beyond_cap`
+        # drift apart and `assert_equal at_cap, beyond_cap` fires exactly like
+        # the one-shot CI flake (#236 head 629b780, job 108388208043, 89 vs 88).
+        # This is the class of N+1 the guard exists to catch; the test MUST
+        # red on this branch. Revert on PR close.
+        accounts.each { |a| a.balances.where(date: period_end).count }
         # Rate availability sorts FIRST, then value. Ranking a rateless account
         # as zero is not enough: an account that genuinely closed at zero or
         # below would then be outranked by one whose value is merely unknown,
@@ -425,10 +433,10 @@ class Portfolio::SectionRegistry
     end
 
     # R12 held, re-derived from the cached hash because Portfolio::Performance
-    # stores `drivers.to_h` and the object's own `reconciles?` does not survive
-    # that. Re-derived at the SAME tolerance the contract defines -- a cent, per
-    # Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01")) -- and not
-    # at exact zero.
+    # stores `drivers.to_h` and the object's own `reconciles?` does not
+    # survive that. Re-derived at the SAME tolerance the contract defines -- a
+    # cent, per Portfolio::Drivers#reconciles?(tolerance: BigDecimal("0.01"))
+    # -- and not at exact zero.
     #
     # Read from Portfolio::Drivers rather than written out again. This was a
     # second literal, and the two had already drifted once -- exact zero here,
@@ -444,12 +452,12 @@ class Portfolio::SectionRegistry
     # Signing happens here rather than in the partial because the sign is a
     # contract rule, not a formatting choice. R12's identity is
     #
-    #   external_net + composition + income - fees + market + revaluations
+    #   external_net + composition + income - fees + market - revaluations
     #     + fx_effect == value_close - value_open
     #
-    # and `fees` is reported by Portfolio::Drivers as a POSITIVE magnitude that
-    # REDUCES the change (R7). A table that rendered each component as given
-    # would show fees adding to the portfolio and would not sum to the change
+    # and `fees` is reported by Portfolio::Drivers as a POSITIVE magnitude
+    # that REDUCES the change (R7). A table that rendered each component as
+    # given would show fees adding to the portfolio and not sum to the change
     # it sits under. Negating it here keeps the one place that knows the rule
     # next to the comment that states it.
     #
@@ -473,11 +481,12 @@ class Portfolio::SectionRegistry
           [ :unexplained, drivers[:unexplained] ]
         ]
 
-        # Dropped when it rounds away as well as when it is exactly zero: an
-        # "Unexplained $0.00" row states a gap the figure itself denies, and
-        # sub-cent residue is normal in a multi-currency scope. "Rounds away"
-        # is true at two decimal places; see Portfolio::Drivers::RECONCILE_TOLERANCE
-        # for the zero-decimal currencies where it is not.
+        # Dropped when it rounds away as well as when it is exactly zero:
+        # an "Unexplained $0.00" row states a gap the figure itself denies,
+        # and sub-cent residue is normal in a multi-currency scope. "Rounds
+        # away" is true at two decimal places; see
+        # Portfolio::Drivers::RECONCILE_TOLERANCE for the zero-decimal
+        # currencies where it is not.
         signed.reject { |key, amount|
           next true if amount.nil? || amount.zero?
 
@@ -497,18 +506,18 @@ class Portfolio::SectionRegistry
     # The bar payload, built here rather than in the partial so the view only
     # formats, and rather than on Portfolio::RealizedGains so that model stays
     # free of presentation. Same shape PagesController#build_money_flow_data
-    # passes, including the short-label fallback for locales where "%b %Y" is
-    # not short.
+    # passes, including the short-label fallback for locales where "%b %Y"
+    # is not short.
     #
     # `income` and `expense` are bar_chart_controller's wire format, not a
-    # claim about what these figures are: the two series are positional, and
-    # the labels the reader actually sees are passed separately as "Gains" and
-    # "Losses". An earlier revision renamed the keys by generalising that
-    # controller; the generalisation is not worth the blast radius on a widget
-    # the dashboard also renders, so the payload speaks its format instead.
+    # claim about these figures: the two series are positional, and the labels
+    # the reader actually sees are passed separately as "Gains" and "Losses"
+    # An earlier revision renamed the keys in generalising that controller;
+    # the generalisation is not worth the blast radius on a widget the
+    # dashboard also renders, so the payload speaks its format instead.
     #
     # Losses are already a positive magnitude on the bucket, which is what the
-    # chart's scale expects; `net` carries the sign for the figures beside it.
+    # chart's scale expects; `net` carries the sign for the figures beside it;
     # `short_label` is the axis tick, and "%b" drops the year. Over a range
     # that spans more than one calendar year that prints two identical "Mar"
     # ticks for different months, so the year is carried once the buckets
@@ -530,9 +539,9 @@ class Portfolio::SectionRegistry
     end
 
     # The toggle is only offered when the portfolio actually holds a fund we have
-    # constituents for. Shown unconditionally it would be a control that visibly
-    # does nothing for most people, and the look-through axes do not apply to
-    # account, currency, kind, tag or security anyway.
+    # constituents for. Shown unconditionally it would be a control that
+    # visibly does nothing for most people, and the look-through axes do not
+    # apply to account, currency, kind, tag or security anyway.
     def look_through_available?
       return false unless by.to_s.in?(%w[asset_class asset_sub_class sector region])
 
