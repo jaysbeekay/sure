@@ -2,20 +2,21 @@ require "test_helper"
 
 class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   setup do
-    # Hardened against a one-shot order-dependent per-worker state leak that
-    # flaked the comparison cap test (#240) once on a single CI worker (#236
-    # head 629b780, job 108388208043): 89 vs 88 queries on the 14-account GET.
+    # Hardened against a one-shot, order-dependent, per-worker state leak that
+    # flaked the comparison-cap test in this very file once on a single CI
+    # worker (PR #236 head 629b780, job 108388208043): 89 queries at 14
+    # accounts vs 88 at 11, on a class of N+1 the cap exists to prevent.
     #
-    # The repo's known class (rails-settings-cached) is already cleared in
-    # test_helper.rb (`setup { Setting.clear_cache }`). This extends the
-    # reset to the other candidate classes on the portfolio path -- Current.*
-    # thread-locals and Rails.cache (a no-op under :null_store, a
-    # self-documenting guard here). The guard assertion itself is not
-    # touched: the test still fails on a per-account (uncapped) query in the
-    # comparison pool, and still passes when the cap holds.
+    # test_helper.rb already clears the rails-settings-cached state
+    # (Setting.clear_cache) per test. This extends the reset to the other
+    # per-worker candidate state on the portfolio path -- Current.*
+    # thread-locals and Rails.cache (a no-op under :null_store in test, but a
+    # self-documenting guard here) -- so an earlier test in the same worker
+    # cannot leak an extra query into the flatness assertion below.
     #
-    # See the mutation-proof branch on `main` (see #240 for the link) for
-    # the CI-failing evidence that the guard still bites after this change.
+    # The guard itself is untouched: a true per-account uncapped query in the
+    # comparison pool (the mutation-proof branch) still makes beyond_cap
+    # drift past at_cap and trips `assert_equal at_cap, beyond_cap`.
     Current.reset if defined?(Current)
     Setting.clear_cache
     Rails.cache.clear
@@ -216,8 +217,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       as: :json
 
     assert_response :ok
-    assert_nil @user.reload.preferences["portfolio_collapsed_sections"]
-    assert_equal %w[kpis], @user.preferences["portfolio_section_order"]
+    @user.reload
+    assert_nil @user.preferences["portfolio_collapsed_sections"]
+    assert_equal %w[kpis], @user.section_order("portfolio")
   end
 
   test "a saved order with repeated keys renders each section once" do
@@ -235,10 +237,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[value_chart kpis], keys.first(2)
   end
 
-  # A return is a rate, not an amount. The card carries `money:` and `trend:`
-  # as well, and both format with a currency symbol, so the failure this
-  # guards against is a 21% return rendering as $0.21 -- plausible-looking,
-  # and wrong by two orders of magnitude and a unit.
+  # A return is a rate, not an amount. The card takes `money:` and `trend:` as
+  # well, and both format with a currency symbol, so the failure this guards
+  # against is a 21% return rendering as $0.21 -- plausible-looking, and wrong
+  # by two orders of magnitude and a unit.
   test "a return renders as a percentage, not as money" do
     Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(BigDecimal("0.2134"))
     Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
@@ -248,9 +250,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "#portfolio-performance" do
-      assert_select "p", text: /21\.34%/
+      assert_select "p", text: /21\\.34%/
     end
-    assert_no_match(/\$0\.21/, response.body, "a rate must not be formatted as currency")
+    assert_no_match(/\\$0\\.21/, response.body, "a rate must not be formatted as currency")
   end
 
   # R8 solves the money-weighted return per unit of the PERIOD'S SPAN, not as a
@@ -271,9 +273,8 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path
 
     assert_response :success
-    # A fragment, not the whole hint: it is a short phrase with an apostrophe
-    # and an em dash, which are HTML-escaped and would never match the raw
-    # string.
+    # A fragment, not the whole hint: it carries an apostrophe and an em dash,
+    # which render HTML-escaped and would never match the raw string.
     assert_match(/Money-weighted, over the period/, response.body)
 
     %i[en de].each do |locale|
@@ -287,12 +288,12 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  # "Left out" is true of the chained TWR and of nothing else on this section.
-  # A suppressed day keeps its place in the series (R6): volatility counts it
-  # as an observation of zero, and its flows stay in the money-weighted
-  # series. Three of the six figures on the card are computed from a day the
-  # banner told the reader was omitted, so the wording is pinned in both
-  # locales rather than left to drift back.
+  # "Left out" is true of the chained TWR and of nothing else on this section. A
+  # suppressed day keeps its place in the series (R6): volatility counts it as an
+  # observation of zero, and its flows stay in the money-weighted series. Three
+  # of the six figures on the card are computed from a day the banner told the
+  # reader was omitted, so the wording is pinned in both locales rather than left
+  # to drift back.
   test "the suppressed-days banner says a day was counted as zero, in every locale" do
     Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
     Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([ Date.current ])
@@ -314,9 +315,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  # Every figure may be withheld by contract (R13, R15, R16). The section
-  # still renders and says so -- the same decision #171 settled for realised
-  # P&L, where a vanishing section reads as "this page does not do that".
+  # Every figure may be withheld by contract (R13, R15, R16). The section still
+  # renders and says so -- the same decision #171 settled for realised P&L,
+  # where a vanishing section reads as "this page does not do that".
   test "the performance section states that figures are withheld rather than vanishing" do
     Portfolio::Performance.any_instance.stubs(:time_weighted_return).returns(nil)
     Portfolio::Performance.any_instance.stubs(:annualized_time_weighted_return).returns(nil)
@@ -494,7 +495,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       assert_select "[data-portfolio-driver=fees] td", text: /-/
     end
     assert_match I18n.t("portfolios.drivers.value_open"), response.body
-    assert_match I18n.t("portfolios.drivers.change"), response.body
+    assert_match I18n.t("portfolios.drivers.value_close"), response.body
     assert_select "#portfolio-drivers", text: /#{Regexp.escape(I18n.t("portfolios.drivers.unreconciled_title"))}/, count: 0,
       message: "a reconciling table does not warn"
   end
@@ -523,12 +524,6 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # is the intended behaviour rather than a leak. Above it, the count must stop
   # moving: that is what the cap is for, and without this the ceiling above
   # would only be "true today for ten accounts".
-  #
-  # The class-level setup above also clears per-worker state that the one-shot
-  # CI flake (#240) suggested could leak into this test from an earlier one in
-  # the same worker -- see the setup comment for which classes and why each is
-  # cleared, and the linked mutation-proof PR for the CI-failing evidence that
-  # the guard still bites after that reset.
   test "the comparison cap keeps the query count from growing with account count" do
     # One added account, so three in total with the two the fixtures carry --
     # genuinely below D7's cap of five, which `accounts: 3` would already have
@@ -552,16 +547,15 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
                  "past five accounts the comparison stops growing:\n#{(beyond_cap - at_cap)} extra queries"
   end
 
-  # The legend is the only thing that tells the lines apart -- the chart
-  # carries no tooltip on purpose -- and nothing read it. This pins the
-  # rendering: one entry per series, the portfolio line first, and the two
-  # elements that have to carry `text-primary` for the baseline to be visible
-  # at all.
+  # The legend is the only thing that tells the lines apart -- the chart carries
+  # no tooltip on purpose -- and nothing read it. This pins the rendering: one
+  # entry per series, the portfolio's own line first, and the two elements that
+  # have to carry `text-primary` for the baseline to be visible at all.
   #
   # `currentColor` is not a colour on its own: it resolves against the element
   # it is used on. Painting the dot and the mount with a literal gray was what
-  # made the baseline invisible in dark mode, so the token that replaced it
-  # must actually be in the markup or the line has no colour to follow.
+  # made the baseline invisible in dark mode, so the token that replaced it must
+  # actually be in the markup or the line has no colour to follow.
   test "the comparison legend names every line and carries the theme token for the baseline" do
     build_portfolio(accounts: 1, securities: 2)
 
@@ -659,7 +653,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
   test "data quality offers the cost-basis drawer only where the user may write" do
     other = users(:family_member)
-    shared = @family.accounts.create!(name: "Shared brokerage", balance: 500, cash_balance: 0, currency: "USD", accountable: Investment.new, owner: other)
+    shared = @family.accounts.create!(name: "Read-only broker", balance: 500, cash_balance: 0, currency: "USD", accountable: Investment.new, owner: other)
     shared.share_with!(@user, permission: "read_only", include_in_finances: true)
     unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
     read_only_holding = Holding.create!(account: shared, security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
@@ -671,8 +665,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(own_holding)
     assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(read_only_holding), count: 0,
       message: "a read-only share cannot PATCH the holding, so it must not be offered the drawer"
-    assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{Regexp.escape(I18n.t("portfolios.data_quality.read_only"))}/
-\n  # Measured 87, ceiling 93 -- the same 6 of headroom every previous pair
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
+  end
+
+  # Measured 87, ceiling 93 -- the same 6 of headroom every previous pair
   # carried. The figure has moved twice:
   #
   #   54 -> 61  the performance section: one Portfolio::Performance for the
@@ -722,22 +718,22 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # A buy-and-hold portfolio realises nothing, so the section used to vanish
   # entirely. For a family that holds investments, "no section" is ambiguous
   # between "you disposed of nothing this period" and "this page does not do
-  # returns" -- the second is what a reader concludes with all the other
-  # sections present. The value chart already answers the same question with
-  # an empty state rather than by disappearing; this follows it.
+  # that" -- the second being what a reader concludes when every other section
+  # is present. The value chart already answers the same question with an empty
+  # state rather than by disappearing; this follows it.
   test "the realised gains section states that nothing was realised rather than vanishing" do
     get portfolio_path(period: "last_30_days")
 
     assert_response :success
     assert_select "[data-section-key=?]", "realized_gains", count: 1
     assert_match I18n.t("portfolios.realized_gains.no_disposals", period: Period.last_30_days.label), response.body
-    # The figure, the summary, and the chart are what there is nothing to show;
-    # all three stay out. Asserting only the chart would leave a regression
-    # that restored the figure on an empty period green, since all three are
-    # behind the same `realized.any?` branch.
+    # The figure, the summary and the chart are what there is nothing to show;
+    # all three stay out. Asserting only the chart would leave a regression that
+    # restored the figure on an empty period green, since all three sit behind
+    # the same `realized.any?` branch.
     assert_select "#portfolio-realized-gains [data-controller=?]", "bar-chart", count: 0
     assert_select "#portfolio-realized-gains p.text-3xl", count: 0
-    assert_no_match(/#{Regexp.escape(I18n.t("portfolios.realized_gains.summary", count: 0, period: Period.last_30_days.label))}/, response.body)
+    assert_no_match I18n.t("portfolios.realized_gains.summary", count: 0, period: Period.last_30_days.label), response.body
   end
 
   private
