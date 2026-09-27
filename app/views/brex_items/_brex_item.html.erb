@@ -27,7 +27,9 @@
                 <%= tag.p t(".deletion_in_progress"), class: "text-destructive text-sm animate-pulse" %>
               <% end %>
             </div>
-            <% if brex_item.accounts.any? %>
+            <%# The institution belongs to every account on the connection, so it is
+                shown only to a viewer who can see them all (#235). %>
+            <% if brex_item.accounts.any? && visible_accounts.size == brex_item.accounts.size %>
               <p class="text-xs text-secondary">
                 <%= brex_item.institution_summary %>
               </p>

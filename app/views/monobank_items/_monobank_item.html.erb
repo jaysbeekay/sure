@@ -17,7 +17,9 @@
               <% end %>
             </div>
 
-            <% if monobank_item.accounts.any? %>
+            <%# The institution belongs to every account on the connection, so it is
+                shown only to a viewer who can see them all (#235). %>
+            <% if monobank_item.accounts.any? && visible_accounts.size == monobank_item.accounts.size %>
               <p class="text-xs text-secondary"><%= monobank_item.institution_summary %></p>
             <% end %>
 

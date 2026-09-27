@@ -16,7 +16,9 @@
                 <p class="text-destructive text-sm animate-pulse"><%= t(".deletion_in_progress") %></p>
               <% end %>
             </div>
-            <% if mercury_item.accounts.any? %>
+            <%# The institution belongs to every account on the connection, so it is
+                shown only to a viewer who can see them all (#235). %>
+            <% if mercury_item.accounts.any? && visible_accounts.size == mercury_item.accounts.size %>
               <p class="text-xs text-secondary">
                 <%= mercury_item.institution_summary %>
               </p>

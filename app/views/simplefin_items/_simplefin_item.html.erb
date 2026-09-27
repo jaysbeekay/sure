@@ -36,7 +36,7 @@
                 <p class="text-destructive text-sm animate-pulse"><%= t(".deletion_in_progress") %></p>
               <% end %>
             </div>
-            <% if accounts.any? %>
+            <% if all_accounts_visible && accounts.any? %>
               <p class="text-xs text-secondary">
                 <%= simplefin_item.institution_summary %>
               </p>

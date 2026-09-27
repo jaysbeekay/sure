@@ -228,6 +228,43 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_not_includes response.body, unshared.name
   end
 
+  # The card header names the connected institution when there is only one.
+  # That institution is the unshared account's as much as the shared one's,
+  # so it follows the same rule as the other names on the card.
+  test "a partially shared member does not see the connection's institution name" do
+    item = SimplefinItem.create!(family: families(:dylan_family), name: "Conn 235", access_url: "https://example.com/access")
+    link_two_accounts_to(item) do |sf_item, index|
+      sf_item.simplefin_accounts.create!(
+        name: "SF #{index}", account_id: "sf_235_#{index}", currency: "USD",
+        current_balance: 1, account_type: "depository"
+      )
+    end
+    SimplefinItem.any_instance.stubs(:connected_institutions).returns([ { "name" => "Hidden Bank 235" } ])
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_not_includes response.body, "Hidden Bank 235"
+  end
+
+  test "an admin still sees the connection's institution name" do
+    item = SimplefinItem.create!(family: families(:dylan_family), name: "Conn 235", access_url: "https://example.com/access")
+    link_two_accounts_to(item) do |sf_item, index|
+      sf_item.simplefin_accounts.create!(
+        name: "SF #{index}", account_id: "sf_235_#{index}", currency: "USD",
+        current_balance: 1, account_type: "depository"
+      )
+    end
+    SimplefinItem.any_instance.stubs(:connected_institutions).returns([ { "name" => "Hidden Bank 235" } ])
+
+    get accounts_url
+
+    assert_response :success
+    assert_includes response.body, "Hidden Bank 235"
+  end
+
   test "a partially shared member sees only their account on a Kraken card" do
     item = kraken_items(:one)
     shared, unshared = link_two_accounts_to(item) do |k_item, index|
