@@ -189,6 +189,24 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
     assert_equal 4.5, loan.interest_rate.to_f, "the rejected rate was stored after all"
   end
 
+  # The provenance ledger, not the loan. A refused write must not re-attribute
+  # the rejected figure to Plaid. `find_or_create_by` reuses the row an earlier
+  # accepted write made, so a row count cannot see this -- only the stored
+  # `value` can.
+  test "a refused rate leaves the previously accepted provenance value in place" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "variable")
+    writer = PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account.reload)
+
+    writer.send(:write_loan_terms, interest_rate: 5.2)
+    enrichment = DataEnrichment.find_by!(enrichable: loan, attribute_name: "interest_rate", source: "plaid")
+    assert_equal 5.2, enrichment.value.to_f
+
+    writer.send(:write_loan_terms, interest_rate: 150)
+
+    assert_equal 5.2, enrichment.reload.value.to_f, "the refused rate was recorded as Plaid's value"
+    assert_equal 5.2, loan.reload.interest_rate.to_f
+  end
+
   private
     def loan_with(**attrs)
       loan = @plaid_account.current_account.loan
