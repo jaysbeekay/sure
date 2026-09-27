@@ -76,7 +76,7 @@
            else
              fio_item.latest_sync_record&.sync_stats || {}
            end %>
-        <%= render ProviderSyncSummary.new(stats: stats, provider_item: fio_item) %>
+        <%= render ProviderSyncSummary.new(stats: stats, provider_item: fio_item, show_account_details: visible_accounts.size == fio_item.accounts.size) %>
 
         <% if fio_item.requires_update? %>
           <div class="p-4 flex flex-col gap-3 items-center justify-center">

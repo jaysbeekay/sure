@@ -118,7 +118,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: sophtron_item,
+          provider_item: sophtron_item, show_account_details: visible_accounts.size == sophtron_item.accounts.size,
           institutions_count: sophtron_item.connected_institutions.size
         ) %>
 

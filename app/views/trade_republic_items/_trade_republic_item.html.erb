@@ -85,7 +85,7 @@
         <% end %>
 
         <% stats = trade_republic_item.syncs.ordered.first&.sync_stats || {} %>
-        <%= render ProviderSyncSummary.new(stats: stats, provider_item: trade_republic_item) %>
+        <%= render ProviderSyncSummary.new(stats: stats, provider_item: trade_republic_item, show_account_details: visible_accounts.size == trade_republic_item.accounts.size) %>
 
         <% quality = trade_republic_item.data_quality_summary %>
         <% reconciliation = trade_republic_item.reconciliation_summary %>

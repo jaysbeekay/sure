@@ -86,7 +86,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: lunchflow_item,
+          provider_item: lunchflow_item, show_account_details: visible_accounts.size == lunchflow_item.accounts.size,
           institutions_count: lunchflow_item.connected_institutions.size
         ) %>
 

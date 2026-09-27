@@ -75,7 +75,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: questrade_item,
+          provider_item: questrade_item, show_account_details: visible_accounts.size == questrade_item.accounts.size,
           institutions_count: questrade_item.connected_institutions.size
         ) %>
 

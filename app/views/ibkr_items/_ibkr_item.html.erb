@@ -86,7 +86,7 @@
         <% end %>
 
         <% stats = ibkr_item.syncs.ordered.first&.sync_stats || {} %>
-        <%= render ProviderSyncSummary.new(stats: stats, provider_item: ibkr_item) %>
+        <%= render ProviderSyncSummary.new(stats: stats, provider_item: ibkr_item, show_account_details: visible_accounts.size == ibkr_item.accounts.size) %>
 
         <% if Current.user&.admin? %>
           <% if unlinked_count > 0 && ibkr_item.accounts.empty? %>

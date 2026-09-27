@@ -89,7 +89,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: redbark_item
+          provider_item: redbark_item, show_account_details: visible_accounts.size == redbark_item.accounts.size
         ) %>
 
         <%# Compute unlinked accounts (no AccountProvider link) %>

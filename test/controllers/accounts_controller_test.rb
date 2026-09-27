@@ -153,6 +153,79 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "##{dom_id(item)}"
     assert_select "turbo-frame##{dom_id(shared)}", count: 1
     assert_select "turbo-frame##{dom_id(unshared)}", count: 0
+    assert_not_includes response.body, unshared.name
+  end
+
+  # The card's other name-bearing lists. The sync summary's detail rows come
+  # from the connection's last sync and name the accounts and transactions
+  # involved, so they follow the same rule as the account list: shown only to
+  # a viewer who can see every account on the connection. Counts stay.
+  test "a partially shared member does not see account names in a card's sync summary" do
+    item = plaid_items(:one)
+    _shared, unshared = link_two_accounts_to(item) do |p_item, index|
+      p_item.plaid_accounts.create!(
+        name: "Second Plaid Account", plaid_id: "acc_235_#{index}", plaid_type: "investment",
+        currency: "USD", current_balance: 10
+      )
+    end
+    item.syncs.create!(status: "completed", sync_stats: {
+      "tx_seen" => 1, "tx_skipped" => 1,
+      "skip_details" => [ { "name" => "Secret Txn 235", "reason" => "excluded", "account_name" => unshared.name } ],
+      "total_errors" => 1,
+      "errors" => [ { "name" => unshared.name, "message" => "Import failed 235" } ]
+    })
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_not_includes response.body, unshared.name
+    assert_not_includes response.body, "Secret Txn 235"
+  end
+
+  test "an admin still sees the account names in a card's sync summary" do
+    item = plaid_items(:one)
+    link_two_accounts_to(item) do |p_item, index|
+      p_item.plaid_accounts.create!(
+        name: "Second Plaid Account", plaid_id: "acc_235_#{index}", plaid_type: "investment",
+        currency: "USD", current_balance: 10
+      )
+    end
+    item.syncs.create!(status: "completed", sync_stats: {
+      "tx_seen" => 1, "tx_skipped" => 1,
+      "skip_details" => [ { "name" => "Secret Txn 235", "reason" => "excluded", "account_name" => "x" } ]
+    })
+
+    get accounts_url
+
+    assert_response :success
+    assert_includes response.body, "Secret Txn 235"
+  end
+
+  test "a partially shared member does not see unshared names in SimpleFIN's stale-pending and replacement banners" do
+    item = SimplefinItem.create!(family: families(:dylan_family), name: "Conn 235", access_url: "https://example.com/access")
+    _shared, unshared = link_two_accounts_to(item) do |sf_item, index|
+      sf_item.simplefin_accounts.create!(
+        name: "SF #{index}", account_id: "sf_235_#{index}", currency: "USD",
+        current_balance: 1, account_type: "depository"
+      )
+    end
+    SimplefinItem.any_instance.stubs(:stale_pending_status)
+                 .returns({ count: 2, message: "2 pending", accounts: [ unshared.name ] })
+    item.syncs.create!(status: "completed", sync_stats: {
+      "replacement_suggestions" => [ {
+        "dormant_sfa_id" => item.simplefin_accounts.find_by!(account_id: "sf_235_1").id,
+        "active_sfa_id" => item.simplefin_accounts.find_by!(account_id: "sf_235_0").id,
+        "sure_account_id" => unshared.id
+      } ]
+    })
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_not_includes response.body, unshared.name
   end
 
   test "a partially shared member sees only their account on a Kraken card" do

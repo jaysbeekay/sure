@@ -86,7 +86,7 @@
         <% end %>
 
         <% stats = trading212_item.syncs.ordered.first&.sync_stats || {} %>
-        <%= render ProviderSyncSummary.new(stats: stats, provider_item: trading212_item) %>
+        <%= render ProviderSyncSummary.new(stats: stats, provider_item: trading212_item, show_account_details: visible_accounts.size == trading212_item.accounts.size) %>
 
         <% if Current.user&.admin? %>
           <% if unlinked_count > 0 && trading212_item.accounts.empty? %>

@@ -99,7 +99,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: plaid_item
+          provider_item: plaid_item, show_account_details: visible_accounts.size == plaid_item.accounts.size
         ) %>
 
         <% if plaid_item.accounts.empty? %>

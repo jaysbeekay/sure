@@ -90,7 +90,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: coinstats_item
+          provider_item: coinstats_item, show_account_details: visible_accounts.size == coinstats_item.accounts.size
         ) %>
 
         <% if coinstats_item.accounts.empty? %>

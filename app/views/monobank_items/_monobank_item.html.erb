@@ -73,7 +73,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: monobank_item,
+          provider_item: monobank_item, show_account_details: visible_accounts.size == monobank_item.accounts.size,
           institutions_count: monobank_item.connected_institutions.size
         ) %>
 

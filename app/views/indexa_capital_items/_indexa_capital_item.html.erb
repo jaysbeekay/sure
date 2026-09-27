@@ -106,7 +106,7 @@
         <% activities_pending = indexa_capital_item.indexa_capital_accounts.any?(&:activities_fetch_pending) %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: indexa_capital_item,
+          provider_item: indexa_capital_item, show_account_details: visible_accounts.size == indexa_capital_item.accounts.size,
           activities_pending: activities_pending
         ) %>
 

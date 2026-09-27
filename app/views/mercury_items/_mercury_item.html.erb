@@ -86,7 +86,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: mercury_item,
+          provider_item: mercury_item, show_account_details: visible_accounts.size == mercury_item.accounts.size,
           institutions_count: mercury_item.connected_institutions.size
         ) %>
 

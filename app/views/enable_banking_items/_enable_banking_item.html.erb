@@ -98,7 +98,7 @@
         <% end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: enable_banking_item
+          provider_item: enable_banking_item, show_account_details: visible_accounts.size == enable_banking_item.accounts.size
         ) %>
 
         <% if enable_banking_item.unlinked_accounts_count > 0 %>

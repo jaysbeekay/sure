@@ -89,7 +89,7 @@
         <% end %>
 
         <% stats = kraken_item.syncs.ordered.first&.sync_stats || {} %>
-        <%= render ProviderSyncSummary.new(stats: stats, provider_item: kraken_item) %>
+        <%= render ProviderSyncSummary.new(stats: stats, provider_item: kraken_item, show_account_details: visible_accounts.size == kraken_item.accounts.size) %>
 
         <% if unlinked_count.to_i > 0 && kraken_item.accounts.empty? %>
           <div class="p-4 flex flex-col gap-3 items-center justify-center">

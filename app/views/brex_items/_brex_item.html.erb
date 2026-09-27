@@ -91,7 +91,7 @@
 
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: brex_item,
+          provider_item: brex_item, show_account_details: visible_accounts.size == brex_item.accounts.size,
           institutions_count: institutions_count
         ) %>
 

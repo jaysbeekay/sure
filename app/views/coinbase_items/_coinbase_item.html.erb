@@ -115,7 +115,7 @@
            end %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: coinbase_item
+          provider_item: coinbase_item, show_account_details: visible_accounts.size == coinbase_item.accounts.size
         ) %>
 
         <% if unlinked_count.to_i > 0 && coinbase_item.accounts.empty? %>

@@ -89,7 +89,7 @@
         <% end %>
 
         <% stats = coinspot_item.syncs.ordered.first&.sync_stats || {} %>
-        <%= render ProviderSyncSummary.new(stats: stats, provider_item: coinspot_item) %>
+        <%= render ProviderSyncSummary.new(stats: stats, provider_item: coinspot_item, show_account_details: visible_accounts.size == coinspot_item.accounts.size) %>
 
         <% if unlinked_count.to_i > 0 && coinspot_item.accounts.empty? %>
           <div class="p-4 flex flex-col gap-3 items-center justify-center">

@@ -103,7 +103,7 @@
         <% stats = binance_item.syncs.ordered.first&.sync_stats || {} %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
-          provider_item: binance_item
+          provider_item: binance_item, show_account_details: visible_accounts.size == binance_item.accounts.size
         ) %>
 
         <% if binance_item.unlinked_accounts_count > 0 %>
