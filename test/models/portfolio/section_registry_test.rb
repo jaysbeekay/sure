@@ -314,6 +314,28 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   # are the same series: the aggregate Performance and the per-account one are
   # built over the same holdings, so the reader gets two identical lines and a
   # legend implying they differ.
+  # The comparison keeps the five highest-value accounts. When candidates TIE on
+  # every sort key -- which the page reaches easily, because an account with no
+  # balance history has no closing value at all and the key then collapses to
+  # the name -- the winner was decided by whatever order the accounts arrived
+  # in. That order comes from a query with no ORDER BY, so it is not stable, and
+  # two identical requests could plot two different sets of five.
+  #
+  # This is asserted by feeding the SAME accounts in two different orders rather
+  # than by re-running and hoping: a tiebreak that depends on input order fails
+  # it every time, where a repeat-until-it-flakes test fails only sometimes.
+  test "the comparison picks the same accounts however the candidates are ordered" do
+    tied = 8.times.map { create_portfolio_account(family: @family, name: "Tied broker") }
+
+    first_pass = comparison_picks_for(tied)
+    second_pass = comparison_picks_for(tied.reverse)
+
+    assert_equal Portfolio::SectionRegistry::COMPARISON_LIMIT, first_pass.size,
+                 "the fixture must reach the cap, or the ordering question never arises"
+    assert_equal first_pass, second_pass,
+                 "reversing the candidate order changed which accounts the comparison plots"
+  end
+
   test "a family with a single account gets no comparison section" do
     only = create_portfolio_account(family: @family, name: "Only broker")
     @statement.stubs(:historical_scope).returns(
@@ -578,6 +600,19 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
       perf = Portfolio::Performance.allocate
       perf.stubs(:index_series).returns(two_points)
       perf
+    end
+
+    # A fresh registry per call: comparison_accounts is memoised, so reusing one
+    # would answer the second ordering from the first one's cache and the test
+    # would pass against any tiebreak at all.
+    def comparison_picks_for(accounts)
+      statement = InvestmentStatement.new(@family, user: @user)
+      statement.stubs(:historical_scope).returns(
+        stub(accounts: accounts, account_ids: accounts.map(&:id), active_until_dates: {})
+      )
+      Portfolio::SectionRegistry.new(
+        statement: statement, period: @period, as_of: Date.current, user: @user
+      ).send(:comparison_accounts).map(&:id)
     end
 
     def registry(extra_sections: [])

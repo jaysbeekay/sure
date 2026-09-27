@@ -362,9 +362,21 @@ class Portfolio::SectionRegistry
         # below would then be outranked by one whose value is merely unknown,
         # which is the parity mistake in a different shape -- a missing figure
         # winning a comparison it was never measured for.
+        # The id is the last resort, and it is what makes this a TOTAL order.
+        # Without it two accounts can tie on every key -- which is not an edge
+        # case: an account with no balance history has no closing value at all,
+        # so the first two keys collapse to `[1, 0]` for every such account and
+        # the name is all that is left. Two accounts can share a name.
+        #
+        # A tie here is decided by the order `accounts` arrived in, and that
+        # comes from a query with no ORDER BY, so it is not stable between
+        # requests. The page could plot one set of five and then a different set
+        # on refresh, with nothing having changed. #240 is the same defect seen
+        # from CI: a query-count assertion that moved by one because a different
+        # account took the fifth slot.
         accounts.sort_by { |account|
           value = values[account.id]
-          [ value.nil? ? 1 : 0, -(value || BigDecimal(0)), account.name.to_s ]
+          [ value.nil? ? 1 : 0, -(value || BigDecimal(0)), account.name.to_s, account.id ]
         }.first(COMPARISON_LIMIT)
       end
     end
