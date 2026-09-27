@@ -1,4 +1,10 @@
 class Api::V1::Financekit::BatchesController < ActionController::API
+  # This controller does not inherit Api::V1::Financekit::BaseController, so
+  # it does not get that controller's `wrap_parameters false`. Wrapping would
+  # parse the body again before the action; FinancekitBodyLimit bounds the
+  # body, and nothing here needs it wrapped.
+  wrap_parameters false
+
   rescue_from Financekit::Error, with: :protocol_error
   rescue_from ActiveRecord::RecordNotFound do
     render json: { error: "not_found" }, status: :not_found
@@ -24,7 +30,8 @@ class Api::V1::Financekit::BatchesController < ActionController::API
 
   private
     def authenticated_item!
-      item = FinancekitItem.find_by(publisher_id: params[:publisher_id])
+      # From the route alone: `params` would merge in the parsed JSON body.
+      item = FinancekitItem.find_by(publisher_id: request.path_parameters[:publisher_id])
       token = request.authorization&.match(/\ABearer ([A-Za-z0-9_-]+)\z/)&.captures&.first # pipelock:ignore Credential in URL
       raise Financekit::Error.new("publisher_unauthorized", 401) unless item&.authenticate_credential?(token)
       item

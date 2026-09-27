@@ -192,6 +192,6 @@ class GenerateInsightsJob < ApplicationJob
     def advisory_lock_key(family_id)
       # Use (nearly) the full signed-bigint space pg_try_advisory_lock accepts
       # to keep the collision odds between families negligible.
-      Digest::MD5.hexdigest("generate_insights:#{family_id}").to_i(16) % (2**62)
+      Digest::SHA256.hexdigest("generate_insights:#{family_id}").to_i(16) % (2**62)
     end
 end

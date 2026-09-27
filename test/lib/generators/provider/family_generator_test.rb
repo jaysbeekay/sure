@@ -19,6 +19,7 @@ class Provider::FamilyGeneratorTest < ActiveSupport::TestCase
   test "the unlinking scaffold renders to valid Ruby and carries the disposition seam" do
     template = Rails.root.join("lib/generators/provider/family/templates/unlinking_concern.rb.tt").read
     context = Struct.new(:class_name, :file_name).new("Gocardless", "gocardless")
+    # Renders the static unlinking_concern.rb.tt template with a fixed Struct binding — no user/attacker data — so Codacy's "manual ERB template" rule is a false positive here (issue #239).
     rendered = ERB.new(template, trim_mode: "-").result(context.instance_eval { binding })
 
     assert_parses rendered

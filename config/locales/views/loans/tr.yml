@@ -13,8 +13,36 @@ tr:
       subtype_prompt: Kredi türünü seçin
       term_months: Vade (ay)
       term_months_placeholder: '360'
+      rate_type_adjustable: Ayarlanabilir
+      rate_type_fixed: Sabit
+      rate_type_variable: Değişken
+      rate_changes: Faiz oranı değişiklikleri
+      rate_changes_hint: Her satır, geçerlilik tarihinden bir sonraki değişikliğe kadar uygulanan oranı belirler. Aynı tarihi yeniden girmek ikinci bir satır eklemez, o satırı değiştirir.
+      rate_changes_empty: Kayıtlı faiz oranı değişikliği yok. Kredi yukarıdaki faiz oranıyla işler.
+      rate_change_effective_date: Geçerlilik tarihi
+      rate_change_rate: Oran
+      rate_change_add: Oran değişikliği ekle
+      rate_change_remove: Kaldır
+      start_date: Kullandırım tarihi
+      start_date_hint: Kredinin kullandırıldığı tarih. Hesabın açılış tarihini kullanmak için boş bırakın.
+      offset_accounts: Offset accounts
+      offset_accounts_hint: Only accounts visible to everyone who can access this loan can be linked.
+      day_count_convention: Interest day-count basis
+      day_count_convention_actual_365: Actual/365
+      day_count_convention_actual_actual: Actual/actual (366 in a leap year)
+      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
     new:
       title: Kredi detaylarını girin
+    overview:
+      interest_rate: Faiz Oranı
+      monthly_payment: Aylık Ödeme
+      not_applicable: Uygulanamaz
+      original_principal: Orijinal Anapara
+      remaining_principal: Kalan Anapara
+      term: Vade
+      type: Tür
+      unknown: Bilinmiyor
+      original_payoff_date: Orijinal Vade Sonu Tarihi
     tabs:
       overview:
         edit_loan_details: Kredi detaylarını düzenle
@@ -26,3 +54,60 @@ tr:
         term: Vade
         type: Tür
         unknown: Bilinmiyor
+        original_payoff_date: Orijinal Vade Sonu Tarihi
+        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        variable_with_offset: Variable + offset
+      schedule:
+        date: Tarih
+        description: Orijinal bakiye, faiz oranı ve vadeye göre %{start_date} tarihinden itibaren öngörülmüştür. Ek ödemeler yansıtılmaz.
+        variable_rate_notice: Bu kredinin faiz oranı zaman içinde değişir. Ödeme planı her kayıtlı değişiklikte orijinal vade sonu tarihi korunarak ve taksit tutarı yeniden belirlenerek yeniden hesaplanır; henüz kaydedilmemiş bir değişiklik bu rakamları değiştirecektir.
+        opening_payment: İlk Taksit
+        interest: Faiz
+        monthly_payment: Aylık Ödeme
+        number: '#'
+        payment: Taksit
+        principal: Anapara
+        remaining_balance: Kalan Bakiye
+        total_cost: Toplam Maliyet
+        total_interest: Toplam Faiz
+        current_monthly_payment: Current Monthly Payment
+        payoff_date: Payoff Date
+        projected_payoff_date: Projected Payoff
+        interest_saved: Interest Saved
+        interest_added: Additional Interest
+        months_saved:
+          one: "%{count} month sooner"
+          other: "%{count} months sooner"
+        months_behind:
+          one: "%{count} month later"
+          other: "%{count} months later"
+        projection_not_converged: The projected payoff does not converge within the supported term.
+        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
+        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
+        rate_change_marker: "rate change"
+        rate_change_marker_title: "The interest rate changes during this payment's period, to %{rate}%."
+        day_count_notice: "Interest accrues on an %{basis} basis. If your lender uses a different day-count basis, the interest figures here are an approximation."
+        chart:
+          today: Today
+          scheduled_history: "Scheduled (contracted terms)"
+          original_payoff: Original schedule
+          accelerated_payoff: Projected payoff
+          aria_label: "Loan payoff comparison chart"
+          aria_description: "Chart comparing the loan's original scheduled payoff against a projection based on the current balance. Current balance: %{current_balance}. Original scheduled payoff date: %{original_payoff_date}. Projected payoff date based on current balance: %{accelerated_payoff_date}."
+          extra_payment_applied: "Modeling an extra %{amount} %{frequency}"
+          frequency:
+            weekly: per week
+            monthly: per month
+            yearly: per year
+        extra_payment:
+          amount_label: Extra payment
+          amount_placeholder: "0.00"
+          frequency_label: Frequency
+          weekly: per week
+          monthly: per month
+          yearly: per year
+          apply: Apply
+          clear: Clear
+          approximation_notice: "Weekly and yearly amounts are converted to a monthly-equivalent figure for modeling -- this is an approximation, not a true weekly/annual payment schedule."
+          variable_rate_notice: "This loan's rate can change. The projection applies the rate changes already recorded on this loan and keeps the current repayment, so a rate change that hasn't been recorded yet will shift these figures."

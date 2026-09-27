@@ -88,27 +88,47 @@ module Enrichable
 
     return false if enrichable_attrs.empty?
 
+    # Issue #224 (correction b): capture new-record state BEFORE any mutation
+    # so the post-save log decision still reflects "was this record already
+    # persisted when we started" rather than the post-save state.
+    was_new = new_record?
+
     was_modified = false
-    ActiveRecord::Base.transaction do
+    save_result = false
+    # requires_new: several callers (e.g. Account::ProviderImportAdapter) already
+    # hold a transaction. Without a savepoint the Rollback below would be
+    # swallowed by the joined outer block and undo nothing.
+    ActiveRecord::Base.transaction(requires_new: true) do
       enrichable_attrs.each do |attr, value|
         self.send("#{attr}=", value)
+      end
 
-        # If it's a new record, this isn't technically an "enrichment".  No logging necessary.
-        unless self.new_record?
+      save_result = save
+
+      # A refused save must leave nothing behind. Virtual setters on a
+      # persisted record (tag_ids=) write their join rows immediately, before
+      # save runs, so roll the savepoint back rather than let them commit.
+      # Rollback is swallowed by the transaction block, so the method still
+      # returns (false) instead of raising, and the record keeps its errors.
+      raise ActiveRecord::Rollback unless save_result
+
+      # Issue #224 (option 1, correction b): only log enrichment AFTER a
+      # successful save, and only for records that were already persisted when
+      # the call began. The pre-fix code called log_enrichment inside the
+      # setter loop before save, which persisted DataEnrichment rows inside
+      # the outer transaction even when save on the underlying record refused.
+      if save_result && !was_new
+        enrichable_attrs.each do |attr, value|
           log_enrichment(attribute_name: attr, attribute_value: value, source: source, metadata: metadata)
         end
       end
-
-      save
 
       # For virtual attributes (like tag_ids), previous_changes won't track them
       # So we need to check if the value actually changed by comparing before/after
       if previous_changes.any?
         was_modified = true
       else
-        # Check if any virtual attributes changed by comparing current value with what we set
         enrichable_attrs.each do |attr, new_value|
-          # Get the current value after save (for virtual attributes, this reflects the change)
           current_value = if respond_to?(attr.to_sym)
             send(attr.to_sym)
           else

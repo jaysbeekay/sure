@@ -81,7 +81,7 @@ class DemoFamilyRefreshJob < ApplicationJob
     end
 
     def advisory_lock_key
-      Digest::MD5.hexdigest("demo_family_refresh").to_i(16) % (2**62)
+      Digest::SHA256.hexdigest("demo_family_refresh").to_i(16) % (2**62)
     end
 
     def deleted_email_for(user)

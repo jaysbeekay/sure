@@ -12,8 +12,36 @@ uk:
       none: Немає
       subtype_prompt: Виберіть тип позики
       subtype_none: Немає
+      rate_type_adjustable: Змінна з періодичним переглядом
+      rate_type_fixed: Фіксована
+      rate_type_variable: Плаваюча
+      rate_changes: Зміни ставки
+      rate_changes_hint: Кожен рядок задає ставку, яка діє з дати набрання чинності до наступної зміни. Повторне введення дати замінює відповідний рядок, а не додає ще один.
+      rate_changes_empty: Змін ставки не записано. Кредит обслуговується за вказаною вище процентною ставкою.
+      rate_change_effective_date: Дата набрання чинності
+      rate_change_rate: Ставка
+      rate_change_add: Додати зміну ставки
+      rate_change_remove: Видалити
+      start_date: Дата видачі кредиту
+      start_date_hint: Коли кошти кредиту було видано. Залиште порожнім, щоб використати дату відкриття рахунку.
+      offset_accounts: Offset accounts
+      offset_accounts_hint: Only accounts visible to everyone who can access this loan can be linked.
+      day_count_convention: Interest day-count basis
+      day_count_convention_actual_365: Actual/365
+      day_count_convention_actual_actual: Actual/actual (366 in a leap year)
+      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
     new:
       title: Введіть деталі позики
+    overview:
+      interest_rate: Процентна ставка
+      monthly_payment: Щомісячний платіж
+      not_applicable: Н/Д
+      original_principal: Початкова сума позики
+      remaining_principal: Залишок основної суми
+      term: Термін
+      type: Тип
+      unknown: Невідомо
+      original_payoff_date: Початкова дата погашення
     tabs:
       overview:
         current_interest_rate: Процентна ставка
@@ -25,3 +53,60 @@ uk:
         type: Тип
         unknown: Невідомо
         edit_loan_details: "Редагувати деталі позики"
+        original_payoff_date: Початкова дата погашення
+        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        variable_with_offset: Variable + offset
+      schedule:
+        date: Дата
+        description: Розраховано на основі початкової суми, ставки й терміну, починаючи з %{start_date}. Дострокові платежі не враховано.
+        variable_rate_notice: 'Ставка цього кредиту змінюється з часом. Графік перераховується після кожної записаної зміни: дата остаточного погашення залишається початковою, а розмір платежу змінюється. Ще не записана зміна ставки вплине на ці цифри.'
+        opening_payment: Перший платіж
+        interest: Відсотки
+        monthly_payment: Щомісячний платіж
+        number: №
+        payment: Платіж
+        principal: Тіло кредиту
+        remaining_balance: Залишок боргу
+        total_cost: Загальна вартість
+        total_interest: Загальна сума відсотків
+        current_monthly_payment: Current Monthly Payment
+        payoff_date: Payoff Date
+        projected_payoff_date: Projected Payoff
+        interest_saved: Interest Saved
+        interest_added: Additional Interest
+        months_saved:
+          one: "%{count} month sooner"
+          other: "%{count} months sooner"
+        months_behind:
+          one: "%{count} month later"
+          other: "%{count} months later"
+        projection_not_converged: The projected payoff does not converge within the supported term.
+        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
+        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
+        rate_change_marker: "rate change"
+        rate_change_marker_title: "The interest rate changes during this payment's period, to %{rate}%."
+        day_count_notice: "Interest accrues on an %{basis} basis. If your lender uses a different day-count basis, the interest figures here are an approximation."
+        chart:
+          today: Today
+          scheduled_history: "Scheduled (contracted terms)"
+          original_payoff: Original schedule
+          accelerated_payoff: Projected payoff
+          aria_label: "Loan payoff comparison chart"
+          aria_description: "Chart comparing the loan's original scheduled payoff against a projection based on the current balance. Current balance: %{current_balance}. Original scheduled payoff date: %{original_payoff_date}. Projected payoff date based on current balance: %{accelerated_payoff_date}."
+          extra_payment_applied: "Modeling an extra %{amount} %{frequency}"
+          frequency:
+            weekly: per week
+            monthly: per month
+            yearly: per year
+        extra_payment:
+          amount_label: Extra payment
+          amount_placeholder: "0.00"
+          frequency_label: Frequency
+          weekly: per week
+          monthly: per month
+          yearly: per year
+          apply: Apply
+          clear: Clear
+          approximation_notice: "Weekly and yearly amounts are converted to a monthly-equivalent figure for modeling -- this is an approximation, not a true weekly/annual payment schedule."
+          variable_rate_notice: "This loan's rate can change. The projection applies the rate changes already recorded on this loan and keeps the current repayment, so a rate change that hasn't been recorded yet will shift these figures."
