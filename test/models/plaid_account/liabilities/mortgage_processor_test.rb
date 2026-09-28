@@ -279,6 +279,50 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
     assert_equal 4.5, loan.interest_rate.to_f
   end
 
+  # CodeRabbit on #247: the variable path is two saves, the terms and then the
+  # dated rate. Before #223 they were one save, so a refused rate took the
+  # terms back with it; split, a reclassification to variable could land while
+  # the rate that came with it was refused.
+  test "a move to variable whose rate row is refused changes nothing" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "fixed")
+    writer = PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account.reload, as_of: Date.new(2026, 1, 15))
+
+    assert_difference "DebugLogEntry.count", 1, "the refusal must still be reported" do
+      writer.send(:write_loan_terms, rate_type: "variable", interest_rate: 150)
+    end
+
+    assert_equal "fixed", writer.send(:account).loan.rate_type,
+                 "the rolled-back reclassification is still on the writer's loan in memory"
+    loan.reload
+    assert_equal "fixed", loan.rate_type, "the reclassification landed without its rate"
+    assert_equal 4.5, loan.interest_rate.to_f
+    assert loan.variable_rate_schedule.blank?
+    assert_not DataEnrichment.exists?(enrichable: loan, attribute_name: "rate_type", source: "plaid")
+  end
+
+  test "an error between the terms and the rate leaves the terms unwritten" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "fixed")
+    writer = PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account.reload, as_of: Date.new(2026, 1, 15))
+    Loan.any_instance.stubs(:variable_rate_update_for).raises(ActiveRecord::StatementInvalid, "interrupted")
+
+    assert_raises(ActiveRecord::StatementInvalid) do
+      writer.send(:write_loan_terms, rate_type: "variable", interest_rate: 5.2)
+    end
+
+    assert_equal "fixed", loan.reload.rate_type
+  end
+
+  test "a move to variable with an acceptable rate still lands both" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "fixed")
+    writer = PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account.reload, as_of: Date.new(2026, 1, 15))
+
+    writer.send(:write_loan_terms, rate_type: "variable", interest_rate: 5.2)
+
+    loan.reload
+    assert_equal "variable", loan.rate_type
+    assert_equal({ "2026-01-15" => 5.2 }, loan.variable_rate_schedule)
+  end
+
   private
     def loan_with(**attrs)
       loan = @plaid_account.current_account.loan
