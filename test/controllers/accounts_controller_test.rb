@@ -265,6 +265,47 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "Hidden Bank 235"
   end
 
+  # CodeRabbit on #244: the SnapTrade card's brokerage line is built from every
+  # account on the connection. With one brokerage it prints that brokerage's
+  # name, so a member shared only the nameless account would read the other's.
+  test "a partially shared member does not see a SnapTrade connection's brokerage" do
+    item = snaptrade_items(:configured_item)
+    # The fixture accounts name two brokerages, which makes the line a count.
+    # Cleared so the only brokerage left is the unshared account's.
+    item.snaptrade_accounts.update_all(brokerage_name: nil)
+    link_two_accounts_to(item) do |st_item, index|
+      st_item.snaptrade_accounts.create!(
+        name: "ST #{index}", snaptrade_account_id: "st_235_#{index}", currency: "USD",
+        current_balance: 1, brokerage_name: (index.zero? ? nil : "Hidden Broker 235")
+      )
+    end
+
+    sign_in users(:family_member)
+    get accounts_url
+
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_not_includes response.body, "Hidden Broker 235"
+  end
+
+  test "an admin still sees a SnapTrade connection's brokerage" do
+    item = snaptrade_items(:configured_item)
+    # The fixture accounts name two brokerages, which makes the line a count.
+    # Cleared so the only brokerage left is the unshared account's.
+    item.snaptrade_accounts.update_all(brokerage_name: nil)
+    link_two_accounts_to(item) do |st_item, index|
+      st_item.snaptrade_accounts.create!(
+        name: "ST #{index}", snaptrade_account_id: "st_235_#{index}", currency: "USD",
+        current_balance: 1, brokerage_name: (index.zero? ? nil : "Hidden Broker 235")
+      )
+    end
+
+    get accounts_url
+
+    assert_response :success
+    assert_includes response.body, "Hidden Broker 235"
+  end
+
   test "a partially shared member sees only their account on a Kraken card" do
     item = kraken_items(:one)
     shared, unshared = link_two_accounts_to(item) do |k_item, index|
