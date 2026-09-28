@@ -16,14 +16,6 @@ class EnableBankingItem::SyncCompleteEvent
     family = enable_banking_item.family
     return unless family
 
-    # Update the Enable Banking item view on the Accounts page
-    enable_banking_item.broadcast_replace_to(
-      family,
-      target: "enable_banking_item_#{enable_banking_item.id}",
-      partial: "enable_banking_items/enable_banking_item",
-      locals: { enable_banking_item: enable_banking_item }
-    )
-
     # Update the Settings > Providers panel
     enable_banking_items = family.enable_banking_items.ordered.includes(:syncs)
     enable_banking_item.broadcast_replace_to(
