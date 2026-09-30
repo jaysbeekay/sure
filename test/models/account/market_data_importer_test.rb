@@ -295,6 +295,38 @@ class Account::MarketDataImporterTest < ActiveSupport::TestCase
     Account::MarketDataImporter.new(account).import_all
   end
 
+  test "a closed account stays quiet after another account extends the shared prices" do
+    security = Security.create!(ticker: "SHARED", exchange_operating_mic: "XNAS")
+    closed_account = Family.create!(name: "Closed", currency: "USD").accounts.create!(
+      name: "Sold", currency: "USD", balance: 0, accountable: Investment.new
+    )
+    open_account = Family.create!(name: "Open", currency: "USD").accounts.create!(
+      name: "Held", currency: "USD", balance: 0, accountable: Investment.new
+    )
+    buy_date  = 30.days.ago.to_date
+    sold_date = 5.days.ago.to_date
+
+    closed_account.entries.create!(name: "Buy", date: buy_date, amount: 1000, currency: "USD",
+                                   entryable: Trade.new(security: security, qty: 10, price: 100, currency: "USD", investment_activity_label: "Buy"))
+    closed_account.entries.create!(name: "Sell", date: sold_date, amount: 1100, currency: "USD",
+                                   entryable: Trade.new(security: security, qty: -10, price: 110, currency: "USD", investment_activity_label: "Sell"))
+    closed_account.holdings.create!(security: security, date: sold_date - 1.day, qty: 10, price: 105, amount: 1050, currency: "USD")
+    closed_account.holdings.create!(security: security, date: Date.current, qty: 0, price: 0, amount: 0, currency: "USD")
+    open_account.holdings.create!(security: security, date: Date.current, qty: 1, price: 120, amount: 120, currency: "USD")
+
+    # The open account's last sync carried the shared prices past the sale, up to
+    # yesterday. Today's price is still missing: only the open account needs it.
+    ((buy_date - SECURITY_PRICE_BUFFER)..Date.yesterday).each do |date|
+      Security::Price.create!(security: security, date: date, price: 100, currency: "USD", provisional: false)
+    end
+
+    @provider.expects(:fetch_security_prices).never
+    @provider.stubs(:fetch_security_info).returns(provider_success_response(OpenStruct.new(name: "Shared", logo_url: "logo")))
+    @provider.stubs(:fetch_exchange_rates).returns(provider_success_response([]))
+
+    Account::MarketDataImporter.new(closed_account).import_all
+  end
+
   test "fetches prices through today when a sold security is repurchased before holdings are rematerialized" do
     family = Family.create!(name: "Smith", currency: "USD")
 

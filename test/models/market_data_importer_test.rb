@@ -130,13 +130,18 @@ class MarketDataImporterTest < ActiveSupport::TestCase
     assert_equal 1, Security::Price.where(security: security, date: SNAPSHOT_START_DATE).count
   end
 
-  test "skips online securities without holdings or trades" do
-    Security.create!(ticker: "UNUSED", exchange_operating_mic: "XNAS")
+  test "fetches no prices for online securities without holdings or trades" do
+    security = Security.create!(ticker: "UNUSED", exchange_operating_mic: "XNAS")
 
     @provider.expects(:fetch_security_prices).never
-    @provider.expects(:fetch_security_info).never
+    @provider.expects(:fetch_security_info)
+             .with(symbol: "UNUSED", exchange_operating_mic: "XNAS")
+             .once
+             .returns(provider_success_response(OpenStruct.new(name: "Unused", logo_url: "logo")))
 
     MarketDataImporter.new(mode: :full).import_security_prices
+
+    assert_equal "Unused", security.reload.name
   end
 
   test "stops the global price range at a sale despite zero holdings through today" do
