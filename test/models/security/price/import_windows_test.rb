@@ -44,6 +44,26 @@ class Security::Price::ImportWindowsTest < ActiveSupport::TestCase
     assert_equal Date.current, window.end_date
   end
 
+  test "a materialized zero holding closes a position even when raw trade quantities are positive" do
+    family = Family.create!(name: "Smith", currency: "USD")
+    account = family.accounts.create!(name: "Brokerage", currency: "USD", balance: 0, accountable: Investment.new)
+    security = Security.create!(ticker: "SPLIT", exchange_operating_mic: "XNAS")
+    buy_date = 30.days.ago.to_date
+    sell_date = 5.days.ago.to_date
+
+    account.entries.create!(name: "Buy", date: buy_date, amount: 1000, currency: "USD",
+                            entryable: Trade.new(security: security, qty: 10, price: 100, currency: "USD", investment_activity_label: "Buy"))
+    # A 1-for-10 reverse split leaves one share to sell. The split is reflected
+    # in the materialized holdings, not in the original trade quantities.
+    account.entries.create!(name: "Sell", date: sell_date, amount: 100, currency: "USD",
+                            entryable: Trade.new(security: security, qty: -1, price: 100, currency: "USD", investment_activity_label: "Sell"))
+    account.holdings.create!(security: security, date: sell_date - 1.day, qty: 1, price: 100, amount: 100, currency: "USD")
+    account.holdings.create!(security: security, date: Date.current, qty: 0, price: 100, amount: 0, currency: "USD")
+
+    assert_equal 9, account.trades.sum(:qty)
+    assert_equal sell_date, Security::Price::ImportWindows.new(account).to_h.fetch(security.id).end_date
+  end
+
   test "recognizes a buy after a closed provider snapshot" do
     family = Family.create!(name: "Smith", currency: "USD")
     account = family.accounts.create!(name: "Brokerage", currency: "USD", balance: 0, accountable: Investment.new)

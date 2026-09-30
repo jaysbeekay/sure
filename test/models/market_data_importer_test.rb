@@ -193,6 +193,27 @@ class MarketDataImporterTest < ActiveSupport::TestCase
     2.times { MarketDataImporter.new(mode: :full).import_security_prices }
   end
 
+  test "snapshot cache clearing skips a position closed before the snapshot" do
+    security = Security.create!(ticker: "OLD", exchange_operating_mic: "XNAS")
+    account = Family.create!(name: "Smith", currency: "USD").accounts.create!(
+      name: "Brokerage", currency: "USD", balance: 0, accountable: Investment.new
+    )
+    buy_date = 90.days.ago.to_date
+    sell_date = 60.days.ago.to_date
+
+    account.entries.create!(name: "Buy", date: buy_date, amount: 100, currency: "USD",
+                            entryable: Trade.new(security: security, qty: 1, price: 100, currency: "USD", investment_activity_label: "Buy"))
+    account.entries.create!(name: "Sell", date: sell_date, amount: 110, currency: "USD",
+                            entryable: Trade.new(security: security, qty: -1, price: 110, currency: "USD", investment_activity_label: "Sell"))
+    account.holdings.create!(security: security, date: sell_date - 1.day, qty: 1, price: 105, amount: 105, currency: "USD")
+    account.holdings.create!(security: security, date: Date.current, qty: 0, price: 110, amount: 0, currency: "USD")
+
+    @provider.expects(:fetch_security_prices).never
+    @provider.stubs(:fetch_security_info).returns(provider_success_response(OpenStruct.new(name: "Old", logo_url: "logo")))
+
+    MarketDataImporter.new(mode: :snapshot, clear_cache: true).import_security_prices
+  end
+
   test "keeps a shared security current while another account holds it" do
     security = Security.create!(ticker: "SHARED", exchange_operating_mic: "XNAS")
     first_family = Family.create!(name: "First", currency: "USD")

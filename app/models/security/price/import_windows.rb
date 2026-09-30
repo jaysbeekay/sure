@@ -11,42 +11,56 @@ class Security::Price::ImportWindows
     first_trade_dates = {}
     last_trade_dates = {}
     last_buy_dates = {}
+    last_buy_created_at = {}
     trade_quantities = {}
     account.trades.group(:security_id).pluck(
       :security_id,
       Arel.sql("MIN(entries.date)"),
       Arel.sql("MAX(entries.date) FILTER (WHERE trades.qty <> 0)"),
       Arel.sql("MAX(entries.date) FILTER (WHERE trades.qty > 0)"),
+      Arel.sql("MAX(entries.created_at) FILTER (WHERE trades.qty > 0)"),
       Arel.sql("SUM(trades.qty)")
-    ).each do |security_id, first_date, last_date, last_buy_date, qty|
+    ).each do |security_id, first_date, last_date, last_buy_date, buy_created_at, qty|
       first_trade_dates[security_id] = first_date
       last_trade_dates[security_id] = last_date
       last_buy_dates[security_id] = last_buy_date
+      last_buy_created_at[security_id] = buy_created_at
       trade_quantities[security_id] = qty
     end
 
     first_held_dates = {}
     last_held_dates = {}
+    last_holding_dates = {}
+    last_holding_updated_at = {}
     last_provider_dates = {}
     provider_holding_ids = Set.new
     account.holdings.group(:security_id).pluck(
       :security_id,
       Arel.sql("MIN(holdings.date) FILTER (WHERE holdings.qty > 0)"),
       Arel.sql("MAX(holdings.date) FILTER (WHERE holdings.qty > 0)"),
+      Arel.sql("MAX(holdings.date)"),
+      Arel.sql("MAX(holdings.updated_at)"),
       Arel.sql("MAX(holdings.date) FILTER (WHERE holdings.account_provider_id IS NOT NULL)")
-    ).each do |security_id, first_date, last_date, provider_date|
+    ).each do |security_id, first_date, last_date, holding_date, holding_updated_at, provider_date|
       first_held_dates[security_id] = first_date if first_date
       last_held_dates[security_id] = last_date if last_date
+      last_holding_dates[security_id] = holding_date
+      last_holding_updated_at[security_id] = holding_updated_at
       if provider_date
         provider_holding_ids.add(security_id)
         last_provider_dates[security_id] = provider_date
       end
     end
 
-    # A manual buy can precede holding materialization. Use the trade ledger to
-    # recognize that open position even when current_holdings is still empty.
+    # A manual buy can precede holding materialization. A zero holding recorded
+    # after the buy is authoritative even when raw trade quantities disagree
+    # (for example, after a reverse split). A newly entered, backdated buy can
+    # still reopen the position before holdings are rematerialized.
     manual_open_ids = trade_quantities.filter_map do |id, qty|
-      id if qty.positive? && !provider_holding_ids.include?(id)
+      next unless qty.positive? && !provider_holding_ids.include?(id)
+
+      last_holding_date = last_holding_dates[id]
+      id if last_holding_date.nil? || last_buy_dates[id] > last_holding_date || last_buy_created_at[id] > last_holding_updated_at[id]
     end.to_set
     provider_reopened_ids = provider_holding_ids.filter_map do |id|
       id if last_buy_dates[id] && last_buy_dates[id] > last_provider_dates[id]

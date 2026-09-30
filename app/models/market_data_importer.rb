@@ -69,6 +69,7 @@ class MarketDataImporter
 
     def required_security_price_windows
       windows = {}
+      # Account status does not close a position; retained holdings still count.
       accounts_with_securities = Account.where(id: Holding.select(:account_id))
         .or(Account.where(id: Entry.where(entryable_type: "Trade").select(:account_id)))
 

@@ -1,0 +1,167 @@
+# Codacy's RuboCop image does not install rubocop-rails-omakase.
+# This is the pinned gem's 1.1.0 configuration with .rubocop.yml overrides.
+# Keep it in sync when the gem or local overrides change.
+---
+plugins:
+- rubocop-performance
+- rubocop-rails
+inherit_mode:
+  merge:
+  - Exclude
+AllCops:
+  SuggestExtensions: false
+  Exclude:
+  - data/**/*
+Bundler:
+  Enabled: false
+Gemspec:
+  Enabled: false
+Layout:
+  Enabled: false
+Lint:
+  Enabled: false
+Metrics:
+  Enabled: false
+Naming:
+  Enabled: false
+Performance:
+  Enabled: false
+  Exclude:
+  - test/**/*
+Rails:
+  Enabled: false
+Security:
+  Enabled: false
+Style:
+  Enabled: false
+Layout/CaseIndentation:
+  Enabled: true
+  EnforcedStyle: end
+Layout/CommentIndentation:
+  Enabled: true
+Layout/ElseAlignment:
+  Enabled: true
+Layout/EmptyLineAfterMagicComment:
+  Enabled: true
+Layout/EmptyLinesAroundBlockBody:
+  Enabled: true
+Layout/EmptyLinesAroundClassBody:
+  Enabled: true
+Layout/EmptyLinesAroundMethodBody:
+  Enabled: true
+Layout/EmptyLinesAroundModuleBody:
+  Enabled: true
+Layout/EndAlignment:
+  Enabled: true
+  EnforcedStyleAlignWith: variable
+Layout/IndentationConsistency:
+  Enabled: true
+  EnforcedStyle: indented_internal_methods
+Layout/IndentationStyle:
+  Enabled: true
+  EnforcedStyle: spaces
+  IndentationWidth: 2
+Layout/IndentationWidth:
+  Enabled: true
+Layout/LeadingCommentSpace:
+  Enabled: true
+Layout/SpaceAfterColon:
+  Enabled: true
+Layout/SpaceAfterComma:
+  Enabled: true
+Layout/SpaceAroundEqualsInParameterDefault:
+  Enabled: true
+Layout/SpaceAroundKeyword:
+  Enabled: true
+Layout/SpaceBeforeBlockBraces:
+  Enabled: true
+Layout/SpaceBeforeComma:
+  Enabled: true
+Layout/SpaceBeforeFirstArg:
+  Enabled: true
+Layout/SpaceInLambdaLiteral:
+  Enabled: true
+Layout/SpaceInsideArrayLiteralBrackets:
+  Enabled: true
+  EnforcedStyle: space
+  EnforcedStyleForEmptyBrackets: no_space
+  Exclude:
+  - db/schema.rb
+Layout/SpaceInsideArrayPercentLiteral:
+  Enabled: true
+Layout/SpaceInsideBlockBraces:
+  Enabled: true
+  EnforcedStyleForEmptyBraces: space
+Layout/SpaceInsideHashLiteralBraces:
+  Enabled: true
+  EnforcedStyle: space
+  EnforcedStyleForEmptyBraces: no_space
+Layout/SpaceInsideParens:
+  Enabled: true
+Layout/SpaceInsidePercentLiteralDelimiters:
+  Enabled: true
+Layout/SpaceInsideReferenceBrackets:
+  Enabled: true
+Layout/TrailingEmptyLines:
+  Enabled: true
+Layout/TrailingWhitespace:
+  Enabled: true
+Lint/RedundantStringCoercion:
+  Enabled: true
+Lint/RequireParentheses:
+  Enabled: true
+Lint/UriEscapeUnescape:
+  Enabled: true
+Performance/FlatMap:
+  Enabled: true
+Rails/AssertNot:
+  Include:
+  - test/**/*
+Rails/RefuteMethods:
+  Include:
+  - test/**/*
+Style/AndOr:
+  Enabled: false
+Style/ColonMethodCall:
+  Enabled: true
+Style/DefWithParentheses:
+  Enabled: true
+Style/HashSyntax:
+  Enabled: true
+  EnforcedShorthandSyntax: either
+Style/MethodDefParentheses:
+  Enabled: true
+Style/ParenthesesAroundCondition:
+  Enabled: true
+Style/PercentLiteralDelimiters:
+  Enabled: true
+  PreferredDelimiters:
+    default: "()"
+    "%i": "[]"
+    "%I": "[]"
+    "%r": "{}"
+    "%w": "[]"
+    "%W": "[]"
+Style/RedundantPercentQ:
+  Enabled: false
+Style/RedundantReturn:
+  Enabled: true
+  AllowMultipleReturnValues: true
+Style/Semicolon:
+  Enabled: true
+  AllowAsExpressionSeparator: true
+Style/StabbyLambdaParentheses:
+  Enabled: true
+Style/StringLiterals:
+  Enabled: true
+  EnforcedStyle: double_quotes
+  Include:
+  - app/**/*
+  - config/**/*
+  - lib/**/*
+  - test/**/*
+  - Gemfile
+Style/TrailingCommaInArrayLiteral:
+  Enabled: true
+Style/TrailingCommaInHashLiteral:
+  Enabled: true

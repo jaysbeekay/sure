@@ -516,6 +516,34 @@ class Account::MarketDataImporterTest < ActiveSupport::TestCase
     assert_equal 1, Security::Price.where(security: security, date: account.start_date).count
   end
 
+  test "backfills a closed provider-held position once and then skips it" do
+    family = Family.create!(name: "Smith", currency: "USD")
+    account = family.accounts.create!(name: "Brokerage", currency: "USD", balance: 0, accountable: Investment.new)
+    security = Security.create!(ticker: "OLDPROV", exchange_operating_mic: "XNAS")
+    provider_item = family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider_account = provider_item.coinstats_accounts.create!(name: "Provider", currency: "USD")
+    account_provider = AccountProvider.create!(account: account, provider: provider_account)
+    held_date = 10.days.ago.to_date
+
+    account.holdings.create!(security: security, date: held_date, qty: 1, price: 100, amount: 100,
+                             currency: "USD", account_provider: account_provider)
+    account.holdings.create!(security: security, date: Date.current, qty: 0, price: 100, amount: 0,
+                             currency: "USD", account_provider: account_provider)
+
+    @provider.expects(:fetch_security_prices)
+             .with(symbol: security.ticker, exchange_operating_mic: "XNAS",
+                   start_date: held_date - SECURITY_PRICE_BUFFER, end_date: held_date)
+             .once
+             .returns(provider_success_response([
+               OpenStruct.new(security: security, date: held_date, price: 100, currency: "USD")
+             ]))
+    @provider.stubs(:fetch_security_info).returns(provider_success_response(OpenStruct.new(name: "Old", logo_url: "logo")))
+
+    2.times { Account::MarketDataImporter.new(account).import_security_prices }
+
+    assert Security::Price.exists?(security: security, date: held_date)
+  end
+
   test "handles provider error response gracefully for exchange rates" do
     family = Family.create!(name: "Smith", currency: "USD")
 
