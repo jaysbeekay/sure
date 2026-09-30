@@ -242,7 +242,7 @@ class Account::MarketDataImporterTest < ActiveSupport::TestCase
     assert_equal 1, Security::Price.where(security: security, date: trade_date).count
   end
 
-  test "caps end_date at last holding date for securities no longer held" do
+  test "caps a sold security at its closing trade despite later zero holdings" do
     family = Family.create!(name: "Smith", currency: "USD")
 
     account = family.accounts.create!(
@@ -262,13 +262,16 @@ class Account::MarketDataImporterTest < ActiveSupport::TestCase
       trade = Trade.new(security: sec, qty: 10, price: 100, currency: "USD", investment_activity_label: "Buy")
       account.entries.create!(name: "Buy #{sec.ticker}", date: trade_date, amount: 1000, currency: "USD", entryable: trade)
     end
+    account.entries.create!(name: "Sell HIST", date: sold_date, amount: 1100, currency: "USD",
+                            entryable: Trade.new(security: historical_sec, qty: -10, price: 110, currency: "USD", investment_activity_label: "Sell"))
 
     # Current: most-recent holding has qty > 0 — shows up in current_holdings
     account.holdings.create!(security: current_sec, date: Date.current, qty: 10, price: 110, amount: 1100, currency: "USD")
 
-    # Historical: most-recent holding has qty == 0 (sold) — excluded from current_holdings
+    # Historical: zero-quantity holdings continue through today after the sale.
     account.holdings.create!(security: historical_sec, date: 10.days.ago.to_date, qty: 10, price: 105, amount: 1050, currency: "USD")
     account.holdings.create!(security: historical_sec, date: sold_date, qty: 0, price: 0, amount: 0, currency: "USD")
+    account.holdings.create!(security: historical_sec, date: Date.current, qty: 0, price: 0, amount: 0, currency: "USD")
 
     expected_start_date = trade_date - SECURITY_PRICE_BUFFER
 
@@ -318,6 +321,7 @@ class Account::MarketDataImporterTest < ActiveSupport::TestCase
 
     # Stale materialized holdings — qty=0 means current_holdings excludes this security
     account.holdings.create!(security: security, date: sold_date, qty: 0, price: 0, amount: 0, currency: "USD")
+    account.holdings.create!(security: security, date: Date.current, qty: 0, price: 0, amount: 0, currency: "USD")
 
     # Repurchase trade added after last materialization — holdings haven't been rematerialized yet
     repurchase = Trade.new(security: security, qty: 5, price: 130, currency: "USD", investment_activity_label: "Buy")
