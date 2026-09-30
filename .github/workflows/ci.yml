@@ -206,7 +206,28 @@ jobs:
           MAX_P99_MS: "400"
 
       - name: Unit and integration tests
-        run: bin/rails test
+        # repro/3747 branch only: run the Redbark suites and surface every
+        # Minitest result as an annotation so it is readable via the API.
+        run: |
+          set -o pipefail
+          bin/rails test test/models/redbark_account test/models/redbark_item test/models/redbark_item_test.rb test/models/balance_sheet_test.rb -v 2>&1 | tee test-output.txt
+        continue-on-error: true
+        id: unit
+
+      - name: Publish test results as annotations
+        if: always()
+        run: |
+          ruby -e '
+            out = File.read("test-output.txt")
+            out.scan(/^(RedbarkAccount::ProcessorSignReproTest#\S+) = [\d.]+ s = (\S)/).each { |t, r| puts "::notice title=#{r == "." ? "PASS" : "FAIL"} #{t}::#{t}" }
+            out.split(/\n(?=(?:Failure|Error):\n)/).drop(1).first(9).each_with_index do |blk, i|
+              body = blk.split(/\n\n(?:bin\/rails test|Finished|\d+ runs)/).first.strip
+              puts "::error title=Minitest #{i + 1}::" + body.gsub("%", "%25").gsub("\n", "%0A")
+            end
+            summary = out[/^\d+ runs, .*$/]
+            puts "::warning title=Summary::#{summary}"
+          '
+          test "${{ steps.unit.outcome }}" = "success"
 
   test_system:
     runs-on: ubuntu-latest
