@@ -148,6 +148,21 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     assert_equal @category.id, still_open.reload.category_id
   end
 
+  # The race the row lock closes: the eligibility query ran, then someone
+  # categorised the row before the write. Simulated by making the query stale.
+  test "accept re-checks under the row lock when the eligibility query was stale" do
+    txn = create_transaction(account: @account, name: "Raced").transaction
+    txn.update!(category: @other_category)
+    @review.stubs(:backlog_transaction_ids_among).returns([ txn.id ])
+
+    result = @review.accept([ { transaction_id: txn.id, category_id: @category.id } ])
+
+    assert_equal 0, result.applied
+    assert_equal 1, result.skipped
+    assert_equal @other_category.id, txn.reload.category_id
+    assert_not txn.locked?(:category_id)
+  end
+
   test "accept skips a row whose category was locked since the suggestion" do
     txn = create_transaction(account: @account, name: "Locked meanwhile").transaction
     txn.lock_attr!(:category_id)
