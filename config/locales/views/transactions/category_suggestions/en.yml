@@ -9,8 +9,8 @@ en:
         intro: "Review what the AI would categorize your uncategorized transactions as. Nothing changes until you accept a suggestion."
         back: "Quick categorize"
         backlog:
-          one: "1 uncategorized transaction can be suggested for."
-          other: "%{count} uncategorized transactions can be suggested for."
+          one: "A category can be suggested for 1 uncategorized transaction."
+          other: "Categories can be suggested for %{count} uncategorized transactions."
         batch_note: "Each run covers the %{count} most recent."
         cost_with_estimate: "Estimated cost of this run: ~$%{cost} using %{model}."
         cost_unavailable: "No pricing is available for the selected model, so the cost cannot be estimated."

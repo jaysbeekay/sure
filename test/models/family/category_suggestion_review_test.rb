@@ -221,6 +221,27 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     assert_equal @category.id, txn.reload.category_id
   end
 
+  # Active Record casts a malformed uuid to nil before the query reaches Postgres, so
+  # neither id can raise; pinned for both columns, alone and beside a valid row.
+  test "accept treats a malformed transaction or category id as a skipped row, not an error" do
+    txn = create_transaction(account: @account, name: "Valid").transaction
+    other = create_transaction(account: @account, name: "Other").transaction
+
+    result = nil
+    assert_nothing_raised do
+      result = @review.accept([
+        { transaction_id: txn.id, category_id: "not-a-uuid" },
+        { transaction_id: "also-bad", category_id: @category.id },
+        { transaction_id: other.id, category_id: @category.id }
+      ])
+    end
+
+    assert_equal 1, result.applied
+    assert_equal 2, result.skipped
+    assert_nil txn.reload.category_id
+    assert_equal @category.id, other.reload.category_id
+  end
+
   test "accept applied count equals the rows that were actually changed" do
     txns = Array.new(3) { |i| create_transaction(account: @account, name: "Row #{i}").transaction }
     before = Transaction.where(id: txns.map(&:id)).where.not(category_id: nil).count
