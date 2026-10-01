@@ -1,0 +1,50 @@
+<div class="space-y-4 pb-6 lg:pb-12">
+  <header class="flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-2">
+      <h1 class="text-xl font-medium text-primary"><%= t(".title") %></h1>
+      <%= render DS::Pill.new(label: t("shared.preview"), size: :md) %>
+    </div>
+    <%= render DS::Link.new(
+      text: t(".back"),
+      icon: "tag",
+      variant: "outline",
+      href: transactions_categorize_path
+    ) %>
+  </header>
+
+  <p class="text-sm text-secondary"><%= t(".intro") %></p>
+
+  <%= turbo_frame_tag "category_suggestions" do %>
+    <% if @failed %>
+      <%= render DS::Alert.new(message: t("transactions.category_suggestions.suggestions.failed"), variant: :error, live: :alert) %>
+    <% end %>
+
+    <% if !@provider_configured %>
+      <%= render DS::Alert.new(message: t(".no_provider"), variant: :warning) %>
+    <% elsif @backlog_count.zero? && @batch.nil? %>
+      <%= render DS::EmptyState.new(icon: "check-circle", title: t(".empty_title"), description: t(".empty_description")) %>
+    <% elsif @batch.present? && @batch.pairs.any? %>
+      <%= render "transactions/category_suggestions/suggestions", batch: @batch %>
+    <% else %>
+      <% if @batch.present? %>
+        <%= render DS::Alert.new(message: t("transactions.category_suggestions.suggestions.none"), variant: :info) %>
+      <% end %>
+
+      <div class="bg-container shadow-border-xs rounded-xl p-4 space-y-3">
+        <p class="text-sm text-primary"><%= t(".backlog", count: @backlog_count) %></p>
+        <p class="text-sm text-secondary"><%= t(".batch_note", count: @batch_size) %></p>
+        <p class="text-sm text-secondary privacy-sensitive">
+          <% if @estimated_cost.nil? %>
+            <%= t(".cost_unavailable") %>
+          <% else %>
+            <%= t(".cost_with_estimate", cost: sprintf("%.4f", @estimated_cost), model: @selected_model) %>
+          <% end %>
+        </p>
+
+        <%= form_with url: transactions_category_suggestions_path, method: :post do %>
+          <%= render DS::Button.new(text: t(".suggest"), icon: "sparkles", type: "submit") %>
+        <% end %>
+      </div>
+    <% end %>
+  <% end %>
+</div>

@@ -13,6 +13,9 @@
           <% menu.with_item(variant: "link", text: t(".import"), href: new_import_path, icon: "download", data: { turbo_frame: "modal", class_name: "md:!hidden" }) %>
           <% if @uncategorized_count > 0 %>
             <% menu.with_item(variant: "link", text: t(".categorize_button", count: @uncategorized_count), href: transactions_categorize_path, icon: "tag", data: { turbo_frame: :_top }) %>
+            <% if preview_features_enabled? %>
+              <% menu.with_item(variant: "link", text: t(".review_ai_suggestions"), href: transactions_category_suggestions_path, icon: "sparkles", data: { turbo_frame: :_top }) %>
+            <% end %>
           <% end %>
         <% end %>
 

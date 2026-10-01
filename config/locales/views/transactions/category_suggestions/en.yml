@@ -1,0 +1,48 @@
+---
+en:
+  transactions:
+    index:
+      review_ai_suggestions: "Review AI suggestions"
+    category_suggestions:
+      index:
+        title: "AI category suggestions"
+        intro: "Review what the AI would categorize your uncategorized transactions as. Nothing changes until you accept a suggestion."
+        back: "Quick categorize"
+        backlog:
+          one: "1 uncategorized transaction can be suggested for."
+          other: "%{count} uncategorized transactions can be suggested for."
+        batch_note: "Each run covers the %{count} most recent."
+        cost_with_estimate: "Estimated cost of this run: ~$%{cost} using %{model}."
+        cost_unavailable: "No pricing is available for the selected model, so the cost cannot be estimated."
+        suggest: "Suggest categories"
+        no_provider: "No AI provider is configured, so there is nothing to suggest with. Set one up in Settings, then come back."
+        empty_title: "Nothing to suggest for"
+        empty_description: "Every transaction you can categorize already has a category."
+      suggestions:
+        heading:
+          one: "1 suggestion"
+          other: "%{count} suggestions"
+        remaining:
+          one: "1 more uncategorized transaction is waiting for the next run."
+          other: "%{count} more uncategorized transactions are waiting for the next run."
+        none: "The AI did not suggest a category for any of these transactions. You can try again."
+        failed: "Suggestions could not be generated. Check that an AI provider and categories are set up, then try again."
+        accept_all: "Accept all (%{count})"
+        accept: "Accept"
+        accept_row: "Accept the suggestion for %{name}"
+        make_rule: "Make this a rule"
+        make_rule_row: "Make a rule from the suggestion for %{name}"
+        table_label: "Suggested categories"
+        col_transaction: "Transaction"
+        col_amount: "Amount"
+        col_category: "Suggested category"
+        col_actions: "Actions"
+        footnote: "Accepted suggestions are recorded as AI categorizations and locked, like rule-based AI categorization."
+      accept:
+        applied:
+          one: "1 transaction categorized."
+          other: "%{count} transactions categorized."
+        skipped:
+          one: "1 suggestion skipped because the transaction was categorized in the meantime or is no longer eligible."
+          other: "%{count} suggestions skipped because the transactions were categorized in the meantime or are no longer eligible."
+        none_selected: "No suggestions were selected."

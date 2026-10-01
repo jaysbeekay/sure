@@ -1,0 +1,51 @@
+<%# locals: (batch:) %>
+<%= form_with url: accept_transactions_category_suggestions_path, method: :post, class: "space-y-4", data: { turbo_frame: "_top" } do %>
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h2 class="text-base font-medium text-primary"><%= t(".heading", count: batch.pairs.size) %></h2>
+      <% if batch.remaining.positive? %>
+        <p class="text-sm text-secondary"><%= t(".remaining", count: batch.remaining) %></p>
+      <% end %>
+    </div>
+    <%= render DS::Button.new(text: t(".accept_all", count: batch.pairs.size), icon: "check", type: "submit") %>
+  </div>
+
+  <%= render DS::Table.new(rows: batch.pairs, label: t(".table_label")) do |table| %>
+    <% table.with_column(t(".col_transaction"), row_header: true) do |(transaction, category), index| %>
+      <%= hidden_field_tag "suggestions[#{index}][transaction_id]", transaction.id, id: nil %>
+      <%= hidden_field_tag "suggestions[#{index}][category_id]", category.id, id: nil %>
+      <span class="block font-medium text-primary"><%= transaction.entry.name %></span>
+      <span class="block text-xs text-secondary"><%= format_date(transaction.entry.date) %></span>
+    <% end %>
+    <% table.with_column(t(".col_amount"), numeric: true, class: "privacy-sensitive") do |(transaction, _category), _index| %>
+      <% entry = transaction.entry %>
+      <span class="<%= entry.amount.negative? ? "text-success" : "text-primary" %>"><%= format_money(entry.amount_money.abs) %></span>
+    <% end %>
+    <% table.with_column(t(".col_category")) do |(_transaction, category), _index| %>
+      <%= render "categories/badge", category: category %>
+    <% end %>
+    <% table.with_column(t(".col_actions"), align: :right) do |(transaction, category), _index| %>
+      <div class="flex items-center justify-end gap-2">
+        <%= render DS::Link.new(
+          text: t(".make_rule"),
+          variant: "ghost",
+          size: :sm,
+          href: new_rule_path(name: transaction.entry.name, action_type: "set_transaction_category", action_value: category.id),
+          frame: :modal,
+          aria: { label: t(".make_rule_row", name: transaction.entry.name) }
+        ) %>
+        <%= render DS::Button.new(
+          text: t(".accept"),
+          variant: "outline",
+          size: :sm,
+          type: "submit",
+          name: "only",
+          value: transaction.id,
+          aria: { label: t(".accept_row", name: transaction.entry.name) }
+        ) %>
+      </div>
+    <% end %>
+  <% end %>
+
+  <p class="text-xs text-secondary"><%= t(".footnote") %></p>
+<% end %>
