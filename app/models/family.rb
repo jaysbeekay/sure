@@ -200,6 +200,26 @@ class Family < ApplicationRecord
     end
   end
 
+  # Names the provider's model that will actually run and prices a categorization
+  # of `transaction_count` transactions against it, as [model, cost].
+  #
+  # This previously hardcoded :openai, so an Anthropic install was quoted the
+  # wrong model and a family on Jev was quoted a provider that would not run
+  # at all. LlmUsage has no pricing for Jev, so the cost comes back nil and the
+  # view says so rather than inventing a figure. No provider yields [nil, nil].
+  def auto_categorize_estimate(transaction_count:)
+    model = categorization_model_name
+    return [ nil, nil ] if model.blank?
+
+    cost = LlmUsage.estimate_auto_categorize_cost(
+      transaction_count: transaction_count,
+      category_count: categories.count,
+      model: model
+    )
+
+    [ model, cost ]
+  end
+
   # Answers below this confidence are not applied. Zero applies everything and
   # is the default. Only providers reporting calibrated confidence can be gated;
   # the LLM providers return a bare category name. Clamped because the ENV

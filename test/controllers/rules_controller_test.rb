@@ -249,6 +249,23 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_match "~typesafe/jev-latest", response.body
   end
 
+  # Pins the figure and the "no pricing" branch that the batch suggestion page
+  # (#130, 11.4) shares through Family#auto_categorize_estimate.
+  test "confirm quotes the estimated cost, and says so when there is no pricing" do
+    rule = rules(:one)
+    rule.actions.create!(action_type: "auto_categorize")
+    Provider::Registry.stubs(:preferred_llm_provider).returns(Provider::Openai.allocate)
+    LlmUsage.stubs(:estimate_auto_categorize_cost).returns(0.0123)
+
+    get confirm_rule_url(rule)
+    assert_match "~$0.0123", response.body
+
+    LlmUsage.stubs(:estimate_auto_categorize_cost).returns(nil)
+    get confirm_rule_url(rule)
+    assert_no_match "~$", response.body
+    assert_match "Cost estimation unavailable", response.body
+  end
+
   test "confirm does not name Jev when the family has not selected it" do
     rule = rules(:one)
     rule.actions.create!(action_type: "auto_categorize")

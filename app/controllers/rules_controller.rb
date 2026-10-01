@@ -118,25 +118,12 @@ class RulesController < ApplicationController
   end
 
   private
-    # Names the provider that will actually run, and prices against it.
-    #
-    # This previously hardcoded :openai, so an Anthropic install was quoted the
-    # wrong model and a family on Jev was quoted a provider that would not run
-    # at all. LlmUsage has no pricing for Jev, so the cost comes back nil and the
-    # view says so rather than inventing a figure.
+    # Pricing lives on Family so the batch suggestion page quotes the same way.
     def auto_categorize_estimate(scope, transaction_count: nil)
       family = scope.is_a?(Rule) ? scope.family : scope
       count = transaction_count || scope.affected_resource_count
-      model = family.categorization_model_name
-      return [ nil, nil ] if model.blank?
 
-      cost = LlmUsage.estimate_auto_categorize_cost(
-        transaction_count: count,
-        category_count: family.categories.count,
-        model: model
-      )
-
-      [ model, cost ]
+      family.auto_categorize_estimate(transaction_count: count)
     end
 
     # The reset itself happens in a background job, so an enqueue that never

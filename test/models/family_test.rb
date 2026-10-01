@@ -545,6 +545,34 @@ class FamilyTest < ActiveSupport::TestCase
     assert_equal "claude-sonnet-test", family.categorization_model_name
   end
 
+  test "auto_categorize_estimate prices the model that will categorize" do
+    family = families(:dylan_family)
+    family.stubs(:resolved_categorization_provider).returns(Provider::Anthropic.allocate)
+    Provider::Anthropic.stubs(:effective_model).returns("claude-sonnet-test")
+    LlmUsage.expects(:estimate_auto_categorize_cost)
+            .with(transaction_count: 7, category_count: family.categories.count, model: "claude-sonnet-test")
+            .returns(0.5)
+
+    assert_equal [ "claude-sonnet-test", 0.5 ], family.auto_categorize_estimate(transaction_count: 7)
+  end
+
+  test "auto_categorize_estimate returns a nil cost, not a made-up one, when there is no pricing" do
+    family = families(:dylan_family)
+    family.stubs(:resolved_categorization_provider).returns(Provider::Jev.allocate)
+    Provider::Jev.stubs(:effective_model).returns("~typesafe/jev-latest")
+    LlmUsage.stubs(:estimate_auto_categorize_cost).returns(nil)
+
+    assert_equal [ "~typesafe/jev-latest", nil ], family.auto_categorize_estimate(transaction_count: 3)
+  end
+
+  test "auto_categorize_estimate is empty and prices nothing when no provider is configured" do
+    family = families(:dylan_family)
+    family.stubs(:resolved_categorization_provider).returns(nil)
+    LlmUsage.expects(:estimate_auto_categorize_cost).never
+
+    assert_equal [ nil, nil ], family.auto_categorize_estimate(transaction_count: 3)
+  end
+
   test "resolved_categorization_provider falls back to the LLM provider when the endpoint is rejected" do
     family = families(:dylan_family)
     family.update!(categorization_provider: "jev")
