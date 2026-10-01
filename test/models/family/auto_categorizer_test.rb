@@ -496,6 +496,40 @@ class Family::AutoCategorizerTest < ActiveSupport::TestCase
     assert_equal category, txn.reload.category
   end
 
+  # Pins the write path that the review flow (#130 11.4) shares builders with:
+  # the provider is handed exactly these input shapes, and an applied answer is
+  # stored, sourced "ai" and locked. Added before the builders were touched.
+  test "write path hands the provider the documented inputs and stores the answer" do
+    txn = create_transaction(account: @account, name: "Coffee shop", notes: "latte", amount: -12.5).transaction
+    category = @family.categories.create!(name: "Pinned category")
+    other_ids = @family.categories.where.not(id: category.id).pluck(:id)
+    captured = {}
+
+    @llm_provider.expects(:auto_categorize).with do |transactions:, user_categories:, family:|
+      captured[:transactions] = transactions
+      captured[:categories] = user_categories
+      family == @family
+    end.returns(provider_success_response([
+      AutoCategorization.new(transaction_id: txn.id, category_name: category.name)
+    ])).once
+
+    modified = Family::AutoCategorizer.new(@family, transaction_ids: [ txn.id ]).auto_categorize
+
+    assert_equal 1, modified
+    assert_equal [ { id: txn.id, amount: 12.5, classification: "income", description: "Coffee shop latte", merchant: nil } ],
+                 captured[:transactions]
+    assert_equal ([ category.id ] + other_ids).sort, captured[:categories].map { |c| c[:id] }.sort
+    assert_equal({ id: category.id, name: "Pinned category", is_subcategory: false, parent_id: nil },
+                 captured[:categories].find { |c| c[:id] == category.id })
+
+    txn.reload
+    assert_equal category, txn.category
+    assert txn.locked?(:category_id)
+    enrichment = txn.data_enrichments.find_by!(attribute_name: "category_id")
+    assert_equal "ai", enrichment.source
+    assert_equal category.id, enrichment.value
+  end
+
   private
     AutoCategorization = Provider::LlmConcept::AutoCategorization
     CategoryDecision = Provider::ClassificationConcept::CategoryDecision

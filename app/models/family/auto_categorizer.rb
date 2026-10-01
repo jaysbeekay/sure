@@ -1,6 +1,10 @@
 class Family::AutoCategorizer
   Error = Class.new(StandardError)
 
+  # Provider::Anthropic rejects a categorization request over this many
+  # transactions, so a review batch is capped here rather than at the provider.
+  SUGGEST_LIMIT = 25
+
   def initialize(family, transaction_ids: [])
     @family = family
     @transaction_ids = transaction_ids
@@ -24,22 +28,7 @@ class Family::AutoCategorizer
 
     categories_input = user_categories_input
 
-    if categories_input.empty?
-      message = "Cannot auto-categorize transactions for family #{family.id}: no categories available"
-      Rails.logger.error(message)
-      DebugLogEntry.capture(
-        category: "auto_categorization",
-        level: "error",
-        message: "AI categorization failed: no categories available",
-        source: self.class.name,
-        family: family,
-        provider: categorization_provider,
-        metadata: {
-          requested_transaction_ids: transaction_ids
-        }
-      )
-      raise Error, "No categories available for auto-categorization"
-    end
+    report_no_categories if categories_input.empty?
 
     result = categorization_provider.auto_categorize(
       transactions: transactions_input,
@@ -112,8 +101,83 @@ class Family::AutoCategorizer
     modified_count
   end
 
+  # Asks the provider what it would categorize these transactions as, and
+  # returns `[transaction, category]` pairs WITHOUT applying them: nothing is
+  # enriched, locked, saved or shadow-compared. The caller shows them for review
+  # and applies the ones the person accepts.
+  #
+  # Selects with the same `scope` as #auto_categorize, so a transaction it would
+  # not touch (already categorised, category locked, another family's) is not
+  # offered either. An answer is dropped when it names a category the family
+  # does not have, names none, is for a transaction that was not sent, or is
+  # withheld for low confidence, exactly as the write path would skip it.
+  def suggest
+    raise Error, "No LLM provider for auto-categorization" unless categorization_provider
+
+    if transaction_ids.uniq.size > SUGGEST_LIMIT
+      raise Error, "Too many transactions to suggest categories for. Max is #{SUGGEST_LIMIT} per request."
+    end
+
+    transactions = scope.to_a
+    return [] if transactions.empty?
+
+    categories_input = user_categories_input
+    report_no_categories if categories_input.empty?
+
+    result = categorization_provider.auto_categorize(
+      transactions: transactions_input(transactions),
+      user_categories: categories_input,
+      family: family
+    )
+
+    unless result.success?
+      DebugLogEntry.capture(
+        category: "auto_categorization",
+        level: "error",
+        message: "AI category suggestion failed",
+        source: self.class.name,
+        family: family,
+        provider: categorization_provider,
+        metadata: {
+          requested_transaction_ids: transaction_ids,
+          error_class: result.error.class.name,
+          error_message: result.error.message
+        }
+      )
+      raise Error, "Failed to suggest categories: #{result.error.message}"
+    end
+
+    categories_by_id = family.categories.index_by(&:id)
+
+    transactions.filter_map do |transaction|
+      decision = result.data.find { |c| c.transaction_id == transaction.id }
+      category_id = categories_input.find { |c| c[:name] == decision&.category_name }&.dig(:id)
+
+      next if category_id.blank? || withhold?(decision)
+
+      [ transaction, categories_by_id.fetch(category_id) ]
+    end
+  end
+
   private
     attr_reader :family, :transaction_ids
+
+    def report_no_categories
+      message = "Cannot auto-categorize transactions for family #{family.id}: no categories available"
+      Rails.logger.error(message)
+      DebugLogEntry.capture(
+        category: "auto_categorization",
+        level: "error",
+        message: "AI categorization failed: no categories available",
+        source: self.class.name,
+        family: family,
+        provider: categorization_provider,
+        metadata: {
+          requested_transaction_ids: transaction_ids
+        }
+      )
+      raise Error, "No categories available for auto-categorization"
+    end
 
     # Memoized: this is read once to guard, once per DebugLogEntry and once to
     # run, and each registry lookup builds a fresh provider object. Memoizing
@@ -254,8 +318,8 @@ class Family::AutoCategorizer
       end
     end
 
-    def transactions_input
-      scope.map do |transaction|
+    def transactions_input(transactions = scope)
+      transactions.map do |transaction|
         {
           id: transaction.id,
           amount: transaction.entry.amount.abs,
