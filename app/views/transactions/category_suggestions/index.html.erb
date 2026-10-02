@@ -24,7 +24,7 @@
     <% elsif @backlog_count.zero? && @batch&.pairs.blank? %>
       <%= render DS::EmptyState.new(icon: "check-circle", title: t(".empty_title"), description: t(".empty_description")) %>
     <% elsif @batch.present? && @batch.pairs.any? %>
-      <%= render "transactions/category_suggestions/suggestions", batch: @batch %>
+      <%= render "transactions/category_suggestions/suggestions", batch: @batch, review: @review %>
     <% else %>
       <% if @batch.present? %>
         <%= render DS::Alert.new(message: t("transactions.category_suggestions.suggestions.none"), variant: :info) %>

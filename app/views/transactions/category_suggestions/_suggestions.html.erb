@@ -1,4 +1,4 @@
-<%# locals: (batch:) %>
+<%# locals: (batch:, review:) %>
 <%= form_with url: accept_transactions_category_suggestions_path, method: :post, class: "space-y-4", data: { turbo_frame: "_top" } do %>
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
@@ -14,6 +14,7 @@
     <% table.with_column(t(".col_transaction"), row_header: true) do |(transaction, category), index| %>
       <%= hidden_field_tag "suggestions[#{index}][transaction_id]", transaction.id, id: nil %>
       <%= hidden_field_tag "suggestions[#{index}][category_id]", category.id, id: nil %>
+      <%= hidden_field_tag "suggestions[#{index}][token]", review.token_for(transaction.id, category.id), id: nil %>
       <span class="block font-medium text-primary"><%= transaction.entry.name %></span>
       <span class="block text-xs text-secondary"><%= format_date(transaction.entry.date) %></span>
     <% end %>

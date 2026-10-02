@@ -67,7 +67,7 @@ class Transactions::CategorySuggestionsController < ApplicationController
       return [] unless raw.respond_to?(:values)
 
       rows = raw.values.filter_map do |row|
-        row.permit(:transaction_id, :category_id).to_h if row.respond_to?(:permit)
+        row.permit(:transaction_id, :category_id, :token).to_h if row.respond_to?(:permit)
       end
 
       # A per-row Accept button names its row; Accept all names none.

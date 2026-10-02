@@ -108,11 +108,74 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
 
   # accept
 
+  # Provenance: a row is applied only with the token `suggest` signed for that exact pair,
+  # so an edited or replayed form cannot record another category as the AI's answer.
+  test "accept skips a row posted without the token the suggestion was signed with" do
+    txn = create_transaction(account: @account, name: "Unsigned").transaction
+
+    result = @review.accept([ { transaction_id: txn.id, category_id: @category.id } ])
+
+    assert_equal 0, result.applied
+    assert_equal 1, result.skipped
+    assert_nil txn.reload.category_id
+  end
+
+  test "accept skips a row whose category was changed after the suggestion was signed" do
+    txn = create_transaction(account: @account, name: "Edited").transaction
+    row = signed(txn, @category).merge(category_id: @other_category.id)
+
+    result = @review.accept([ row ])
+
+    assert_equal 0, result.applied
+    assert_nil txn.reload.category_id
+  end
+
+  test "accept skips a token signed for another transaction" do
+    one = create_transaction(account: @account, name: "One").transaction
+    two = create_transaction(account: @account, name: "Two").transaction
+    row = { transaction_id: two.id, category_id: @category.id, token: @review.token_for(one.id, @category.id) }
+
+    assert_equal 0, @review.accept([ row ]).applied
+    assert_nil two.reload.category_id
+  end
+
+  test "accept skips a token signed for another user" do
+    txn = create_transaction(account: @account, name: "Other user").transaction
+    other = Family::CategorySuggestionReview.new(@family, user: users(:family_member))
+
+    result = @review.accept([ signed(txn, @category, review: other) ])
+
+    assert_equal 0, result.applied
+  end
+
+  test "accept skips a token that has expired" do
+    txn = create_transaction(account: @account, name: "Old").transaction
+    row = signed(txn, @category)
+
+    travel(Family::CategorySuggestionReview::TOKEN_LIFETIME + 1.minute) do
+      assert_equal 0, @review.accept([ row ]).applied
+    end
+    assert_equal 1, @review.accept([ row ]).applied
+  end
+
+  test "an exception on one row skips that row, logs it, and the others still apply" do
+    bad = create_transaction(account: @account, name: "Bad").transaction
+    good = create_transaction(account: @account, name: "Good").transaction
+    Transaction.any_instance.stubs(:enrich_attribute).with { |*| true }.raises(ActiveRecord::StatementInvalid.new("boom")).then.returns(true)
+
+    assert_difference "DebugLogEntry.where(category: 'category_suggestions', level: 'error').count", 1 do
+      result = @review.accept([ signed(bad, @category), signed(good, @category) ])
+
+      assert_equal 1, result.applied
+      assert_equal 1, result.skipped
+    end
+  end
+
   test "accept applies only the posted rows" do
     posted = create_transaction(account: @account, name: "Posted").transaction
     left_alone = create_transaction(account: @account, name: "Left alone").transaction
 
-    result = @review.accept([ { transaction_id: posted.id, category_id: @category.id } ])
+    result = @review.accept([ signed(posted, @category) ])
 
     assert_equal 1, result.applied
     assert_equal @category.id, posted.reload.category_id
@@ -123,7 +186,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     txn = create_transaction(account: @account, name: "Posted").transaction
 
     assert_difference "DataEnrichment.where(source: 'ai', attribute_name: 'category_id').count", 1 do
-      @review.accept([ { transaction_id: txn.id, category_id: @category.id } ])
+      @review.accept([ signed(txn, @category) ])
     end
 
     txn.reload
@@ -137,8 +200,8 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     meanwhile.update!(category: @other_category)
 
     result = @review.accept([
-      { transaction_id: meanwhile.id, category_id: @category.id },
-      { transaction_id: still_open.id, category_id: @category.id }
+      signed(meanwhile, @category),
+      signed(still_open, @category)
     ])
 
     assert_equal 1, result.applied
@@ -155,7 +218,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     txn.update!(category: @other_category)
     @review.stubs(:backlog_transaction_ids_among).returns([ txn.id ])
 
-    result = @review.accept([ { transaction_id: txn.id, category_id: @category.id } ])
+    result = @review.accept([ signed(txn, @category) ])
 
     assert_equal 0, result.applied
     assert_equal 1, result.skipped
@@ -167,7 +230,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     txn = create_transaction(account: @account, name: "Locked meanwhile").transaction
     txn.lock_attr!(:category_id)
 
-    result = @review.accept([ { transaction_id: txn.id, category_id: @category.id } ])
+    result = @review.accept([ signed(txn, @category) ])
 
     assert_equal 0, result.applied
     assert_equal 1, result.skipped
@@ -179,7 +242,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     foreign = create_transaction(account: foreign_account, name: "Foreign").transaction
 
     assert_no_difference "DataEnrichment.count" do
-      result = @review.accept([ { transaction_id: foreign.id, category_id: @category.id } ])
+      result = @review.accept([ signed(foreign, @category) ])
       assert_equal 0, result.applied
       assert_equal 1, result.skipped
     end
@@ -190,7 +253,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     txn = create_transaction(account: @account, name: "Posted").transaction
     foreign_category = families(:empty).categories.create!(name: "Foreign category", color: "#123456", lucide_icon: "shapes")
 
-    result = @review.accept([ { transaction_id: txn.id, category_id: foreign_category.id } ])
+    result = @review.accept([ signed(txn, foreign_category) ])
 
     assert_equal 0, result.applied
     assert_equal 1, result.skipped
@@ -201,7 +264,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     review = Family::CategorySuggestionReview.new(@family, user: users(:family_member))
     txn = create_transaction(account: accounts(:credit_card), name: "Read-only share").transaction
 
-    result = review.accept([ { transaction_id: txn.id, category_id: @category.id } ])
+    result = review.accept([ signed(txn, @category) ])
 
     assert_equal 0, result.applied
     assert_nil txn.reload.category_id
@@ -211,9 +274,9 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     txn = create_transaction(account: @account, name: "Posted").transaction
 
     result = @review.accept([
-      { transaction_id: txn.id, category_id: @category.id },
-      { transaction_id: txn.id, category_id: @category.id },
-      { transaction_id: "not-a-uuid", category_id: @category.id },
+      signed(txn, @category),
+      signed(txn, @category),
+      signed("not-a-uuid", @category),
       { transaction_id: nil, category_id: nil }
     ])
 
@@ -230,9 +293,9 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     result = nil
     assert_nothing_raised do
       result = @review.accept([
-        { transaction_id: txn.id, category_id: "not-a-uuid" },
-        { transaction_id: "also-bad", category_id: @category.id },
-        { transaction_id: other.id, category_id: @category.id }
+        signed(txn, "not-a-uuid"),
+        signed("also-bad", @category),
+        signed(other, @category)
       ])
     end
 
@@ -246,7 +309,7 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
     txns = Array.new(3) { |i| create_transaction(account: @account, name: "Row #{i}").transaction }
     before = Transaction.where(id: txns.map(&:id)).where.not(category_id: nil).count
 
-    result = @review.accept(txns.map { |t| { transaction_id: t.id, category_id: @category.id } })
+    result = @review.accept(txns.map { |t| signed(t, @category) })
 
     after = Transaction.where(id: txns.map(&:id)).where.not(category_id: nil).count
     assert_equal 3, result.applied
@@ -254,6 +317,11 @@ class Family::CategorySuggestionReviewTest < ActiveSupport::TestCase
   end
 
   private
+    def signed(transaction, category, review: @review)
+      transaction_id = transaction.respond_to?(:id) ? transaction.id : transaction
+      category_id = category.respond_to?(:id) ? category.id : category
+      { transaction_id: transaction_id, category_id: category_id, token: review.token_for(transaction_id, category_id) }
+    end
     def create_backlog(count)
       Array.new(count) { |i| create_transaction(account: @account, name: "Backlog #{i}", date: i.days.ago.to_date).transaction }
     end

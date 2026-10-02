@@ -136,6 +136,15 @@ class Transactions::CategorySuggestionsControllerTest < ActionDispatch::Integrat
     assert_no_match I18n.t("transactions.category_suggestions.suggestions.none"), response.body
   end
 
+  test "the form carries a signed token per suggested row" do
+    txn = create_transaction(account: @account, name: "Starbucks").transaction
+    stub_answers(AutoCategorization.new(transaction_id: txn.id, category_name: @category.name))
+
+    post transactions_category_suggestions_url
+
+    assert_select "input[name='suggestions[0][token]']", count: 1
+  end
+
   test "create renders one row per suggestion, carrying it in the form, and writes nothing" do
     one = create_transaction(account: @account, name: "Starbucks").transaction
     two = create_transaction(account: @account, name: "Shell").transaction
@@ -295,6 +304,9 @@ class Transactions::CategorySuggestionsControllerTest < ActionDispatch::Integrat
     end
 
     def rows_for(transactions, category)
-      transactions.each_with_index.to_h { |t, i| [ i.to_s, { transaction_id: t.id, category_id: category.id } ] }
+      review = Family::CategorySuggestionReview.new(@family, user: @user)
+      transactions.each_with_index.to_h do |t, i|
+        [ i.to_s, { transaction_id: t.id, category_id: category.id, token: review.token_for(t.id, category.id) } ]
+      end
     end
 end
