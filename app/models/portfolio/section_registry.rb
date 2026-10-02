@@ -165,6 +165,7 @@ class Portfolio::SectionRegistry
           title: "portfolios.sections.income",
           partial: "portfolios/income",
           locals: shared_locals.merge(income: income, trailing: trailing_income, bars: income_bars,
+                                      securities: income_by_security, yields: income_yields,
                                       rate_missing: income_rate_missing?),
           visible: true,
           collapsible: true
@@ -598,6 +599,76 @@ class Portfolio::SectionRegistry
       @trailing_performance ||= statement.performance(
         period: Period.custom(start_date: as_of.prev_year + 1.day, end_date: as_of)
       )
+    end
+
+    # The selected period's income by security. `total` is the figure the bars
+    # and the drivers table report, so the table and its unattributed row add up
+    # to it by construction (see Portfolio::IncomeBySecurity).
+    def income_by_security
+      @income_by_security ||= Portfolio::IncomeBySecurity.new(amounts: income[:by_security], total: income[:total])
+    end
+
+    # Yield-on-cost for each security in the table: the trailing twelve months'
+    # income over the cost basis, { "security-uuid" => fraction or nil }. Every
+    # row has a key, so the partial can tell "no figure" from "not asked for".
+    #
+    # The numerator is the TRAILING income, not the row's period amount. The
+    # row answers "what did it pay in the period you picked" and a yield over
+    # that would move with the picker; a yield is a yearly figure.
+    #
+    # LIMITATION, by the issue's own definition ("trailing income / cost basis"):
+    # this divides a year of income by TODAY's cost basis. A position that was
+    # partly sold during the year overstates the yield (income from shares no
+    # longer in the denominator), and one bought recently understates it (a year
+    # of denominator, a few months of income). It is a yield on what is held now,
+    # not a time-weighted figure.
+    #
+    # nil, never zero, when it cannot be stated honestly:
+    # - the security is not held, so there is no cost basis to divide by;
+    # - a position's cost basis is unknown (`missing_cost_basis`), because the
+    #   income covers the whole position and the basis only part of it;
+    # - a rate is missing in either income window (R13), as every ratio on this
+    #   page is withheld;
+    # - a position behind the row is in a currency with no rate, so its cost
+    #   basis was converted at parity (see #unrated_currencies).
+    def income_yields
+      @income_yields ||= begin
+        trailing = Portfolio::IncomeBySecurity.new(amounts: trailing_income[:by_security], total: trailing_income[:total])
+        withheld = income_rate_missing?
+        held = holdings_rows.index_by { |row| row.security.id.to_s }
+
+        unrated = unrated_currencies(held.values_at(*income_by_security.rows.map { |row| row.security.id.to_s }).compact)
+
+        income_by_security.rows.to_h do |row|
+          id = row.security.id.to_s
+          [ id, withheld ? nil : yield_on_cost(held[id], trailing.amount_for(id), unrated) ]
+        end
+      end
+    end
+
+    # The currencies, among the positions behind these rows, that have no rate to
+    # the family currency on record. The statement values a holding with
+    # `rates[currency] || 1`, and ExchangeRate.rates_for ends the same way, so
+    # neither can say "no rate" -- a EUR cost basis with none is converted at
+    # parity and looks like any other. Read directly, as Portfolio::RealizedGains
+    # does, and by the same R13 lookup the account comparison ranks with.
+    def unrated_currencies(holding_rows)
+      foreign = holding_rows.flat_map { |row| row.positions.map(&:currency) }.uniq - [ statement.family.currency ]
+      return [] if foreign.empty?
+
+      foreign - rates_on_or_before(foreign, as_of).keys
+    end
+
+    def yield_on_cost(holding_row, trailing_amount, unrated)
+      return nil if holding_row.nil? || holding_row.missing_cost_basis
+      # A cost basis converted at parity is not a cost basis. Only the positions
+      # behind THIS row matter: a rateless currency elsewhere does not touch it.
+      return nil if holding_row.positions.any? { |position| unrated.include?(position.currency) }
+
+      cost = holding_row.unrealized&.previous&.amount
+      return nil unless cost&.positive?
+
+      trailing_amount / cost
     end
 
     # Whether a currency with no rate left something out of the income figures,

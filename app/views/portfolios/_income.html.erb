@@ -1,11 +1,17 @@
-<%# locals: (statement:, period:, as_of:, income:, trailing:, bars:, rate_missing:) %>
+<%# locals: (statement:, period:, as_of:, income:, trailing:, bars:, securities:, yields:, rate_missing:) %>
 
 <%# Dividends and interest by the month they were paid. `income` is
     Portfolio::Performance#income for the selected period and `trailing` the
     same for the twelve months ending at `as_of`; both are Hashes, and `bars` is
     the chart payload the registry built, so this partial only formats. The bars
     and the period total are the same rows Portfolio::Drivers sums, so they agree
-    with the drivers table by construction. %>
+    with the drivers table by construction.
+
+    `securities` is a Portfolio::IncomeBySecurity for the same period and
+    `yields` is { "security-uuid" => fraction or nil } (trailing twelve months
+    over cost basis). The table is its rows, an unattributed row, and the total:
+    the three add up to the figure above the chart, so a provider that records
+    no security shows up as a row rather than as a gap. %>
 <% currency = statement.family.currency %>
 <div id="portfolio-income" class="space-y-4">
   <%# Above both branches: when every payout was unconvertible, "nothing was
@@ -58,6 +64,61 @@
       data-bar-chart-income-label-value="<%= t("portfolios.income.chart_label") %>"
       data-bar-chart-expense-label-value="<%= t("portfolios.income.reversals") %>">
     </div>
+
+    <%# `any?`, not `rows.any?`: with no income tied to a security there are no
+        rows, and the unattributed row is then the whole table. %>
+    <% if securities.any? %>
+      <div id="portfolio-income-securities" class="bg-container-inset rounded-xl p-1 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="uppercase text-xs font-medium text-secondary">
+              <th scope="col" class="px-4 py-2 font-medium text-left"><%= t("portfolios.income.securities.columns.security") %></th>
+              <th scope="col" class="px-4 py-2 font-medium text-right"><%= t("portfolios.income.securities.columns.income") %></th>
+              <th scope="col" class="px-4 py-2 font-medium text-right"><%= t("portfolios.income.securities.columns.yield_on_cost") %></th>
+            </tr>
+          </thead>
+          <tbody class="bg-container shadow-border-xs text-primary font-medium">
+            <% securities.rows.each do |row| %>
+              <% yield_on_cost = yields[row.security.id.to_s] %>
+              <tr data-portfolio-income-security="<%= row.security.ticker %>" class="hover:bg-container-hover">
+                <td class="px-4 py-3">
+                  <span><%= row.security.ticker %></span>
+                  <% if row.security.name.present? && row.security.name != row.security.ticker %>
+                    <span class="text-xs text-secondary font-normal"><%= row.security.name %></span>
+                  <% end %>
+                </td>
+                <td class="px-4 py-3 text-right tabular-nums privacy-sensitive"><%= format_money(Money.new(row.amount, currency)) %></td>
+                <td class="px-4 py-3 text-right tabular-nums privacy-sensitive">
+                  <% if yield_on_cost %>
+                    <%= number_to_percentage(yield_on_cost * 100, precision: 2) %>
+                  <% else %>
+                    <span class="text-secondary" title="<%= t("portfolios.income.securities.yield_unavailable") %>">—</span>
+                  <% end %>
+                </td>
+              </tr>
+            <% end %>
+            <%# Income the provider did not tie to a security. A row of its own
+                rather than a footnote, so the column adds up to the total below
+                and a provider that records none is visible. %>
+            <% unless securities.unattributed.zero? %>
+              <tr data-portfolio-income-unattributed class="hover:bg-container-hover">
+                <td class="px-4 py-3">
+                  <span><%= t("portfolios.income.securities.unattributed") %></span>
+                  <span class="block text-xs text-secondary font-normal"><%= t("portfolios.income.securities.unattributed_hint") %></span>
+                </td>
+                <td class="px-4 py-3 text-right tabular-nums privacy-sensitive"><%= format_money(Money.new(securities.unattributed, currency)) %></td>
+                <td class="px-4 py-3 text-right text-secondary">—</td>
+              </tr>
+            <% end %>
+            <tr data-portfolio-income-total class="border-t border-primary">
+              <td class="px-4 py-3"><%= t("portfolios.income.securities.total") %></td>
+              <td class="px-4 py-3 text-right tabular-nums privacy-sensitive"><%= format_money(Money.new(securities.total, currency)) %></td>
+              <td class="px-4 py-3"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    <% end %>
   <% else %>
     <%# Nothing paid in the period: say so and stop. A zero total over an empty
         chart is true and tells the reader nothing. The trailing figure still

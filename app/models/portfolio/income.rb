@@ -11,11 +11,14 @@
 # reclassifies a row: a reader that re-derived "is this a dividend?" for itself
 # is the thing the classifier exists to prevent.
 #
-# WHAT THIS CANNOT DO is attribute income to a security. The daily rows are
+# WHAT THIS DOES NOT DO is attribute income to a security. The daily rows are
 # scope-wide, and a Transaction-shaped dividend carries a security only when the
-# provider recorded one (Transaction#activity_security). A by-security table
-# needs an explicit unattributed bucket to reconcile to this series and is a
-# separate piece of work.
+# provider recorded one (Transaction#activity_security). Attribution lives in
+# Portfolio::DailyReturns#income_by_security, which reads the same entries
+# through the same fragments, and `to_h` carries its result as `by_security`.
+# Portfolio::IncomeBySecurity turns that into a table, with whatever it cannot
+# name kept as an explicit unattributed remainder so the table adds up to
+# #total by construction.
 class Portfolio::Income
   # One calendar month in which income was paid. A month that paid nothing is
   # absent rather than present as a zero -- the same distinction
@@ -85,14 +88,17 @@ class Portfolio::Income
   end
 
   # The shape Portfolio::Performance caches. Plain values only, so it survives
-  # Rails.cache the way Portfolio::Drivers#to_h does.
+  # Rails.cache the way Portfolio::Drivers#to_h does. `by_security` is the raw
+  # { "security-uuid" => amount } for Portfolio::IncomeBySecurity, not Security
+  # records, for the same reason.
   def to_h
     {
       buckets: buckets.map { |bucket| { month: bucket.month, amount: bucket.amount } },
       total: total,
       fees: fees,
       average_value: average_value,
-      fee_ratio: fee_ratio
+      fee_ratio: fee_ratio,
+      by_security: daily_returns.income_by_security
     }
   end
 

@@ -69,14 +69,14 @@ module PortfolioReturnsTestHelper
 
   # A dividend or interest payment, in the Trade shape upstream #1311 introduced
   # (qty: 0, price: 0, value in the entry amount).
-  def income_trade(account:, date:, amount:, label: "Dividend", currency: nil)
+  def income_trade(account:, date:, amount:, label: "Dividend", currency: nil, security: nil)
     account.entries.create!(
       name: label,
       date: date,
       amount: -BigDecimal(amount.to_s),
       currency: currency || account.currency,
       entryable: Trade.new(
-        security: security_under_test,
+        security: security || security_under_test,
         qty: 0,
         price: 0,
         currency: currency || account.currency,
@@ -87,13 +87,18 @@ module PortfolioReturnsTestHelper
 
   # The other storage shape: a Transaction carrying the label, which is what
   # Trading212 and SimpleFIN write (contract F4).
-  def income_transaction(account:, date:, amount:, label: "Dividend", currency: nil)
+  #
+  # `extra` is the provider payload, where a security is recorded when the
+  # provider knew one: `{ "security_id" => id }` (flat) or
+  # `{ "security" => { "id" => id } }` (nested). Left out, it is the common case
+  # this shape exists to cover -- a dividend with no security attached.
+  def income_transaction(account:, date:, amount:, label: "Dividend", currency: nil, extra: nil)
     account.entries.create!(
       name: label,
       date: date,
       amount: -BigDecimal(amount.to_s),
       currency: currency || account.currency,
-      entryable: Transaction.new(kind: "standard", investment_activity_label: label)
+      entryable: Transaction.new(kind: "standard", investment_activity_label: label, extra: extra || {})
     )
   end
 

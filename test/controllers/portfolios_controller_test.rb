@@ -504,6 +504,92 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#portfolio-income p", text: /#{Regexp.escape(I18n.t("portfolios.income.trailing_total"))}/
   end
 
+  # The table adds up to the figure above the chart: the security rows, the row
+  # for income no security was recorded for, and the total. Rendered through the
+  # page so the registry's locals and the partial are exercised together.
+  test "the income section lists income by security with an unattributed row and a total" do
+    aapl = securities(:aapl)
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("42.5") } ],
+      total: BigDecimal("42.5"), fees: BigDecimal(0), average_value: BigDecimal("2000"), fee_ratio: nil,
+      by_security: { aapl.id.to_s => BigDecimal("30") }
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income-securities" do
+      assert_select "tr[data-portfolio-income-security=AAPL] td", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(30, "USD")))}/
+      assert_select "tr[data-portfolio-income-unattributed] td", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(BigDecimal("12.5"), "USD")))}/
+      assert_select "tr[data-portfolio-income-total] td", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(BigDecimal("42.5"), "USD")))}/
+    end
+  end
+
+  # The case the unattributed row exists for, at its limit: a provider that
+  # records no security at all. With nothing attributed there are no security
+  # rows, and a table guarded on them alone vanishes -- taking the only
+  # explanation of where the income came from with it.
+  test "the income table still renders when none of the income is tied to a security" do
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("12.5") } ],
+      total: BigDecimal("12.5"), fees: BigDecimal(0), average_value: BigDecimal("2000"), fee_ratio: nil,
+      by_security: {}
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income-securities" do
+      assert_select "tr[data-portfolio-income-security]", count: 0
+      assert_select "tr[data-portfolio-income-unattributed] td", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(BigDecimal("12.5"), "USD")))}/
+      assert_select "tr[data-portfolio-income-total]"
+    end
+  end
+
+  test "the income table has no unattributed row when every dividend names a security" do
+    aapl = securities(:aapl)
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("30") } ],
+      total: BigDecimal("30"), fees: BigDecimal(0), average_value: BigDecimal("2000"), fee_ratio: nil,
+      by_security: { aapl.id.to_s => BigDecimal("30") }
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income-securities tr[data-portfolio-income-security=AAPL]"
+    assert_select "#portfolio-income-securities tr[data-portfolio-income-unattributed]", count: 0
+  end
+
+  # A yield and the absence of one are both rendered by this partial, and the
+  # page cannot be made to hold a cost-basis fixture for either without a
+  # holdings graph, so the partial is rendered with the locals the registry builds.
+  test "the income table prints a yield where there is one and a dash where there is not" do
+    aapl = securities(:aapl)
+    msft = securities(:msft)
+    securities_table = Portfolio::IncomeBySecurity.new(
+      amounts: { aapl.id.to_s => BigDecimal(30), msft.id.to_s => BigDecimal(10) }, total: BigDecimal(40)
+    )
+
+    html = ApplicationController.render(
+      partial: "portfolios/income",
+      locals: {
+        statement: InvestmentStatement.new(@family, user: @user), period: Period.last_30_days, as_of: Date.current,
+        income: { buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal(40) } ], total: BigDecimal(40),
+                  fees: BigDecimal(0), average_value: BigDecimal(0), fee_ratio: nil },
+        trailing: { total: BigDecimal(40) }, bars: [ { label: "Mar 2026", short_label: "Mar", income: 40.0, expense: 0.0 } ],
+        securities: securities_table, yields: { aapl.id.to_s => BigDecimal("0.05"), msft.id.to_s => nil },
+        rate_missing: false
+      }
+    )
+    page = Nokogiri::HTML.fragment(html)
+
+    assert_match(/5\.00%/, page.at_css("tr[data-portfolio-income-security=AAPL]").text)
+    assert_no_match(/%/, page.at_css("tr[data-portfolio-income-security=MSFT]").text,
+                    "no yield for MSFT: a dash, not 0.00%")
+    assert_includes page.at_css("tr[data-portfolio-income-security=MSFT]").text, "—"
+  end
+
   # R13: the totals are reported whatever happens, so the section has to say
   # when something was left out of them. It says so where the figures are -- in
   # both branches, since an income section that reads "nothing was paid" because
@@ -760,9 +846,13 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
-  # Measured 99, ceiling 101. The comment here said 95 until the income section
-  # (#123), but `main` already measured 97 when that landed: the 95 -> 97 drift
-  # is not attributed to any change below. The figure has moved four times:
+  # Measured 101, ceiling 103. Headroom was 6 for every previous pair and is 2
+  # now, which is a choice and not an oversight: the ceiling is the number the
+  # next section has to justify raising, and the two tests above, not this
+  # constant, are what prove the count does not grow with holdings. This comment
+  # said 95 until the income section (#123), but `main` already measured 97 when
+  # that landed; the 95 -> 97 drift is not attributed to any change below. The
+  # figure has moved five times:
   #
   #   54 -> 61  the performance section: one Portfolio::Performance for the
   #             request, memoised on the registry, which is its only caller
@@ -774,11 +864,15 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             account or holding
   #   97 -> 99  the income section (#123, 4.1a): the trailing twelve months'
   #             Portfolio::Performance, a second window beside the period's
+  #   99 -> 101 the income table (4.1b): one by-security read per window, the
+  #             period's and the trailing year's. Per request: Performance#income
+  #             is its own cache entry, so the comparison's six Performances do
+  #             not run it (folded into the shared metrics it cost 106)
   #
   # Neither rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 101
+  PORTFOLIO_QUERY_CEILING = 103
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one

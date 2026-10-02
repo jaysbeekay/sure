@@ -124,6 +124,15 @@ de:
       rate_missing_body: Mindestens eine Dividende, Zinszahlung oder Gebühr liegt in einer Währung ohne Wechselkurs nach %{currency} und ist in den folgenden Werten nicht enthalten. Sie können zu niedrig ausfallen.
       rate_missing_title: Einige Erträge konnten nicht umgerechnet werden
       reversals: Rückbuchungen
+      securities:
+        columns:
+          income: Erträge
+          security: Wertpapier
+          yield_on_cost: Rendite auf Kostenbasis
+        total: Summe
+        unattributed: Keinem Wertpapier zugeordnet
+        unattributed_hint: Erträge, zu denen dein Anbieter kein Wertpapier angegeben hat.
+        yield_unavailable: Wird nur für gehaltene Wertpapiere mit bekannter, positiver Kostenbasis für jede Position und einem Wechselkurs für jede Währung angezeigt.
       trailing_total: Letzte 12 Monate
     index_chart:
       explainer: Zu Beginn des Zeitraums auf 100 normiert, ohne den Effekt von Ein- und Auszahlungen. Ein Stand von 121 bedeutet 21% Rendite.

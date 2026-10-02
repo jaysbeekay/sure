@@ -2,6 +2,7 @@ require "test_helper"
 
 class Portfolio::PerformanceTest < ActiveSupport::TestCase
   include PortfolioReturnsTestHelper
+  include SqlQueryCapture
 
   setup do
     @family = families(:empty) # USD
@@ -166,6 +167,23 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_nil result.volatility
     assert_nil result.max_drawdown
     assert_empty result.index_series
+  end
+
+  # The account comparison builds a Performance per line and reads only
+  # index_series from each. Income carries a by-security read of its own, so if
+  # it rode along in the shared metrics every one of those lines would pay for a
+  # figure it never shows -- 106 queries on the page against a ceiling of 101.
+  test "income is computed only when it is asked for" do
+    build_textbook_case
+    subject = performance
+
+    metric_queries = capture_sql_queries { subject.index_series }
+    income_queries = capture_sql_queries { subject.income }
+
+    assert_empty metric_queries.grep(/AS security_id/), "reading a return must not run the by-security query"
+    assert_equal 1, income_queries.grep(/AS security_id/).size,
+                 "asking for income runs it once, over rows the metrics already loaded"
+    assert_empty income_queries.grep(/AS value_close/), "and does not read the daily rows a second time"
   end
 
   # The same withholding for the fee ratio. Fees and income are money and are
