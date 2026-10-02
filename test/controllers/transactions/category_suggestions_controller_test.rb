@@ -124,6 +124,18 @@ class Transactions::CategorySuggestionsControllerTest < ActionDispatch::Integrat
     assert_response :success
   end
 
+  # The backlog can empty between loading the page and pressing Suggest.
+  test "create on an empty backlog shows the empty state, not a failed suggestion, and does not call the provider" do
+    @llm.expects(:auto_categorize).never
+
+    post transactions_category_suggestions_url
+
+    assert_response :success
+    assert_select "h3, p", text: /#{Regexp.escape(I18n.t("transactions.category_suggestions.index.empty_title"))}/
+    assert_select "form[action=?]", transactions_category_suggestions_path, count: 0
+    assert_no_match I18n.t("transactions.category_suggestions.suggestions.none"), response.body
+  end
+
   test "create renders one row per suggestion, carrying it in the form, and writes nothing" do
     one = create_transaction(account: @account, name: "Starbucks").transaction
     two = create_transaction(account: @account, name: "Shell").transaction
