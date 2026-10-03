@@ -1,0 +1,37 @@
+<%# locals: (event:) %>
+
+<%= styled_form_with model: event, class: "space-y-5" do |f| %>
+  <% if event.errors.any? %>
+    <%= render DS::Alert.new(variant: :error, title: t("events.form.error_title"), message: event.errors.full_messages.to_sentence, live: :alert) %>
+  <% end %>
+
+  <%= f.text_field :name,
+                   label: t("events.form.name"),
+                   placeholder: t("events.form.name_placeholder"),
+                   autofocus: true,
+                   required: true %>
+
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <%= f.date_field :start_date, label: t("events.form.start_date"), required: true %>
+    <%= f.date_field :end_date, label: t("events.form.end_date"), required: true, help_text: t("events.form.dates_hint") %>
+  </div>
+
+  <fieldset>
+    <legend class="text-sm font-medium text-secondary mb-2"><%= t("events.form.color") %></legend>
+    <div class="flex flex-wrap gap-2 items-center">
+      <% Event::COLORS.each do |color| %>
+        <label class="relative">
+          <%= f.radio_button :color, color, class: "sr-only peer" %>
+          <span class="block size-6 rounded-full cursor-pointer peer-checked:ring-2 peer-checked:ring-offset-2 peer-checked:ring-alpha-black-500 peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-alpha-black-500"
+                style="background-color: <%= color %>;"></span>
+          <span class="sr-only"><%= t("events.color_label", hex: color) %></span>
+        </label>
+      <% end %>
+    </div>
+  </fieldset>
+
+  <div class="flex items-center justify-end gap-2">
+    <%= render DS::Link.new(text: t("events.form.cancel"), variant: "ghost", href: event.persisted? ? event_path(event) : events_path) %>
+    <%= render DS::Button.new(text: t(event.persisted? ? "events.form.save" : "events.form.create"), type: :submit, variant: "primary") %>
+  </div>
+<% end %>

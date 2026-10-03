@@ -1,0 +1,97 @@
+---
+en:
+  events:
+    date_range: "%{start} – %{end}"
+    days:
+      one: 1 day
+      other: "%{count} days"
+    color_label: Color %{hex}
+    index:
+      title: Events
+      subtitle: What did a trip, a move or a celebration really cost?
+      new_event: New event
+      name: Event
+      dates: Dates
+      length: Length
+      table_label: Events
+      empty_title: No events yet
+      empty_description: An event is a date range, such as a trip. Sure adds up the spending inside it, net of refunds.
+    new:
+      title: New event
+      subtitle: Name it and give it dates. Spending inside the dates is included automatically.
+    edit:
+      title: Edit event
+      subtitle: Changing the dates changes which transactions are included.
+    form:
+      name: Name
+      name_placeholder: Bali trip
+      start_date: First day
+      end_date: Last day
+      color: Color
+      dates_hint: Both days are included.
+      error_title: The event could not be saved
+      cancel: Cancel
+      create: Create event
+      save: Save changes
+    create:
+      created: Event created.
+    update:
+      updated: Event updated.
+    destroy:
+      destroyed: Event deleted. Its transactions are untouched.
+    include_transaction:
+      included: Transaction added to the event.
+      not_countable: That transaction can't count towards an event (transfers, excluded and pending transactions never do).
+    exclude_transaction:
+      excluded: Transaction removed from the event.
+      not_countable: That transaction can't count towards an event (transfers, excluded and pending transactions never do).
+    reset_transaction:
+      reset: Transaction restored to the date rule.
+    show:
+      edit: Edit
+      delete: Delete
+      kpi:
+        true_cost: True cost
+        true_cost_hint: Spending minus refunds
+        transactions: Transactions
+        per_day: Average per day
+      chart:
+        title: Cost day by day
+        hint: Running total, with refunds netted on the day they landed.
+        too_short: A one day event has no line to draw.
+      categories:
+        title: By category
+        hint: Net spend per category. A category refunded in full is left out.
+        total: Net spend
+        empty: Nothing has been spent in this event.
+        weight: Share
+        amount: Net spend
+      transactions:
+        title: Transactions
+        hint: Everything dated inside the event, plus anything you added by hand.
+        empty: No transactions fall inside these dates.
+        truncated: Showing the latest %{shown} of %{total}.
+        see_all: See every transaction in these dates
+        date: Date
+        name: Name
+        category: Category
+        account: Account
+        amount: Amount
+        manual: Added by hand
+        uncategorized: Uncategorized
+        remove: Remove from event
+        remove_manual: Remove
+        table_label: Transactions in this event
+      removed:
+        title: Removed by hand
+        hint: These fall inside the dates but you took them out.
+        restore: Put back
+        table_label: Transactions removed from this event
+      nearby:
+        title: Add a transaction
+        hint: Spending from the %{days} days either side of the event. Use this for a deposit paid early or a flight home booked late.
+        label: Transaction
+        prompt: Choose a transaction
+        submit: Add to event
+        empty: Nothing nearby to add.
+        option: "%{date} · %{name} · %{amount}"

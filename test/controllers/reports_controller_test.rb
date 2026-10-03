@@ -998,6 +998,26 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_equal ApplicationController.helpers.format_money(row.amount_money), cells[2].text.strip
   end
 
+  # #130, 11.2: the events page is a preview feature, so its entry point is too.
+  test "the reports page links to events for a user with preview access" do
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+
+    get reports_path
+
+    assert_response :success
+    assert_select "a[href=?]", events_path
+    assert_select "a[href=?].hidden", events_path, count: 0
+  end
+
+  test "the reports page does not link to events without preview access" do
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => false))
+
+    get reports_path
+
+    assert_response :success
+    assert_select "a[href=?]", events_path, count: 0
+  end
+
   private
     # Second investment account holding the same security as
     # accounts(:investment), so top_holdings has something to roll up.

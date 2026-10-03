@@ -1,0 +1,13 @@
+---
+en:
+  activerecord:
+    errors:
+      models:
+        event:
+          attributes:
+            end_date:
+              before_start: must be on or after the start date
+        event_transaction:
+          attributes:
+            transaction_record:
+              wrong_family: must belong to the event's family

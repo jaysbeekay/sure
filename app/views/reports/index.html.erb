@@ -17,6 +17,11 @@
         </div>
       <% end %>
 
+      <%# Events (preview) %>
+      <% if preview_features_enabled? %>
+        <%= render DS::Link.new(text: t("reports.index.events_link"), variant: "outline", icon: "calendar-range", href: events_path) %>
+      <% end %>
+
       <%# Print Report Button %>
         <%= link_to print_reports_path(period_type: @period_type, start_date: @start_date, end_date: @end_date),
                   target: "_blank",

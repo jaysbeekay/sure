@@ -452,6 +452,17 @@ Rails.application.routes.draw do
     get :picker, on: :collection
   end
 
+  # Dated lenses over spending, e.g. "what did the Bali trip cost?" (#130, 11.2).
+  # Preview-gated in the controller. Overrides are three small writes on the
+  # event rather than a nested resource: they carry no page of their own.
+  resources :events do
+    member do
+      post :include_transaction
+      post :exclude_transaction
+      delete :reset_transaction
+    end
+  end
+
   # Hub page fronting budgets + goals under a single "Plan" nav entry.
   resource :plan, only: :show
 

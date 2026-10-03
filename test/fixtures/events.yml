@@ -1,0 +1,13 @@
+bali_trip:
+  family: dylan_family
+  name: Bali trip
+  start_date: 2020-03-10
+  end_date: 2020-03-14
+  color: "#4da568"
+
+other_family_trip:
+  family: empty
+  name: Other family trip
+  start_date: 2020-03-10
+  end_date: 2020-03-14
+  color: "#db5a54"
