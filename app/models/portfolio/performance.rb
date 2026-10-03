@@ -33,7 +33,10 @@ class Portfolio::Performance
   #
   # v4: :mwr changed from an annual rate to a period rate and :annualized_mwr
   # was added, so a v3 entry would serve the old meaning under the new name.
-  CACHE_VERSION = "v5".freeze
+  #
+  # v6: `income` was added (the monthly income series and the fee ratio). A v5
+  # entry has no such key and would serve nil for it until the next sync.
+  CACHE_VERSION = "v6".freeze
 
   # R5: the balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention
@@ -112,6 +115,14 @@ class Portfolio::Performance
 
   def drivers
     metrics[:drivers]
+  end
+
+  # Dividend and interest income by calendar month, and the fees over the same
+  # rows -- see Portfolio::Income#to_h for the keys. A Hash, as #drivers is,
+  # because the metrics are cached and an object would not survive the round
+  # trip.
+  def income
+    metrics[:income]
   end
 
   # R13. True when a currency pair had no rate anywhere in the period, in which
@@ -213,10 +224,20 @@ class Portfolio::Performance
         max_drawdown: withhold_time_weighted ? nil : drawdown(returns),
         index_series: withhold_time_weighted ? [] : rebased_index(returns),
         drivers: drivers.to_h,
+        income: income_metrics(rate_missing),
         rate_missing: rate_missing,
         suppressed_dates: rows.select(&:suppressed).map(&:date),
         day_count: rows.size
       }
+    end
+
+    # The income figures are money and are reported whatever happens, as the
+    # drivers are. The fee ratio is a percentage, so it is withheld on R13's
+    # terms: with a rate missing, fees and value cover only the currencies that
+    # converted, and their ratio would read as the whole portfolio's.
+    def income_metrics(rate_missing)
+      income = Portfolio::Income.new(daily_returns).to_h
+      rate_missing ? income.merge(fee_ratio: nil) : income
     end
 
     # R3.

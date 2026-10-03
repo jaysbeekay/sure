@@ -114,6 +114,17 @@ de:
       position_missing_cost_basis_hint: Diese Position hat keine bekannte Kostenbasis, daher hat sie keine Durchschnittskosten und fließt nicht in die Rendite der Zeile ein.
       positions_caption: Positionen in %{ticker} nach Konto
       toggle_positions: Positionen in %{ticker} anzeigen
+    income:
+      chart_label: Dividenden und Zinsen
+      fee_ratio: "%{ratio} des durchschnittlichen Werts"
+      fee_ratio_hint: Im Zeitraum angefallene Gebühren als Anteil am durchschnittlichen Portfoliowert in diesem Zeitraum. Nicht auf ein Jahr hochgerechnet.
+      fees: Gebühren im Zeitraum (%{period})
+      no_income: Im ausgewählten Zeitraum (%{period}) wurden keine Dividenden oder Zinsen gezahlt.
+      period_total: Dividenden und Zinsen im Zeitraum (%{period})
+      rate_missing_body: Mindestens eine Dividende, Zinszahlung oder Gebühr liegt in einer Währung ohne Wechselkurs nach %{currency} und ist in den folgenden Werten nicht enthalten. Sie können zu niedrig ausfallen.
+      rate_missing_title: Einige Erträge konnten nicht umgerechnet werden
+      reversals: Rückbuchungen
+      trailing_total: Letzte 12 Monate
     index_chart:
       explainer: Zu Beginn des Zeitraums auf 100 normiert, ohne den Effekt von Ein- und Auszahlungen. Ein Stand von 121 bedeutet 21% Rendite.
     kpi_row:
@@ -168,6 +179,7 @@ de:
       data_quality: Datenqualität
       drivers: Was den Wert bewegt hat
       holdings: Bestände
+      income: Erträge
       index_chart: Rendite-Index
       kpis: Überblick
       performance: Wertentwicklung

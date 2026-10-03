@@ -1,0 +1,93 @@
+<%# locals: (statement:, period:, as_of:, income:, trailing:, bars:, rate_missing:) %>
+
+<%# Dividends and interest by the month they were paid. `income` is
+    Portfolio::Performance#income for the selected period and `trailing` the
+    same for the twelve months ending at `as_of`; both are Hashes, and `bars` is
+    the chart payload the registry built, so this partial only formats. The bars
+    and the period total are the same rows Portfolio::Drivers sums, so they agree
+    with the drivers table by construction. %>
+<% currency = statement.family.currency %>
+<div id="portfolio-income" class="space-y-4">
+  <%# Above both branches: when every payout was unconvertible, "nothing was
+      paid" below would be false, and this is the one place that says why. The
+      figures are partial because an entry in a currency with no rate cannot be
+      converted (R13), not because the portfolio paid less. %>
+  <% if rate_missing %>
+    <div class="px-4">
+      <%= render DS::Alert.new(title: t("portfolios.income.rate_missing_title"), variant: :warning) do %>
+        <p class="text-xs text-secondary"><%= t("portfolios.income.rate_missing_body", currency: currency) %></p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <% if income[:buckets].any? %>
+    <div class="px-4 flex flex-wrap items-end gap-x-8 gap-y-3">
+      <div class="space-y-1">
+        <p class="text-3xl font-medium tabular-nums privacy-sensitive text-primary">
+          <%= format_money(Money.new(income[:total], currency)) %>
+        </p>
+        <p class="text-xs text-secondary"><%= t("portfolios.income.period_total", period: period.label) %></p>
+      </div>
+
+      <div class="space-y-1">
+        <p class="text-xl font-medium tabular-nums privacy-sensitive text-primary">
+          <%= format_money(Money.new(trailing[:total], currency)) %>
+        </p>
+        <p class="text-xs text-secondary"><%= t("portfolios.income.trailing_total") %></p>
+      </div>
+    </div>
+
+    <div class="px-4 flex items-center gap-4">
+      <span class="flex items-center gap-1.5 text-xs text-secondary">
+        <span class="w-2 h-2 rounded-full bg-success"></span>
+        <%= t("portfolios.income.chart_label") %>
+      </span>
+      <%# Only when a month netted negative, so the legend names what is drawn. %>
+      <% if bars.any? { |bar| bar[:expense].positive? } %>
+        <span class="flex items-center gap-1.5 text-xs text-secondary">
+          <span class="w-2 h-2 rounded-full bg-subdued"></span>
+          <%= t("portfolios.income.reversals") %>
+        </span>
+      <% end %>
+    </div>
+
+    <div class="w-full h-44 privacy-sensitive"
+      data-controller="bar-chart"
+      data-bar-chart-data-value="<%= bars.to_json %>"
+      data-bar-chart-currency-value="<%= currency %>"
+      data-bar-chart-income-label-value="<%= t("portfolios.income.chart_label") %>"
+      data-bar-chart-expense-label-value="<%= t("portfolios.income.reversals") %>">
+    </div>
+  <% else %>
+    <%# Nothing paid in the period: say so and stop. A zero total over an empty
+        chart is true and tells the reader nothing. The trailing figure still
+        shows, because a short period with no payout says nothing about the
+        year. %>
+    <div class="px-4 space-y-1">
+      <p class="text-sm text-secondary"><%= t("portfolios.income.no_income", period: period.label) %></p>
+      <% unless trailing[:total].zero? %>
+        <p class="text-sm text-secondary tabular-nums privacy-sensitive">
+          <%= t("portfolios.income.trailing_total") %>: <%= format_money(Money.new(trailing[:total], currency)) %>
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+
+  <%# Fees are reported beside income and never netted into it. Shown only when
+      the period charged any; the ratio only when there was a value to divide
+      by (Portfolio::Income#fee_ratio is nil otherwise, which is "no ratio" and
+      not a ratio of zero). %>
+  <% if income[:fees].positive? %>
+    <div class="px-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <p class="text-sm text-secondary"><%= t("portfolios.income.fees", period: period.label) %></p>
+      <p class="text-sm font-medium tabular-nums privacy-sensitive text-primary">
+        <%= format_money(Money.new(income[:fees], currency)) %>
+      </p>
+      <% if income[:fee_ratio] %>
+        <p class="text-xs text-secondary tabular-nums privacy-sensitive" title="<%= t("portfolios.income.fee_ratio_hint") %>">
+          <%= t("portfolios.income.fee_ratio", ratio: number_to_percentage(income[:fee_ratio] * 100, precision: 2)) %>
+        </p>
+      <% end %>
+    </div>
+  <% end %>
+</div>

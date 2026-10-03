@@ -328,7 +328,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     # family's period moves no value, so every component is zero and the
     # section hides rather than printing a table of zeros that reconciles to
     # zero.
-    assert_equal %w[value_chart kpis performance index_chart comparison realized_gains holdings accounts allocation data_quality retirement],
+    assert_equal %w[value_chart kpis performance index_chart comparison realized_gains income holdings accounts allocation data_quality retirement],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -450,6 +450,117 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     assert_equal baseline.size, grown.size, "adding 20 holdings changed the query count:\n#{(grown - baseline).join("\n")}"
+  end
+
+  # Nothing else renders this partial with a payout in it: the fixture family
+  # pays no income. A bad i18n key, or Money.new on a nil total, would reach a
+  # user before it reached a test.
+  test "the income section renders its totals, its chart and its fees" do
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("42.5") } ],
+      total: BigDecimal("42.5"), fees: BigDecimal("4"),
+      average_value: BigDecimal("2000"), fee_ratio: BigDecimal("0.002")
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=income] #portfolio-income" do
+      assert_select "[data-controller=bar-chart][data-bar-chart-data-value*=?]", "42.5"
+      assert_select "p", text: /#{Regexp.escape(ApplicationController.helpers.format_money(Money.new(42.5, "USD")))}/
+      assert_select "p.privacy-sensitive", text: /0\.20%/,
+        message: "4 of 2,000 is a fifth of a percent, and it blurs with the figures around it"
+    end
+    assert_select "#portfolio-income span", text: /#{Regexp.escape(I18n.t("portfolios.income.reversals"))}/, count: 0,
+      message: "no month netted negative, so the legend has nothing to name"
+  end
+
+  test "the income legend names reversals when a month netted negative" do
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("-8") } ],
+      total: BigDecimal("-8"), fees: BigDecimal(0),
+      average_value: BigDecimal("2000"), fee_ratio: nil
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income span", text: /#{Regexp.escape(I18n.t("portfolios.income.reversals"))}/
+    assert_select "#portfolio-income [data-controller=bar-chart][data-bar-chart-expense-label-value=?]",
+      I18n.t("portfolios.income.reversals")
+  end
+
+  # A net-negative year is a real figure (reversals larger than payouts), and
+  # hiding it beside "nothing was paid" would state a total that is not true.
+  test "the income section shows a negative trailing total when the period paid nothing" do
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [], total: BigDecimal("-8"), fees: BigDecimal(0),
+      average_value: BigDecimal("2000"), fee_ratio: nil
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income p", text: /#{Regexp.escape(I18n.t("portfolios.income.trailing_total"))}/
+  end
+
+  # R13: the totals are reported whatever happens, so the section has to say
+  # when something was left out of them. It says so where the figures are -- in
+  # both branches, since an income section that reads "nothing was paid" because
+  # every payout was unconvertible would be the worst place to stay quiet.
+  test "the income section warns that a missing exchange rate leaves income out" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(true)
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("42.5") } ],
+      total: BigDecimal("42.5"), fees: BigDecimal(0), average_value: BigDecimal("2000"), fee_ratio: nil
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income", text: /#{Regexp.escape(I18n.t("portfolios.income.rate_missing_title"))}/
+  end
+
+  test "the income section warns about a missing exchange rate even when it shows no income" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(true)
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [], total: BigDecimal(0), fees: BigDecimal(0), average_value: BigDecimal("2000"), fee_ratio: nil
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income", text: /#{Regexp.escape(I18n.t("portfolios.income.rate_missing_title"))}/
+    assert_select "#portfolio-income", text: /#{Regexp.escape(I18n.t("portfolios.income.no_income", period: Period.last_30_days.label))}/
+  end
+
+  test "the income section carries no exchange rate warning when no rate is missing" do
+    Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [ { month: Date.new(2026, 3, 1), amount: BigDecimal("42.5") } ],
+      total: BigDecimal("42.5"), fees: BigDecimal(0), average_value: BigDecimal("2000"), fee_ratio: nil
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income", text: /#{Regexp.escape(I18n.t("portfolios.income.rate_missing_title"))}/, count: 0
+  end
+
+  test "the income section says so when nothing was paid, and omits the fee line" do
+    Portfolio::Performance.any_instance.stubs(:income).returns(
+      buckets: [], total: BigDecimal(0), fees: BigDecimal(0),
+      average_value: BigDecimal("2000"), fee_ratio: BigDecimal(0)
+    )
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-income" do
+      assert_select "[data-controller=bar-chart]", count: 0, message: "an empty chart says nothing a sentence cannot"
+      assert_select "p", text: /#{Regexp.escape(I18n.t("portfolios.income.no_income", period: Period.last_30_days.label))}/
+      assert_select "p", text: /%/, count: 0, message: "no fees, so no ratio"
+    end
   end
 
   # The fixture family moves no value, so the drivers section hides and its
@@ -649,8 +760,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
-  # Measured 95, ceiling 101 -- the same 6 of headroom every previous pair
-  # carried. The figure has moved three times:
+  # Measured 99, ceiling 101. The comment here said 95 until the income section
+  # (#123), but `main` already measured 97 when that landed: the 95 -> 97 drift
+  # is not attributed to any change below. The figure has moved four times:
   #
   #   54 -> 61  the performance section: one Portfolio::Performance for the
   #             request, memoised on the registry, which is its only caller
@@ -660,6 +772,8 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             DISTINCT ON balances read, and one IncomeStatement median with
   #             the account-id lookups it always makes. Per request, not per
   #             account or holding
+  #   97 -> 99  the income section (#123, 4.1a): the trailing twelve months'
+  #             Portfolio::Performance, a second window beside the period's
   #
   # Neither rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
