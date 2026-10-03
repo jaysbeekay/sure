@@ -1,0 +1,116 @@
+<div class="space-y-6 pb-6">
+  <header>
+    <div class="flex items-center gap-2">
+      <h1 class="text-2xl font-semibold text-primary"><%= t(".title") %></h1>
+      <%= render DS::Pill.new(label: t("shared.preview"), size: :md) %>
+    </div>
+    <p class="text-sm text-secondary mt-1"><%= t(".subtitle") %></p>
+    <p class="text-sm text-secondary mt-1" data-testid="narrative-period">
+      <%= t(".period", from: l(@narrative.period.start_date, format: :short), to: l(@narrative.period.end_date, format: :short)) %>
+    </p>
+  </header>
+
+  <%= render DS::Card.new(class: "gap-4", data: { testid: "pace" }) do %>
+    <h2 class="text-lg font-medium text-primary"><%= t(".pace.title") %></h2>
+
+    <% if @pace %>
+      <% status = @pace.status %>
+      <div class="flex items-center justify-between gap-3">
+        <div class="space-y-1">
+          <p class="text-sm text-secondary privacy-sensitive">
+            <%= t(".pace.summary",
+                  spent: spending_money(@pace.spent),
+                  budgeted: spending_money(@pace.budgeted),
+                  spent_pct: @pace.spent_percent,
+                  elapsed_pct: @pace.elapsed_percent) %>
+          </p>
+          <p class="text-sm text-primary privacy-sensitive">
+            <%= t(".pace.outlook.#{status}",
+                  projected: spending_money(@pace.projected_spend),
+                  over_by: spending_money([ @pace.spent - @pace.budgeted, 0 ].max)) %>
+          </p>
+        </div>
+        <span data-testid="pace-status">
+          <%= render DS::Pill.new(label: t(".pace.status.#{status}"), tone: spending_pace_tone(@pace), marker: false, size: :md) %>
+        </span>
+      </div>
+
+      <%# The fill is the share of the budget spent; the rule is how much of the
+          month has gone. Fill past the rule is spending ahead of the clock. %>
+      <div class="relative h-2 rounded-full bg-surface-inset overflow-hidden"
+           role="img"
+           aria-label="<%= t(".pace.bar_aria", spent_pct: @pace.spent_percent, elapsed_pct: @pace.elapsed_percent) %>">
+        <div class="h-full rounded-full <%= spending_pace_bar_class(@pace) %>" style="width: <%= [ @pace.spent_percent, 100 ].min %>%"></div>
+        <div class="absolute inset-y-0 w-0.5 bg-inverse" style="left: <%= @pace.elapsed_percent %>%"></div>
+      </div>
+
+      <div class="flex items-center justify-between gap-3">
+        <p class="text-xs text-secondary"><%= t(".pace.days_left", count: @pace.days_remaining) %></p>
+        <%= render DS::Link.new(text: t(".pace.view_budget"), href: budget_path(Budget.date_to_param(@narrative.budget.start_date)), variant: "outline", size: "sm") %>
+      </div>
+    <% else %>
+      <div data-testid="pace-empty">
+        <%= render DS::EmptyState.new(icon: "gauge", title: t(".pace.empty.title"), description: t(".pace.empty.description")) do |empty| %>
+          <% empty.with_action do %>
+            <%= render DS::Link.new(text: t(".pace.empty.action"), href: budgets_path, variant: "outline") %>
+          <% end %>
+        <% end %>
+      </div>
+    <% end %>
+  <% end %>
+
+  <section class="space-y-3" data-testid="top-movers">
+    <div>
+      <h2 class="text-lg font-medium text-primary"><%= t(".movers.title") %></h2>
+      <p class="text-sm text-secondary">
+        <%= t(".movers.subtitle",
+              days: @narrative.previous_period.days,
+              from: l(@narrative.previous_period.start_date, format: :short),
+              to: l(@narrative.previous_period.end_date, format: :short)) %>
+      </p>
+    </div>
+
+    <% if @movers.any? %>
+      <%= render DS::Table.new(rows: @movers, label: t(".movers.title")) do |table| %>
+        <% table.with_column(t(".movers.category"), row_header: true) do |mover| %>
+          <% href = spending_category_path(mover.category, @narrative.period) %>
+          <%= href ? link_to(mover.category.name, href, class: "text-primary hover:underline") : mover.category.name %>
+        <% end %>
+        <% table.with_column(t(".movers.current"), numeric: true, class: "privacy-sensitive") { |mover| spending_money(mover.current) } %>
+        <% table.with_column(t(".movers.previous"), numeric: true, class: "privacy-sensitive text-secondary") { |mover| spending_money(mover.previous) } %>
+        <% table.with_column(t(".movers.change"), numeric: true, class: "privacy-sensitive") { |mover| spending_change_label(mover) } %>
+      <% end %>
+    <% else %>
+      <p class="text-sm text-secondary"><%= t(".movers.empty") %></p>
+    <% end %>
+  </section>
+
+  <section class="space-y-3" data-testid="heatmap">
+    <div>
+      <h2 class="text-lg font-medium text-primary"><%= t(".heatmap.title") %></h2>
+      <p class="text-sm text-secondary"><%= t(".heatmap.subtitle") %></p>
+    </div>
+
+    <% if @heatmap.total.zero? %>
+      <p class="text-sm text-secondary"><%= t(".heatmap.empty") %></p>
+    <% else %>
+      <p class="text-sm text-secondary">
+        <%= t(".heatmap.total_line") %>
+        <span class="font-medium text-primary privacy-sensitive" data-testid="heatmap-total"><%= spending_money(@heatmap.total) %></span>
+      </p>
+      <%= render DS::Table.new(rows: spending_heatmap_rows(@heatmap), label: t(".heatmap.title")) do |table| %>
+        <% table.with_column(t(".heatmap.week"), row_header: true) do |row| %>
+          <%= row.href ? link_to(row.label, row.href, class: "text-primary hover:underline") : row.label %>
+        <% end %>
+        <% t("date.abbr_day_names").each_with_index do |day_name, weekday| %>
+          <% table.with_column(day_name, numeric: true) { |row| render "spending_narratives/heat_cell", cell: row.cells[weekday] } %>
+        <% end %>
+        <% table.with_column(t(".heatmap.total"), numeric: true) do |row| %>
+          <span class="privacy-sensitive font-medium"><%= spending_money(row.total.total) %></span>
+        <% end %>
+      <% end %>
+    <% end %>
+
+    <p class="text-xs text-secondary" data-testid="heatmap-note"><%= t(".heatmap.note") %></p>
+  </section>
+</div>

@@ -158,6 +158,18 @@ class IncomeStatement
     end
   end
 
+  # The accounts every figure here is limited to: the `accounts:` override, else
+  # the user's finance accounts, else nil for no limit. Public so a query that
+  # reads the same transactions by another grouping (Spending::Heatmap) can
+  # apply the identical scope instead of re-deriving it.
+  def included_account_ids
+    @included_account_ids ||= if @accounts
+      @accounts.pluck(:id)
+    elsif user
+      user.finance_accounts.pluck(:id)
+    end
+  end
+
   # `excluding_kinds` leaves transactions of those kinds out of the monthly
   # totals before the median is taken, and `period` limits the median to the
   # months inside it. Both default to off, so existing callers are unchanged.
@@ -270,14 +282,6 @@ class IncomeStatement
       @category_stats[interval] ||= Rails.cache.fetch([
         "income_statement", "category_stats", family.id, user&.id, interval, included_account_ids_hash, family.entries_cache_version
       ]) { CategoryStats.new(family, interval:, account_ids: included_account_ids).call }
-    end
-
-    def included_account_ids
-      @included_account_ids ||= if @accounts
-        @accounts.pluck(:id)
-      elsif user
-        user.finance_accounts.pluck(:id)
-      end
     end
 
     # Only a cache-key segment, so any stable digest would do; SHA-256 rather

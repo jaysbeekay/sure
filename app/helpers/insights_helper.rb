@@ -10,7 +10,9 @@ module InsightsHelper
     "budget_on_track" => "circle-check",
     # Same shield the reserve panel uses on the goal page, so the two read as
     # the same object seen from two places.
-    "maintained_goal_depleted" => "shield-alert"
+    "maintained_goal_depleted" => "shield-alert",
+    "spending_pace" => "gauge",
+    "top_movers" => "arrow-up-down"
   }.freeze
 
   def insight_icon_key(insight)
@@ -81,6 +83,16 @@ module InsightsHelper
     when "budget_on_track"
       # Still the right figure here, where overall usage *is* the subject.
       facts["budget_spent_pct"] && [ "#{facts["budget_spent_pct"]}%", t("insights.figures.of_budget") ]
+    when "spending_pace"
+      # Ahead of pace: what the month projects to. Already over: by how much.
+      if insight.metadata&.dig("status") == "over"
+        facts["over_by"] && [ facts["over_by"], t("insights.figures.over_budget") ]
+      else
+        facts["projected_spend"] && [ facts["projected_spend"], t("insights.figures.on_pace") ]
+      end
+    when "top_movers"
+      sign = insight.metadata&.dig("direction") == "down" ? "−" : "+"
+      facts["top_change"] && [ "#{sign}#{facts["top_change"]}", t("insights.figures.vs_prior_period") ]
     end
   end
 
@@ -117,6 +129,12 @@ module InsightsHelper
     when "maintained_goal_depleted"
       goal = insight.family.goals.find_by(id: metadata["goal_id"])
       goal && { text: t("insights.actions.maintained_goal_depleted"), href: goal_path(goal) }
+    when "spending_pace"
+      # Computed against the household budget (insights are family-wide), so the
+      # page is asked for that budget rather than the reader's own.
+      { text: t("insights.actions.spending_pace"), href: spending_narrative_path(owner: "household") }
+    when "top_movers"
+      { text: t("insights.actions.top_movers"), href: spending_narrative_path }
     end
   end
 
@@ -156,9 +174,11 @@ module InsightsHelper
       metadata["current_rate"].to_f >= metadata["previous_rate"].to_f ? :positive : :warning
     when "spending_anomaly"
       metadata["direction"] == "below" ? :positive : :warning
+    when "top_movers"
+      metadata["direction"] == "down" ? :positive : :warning
     when "cash_flow_warning"
       metadata["negative"] ? :negative : :warning
-    when "budget_at_risk", "maintained_goal_depleted"
+    when "budget_at_risk", "maintained_goal_depleted", "spending_pace"
       # Warning, not negative: the reserve is short, not overdrawn, and red is
       # reserved here for money actually going the wrong side of zero.
       :warning

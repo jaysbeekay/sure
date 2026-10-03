@@ -193,6 +193,73 @@ class InsightsHelperTest < ActionView::TestCase
     end
   end
 
+  test "spending pace warns without going red, whether approaching or over" do
+    %w[approaching over].each do |status|
+      insight = build_insight("spending_pace", priority: "high", metadata: { "status" => status })
+
+      assert_equal :warning, insight_sentiment(insight)
+      assert_equal "warning", insight_icon_color(insight)
+    end
+  end
+
+  test "top movers sentiment follows the direction of the biggest mover" do
+    up = build_insight("top_movers", metadata: { "direction" => "up" })
+    down = build_insight("top_movers", metadata: { "direction" => "down" })
+
+    assert_equal :warning, insight_sentiment(up)
+    assert_equal :positive, insight_sentiment(down)
+  end
+
+  test "the new types have their own icon, not the fallback" do
+    assert_not_equal "lightbulb", insight_icon_key(build_insight("spending_pace"))
+    assert_not_equal "lightbulb", insight_icon_key(build_insight("top_movers"))
+    # An unknown Lucide name silently renders the "key" icon instead of raising.
+    %w[spending_pace top_movers].each do |type|
+      assert_not_equal ApplicationController.helpers.icon("key").to_s, ApplicationController.helpers.icon(insight_icon_key(build_insight(type))).to_s, "#{type} icon is not a real Lucide icon"
+    end
+  end
+
+  test "every insight type has a meta line label, a title and an icon" do
+    Insight::TYPES.each do |type|
+      assert I18n.exists?("insights.types.#{type}", :en), "insights.types.#{type} is missing"
+      assert I18n.exists?("insights.titles.#{type}", :en), "insights.titles.#{type} is missing"
+      assert InsightsHelper::INSIGHT_ICONS.key?(type), "#{type} has no icon"
+    end
+  end
+
+  test "spending pace leads with the projection when approaching and the overshoot when over" do
+    approaching = build_insight("spending_pace", metadata: { "status" => "approaching" }, facts: { "projected_spend" => "$1,107.14", "over_by" => "$0.00" })
+    over = build_insight("spending_pace", metadata: { "status" => "over" }, facts: { "projected_spend" => "$2,767.86", "over_by" => "$250.00" })
+
+    assert_equal [ "$1,107.14", I18n.t("insights.figures.on_pace") ], insight_key_figure(approaching)
+    assert_equal [ "$250.00", I18n.t("insights.figures.over_budget") ], insight_key_figure(over)
+  end
+
+  test "top movers lead with the signed change against the prior period" do
+    up = build_insight("top_movers", metadata: { "direction" => "up" }, facts: { "top_change" => "$200.00" })
+    down = build_insight("top_movers", metadata: { "direction" => "down" }, facts: { "top_change" => "$800.00" })
+
+    assert_equal [ "+$200.00", I18n.t("insights.figures.vs_prior_period") ], insight_key_figure(up)
+    assert_equal [ "−$800.00", I18n.t("insights.figures.vs_prior_period") ], insight_key_figure(down)
+  end
+
+  test "top movers links to the spending narrative page" do
+    action = insight_action(build_insight("top_movers"))
+
+    assert_equal spending_narrative_path, action[:href]
+    assert_equal I18n.t("insights.actions.top_movers"), action[:text]
+  end
+
+  # The pace insight is computed against the household budget (insights are
+  # family-wide), so its link asks the page for that same budget rather than
+  # whichever personal one the reader happens to have.
+  test "spending pace links to the page for the household budget it was computed against" do
+    action = insight_action(build_insight("spending_pace"))
+
+    assert_equal spending_narrative_path(owner: "household"), action[:href]
+    assert_equal I18n.t("insights.actions.spending_pace"), action[:text]
+  end
+
   private
     def build_insight(insight_type, priority: "medium", metadata: {}, facts: {}, period_start: nil, period_end: nil)
       Insight.new(

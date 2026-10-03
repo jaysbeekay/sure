@@ -658,6 +658,8 @@ Rails.application.routes.draw do
     end
   end
 
+  resource :spending_narrative, only: :show
+
   resources :accountable_sparklines, only: :show, param: :accountable_type
 
   direct :entry do |entry, options|

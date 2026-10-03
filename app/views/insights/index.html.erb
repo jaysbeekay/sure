@@ -10,7 +10,10 @@
       <p class="text-sm text-secondary mt-1"><%= t(".subtitle") %></p>
     </div>
 
-    <%= render "insights/refresh_button", pending: false %>
+    <div class="flex items-center gap-2">
+      <%= render DS::Link.new(text: t(".spending_narrative"), href: spending_narrative_path, variant: "outline") %>
+      <%= render "insights/refresh_button", pending: false %>
+    </div>
   </header>
 
   <%= render "insights/list", insights: @insights, unread_ids: @unread_ids %>

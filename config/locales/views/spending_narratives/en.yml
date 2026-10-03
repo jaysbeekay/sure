@@ -1,0 +1,51 @@
+---
+en:
+  spending_narratives:
+    movers:
+      new: new
+    heatmap:
+      weekday_totals: By weekday
+      week_label: "%{from} to %{to}"
+      empty_cell: "–"
+      cell_aria: "%{date}: %{amount}. View these transactions."
+    show:
+      title: Spending story
+      subtitle: How this month's spending is going, what changed and when it happened.
+      period: "%{from} to %{to}"
+      pace:
+        title: Pace against your budget
+        status:
+          on_track: On track
+          approaching: Approaching
+          over: Over budget
+        summary: "%{spent} of %{budgeted} spent (%{spent_pct}%) with %{elapsed_pct}% of the month gone."
+        outlook:
+          on_track: At this pace you'd end the month around %{projected}, within your budget.
+          approaching: At this pace you'd end the month around %{projected}, which is more than your budget.
+          over: "You're %{over_by} over your budget."
+        days_left:
+          zero: No days left in the month.
+          one: 1 day left in the month.
+          other: "%{count} days left in the month."
+        bar_aria: "%{spent_pct}% of the budget spent, %{elapsed_pct}% of the month gone"
+        view_budget: View budget
+        empty:
+          title: No budget for this month
+          description: Set up a budget to see whether your spending is on pace.
+          action: Set up a budget
+      movers:
+        title: Biggest changes
+        subtitle: "Net spending by category against the previous %{days} days (%{from} to %{to})."
+        category: Category
+        current: This period
+        previous: Previous
+        change: Change
+        empty: Nothing has changed enough to list yet.
+      heatmap:
+        title: When you spend
+        subtitle: Net spending on each day of this month, by weekday.
+        week: Week
+        total: Total
+        total_line: "Net spending so far:"
+        empty: No spending recorded for this month yet.
+        note: Each cell is one day, net of refunds. Sure records the date of a transaction but not the time of day, so there is no hour-of-day view yet.

@@ -1,6 +1,8 @@
 require "test_helper"
 
 class InsightsControllerTest < ActionDispatch::IntegrationTest
+  include EntriesTestHelper
+
   setup do
     sign_in @user = users(:family_admin)
     enable_preview_features
@@ -14,6 +16,63 @@ class InsightsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_match CGI.escapeHTML(@insight.title), response.body
     assert @insight.reload.read?
+  end
+
+  test "index links to the spending narrative page" do
+    get insights_url
+
+    assert_response :success
+    assert_select "a[href=?]", spending_narrative_path
+  end
+
+  # The generators write real rows through the nightly job; the page must then
+  # render both new types -- title, body, key figure and action -- without
+  # disturbing the types that were already there. March 2024 is a month no
+  # fixture touches: 1,300 spent against a 1,000 budget (over), and a category
+  # that went from 100 to 1,300 against the window before (a rise).
+  test "index renders the spending pace and top movers insights the generators write" do
+    family = @user.family
+    category = family.categories.create!(name: "Narrative Dining", color: "#101010", lucide_icon: "circle")
+    Budget.create!(family: family, start_date: Date.new(2024, 3, 1), end_date: Date.new(2024, 3, 31),
+                   budgeted_spending: 1000, expected_income: 0, currency: "USD")
+    create_transaction(category: category, amount: 100, date: Date.new(2024, 2, 20), name: "Prior dining")
+    create_transaction(category: category, amount: 1300, date: Date.new(2024, 3, 3), name: "Current dining")
+
+    # The fixture user has AI enabled; without this the job could call a real
+    # provider. The template body is what is under test.
+    Provider::Registry.stubs(:preferred_llm_provider).returns(nil)
+
+    assert_no_difference -> { DebugLogEntry.where(category: "insights").count } do
+      travel_to Date.new(2024, 3, 14) do
+        GenerateInsightsJob.perform_now(family_id: family.id)
+      end
+    end
+
+    pace = family.insights.find_by!(insight_type: "spending_pace")
+    movers = family.insights.find_by!(insight_type: "top_movers")
+    assert_equal [ "spending_pace:2024-03", "top_movers:2024-03" ], [ pace.dedup_key, movers.dedup_key ]
+    assert_no_match(/translation missing/i, pace.body + movers.body + pace.title + movers.title)
+
+    # The job expired the fixture's anomaly (nothing regenerated it); bring it
+    # back so the page has an older type to render beside the new ones.
+    @insight.reload.update!(status: "active")
+
+    get insights_url
+
+    assert_response :success
+    assert_select "##{ActionView::RecordIdentifier.dom_id(pace)}" do
+      assert_select "h3", text: /over budget/i
+      assert_select "p", text: /\$1,300\.00/
+      assert_select "p", text: "$300.00"
+      assert_select "a[href=?]", spending_narrative_path(owner: "household")
+    end
+    assert_select "##{ActionView::RecordIdentifier.dom_id(movers)}" do
+      assert_select "h3", text: /Narrative Dining rose the most/
+      assert_select "p", text: "+$1,200.00"
+      assert_select "a[href=?]", spending_narrative_path
+    end
+    # The types that were there before are still rendered.
+    assert_select "##{ActionView::RecordIdentifier.dom_id(@insight)}"
   end
 
   test "turbo prefetch requests do not mark insights read" do
