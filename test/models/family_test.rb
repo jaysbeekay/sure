@@ -7,6 +7,16 @@ class FamilyTest < ActiveSupport::TestCase
     @syncable = families(:dylan_family)
   end
 
+  test "stale_valuation_days accepts the whole 1..3650 range and nothing outside it" do
+    family = families(:dylan_family)
+
+    assert_equal 90, family.stale_valuation_days
+    [ 1, 3650 ].each { |days| assert family.tap { |f| f.stale_valuation_days = days }.valid?, "#{days} should be valid" }
+    [ 0, -5, 3651 ].each { |days| assert_not family.tap { |f| f.stale_valuation_days = days }.valid?, "#{days} should be invalid" }
+    assert_not family.tap { |f| f.stale_valuation_days = 30.5 }.valid?
+    assert_not family.tap { |f| f.stale_valuation_days = nil }.valid?
+  end
+
   test "investment_contributions_category creates category when missing" do
     family = families(:dylan_family)
     family.categories.where(name: Category.investment_contributions_name).destroy_all

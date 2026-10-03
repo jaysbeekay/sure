@@ -71,6 +71,20 @@
     <% end %>
   </div>
 <% end %>
+<% if Current.user.admin? && preview_features_enabled? %>
+  <%= settings_section title: t(".insights_title"), subtitle: t(".insights_subtitle") do %>
+    <div>
+      <%= styled_form_with model: @user, class: "space-y-4", data: { controller: "auto-submit-form" } do |form| %>
+        <%= form.hidden_field :redirect_to, value: "preferences" %>
+        <%= form.fields_for :family do |family_form| %>
+          <%= family_form.number_field :stale_valuation_days, min: 1, max: 3650, step: 1,
+              label: t(".stale_valuation_days"), hint: t(".stale_valuation_days_hint"),
+              data: { auto_submit_form_target: "auto" } %>
+        <% end %>
+      <% end %>
+    </div>
+  <% end %>
+<% end %>
 <% if @user.family.personal_budgets? && preview_features_enabled? %>
   <%= settings_section title: t(".budget_sharing_title"), subtitle: t(".budget_sharing_subtitle") do %>
     <% if @family_members.any? %>

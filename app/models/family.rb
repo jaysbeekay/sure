@@ -158,6 +158,7 @@ class Family < ApplicationRecord
   validates :locale, inclusion: { in: I18n.available_locales.map(&:to_s) }
   validates :date_format, inclusion: { in: DATE_FORMATS.map(&:last) }
   validates :month_start_day, inclusion: { in: 1..28 }
+  validates :stale_valuation_days, numericality: { only_integer: true, in: 1..3650 }
   validates :moniker, inclusion: { in: MONIKERS }
   validates :assistant_type, inclusion: { in: ASSISTANT_TYPES }
   validates :categorization_provider, inclusion: { in: CATEGORIZATION_PROVIDERS }

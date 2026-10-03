@@ -178,6 +178,88 @@ class InsightsHelperTest < ActionView::TestCase
     assert_nil insight_action(dangling)
   end
 
+  test "stale valuation action opens the valuation form for that account in the modal" do
+    account = accounts(:property)
+    insight = build_insight("stale_valuation", metadata: { "account_id" => account.id })
+    Current.stubs(:user).returns(users(:family_admin))
+
+    action = insight_action(insight)
+
+    assert_equal new_valuation_path(account_id: account.id), action[:href]
+    assert_equal :modal, action[:frame]
+    assert_equal "Update value", action[:text]
+  end
+
+  test "stale valuation action disappears when the account does not resolve" do
+    insight = build_insight("stale_valuation", metadata: { "account_id" => SecureRandom.uuid })
+
+    assert_nil insight_action(insight)
+  end
+
+  test "only the stale valuation action targets the modal frame" do
+    account = accounts(:property)
+    other = build_insight("idle_cash", metadata: { "account_id" => account.id })
+
+    assert_nil insight_action(other)[:frame]
+  end
+
+  test "stale valuation key figure is the balance with the days unvalued" do
+    insight = build_insight("stale_valuation", facts: { "balance" => "$550,000.00" },
+                            metadata: { "last_valued_on" => 91.days.ago.to_date.iso8601 })
+
+    assert_equal [ "$550,000.00", "unvalued 91 days" ], insight_key_figure(insight)
+    assert_equal "calendar-clock", insight_icon_key(insight)
+    assert_equal :warning, insight_sentiment(insight)
+  end
+
+  # The days are worked out when the card renders, so they keep up with the
+  # calendar between the nightly runs that would otherwise refresh them.
+  test "stale valuation days advance without the insight being regenerated" do
+    insight = build_insight("stale_valuation", facts: { "balance" => "$550,000.00" },
+                            metadata: { "last_valued_on" => 91.days.ago.to_date.iso8601 })
+
+    travel 10.days do
+      assert_equal "unvalued 101 days", insight_key_figure(insight).last
+    end
+  end
+
+  test "stale valuation shows no key figure without a last valued date" do
+    assert_nil insight_key_figure(build_insight("stale_valuation", facts: { "balance" => "$1.00" }))
+  end
+
+  test "stale valuation action is withheld from a user who cannot write the account" do
+    account = accounts(:property)
+    insight = build_insight("stale_valuation", metadata: { "account_id" => account.id })
+    member = users(:family_member)
+
+    Current.stubs(:user).returns(member)
+    assert_nil insight_action(insight), "a user with no access"
+
+    account.share_with!(member, permission: "read_only")
+    assert_nil insight_action(insight), "read only"
+
+    account.unshare_with!(member)
+    account.share_with!(member, permission: "full_control")
+    assert_equal new_valuation_path(account_id: account.id), insight_action(insight)[:href]
+
+    Current.stubs(:user).returns(users(:family_admin))
+    assert_equal new_valuation_path(account_id: account.id), insight_action(insight)[:href], "the owner"
+  end
+
+  # A broadcast render is one render for the whole family, so it cannot tell a
+  # writer from a read-only member. It must not offer the link to either: the
+  # difference from the writer case above is the only thing this test measures.
+  test "stale valuation action is withheld where there is no current user, as in a broadcast" do
+    account = accounts(:property)
+    insight = build_insight("stale_valuation", metadata: { "account_id" => account.id })
+
+    Current.stubs(:user).returns(users(:family_admin))
+    assert insight_action(insight), "precondition: a writer is offered the action"
+
+    Current.stubs(:user).returns(nil)
+    assert_nil insight_action(insight)
+  end
+
   test "maintained reserve metadata and action render in German" do
     family = families(:dylan_family)
     goal = family.goals.first

@@ -44,7 +44,7 @@
       an acknowledgement rather than a deletion. %>
   <div class="px-4 py-2.5 bg-container-inset rounded-b-xl flex items-center justify-between gap-3">
     <% if (action = insight_action(insight)) %>
-      <%= render DS::Link.new(text: action[:text], href: action[:href], variant: "outline", size: "sm") %>
+      <%= render DS::Link.new(text: action[:text], href: action[:href], variant: "outline", size: "sm", frame: action[:frame]) %>
     <% else %>
       <span></span>
     <% end %>

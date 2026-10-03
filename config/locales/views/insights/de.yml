@@ -12,6 +12,7 @@ de:
       net_worth_milestone: Bericht zum Nettovermögen ansehen
       savings_rate_change: Transaktionen dieses Monats ansehen
       spending_anomaly: Transaktionen zu %{category} ansehen
+      stale_valuation: Wert aktualisieren
       subscription_audit: Wiederkehrende Buchungen prüfen
     card:
       acknowledge: Verstanden
@@ -28,6 +29,9 @@ de:
       days_overdue:
         one: "%{count} Tag überfällig"
         other: "%{count} Tage überfällig"
+      days_unvalued:
+        one: "%{count} Tag ohne Bewertung"
+        other: "%{count} Tage ohne Bewertung"
       idle_days:
         one: "%{count} Tag ungenutzt"
         other: "%{count} Tage ungenutzt"
@@ -72,6 +76,7 @@ de:
       spending_anomaly:
         above: Hochgerechnet gibst du diesen Monat %{projected_spend} für %{category} aus, rund %{deviation_pct} % mehr als dein jüngster Monatsschnitt von %{baseline_spend}.
         below: Hochgerechnet gibst du diesen Monat %{projected_spend} für %{category} aus, rund %{deviation_pct} % weniger als dein jüngster Monatsschnitt von %{baseline_spend}.
+      stale_valuation: "%{account} wurde zuletzt am %{last_valued_on} bewertet und zählt noch mit %{balance} zum Nettovermögen."
       subscription_audit: "%{name} (%{amount}) ist seit dem erwarteten Termin am %{expected_on} nicht mehr aufgetaucht. Vielleicht ist das Abo gekündigt oder die Abbuchung hat sich verschoben."
     titles:
       budget_at_risk:
@@ -90,6 +95,7 @@ de:
       spending_anomaly:
         above: Deine Ausgaben für %{category} steigen
         below: Deine Ausgaben für %{category} sinken
+      stale_valuation: "%{account} braucht einen neuen Wert"
       subscription_audit: Läuft %{name} noch?
     types:
       budget_at_risk: Budget
@@ -100,4 +106,5 @@ de:
       net_worth_milestone: Nettovermögen
       savings_rate_change: Sparquote
       spending_anomaly: Ausgaben
+      stale_valuation: Bewertung
       subscription_audit: Abos

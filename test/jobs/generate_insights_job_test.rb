@@ -226,6 +226,38 @@ class GenerateInsightsJobTest < ActiveJob::TestCase
     assert_not_includes Insight.visible, insight
   end
 
+  # The exit criterion end to end, through the real generators: a stale value
+  # raises the insight, and valuing the account clears it on the next run.
+  test "a stale valuation raises an insight that valuing the account expires" do
+    property = accounts(:property)
+    property.entries.destroy_all
+    property.entries.create!(
+      name: "Old valuation", date: 91.days.ago.to_date, amount: property.balance, currency: "USD",
+      entryable: Valuation.new(kind: "reconciliation")
+    )
+    property.update_columns(created_at: 91.days.ago)
+    [ accounts(:vehicle), accounts(:other_asset), accounts(:other_liability) ].each do |account|
+      account.entries.create!(
+        name: "Fresh", date: Date.current, amount: account.balance, currency: "USD",
+        entryable: Valuation.new(kind: "reconciliation")
+      )
+    end
+
+    GenerateInsightsJob.perform_now(family_id: @family.id)
+
+    insight = @family.insights.find_by!(insight_type: "stale_valuation")
+    assert insight.active?
+    assert_equal property.id, insight.metadata["account_id"]
+
+    property.entries.create!(
+      name: "New valuation", date: Date.current, amount: property.balance, currency: "USD",
+      entryable: Valuation.new(kind: "reconciliation")
+    )
+    GenerateInsightsJob.perform_now(family_id: @family.id)
+
+    assert insight.reload.expired?
+  end
+
   test "does not expire insights whose generator failed" do
     insight = insights(:cash_flow_warning)
     stub_generated([], succeeded_types: [])

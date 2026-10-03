@@ -861,6 +861,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_01_110000) do
     t.string "name"
     t.boolean "personal_budgets", default: false, null: false
     t.boolean "recurring_transactions_disabled", default: false, null: false
+    t.integer "stale_valuation_days", default: 90, null: false
     t.string "stripe_customer_id"
     t.string "timezone"
     t.datetime "updated_at", null: false
@@ -871,6 +872,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_01_110000) do
     t.check_constraint "categorization_shadow_rate >= 0::numeric AND categorization_shadow_rate <= 1::numeric", name: "chk_families_categorization_shadow_rate"
     t.check_constraint "default_account_sharing::text = ANY (ARRAY['shared'::character varying::text, 'private'::character varying::text])", name: "chk_families_default_account_sharing"
     t.check_constraint "month_start_day >= 1 AND month_start_day <= 28", name: "month_start_day_range"
+    t.check_constraint "stale_valuation_days >= 1 AND stale_valuation_days <= 3650", name: "chk_families_stale_valuation_days"
   end
 
   create_table "family_documents", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

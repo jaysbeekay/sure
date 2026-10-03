@@ -57,6 +57,10 @@ de:
         month_start_day: Budgetmonat beginnt am
         month_start_day_hint: Lege fest, wann dein Budgetmonat beginnt (z. B. Gehaltstag)
         month_start_day_warning: Deine Budgets und MTD-Berechnungen verwenden diesen benutzerdefinierten Starttag anstelle des 1. jedes Monats.
+        insights_title: Hinweise
+        insights_subtitle: Passe die Hinweise an, die Sure für dich erstellt
+        stale_valuation_days: Erinnere mich, manuelle Werte zu aktualisieren nach (Tagen)
+        stale_valuation_days_hint: Zwischen 1 und 3650 Tagen. Gilt für Immobilien, Fahrzeuge und andere Konten, die du von Hand bewertest.
         additional_currencies_label: Weitere Währungen
         base_currency_badge: Basiswährung
         base_currency_label: Basiswährung

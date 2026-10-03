@@ -47,6 +47,36 @@ class UsersControllerTest < ActionDispatch::IntegrationTest
     assert_equal [ "USD", "SGD" ], @user.family.reload.enabled_currency_codes
   end
 
+  test "admin can set how long a manual value may go unvalued" do
+    patch user_url(@user), params: {
+      user: { redirect_to: "preferences", family_attributes: { id: @user.family.id, stale_valuation_days: 180 } }
+    }
+
+    assert_redirected_to settings_preferences_url
+    assert_equal 180, @user.family.reload.stale_valuation_days
+  end
+
+  test "an out-of-range stale valuation threshold is not saved" do
+    original = @user.family.stale_valuation_days
+
+    patch user_url(@user), params: {
+      user: { redirect_to: "preferences", family_attributes: { id: @user.family.id, stale_valuation_days: 0 } }
+    }
+
+    assert_equal original, @user.family.reload.stale_valuation_days
+  end
+
+  test "non-admin cannot change the stale valuation threshold" do
+    sign_in @member = users(:family_member)
+    original = @member.family.stale_valuation_days
+
+    patch user_url(@member), params: {
+      user: { redirect_to: "preferences", family_attributes: { id: @member.family.id, stale_valuation_days: 30 } }
+    }
+
+    assert_equal original, @member.family.reload.stale_valuation_days
+  end
+
   test "non-admin cannot update enabled family currencies" do
     sign_in @member = users(:family_member)
     original_codes = @member.family.enabled_currency_codes

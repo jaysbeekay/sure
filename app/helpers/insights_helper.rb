@@ -10,7 +10,8 @@ module InsightsHelper
     "budget_on_track" => "circle-check",
     # Same shield the reserve panel uses on the goal page, so the two read as
     # the same object seen from two places.
-    "maintained_goal_depleted" => "shield-alert"
+    "maintained_goal_depleted" => "shield-alert",
+    "stale_valuation" => "calendar-clock"
   }.freeze
 
   def insight_icon_key(insight)
@@ -72,6 +73,12 @@ module InsightsHelper
       facts["amount"] && [ facts["amount"], t("insights.figures.days_overdue", count: facts["days_overdue"].to_i) ]
     when "idle_cash"
       facts["balance"] && [ facts["balance"], t("insights.figures.idle_days", count: facts["idle_days"].to_i) ]
+    when "stale_valuation"
+      # Days are worked out here, not stored: a stored count would be a day older
+      # for every night until the next material change.
+      last_valued_on = insight.metadata&.dig("last_valued_on")
+      facts["balance"] && last_valued_on &&
+        [ facts["balance"], t("insights.figures.days_unvalued", count: (Date.current - Date.parse(last_valued_on)).to_i) ]
     when "budget_at_risk"
       # Not budget_spent_pct: this card's headline is "N categories need
       # attention", and total consumption ("14% of budget") reads as reassurance
@@ -117,6 +124,17 @@ module InsightsHelper
     when "maintained_goal_depleted"
       goal = insight.family.goals.find_by(id: metadata["goal_id"])
       goal && { text: t("insights.actions.maintained_goal_depleted"), href: goal_path(goal) }
+    when "stale_valuation"
+      account = insight.family.accounts.visible.find_by(id: metadata["account_id"])
+      # Offered only to someone the valuation form would accept: it is a write.
+      # A broadcast render has no Current.user, so it cannot tell a writer from a
+      # read-only member and fails closed: no action until the next full page load
+      # renders the card for a real viewer. Showing it would offer a link that
+      # ends in "not authorised" to every read-only member.
+      account = nil if account && !(Current.user && AccountAuthorizable::PERMISSION_LEVELS[:write].include?(account.permission_for(Current.user)))
+      # The valuation form is a modal, so the card's link has to target the
+      # modal frame; every other action navigates the page.
+      account && { text: t("insights.actions.stale_valuation"), href: new_valuation_path(account_id: account.id), frame: :modal }
     end
   end
 
@@ -158,7 +176,7 @@ module InsightsHelper
       metadata["direction"] == "below" ? :positive : :warning
     when "cash_flow_warning"
       metadata["negative"] ? :negative : :warning
-    when "budget_at_risk", "maintained_goal_depleted"
+    when "budget_at_risk", "maintained_goal_depleted", "stale_valuation"
       # Warning, not negative: the reserve is short, not overdrawn, and red is
       # reserved here for money actually going the wrong side of zero.
       :warning

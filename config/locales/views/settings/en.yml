@@ -207,6 +207,10 @@ en:
         personal_budgets_hint: Enable individual budgets for each family member.
         household_budget_enabled: Household budget
         household_budget_enabled_hint: Keep a shared household budget alongside personal budgets. Turn off to use personal budgets only.
+        insights_title: Insights
+        insights_subtitle: Tune the nudges Sure raises for you
+        stale_valuation_days: Remind me to update manual values after (days)
+        stale_valuation_days_hint: Between 1 and 3650 days. Applies to properties, vehicles and other accounts you value by hand.
         budget_sharing_title: Budget sharing
         budget_sharing_subtitle: Let other members view or edit your personal budget
         budget_sharing_no_members: No other members in your %{moniker} to share with
