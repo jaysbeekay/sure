@@ -41,36 +41,36 @@
             </p>
           <% end %>
         </div>
-      </div>
-    <% end %>
 
-    <% if Current.user&.admin? %>
-      <div class="flex items-center justify-end gap-2 mt-2">
-        <%= icon(
-          "refresh-cw",
-          as_button: true,
-          href: sync_coinspot_item_path(coinspot_item),
-          disabled: coinspot_item.syncing?
-        ) %>
-
-        <%= render DS::Menu.new do |menu| %>
-          <% if unlinked_count.to_i > 0 %>
-            <% menu.with_item(
-              variant: "link",
-              text: t(".import_accounts_menu"),
-              icon: "plus",
-              href: setup_accounts_coinspot_item_path(coinspot_item),
-              frame: :modal
+        <% if Current.user&.admin? %>
+          <div class="flex items-center gap-2">
+            <%= icon(
+              "refresh-cw",
+              as_button: true,
+              href: sync_coinspot_item_path(coinspot_item),
+              disabled: coinspot_item.syncing?
             ) %>
-          <% end %>
-          <% menu.with_item(
-            variant: "button",
-            text: t(".delete"),
-            icon: "trash-2",
-            href: coinspot_item_path(coinspot_item),
-            method: :delete,
-            confirm: CustomConfirm.for_resource_deletion(coinspot_item.institution_display_name, high_severity: true)
-          ) %>
+
+            <%= render DS::Menu.new do |menu| %>
+              <% if unlinked_count.to_i > 0 %>
+                <% menu.with_item(
+                  variant: "link",
+                  text: t(".import_accounts_menu"),
+                  icon: "plus",
+                  href: setup_accounts_coinspot_item_path(coinspot_item),
+                  frame: :modal
+                ) %>
+              <% end %>
+              <% menu.with_item(
+                variant: "button",
+                text: t(".delete"),
+                icon: "trash-2",
+                href: coinspot_item_path(coinspot_item),
+                method: :delete,
+                confirm: CustomConfirm.for_resource_deletion(coinspot_item.institution_display_name, high_severity: true)
+              ) %>
+            <% end %>
+          </div>
         <% end %>
       </div>
     <% end %>
