@@ -154,6 +154,24 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
     assert_equal 400, @family.income_statement(user: @user).net_category_totals(period: result.period).total_net_expense
   end
 
+  # The household budget counts what its viewer can see, so the same budget
+  # gives a member who does not count an account in their finances a smaller
+  # spend than the owner of that account.
+  test "the household budget's spend is read for the viewer" do
+    create_budget(budgeted: 1000)
+    member = users(:family_member)
+    private_account = Account.create!(family: @family, owner: @user, name: "Admin only", balance: 0, currency: "USD", accountable: Depository.new)
+    assert_not_includes member.finance_accounts.pluck(:id), private_account.id
+    create_transaction(account: private_account, amount: 400, date: Date.new(2024, 3, 5), name: "Private")
+
+    as_owner = narrative(user: @user)
+    as_member = narrative(user: member)
+
+    assert_equal as_owner.budget, as_member.budget
+    assert_equal 400, as_owner.spent
+    assert_equal 0, as_member.spent
+  end
+
   # Without a budget the viewer's own scope applies: a member who does not count
   # an account in their finances sees none of its spending.
   test "without a budget, spend counts only the viewer's accounts" do
