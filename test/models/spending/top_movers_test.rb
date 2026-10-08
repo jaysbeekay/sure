@@ -46,6 +46,27 @@ class Spending::TopMoversTest < ActiveSupport::TestCase
     assert_equal %i[down up up], ours.map(&:direction)
   end
 
+  # Names chosen so the alphabetical order is the reverse of creation order:
+  # without the name tie-break the two equal movers come back in either order.
+  test "equal changes are ordered by category name" do
+    zebra = category("Narrative Zebra")
+    apple = category("Narrative Apple")
+    spend(zebra, 100, CURRENT.start_date)
+    spend(apple, 100, CURRENT.start_date)
+
+    ours = movers.select { |m| [ zebra.id, apple.id ].include?(m.category.id) }
+
+    assert_equal [ apple.id, zebra.id ], ours.map { |m| m.category.id }
+  end
+
+  # 300 to 401 is +33.67%, where rounding (34) and truncating (33) differ.
+  test "the percentage change is rounded to the nearest whole number" do
+    spend(@dining, 300, PREVIOUS.start_date)
+    spend(@dining, 401, CURRENT.start_date)
+
+    assert_equal 34, mover_for(@dining).change_pct
+  end
+
   test "a category with no spend in the prior period is new and has no percentage" do
     spend(@dining, 200, CURRENT.start_date)
 

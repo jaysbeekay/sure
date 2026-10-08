@@ -53,6 +53,7 @@ class Insight::Generators::TopMoversGeneratorTest < ActiveSupport::TestCase
     assert_equal "$200.00", insight.facts[:top_change]
     assert_equal 14, insight.facts[:days]
     assert_equal "up", insight.metadata[:direction]
+    assert_equal "medium", insight.priority
   end
 
   test "reports a fall when the biggest mover fell" do
@@ -65,6 +66,23 @@ class Insight::Generators::TopMoversGeneratorTest < ActiveSupport::TestCase
     assert_equal "top_movers.down", insight.template_key
     assert_equal "down", insight.metadata[:direction]
     assert_equal "$800.00", insight.facts[:top_change]
+    assert_equal "low", insight.priority
+  end
+
+  # The listed order follows the size of each change; the metadata must not,
+  # or two nights listing the same categories in a different order would read
+  # as a material change. The bigger mover is chosen to be the one whose key
+  # sorts last, so the listed order and the sorted order differ.
+  test "metadata lists the category keys sorted, whatever order they are listed in" do
+    seed_baseline
+    first, last = [ @dining, @travel ].sort_by(&:id)
+    spend(last, 300, CURRENT_DAY)
+    spend(first, 200, CURRENT_DAY)
+
+    insight = generate.first
+
+    assert_equal [ last.name, first.name ].to_sentence, insight.facts[:categories]
+    assert_equal [ first.id, last.id ], insight.metadata[:category_ids]
   end
 
   test "lists up to three categories that moved the same way as the biggest, largest first" do
