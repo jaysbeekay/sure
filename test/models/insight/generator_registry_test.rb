@@ -16,23 +16,24 @@ class Insight::GeneratorRegistryTest < ActiveSupport::TestCase
   test "a failing new generator is logged and skipped, and the others still run" do
     # Only the registry's contract is under test, so every other generator is
     # inert: none of them can raise, log or add a type as fixtures age.
-    (Insight::GeneratorRegistry::GENERATORS - [ Insight::Generators::SpendingPaceGenerator, Insight::Generators::BudgetInsightGenerator ]).each do |generator|
+    (Insight::GeneratorRegistry::GENERATORS - [ Insight::Generators::SpendingPaceGenerator, Insight::Generators::TopMoversGenerator ]).each do |generator|
       generator.any_instance.stubs(:generate).returns([])
     end
     Insight::Generators::SpendingPaceGenerator.any_instance.stubs(:generate).raises(StandardError, "boom")
     survivor = Insight::Generator::GeneratedInsight.new(
-      insight_type: "budget_on_track", priority: "low", title: "t", template_key: "budget_on_track", facts: {}, metadata: {},
-      currency: "USD", period_start: nil, period_end: nil, dedup_key: "budget_on_track:test"
+      insight_type: "top_movers", priority: "low", title: "t", template_key: "top_movers.up", facts: {}, metadata: {},
+      currency: "USD", period_start: nil, period_end: nil, dedup_key: "top_movers:test"
     )
-    Insight::Generators::BudgetInsightGenerator.any_instance.stubs(:generate).returns([ survivor ])
+    Insight::Generators::TopMoversGenerator.any_instance.stubs(:generate).returns([ survivor ])
 
     result = nil
     assert_difference "DebugLogEntry.count", 1 do
       result = Insight::GeneratorRegistry.new(@family).generate_all
     end
 
+    assert_includes result.insights, survivor
     assert_equal [ survivor ], result.insights
     assert_not_includes result.succeeded_types, "spending_pace"
-    assert_includes result.succeeded_types, "budget_on_track"
+    assert_includes result.succeeded_types, "top_movers"
   end
 end
