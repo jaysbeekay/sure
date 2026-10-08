@@ -36,6 +36,13 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
     assert_equal TODAY, period.end_date
   end
 
+  test "the previous period is the equal-length window before it" do
+    previous = narrative.previous_period
+
+    assert_equal narrative.period.days, previous.days
+    assert_equal narrative.period.start_date - 1.day, previous.end_date
+  end
+
   test "the budget is the one covering the date, found without creating anything" do
     budget = create_budget
 
@@ -51,6 +58,7 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
 
     assert_nil result.pace
     assert_equal 0, result.spent
+    assert_equal [], result.top_movers
   end
 
   test "pace is computed against the injected date" do
@@ -138,7 +146,7 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
   # One account scope for every figure. A personal budget counts the owner's
   # own accounts; the viewer's finance accounts also include accounts shared
   # with them, so spending on a shared account is outside the budget's pace.
-  test "pace reads through the budget's account scope, not the viewer's" do
+  test "pace and movers read through the budget's account scope, not the viewer's" do
     @family.update!(personal_budgets: true)
     create_budget(user: @user, budgeted: 1000)
     member = users(:family_member)
@@ -150,8 +158,21 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
     result = narrative
 
     assert_equal 0, result.pace.spent
+    assert_empty result.top_movers.select { |m| m.category.id == category.id }
+    assert_equal 0, result.previous_spend
     # The viewer's own scope would have counted it.
     assert_equal 400, @family.income_statement(user: @user).net_category_totals(period: result.period).total_net_expense
+  end
+
+  test "previous spend is the net spend of the previous window, and zero when there is none" do
+    category = @family.categories.create!(name: "Narrative prior", color: "#101010", lucide_icon: "circle")
+
+    assert_equal 0, narrative.previous_spend
+
+    create_transaction(category: category, amount: 300, date: narrative.previous_period.start_date, name: "Prior")
+    create_transaction(category: category, amount: 999, date: narrative.period.start_date, name: "Current")
+
+    assert_equal 300, narrative.previous_spend
   end
 
   # The household budget counts what its viewer can see, so the same budget
@@ -174,7 +195,7 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
 
   # Without a budget the viewer's own scope applies: a member who does not count
   # an account in their finances sees none of its spending.
-  test "without a budget, spend counts only the viewer's accounts" do
+  test "without a budget, spend and the movers count only the viewer's accounts" do
     member = users(:family_member)
     private_account = Account.create!(family: @family, owner: @user, name: "Admin only", balance: 0, currency: "USD", accountable: Depository.new)
     assert_not_includes member.finance_accounts.pluck(:id), private_account.id
@@ -186,6 +207,8 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
 
     assert_nil as_owner.budget
     assert_equal 400, as_owner.spent
+    assert_equal [ 400 ], as_owner.top_movers.select { |m| m.category.id == category.id }.map { |m| m.delta.to_i }
     assert_equal 0, as_member.spent
+    assert_empty as_member.top_movers.select { |m| m.category.id == category.id }
   end
 end
