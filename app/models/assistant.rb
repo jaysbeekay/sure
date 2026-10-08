@@ -35,7 +35,10 @@ module Assistant
     Function::RecordBillPayment,
     # Writes PROPOSALS, never classifications -- see the class comment. Preview
     # because the portfolio classification surfaces it feeds are preview-gated.
-    Function::SuggestSecurityClassification
+    Function::SuggestSecurityClassification,
+    # Prepares a trade CSV as the manual import does and leaves it pending;
+    # preview while the assistant-driven import is built out (#131, 12.2).
+    Function::PrepareTradeImport
   ].freeze
 
   class << self
