@@ -409,6 +409,14 @@ class Budget < ApplicationRecord
     net_totals.total_net_expense
   end
 
+  # The income statement every figure on this budget is read through, scoped to
+  # the accounts this budget counts. Public so that a page presenting more
+  # figures beside the budget (Spending::Narrative) reads through the same
+  # scope and cannot count a different set of accounts.
+  def income_statement
+    @income_statement ||= family.income_statement(user: current_user, accounts: income_statement_accounts)
+  end
+
   def budget_category_actual_spending(budget_category)
     key = budget_category.category_id || stable_synthetic_key(budget_category.category)
     expense = expense_totals_by_category[key]&.total || 0
@@ -509,9 +517,6 @@ class Budget < ApplicationRecord
 
       rate = ExchangeRate.find_or_fetch_rate(from: from_currency, to: currency, date: Date.current)&.rate
       rate ? amount.to_d * rate : amount.to_d
-    end
-    def income_statement
-      @income_statement ||= family.income_statement(user: current_user, accounts: income_statement_accounts)
     end
 
     # nil for the household budget (IncomeStatement falls back to whatever
