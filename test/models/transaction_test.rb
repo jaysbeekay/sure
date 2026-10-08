@@ -407,4 +407,48 @@ class TransactionTest < ActiveSupport::TestCase
 
     assert_equal [ tags(:one).id, tags(:two).id ].sort, transaction.reload.tag_ids.sort
   end
+
+  # A tag can only be applied once to a transaction, so a writer handed the
+  # same tag twice must store it once rather than fail on the unique index.
+  test "assigning a repeated tag id stores it once" do
+    transaction = transactions(:transfer_out)
+    tag = tags(:one)
+
+    transaction.update!(tag_ids: [ tag.id, tag.id, tag.id.upcase ])
+
+    assert_equal [ tag.id ], transaction.taggings.pluck(:tag_id)
+  end
+
+  # The dedupe above relies on the uuid cast downcasing a non-canonical id
+  # (ActiveRecord's PostgreSQL OID::Uuid#format_uuid), so pin that, and an
+  # assignment made only of case variants of one id.
+  test "an id differing only in case is the same tag" do
+    transaction = transactions(:transfer_out)
+    tag = tags(:one)
+
+    assert_equal tag.id, Tag.type_for_attribute(:id).cast(tag.id.upcase)
+
+    transaction.update!(tag_ids: [ tag.id.upcase, tag.id.downcase ])
+
+    assert_equal [ tag.id ], transaction.taggings.pluck(:tag_id)
+  end
+
+  test "assigning a repeated tag stores it once" do
+    transaction = transactions(:transfer_out)
+    tag = tags(:one)
+
+    transaction.tags = [ tag, tag ]
+
+    assert_equal [ tag.id ], transaction.taggings.pluck(:tag_id)
+  end
+
+  test "a new transaction built with a repeated tag saves it once" do
+    tag = tags(:one)
+    entry = accounts(:depository).entries.create!(
+      name: "Repeated tag", amount: 10, currency: "USD", date: Date.current,
+      entryable: Transaction.new(tags: [ tag, tag ])
+    )
+
+    assert_equal [ tag.id ], entry.transaction.taggings.pluck(:tag_id)
+  end
 end
