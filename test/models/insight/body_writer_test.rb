@@ -74,7 +74,9 @@ class Insight::BodyWriterTest < ActiveSupport::TestCase
       "idle_cash" => { account: "Emergency fund", balance: "$28,400.00", idle_days: 60 },
       "budget_at_risk.over" => { categories: "Food & Drink and Travel", count: 2, budget_spent_pct: 84 },
       "budget_at_risk.near" => { categories: "Shopping", count: 1, budget_spent_pct: 72 },
-      "budget_on_track" => { spent: "$2,948.00", budgeted: "$5,200.00", budget_spent_pct: 57 }
+      "budget_on_track" => { spent: "$2,948.00", budgeted: "$5,200.00", budget_spent_pct: 57 },
+      "spending_pace.approaching" => { spent: "$500.00", budgeted: "$1,000.00", spent_pct: 50, elapsed_pct: 45, projected_spend: "$1,107.14", over_by: "$0.00" },
+      "spending_pace.over" => { spent: "$1,250.00", budgeted: "$1,000.00", spent_pct: 125, elapsed_pct: 45, projected_spend: "$2,767.86", over_by: "$250.00" }
     }.freeze
 
     class FakeLlmProvider

@@ -193,6 +193,44 @@ class InsightsHelperTest < ActionView::TestCase
     end
   end
 
+  test "spending pace warns without going red, whether approaching or over" do
+    %w[approaching over].each do |status|
+      insight = build_insight("spending_pace", priority: "high", metadata: { "status" => status })
+
+      assert_equal :warning, insight_sentiment(insight)
+      assert_equal "warning", insight_icon_color(insight)
+    end
+  end
+
+  test "spending pace has its own icon, not the fallback" do
+    assert_not_equal "lightbulb", insight_icon_key(build_insight("spending_pace"))
+    # An unknown Lucide name silently renders the "key" icon instead of raising.
+    assert_not_equal ApplicationController.helpers.icon("key").to_s, ApplicationController.helpers.icon(insight_icon_key(build_insight("spending_pace"))).to_s, "spending_pace icon is not a real Lucide icon"
+  end
+
+  test "every insight type has a meta line label, a title and an icon" do
+    Insight::TYPES.each do |type|
+      assert I18n.exists?("insights.types.#{type}", :en), "insights.types.#{type} is missing"
+      assert I18n.exists?("insights.titles.#{type}", :en), "insights.titles.#{type} is missing"
+      assert InsightsHelper::INSIGHT_ICONS.key?(type), "#{type} has no icon"
+    end
+  end
+
+  test "spending pace leads with the projection when approaching and the overshoot when over" do
+    approaching = build_insight("spending_pace", metadata: { "status" => "approaching" }, facts: { "projected_spend" => "$1,107.14", "over_by" => "$0.00" })
+    over = build_insight("spending_pace", metadata: { "status" => "over" }, facts: { "projected_spend" => "$2,767.86", "over_by" => "$250.00" })
+
+    assert_equal [ "$1,107.14", I18n.t("insights.figures.on_pace") ], insight_key_figure(approaching)
+    assert_equal [ "$250.00", I18n.t("insights.figures.over_budget") ], insight_key_figure(over)
+  end
+
+  test "spending pace links to the budget of the month it was computed for" do
+    action = insight_action(build_insight("spending_pace", period_start: Date.new(2024, 3, 1), period_end: Date.new(2024, 3, 31)))
+
+    assert_equal budget_path(Budget.date_to_param(Date.new(2024, 3, 1))), action[:href]
+    assert_equal I18n.t("insights.actions.budget"), action[:text]
+  end
+
   private
     def build_insight(insight_type, priority: "medium", metadata: {}, facts: {}, period_start: nil, period_end: nil)
       Insight.new(
