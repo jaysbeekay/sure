@@ -30,7 +30,8 @@ tr:
       day_count_convention: Interest day-count basis
       day_count_convention_actual_365: Actual/365
       day_count_convention_actual_actual: Actual/actual (366 in a leap year)
-      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
+      day_count_convention_thirty_360: 30/360 (every month counts as 30 days)
+      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year; 30/360 charges a twelfth of the annual rate every month, whatever its length. Check a statement -- if this does not match your lender, the interest shown is an approximation.
     new:
       title: Kredi detaylarını girin
     overview:

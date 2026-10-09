@@ -87,7 +87,7 @@ class LoanTest < ActiveSupport::TestCase
   end
 
   test "rejects an unsupported day-count convention" do
-    loan = Loan.new(day_count_convention: "thirty_360")
+    loan = Loan.new(day_count_convention: "actual_366")
 
     assert_not loan.valid?
     assert_includes loan.errors[:day_count_convention], "is not included in the list"
