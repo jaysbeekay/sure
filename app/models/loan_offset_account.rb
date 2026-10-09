@@ -12,12 +12,23 @@ class LoanOffsetAccount < ApplicationRecord
   after_commit :clear_loan_projection_cache, on: %i[create destroy]
 
   class << self
-    def eligible_accounts_for(loan, viewer:)
-      return Account.none unless loan.account && viewer
+    # What the loan form offers: every asset the save would accept. A loan that
+    # has no account yet (the new-loan form, or a failed create re-rendering it)
+    # is judged on the account the create would build, in `family` and
+    # `currency` and owned by `viewer`, so the list matches what the save checks
+    # (#325). A loan with an account ignores both and is judged on it.
+    def eligible_accounts_for(loan, viewer:, family: nil, currency: nil)
+      return Account.none unless viewer
 
+      if loan.account.nil?
+        loan = prospective_loan(viewer:, family:, currency:)
+        return Account.none unless loan
+      end
+
+      loan_account = loan.owning_account
       Account.accessible_by(viewer)
-        .where(family_id: loan.account.family_id, classification: "asset", currency: loan.account.currency)
-        .where.not(id: loan.account.id)
+        .where(family_id: loan_account.family_id, classification: "asset", currency: loan_account.currency)
+        .where.not(id: loan_account.id)
         .select { |account| new(loan: loan, account: account).valid? }
     end
 
@@ -61,6 +72,26 @@ class LoanOffsetAccount < ApplicationRecord
           )
         end
     end
+  end
+
+  class << self
+    private
+
+      # An unsaved loan on an unsaved account, shaped as `create` will build it:
+      # the viewer owns it, and `Loan.viewers_of` treats it as visible to the
+      # whole family when the family shares by default.
+      def prospective_loan(viewer:, family:, currency:)
+        family ||= viewer.family
+        return if family.nil? || family.id != viewer.family_id
+
+        Loan.new.tap do |loan|
+          # Built by id rather than through `family.accounts`, which would add
+          # the unsaved account to the family's loaded association.
+          loan.owning_account = Account.new(
+            family_id: family.id, currency: currency.presence || family.currency, owner: viewer, accountable: loan
+          )
+        end
+      end
   end
 
   private
