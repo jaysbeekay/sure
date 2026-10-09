@@ -289,8 +289,8 @@ class Loan
           accrual_rate_changes: rate_resolver.method(:accrual_rate_changes),
           re_amortisation_events: rate_resolver.method(:re_amortisation_events),
           payment_strategy: :reamortize,
-          payment_amount_for: ->(rate:, balance:, remaining_payments:, **_kwargs) {
-            calculate_segment_payment(rate, balance, remaining_payments)
+          payment_amount_for: ->(rate:, balance:, remaining_payments:, first_period_interest: nil, **_kwargs) {
+            calculate_segment_payment(rate, balance, remaining_payments, first_period_interest: first_period_interest)
           },
           currency_precision: currency_precision,
           daily_accrual: daily_accrual,
@@ -329,13 +329,15 @@ class Loan
 
       # Calculate the payment amount for a segment with a specific rate,
       # amortized over remaining_payments -- the payments left through loan
-      # maturity, not just this segment's own length.
-      def calculate_segment_payment(rate, balance, remaining_payments)
+      # maturity, not just this segment's own length. On a resize the simulator
+      # passes the interest the opening period actually charged (#184).
+      def calculate_segment_payment(rate, balance, remaining_payments, first_period_interest: nil)
         AmortizationMath.level_payment(
           balance: balance,
           monthly_rate: Loan.monthly_rate(rate),
           remaining_payments: remaining_payments,
-          currency_precision: currency_precision
+          currency_precision: currency_precision,
+          first_period_interest: first_period_interest
         )
       end
 
