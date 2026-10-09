@@ -22,7 +22,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     ].each do |example|
       computed = Loan::AmortizationMath.level_payment(
         balance: BigDecimal("400762.12"),
-        monthly_rate: Loan.monthly_rate(example[:rate]),
+        monthly_rate: monthly_rate(example[:rate]),
         remaining_payments: example[:months],
         currency_precision: 2
       )
@@ -61,7 +61,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     before_change = schedule.find { |p| p[:payment_number] == 12 }
     annuity = Loan::AmortizationMath.level_payment(
       balance: at_change[:beginning_balance],
-      monthly_rate: Loan.monthly_rate("6.43"),
+      monthly_rate: monthly_rate("6.43"),
       remaining_payments: 348,
       currency_precision: 2
     )
@@ -208,6 +208,12 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
 
   private
 
+    # An annual percentage as a monthly decimal rate, the conversion
+    # Loan::Simulator makes.
+    def monthly_rate(annual_percentage)
+      (BigDecimal(annual_percentage.to_s) / BigDecimal("100")) / BigDecimal("12")
+    end
+
     ISSUE_392_START = Date.new(2022, 1, 15)
     # After payment 50 (2026-03-15) and before payment 51.
     ISSUE_392_AS_OF = Date.new(2026, 3, 20)
@@ -237,7 +243,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     def actual_balance_figure(loan)
       Loan::AmortizationMath.level_payment(
         balance: loan.interest_bearing_balance.amount,
-        monthly_rate: Loan.monthly_rate(loan.current_variable_rate(ISSUE_392_AS_OF)),
+        monthly_rate: monthly_rate(loan.current_variable_rate(ISSUE_392_AS_OF)),
         remaining_payments: remaining_payments(loan, ISSUE_392_AS_OF),
         currency_precision: 2
       )

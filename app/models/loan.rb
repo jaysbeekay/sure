@@ -458,7 +458,7 @@ class Loan < ApplicationRecord
       interest: payment.interest,
       insurance: premium,
       total: total,
-      ratios: payment_ratios(payment.principal, payment.interest, premium, total)
+      ratios: payment_ratios(payment, premium, total)
     }
   end
 
@@ -569,12 +569,6 @@ class Loan < ApplicationRecord
   # paid each month, against the same loan without it, on one `as_of`.
   def extra_repayment_comparison(amount:, as_of: Date.current)
     ExtraRepaymentComparison.new(self, amount: amount, as_of: as_of)
-  end
-
-  # One annual percentage -> monthly decimal rate conversion, so the two
-  # callers of the annuity formula cannot drift apart on it.
-  def self.monthly_rate(annual_percentage)
-    (BigDecimal(annual_percentage.to_s) / BigDecimal("100")) / BigDecimal("12")
   end
 
   # Whether this loan's rate can move over its life. The one place the answer
@@ -1210,14 +1204,14 @@ class Loan < ApplicationRecord
     end
 
     # The share of one instalment each part takes, for a progress bar.
-    def payment_ratios(principal, interest, premium, total)
+    def payment_ratios(payment, premium, total)
       return { principal: 0.0, interest: 0.0, insurance: 0.0 } unless total.amount.positive?
 
       whole = total.amount.to_f
 
       {
-        principal: principal.amount.to_f / whole,
-        interest: interest.amount.to_f / whole,
+        principal: payment.principal.amount.to_f / whole,
+        interest: payment.interest.amount.to_f / whole,
         insurance: premium.amount.to_f / whole
       }
     end

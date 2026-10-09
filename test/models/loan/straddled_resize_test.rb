@@ -81,18 +81,24 @@ class Loan::StraddledResizeTest < ActiveSupport::TestCase
     first = loan.amortization_rows.first
 
     assert_equal Loan::AmortizationMath.level_payment(
-      balance: BigDecimal("300000"), monthly_rate: Loan.monthly_rate("4.8"), remaining_payments: 360, currency_precision: 2
+      balance: BigDecimal("300000"), monthly_rate: monthly_rate("4.8"), remaining_payments: 360, currency_precision: 2
     ), first[:payment_amount]
   end
 
   private
+
+    # An annual percentage as a monthly decimal rate, the conversion
+    # Loan::Simulator makes.
+    def monthly_rate(annual_percentage)
+      (BigDecimal(annual_percentage.to_s) / BigDecimal("100")) / BigDecimal("12")
+    end
 
     # The row's interest_rate is the rate its period OPENED on; the resize is
     # sized at the rate in force on its payment date.
     def expected_payment(resized, rows, loan)
       Loan::AmortizationMath.level_payment(
         balance: resized[:beginning_balance],
-        monthly_rate: Loan.monthly_rate(loan.current_variable_rate(resized[:payment_date])),
+        monthly_rate: monthly_rate(loan.current_variable_rate(resized[:payment_date])),
         remaining_payments: rows.length - rows.index(resized),
         currency_precision: 2,
         first_period_interest: resized[:interest_payment]
