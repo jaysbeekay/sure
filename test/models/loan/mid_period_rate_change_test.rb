@@ -7,26 +7,27 @@ require "test_helper"
 #   17 days @ 7% = 300000 * 0.07 * 17 / 365 =   978.0822
 #                                            = 1,668.4932 -> 1,668.49
 # A whole period at the opening 6% is 1,500.00 on a flat 1/12, and at the new 7%
-# 1,750.00. The fork already accrues daily (#25, SCHEDULE_DAILY_ACCRUAL); until
-# now the mechanism was pinned by #25's 608.22 example but this figure was not.
+# 1,750.00. Upstream's monthly engine charges the 1,500.00; the fork charges the
+# split through the simulator's interest hook (Loan::DailyInterest, #184).
 class Loan::MidPeriodRateChangeTest < ActiveSupport::TestCase
   test "the engine charges a mid-period change from its effective date" do
-    result = Loan::Simulator.new(
-      starting_balance: BigDecimal("300000"),
-      starting_balance_as_of: Date.new(2026, 1, 1),
-      accrual_start_date: Date.new(2026, 1, 1),
-      payment_schedule: [ Date.new(2026, 2, 1) ],
-      accrual_rate_for: ->(_date) { BigDecimal("6") },
-      accrual_rate_changes: ->(_from, _to) { [ { date: Date.new(2026, 1, 15), rate: BigDecimal("7") } ] },
-      re_amortisation_events: ->(_from, _to) { [] },
-      payment_strategy: :hold,
-      payment_amount_for: ->(**_args) { BigDecimal("300000") },
-      currency_precision: 2,
-      daily_accrual: true,
-      day_count_convention: :actual_365
-    ).run
+    change = ->(_from, _to) { [ { date: Date.new(2026, 1, 15), rate: BigDecimal("7") } ] }
+    run = ->(interest_for) {
+      Loan::Simulator.new(
+        starting_balance: BigDecimal("300000"),
+        accrual_start_date: Date.new(2026, 1, 1),
+        payment_schedule: [ Date.new(2026, 2, 1) ],
+        accrual_rate_for: ->(date) { date < Date.new(2026, 1, 15) ? BigDecimal("6") : BigDecimal("7") },
+        payment_strategy: :hold,
+        payment_amount: BigDecimal("300000"),
+        currency_precision: 2,
+        interest_for: interest_for
+      ).run.payments.first[:interest_payment]
+    }
 
-    assert_equal BigDecimal("1668.49"), result.payments.first[:interest_payment]
+    assert_equal BigDecimal("1500.00"), run.call(nil), "upstream's monthly charge: the opening rate throughout"
+    assert_equal BigDecimal("1668.49"),
+      run.call(Loan::DailyInterest.new(day_count_convention: :actual_365, rate_changes: change))
   end
 
   test "a variable loan's schedule charges the split figure for that period" do
@@ -34,8 +35,8 @@ class Loan::MidPeriodRateChangeTest < ActiveSupport::TestCase
 
     first = loan.amortization_schedule.payments.first
 
-    assert_equal Date.new(2026, 2, 1), first[:payment_date]
-    assert_equal BigDecimal("1668.49"), first[:interest_payment]
+    assert_equal Date.new(2026, 2, 1), first.date
+    assert_equal BigDecimal("1668.49"), first.interest.amount
   end
 
   # The negative: with no change the same period is 31 days at 6%, so the split
@@ -43,7 +44,7 @@ class Loan::MidPeriodRateChangeTest < ActiveSupport::TestCase
   test "without the change the period is charged at the opening rate throughout" do
     loan = variable_loan(changes: {})
 
-    assert_equal BigDecimal("1528.77"), loan.amortization_schedule.payments.first[:interest_payment],
+    assert_equal BigDecimal("1528.77"), loan.amortization_schedule.payments.first.interest.amount,
       "300000 * 0.06 * 31 / 365"
   end
 

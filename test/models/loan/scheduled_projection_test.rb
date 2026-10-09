@@ -15,7 +15,7 @@ class Loan::ScheduledProjectionTest < ActiveSupport::TestCase
     first = projection(loan).payments.first
     schedule_row = schedule_row_on(loan, first[:payment_date])
 
-    assert_not_equal loan.amortization_schedule.monthly_payment.amount, schedule_row[:payment_amount],
+    assert_not_equal loan.amortization_schedule.periodic_payment.amount, schedule_row[:payment_amount],
       "precondition: the rate change has moved the scheduled repayment"
     assert_equal schedule_row[:payment_amount], first[:payment_amount]
   end
@@ -45,7 +45,7 @@ class Loan::ScheduledProjectionTest < ActiveSupport::TestCase
   # repayment holds, as the held projection always did.
   test "a loan behind schedule holds the last level repayment past maturity" do
     loan = loan_with(balance_offset: 25_000)
-    schedule = loan.amortization_schedule.payments
+    schedule = loan.amortization_rows
     payments = projection(loan).payments
     past_maturity = payments.select { |row| row[:payment_date] > schedule.last[:payment_date] }
 
@@ -64,12 +64,29 @@ class Loan::ScheduledProjectionTest < ActiveSupport::TestCase
   end
 
   # The negative: on a fixed loan every scheduled row is the contracted
-  # repayment, so the projection is byte-identical to the held one.
+  # repayment, so the projection is byte-identical to holding it. (The
+  # projection's own :hold strategy went with the core swap; the simulator's
+  # is the same run.)
   test "a fixed loan projects exactly as the held repayment did" do
     loan = loan_with(balance_offset: -40_000, rate_type: "fixed", changes: {})
+    schedule = loan.amortization_schedule
+    remaining = schedule.payments.select { |payment| payment.date > AS_OF }
+    resolver = Loan::RateResolver.for(loan)
 
-    assert_equal Loan::PayoffProjection.new(loan, payment_strategy: :hold, as_of: AS_OF).payments,
-      projection(loan).payments
+    held = Loan::Simulator.new(
+      starting_balance: loan.account.balance,
+      accrual_start_date: schedule.payments.select { |payment| payment.date <= AS_OF }.last.date,
+      payment_schedule: remaining.map(&:date),
+      accrual_rate_for: resolver.method(:accrual_rate_for),
+      re_amortisation_events: resolver.method(:re_amortisation_events),
+      payment_amount: schedule.periodic_payment.amount,
+      payment_strategy: :hold,
+      currency_precision: 2,
+      settle_at_schedule_end: false,
+      interest_for: Loan::DailyInterest.for(loan)
+    ).run
+
+    assert_equal held.payments, projection(loan).payments
   end
 
   test "the modelled monthly payment is the one in force now" do
@@ -85,7 +102,7 @@ class Loan::ScheduledProjectionTest < ActiveSupport::TestCase
     end
 
     def schedule_row_on(loan, date)
-      loan.amortization_schedule.payments.find { |row| row[:payment_date] == date }
+      loan.amortization_rows.find { |row| row[:payment_date] == date }
     end
 
     # $400,000 from 2022-01-15 at 5.50%, moving to 6.43% at payment 13 (#392's
@@ -106,7 +123,7 @@ class Loan::ScheduledProjectionTest < ActiveSupport::TestCase
         entryable: Valuation.new(kind: "opening_anchor")
       )
       loan = account.loan.reload
-      scheduled = loan.amortization_schedule.payments.find { |row| row[:payment_number] == 50 }[:ending_balance]
+      scheduled = loan.amortization_rows.find { |row| row[:payment_number] == 50 }[:ending_balance]
       account.update!(balance: scheduled + balance_offset)
       loan.reload
     end

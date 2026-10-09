@@ -65,7 +65,7 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     @loan.reload
 
     row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
-    schedule_row = @loan.amortization_schedule.payments.find { |p| p[:payment_date] >= effective_on }
+    schedule_row = @loan.amortization_rows.find { |p| p[:payment_date] >= effective_on }
 
     assert_equal Money.new(schedule_row[:payment_amount], "USD"), row[:new_payment]
     assert_equal Money.new(schedule_row[:beginning_balance], "USD"), row[:balance]
@@ -79,13 +79,13 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
   # Listing it would pair its rate with the later rate's repayment.
   test "a change superseded before its payment is not listed" do
     payment_date = @loan.amortization_schedule.payments
-      .find { |p| p[:payment_date] >= Date.current + 2.months }[:payment_date]
+      .find { |p| p.date >= Date.current + 2.months }.date
     @loan.add_variable_rate_change(payment_date - 10.days, 5.93)
     @loan.add_variable_rate_change(payment_date - 3.days, 6.4)
     @loan.reload
 
     row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
-    schedule_row = @loan.amortization_schedule.payments.find { |p| p[:payment_date] == payment_date }
+    schedule_row = @loan.amortization_rows.find { |p| p[:payment_date] == payment_date }
 
     assert_equal payment_date - 3.days, row[:effective_date]
     assert_equal BigDecimal("6.4"), row[:new_rate]
@@ -112,12 +112,12 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
   # A change effective ON a payment date resizes that payment (C8), so its row
   # is that payment's own, not the next one.
   test "a change effective on a payment date is quoted from that payment's row" do
-    payment_date = @loan.amortization_schedule.payments.map { |p| p[:payment_date] }.find { |d| d > Date.current + 3.months }
+    payment_date = @loan.amortization_schedule.payments.map(&:date).find { |d| d > Date.current + 3.months }
     @loan.add_variable_rate_change(payment_date, 5.93)
     @loan.reload
 
     row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
-    payments = @loan.amortization_schedule.payments
+    payments = @loan.amortization_rows
     on_date = payments.find { |p| p[:payment_date] == payment_date }
     before = payments[payments.index(on_date) - 1]
 
@@ -164,8 +164,8 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert component.render?
     assert row[:new_payment] > row[:current_payment],
       "a rate rise must raise the quoted repayment"
-    assert_not Loan::PayoffProjection.new(@loan, payment_strategy: :hold).applicable?,
-      "the fixture must actually break the HELD projection, or this proves nothing"
+    assert_not holding_the_opening_repayment_clears?(@loan),
+      "the fixture must actually break the HELD repayment, or this proves nothing"
   end
 
   # The balances the table quotes off must be produced by the very repayment it
@@ -196,14 +196,36 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
 
     component = UI::Loan::RateChangeTable.new(loan: @loan.reload)
 
-    assert_not Loan::PayoffProjection.new(@loan, payment_strategy: :hold).applicable?,
-      "the fixture must actually defeat the held projection, or this proves nothing"
+    assert_not holding_the_opening_repayment_clears?(@loan),
+      "the fixture must actually defeat the held repayment, or this proves nothing"
     assert_equal 1, component.rows.length,
       "the already-effective rise is the current rate, so only the future one is listed"
     assert component.render?
   end
 
   private
+
+    # Whether the loan's opening repayment, held from today against today's
+    # balance for twice the term, ever clears it -- what the fork's :hold
+    # projection answered before #184's core swap removed that strategy.
+    def holding_the_opening_repayment_clears?(loan)
+      schedule = loan.amortization_schedule
+      opened = schedule.payments.select { |payment| payment.date <= Date.current }.last&.date || schedule.start_date
+      resolver = Loan::RateResolver.for(loan)
+
+      Loan::Simulator.new(
+        starting_balance: loan.account.balance,
+        accrual_start_date: opened,
+        payment_schedule: (1..(2 * loan.term_months)).map { |n| opened >> n },
+        accrual_rate_for: resolver.method(:accrual_rate_for),
+        re_amortisation_events: resolver.method(:re_amortisation_events),
+        payment_strategy: :hold,
+        payment_amount: schedule.periodic_payment.amount,
+        settle_at_schedule_end: false,
+        currency_precision: 2,
+        interest_for: Loan::DailyInterest.for(loan)
+      ).run.converged?
+    end
 
     # With an opening valuation, as a real loan has, so `original_balance` --
     # and with it the schedule -- does not move when the balance does.

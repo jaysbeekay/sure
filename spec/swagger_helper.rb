@@ -1880,7 +1880,7 @@ RSpec.configure do |config|
               interest_payment: { type: :string },
               beginning_balance: { type: :string },
               ending_balance: { type: :string },
-              interest_rate: { type: :string, description: 'Rate effective for this payment, as a decimal percentage string (e.g. "3.500" for 3.5%)' }
+              interest_rate: { type: :string, description: 'Annual rate in force when this payment\'s period opened, as a decimal percentage string (e.g. "3.500" for 3.5%). A change effective on or part-way through the period is charged from its own date and first shows on the following payment.' }
             }
           },
           AmortizationScheduleResponse: {

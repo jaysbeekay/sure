@@ -84,7 +84,6 @@ tr:
           one: "%{count} month later"
           other: "%{count} months later"
         projection_not_converged: The projected payoff does not converge within the supported term.
-        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
         minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
         rate_change_marker: "rate change"

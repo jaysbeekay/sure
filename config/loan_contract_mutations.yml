@@ -26,49 +26,49 @@ C2:
   replace: 'when :actual_365 then Date.leap?(date.year) ? LEAP_YEAR_DAY_COUNT : DAY_COUNT'
 C3:
   file: app/models/loan/simulator.rb
-  defect: daily accrual stops receiving offset change points for the period
-  find: 'offset_changes = @offset_for.call(previous_date, payment_date)'
-  replace: 'offset_changes = []'
+  defect: the interest hook is asked for the wrong window, so the period is not what is charged at its payment point
+  find: '          from_date: period_start,'
+  replace: '          from_date: payment_date,'
 C4:
-  file: app/models/loan/simulator.rb
-  defect: the boundary guard stops rejecting a starting balance dated after accrual start
-  find: 'raise ArgumentError, "starting balance date must be on or before accrual start date"'
-  replace: 'nil'
+  file: app/models/loan/payoff_projection.rb
+  defect: the projection opens its first period on as_of, a stub, instead of where the contract's running period opened
+  find: 'accrual_start_date: current_period_start,'
+  replace: 'accrual_start_date: as_of,'
 C5:
   file: app/models/loan/amortization_schedule.rb
   defect: the payment calendar is built one payment short of the loan term
-  find: 'Array.new(loan.term_months) do'
-  replace: 'Array.new(loan.term_months - 1) do'
+  find: '@payment_schedule ||= (1..term_months).map { |number| start_date >> number }'
+  replace: '@payment_schedule ||= (1...term_months).map { |number| start_date >> number }'
 C6:
-  file: app/models/loan/simulator.rb
-  defect: an extra repayment landing exactly on a payment date is dropped instead of applied before the payment
+  file: app/models/loan/daily_interest.rb
+  defect: a change point on the period's opening date is dropped, so an extra repayment made on a payment date is deferred
   find: 'next unless date >= from_date && date <= to_date'
-  replace: 'next unless date >= from_date && date < to_date'
+  replace: 'next unless date > from_date && date <= to_date'
 C7:
-  file: app/models/loan/simulator.rb
+  file: app/models/loan/daily_interest.rb
   defect: a mid-period rate change no longer segments the accrual window, so the whole period runs at the old rate
   find: 'dates = ([ from_date ] + extras.keys + rates.keys + offsets.keys + [ to_date ]).uniq.sort'
   replace: 'dates = ([ from_date ] + extras.keys + offsets.keys + [ to_date ]).uniq.sort'
 C8:
   file: app/models/loan/simulator.rb
-  defect: the accrual clock is seeded from the payment-sizing rate, re-rating the period that ENDS on the boundary (the #48 defect)
-  find: 'accrual_rate ||= decimal(@accrual_rate_for.call(accrual_start_date))'
-  replace: 'accrual_rate = decimal(segment[:rate])'
+  defect: a period is charged at the rate in force when it closed, re-rating the period that ENDS on a change (the #48 defect)
+  find: 'opening_annual_rate = @accrual_rate_for.call(period_start)'
+  replace: 'opening_annual_rate = @accrual_rate_for.call(payment_date)'
 C9:
-  file: app/models/loan/simulator.rb
+  file: app/models/loan/daily_interest.rb
   defect: same-day event order is reordered so payment precedes accrual
   find: 'EVENT_ORDER = %i[accrual extra_repayment offset_movement payment re_amortisation].freeze'
   replace: 'EVENT_ORDER = %i[payment accrual extra_repayment offset_movement re_amortisation].freeze'
 C10:
-  file: app/models/loan/simulator.rb
-  defect: the accrual window stops being half-open, so a rate effective ON the window's first day is ignored instead of applied from it
-  find: 'next unless date >= from_date && date < to_date'
-  replace: 'next unless date > from_date && date < to_date'
+  file: app/models/loan/rate_resolver.rb
+  defect: a rate effective on D stops being in force on D, so the window opening on D is not the one it applies to
+  find: 'rate_changes.reverse_each.find { |effective_date, _| effective_date <= date }&.last || loan.interest_rate'
+  replace: 'rate_changes.reverse_each.find { |effective_date, _| effective_date < date }&.last || loan.interest_rate'
 C11:
   file: app/models/loan/simulator.rb
-  defect: every run holds the first payment, so re-amortisation stops re-sizing per rate segment
-  find: 'payment = if payment_strategy == :hold'
-  replace: 'payment = if true'
+  defect: every run holds its first payment, so re-amortisation stops re-sizing when the rate moves
+  find: 'if payment.nil? || (@payment_strategy == :reamortize && rate_moved)'
+  replace: 'if payment.nil?'
 C12:
   file: app/models/loan/interest_accrual.rb
   defect: each segment is rounded as it accumulates instead of once at the charge point
@@ -86,8 +86,8 @@ C13:
 C14:
   file: app/models/loan/simulator.rb
   defect: the last scheduled payment no longer settles the remaining balance
-  find: 'final: (@settle_at_schedule_end && payment_number == payment_schedule.length) || payment >= balance + interest,'
-  replace: 'final: payment >= balance + interest,'
+  find: 'final = (@settle_at_schedule_end && index == @payment_schedule.length - 1) ||'
+  replace: 'final = false ||'
 C15:
   file: app/models/loan/interest_accrual.rb
   defect: the offset floor is removed, so an offset above the balance produces negative interest

@@ -70,6 +70,48 @@ class LoanTest < ActiveSupport::TestCase
   # half what the policy charges.
   # Four separate tests rather than four assertions, so each figure is observed
   # to fail on its own: one of them failing first would otherwise hide the rest.
+  # Upstream's (#104), adopted with #184's core swap: a variable loan has a
+  # schedule but no single monthly payment -- quoting the payment it opened
+  # with would present a stale figure as a current one. The figure a lender
+  # quotes today is `current_minimum_payment` (#392).
+  test "variable rate loans have a schedule but no single monthly payment" do
+    account = Account.create! \
+      family: families(:dylan_family),
+      name: "Variable Mortgage",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "variable")
+
+    assert_equal account, account.loan.account, "validating a Loan before attaching its Account must not cache a missing association"
+    assert account.loan.amortizable?
+    assert_not_nil account.loan.amortization_schedule
+    assert_nil account.loan.monthly_payment
+  end
+
+  test "a loan with no account is not amortizable rather than raising" do
+    assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "variable").amortizable?
+    assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "fixed").amortizable?
+  end
+
+  # Upstream's guard, kept: a term longer than the simulator will walk is not
+  # amortizable rather than raising. The fork refuses such a term at
+  # validation and in the database, so only a loan holding a rejected value in
+  # memory -- a form re-rendered after a failed save -- reaches the guard, and
+  # it must answer rather than raise.
+  test "a term longer than the simulator will walk is not amortizable, rather than raising" do
+    loan = Account.create!(
+      family: families(:dylan_family), name: "Overlong", balance: 500_000, currency: "USD",
+      accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "fixed")
+    ).loan
+    assert_not_nil loan.amortization_schedule, "precondition: schedulable at a valid term"
+
+    loan.term_months = Loan::Simulator::MAX_PERIODS + 1
+
+    assert_not loan.valid?
+    assert_not loan.amortizable?
+    assert_nil loan.amortization_schedule
+  end
+
   test "the principal is the recorded one, not the first tracked balance" do
     loan = build_imported_loan_account.loan
 
@@ -79,9 +121,7 @@ class LoanTest < ActiveSupport::TestCase
   test "the schedule amortises what was borrowed" do
     loan = build_imported_loan_account.loan
 
-    # The fork's schedule rows are hashes of BigDecimals (upstream: Payment
-    # structs carrying Money).
-    repaid = loan.amortization_schedule.payments.sum(BigDecimal("0")) { |payment| payment[:principal_payment] }
+    repaid = loan.amortization_schedule.payments.sum(BigDecimal("0")) { |payment| payment.principal.amount }
 
     assert_in_delta 20_000, repaid, 1, "half a loan was being amortised"
   end
@@ -136,7 +176,7 @@ class LoanTest < ActiveSupport::TestCase
     loan.initial_balance = 25_000
 
     assert_equal 25_000, loan.original_balance.amount
-    assert_equal 25_000, loan.amortization_schedule.payments.first[:beginning_balance],
+    assert_equal 25_000, loan.amortization_schedule.principal,
       "and the schedule is rebuilt from it"
   end
 
@@ -310,7 +350,7 @@ class LoanTest < ActiveSupport::TestCase
 
     loan = loan_account.loan
     legacy_signature = Digest::SHA256.hexdigest([
-      Loan::AmortizationSchedule::ALGORITHM_VERSION,
+      LoanAmortization::ALGORITHM_VERSION,
       loan.account.id,
       loan.original_balance.amount.to_s,
       loan.account.currency,
@@ -434,11 +474,11 @@ class LoanTest < ActiveSupport::TestCase
       )
 
     schedule = loan_account.loan.amortization_schedule
-    assert schedule.amortizable?
-    assert_equal 360, schedule.payment_count
+    assert loan_account.loan.amortizable?
+    assert_equal 360, schedule.payments.length
     assert schedule.payoff_date.present?
     assert schedule.total_interest.positive?
-    assert schedule.monthly_payment.positive?
+    assert schedule.periodic_payment.positive?
   end
 
   test "amortization_schedule is amortizable for variable rate loan with a base rate" do
@@ -454,8 +494,8 @@ class LoanTest < ActiveSupport::TestCase
         rate_type: "variable"
       )
 
-    schedule = loan_account.loan.amortization_schedule
-    assert schedule.amortizable?
+    assert loan_account.loan.amortizable?
+    assert_not_nil loan_account.loan.amortization_schedule
   end
 
   test "amortization_schedule not amortizable for loan without an interest rate" do
@@ -471,8 +511,8 @@ class LoanTest < ActiveSupport::TestCase
         rate_type: "fixed"
       )
 
-    schedule = loan_account.loan.amortization_schedule
-    assert_not schedule.amortizable?
+    assert_not loan_account.loan.amortizable?
+    assert_nil loan_account.loan.amortization_schedule
   end
 
   test "amortizable? is false before the loan has an account" do
@@ -661,7 +701,7 @@ class LoanTest < ActiveSupport::TestCase
     assert_equal 4.5, loan.current_variable_rate(Date.new(2027, 6, 1))
   end
 
-  test "payoff_projection returns a memoized PayoffProjection for the loan" do
+  test "payoff_projection builds the projection for the date it is asked about" do
     loan_account = Account.create! \
       family: families(:dylan_family),
       name: "Mortgage Loan",
@@ -677,7 +717,10 @@ class LoanTest < ActiveSupport::TestCase
 
     loan = loan_account.loan
     assert_instance_of Loan::PayoffProjection, loan.payoff_projection
-    assert_same loan.payoff_projection, loan.payoff_projection
+    assert_equal Date.current, loan.payoff_projection.as_of
+    # Not memoised (upstream's #payoff_projection): `as_of` makes each call a
+    # different question, and the balance it reads moves without a callback.
+    assert_equal Date.current + 1.month, loan.payoff_projection(as_of: Date.current + 1.month).as_of
   end
 
   test "payoff_projection_with_extra returns a fresh projection boosted by the given amount" do

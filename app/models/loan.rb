@@ -170,12 +170,19 @@ class Loan < ApplicationRecord
     false
   end
 
-  # The CONTRACTED repayment, sized at origination. For what a lender would
-  # quote today on a variable loan, use `current_minimum_payment` instead --
-  # for a seasoned loan these are different numbers and the difference is the
-  # whole point of #15.
+  # The contracted repayment, for a loan that has exactly one.
+  #
+  # Deliberately still nil for a variable loan even though it now has a
+  # schedule: such a loan does not HAVE a single monthly payment, and quoting
+  # the one it opened with would be a stale figure presented as a current one.
+  # `current_minimum_payment` is the figure a lender quotes today (#392).
   def monthly_payment
-    amortization_schedule.monthly_payment
+    return nil if term_months.nil? || interest_rate.nil? || rate_type != "fixed"
+    # Non-positive, not just zero: `amortizable?` rejects both, so anything that
+    # slips past here would fall through to a nil schedule instead of a payment.
+    return Money.new(0, account.currency) if original_balance.amount <= 0 || term_months <= 0
+
+    amortization_schedule&.periodic_payment
   end
 
   # Everyone who can see the loan's account, or will once it is saved: the rule
@@ -263,19 +270,12 @@ class Loan < ApplicationRecord
       .select { |candidate| loan.collateral_ineligibilities_for(candidate, loan_account: loan_account, viewers: viewers).empty? }
   end
 
-  # Drops both memoized calculators after an offset link changes. Offsets alter
-  # interest without touching any Loan column, so `amortization_schedule_signature`
-  # -- which is built from Loan columns and the account balance -- cannot see the
-  # change, and the schedule has to be dropped by hand.
-  #
-  # `payoff_projection_signature` DOES cover offsets, via
-  # `offset_account_signature`, so the projection would turn itself over on the
-  # next read. It is cleared here anyway so both calculators rebuild from the
-  # same moment rather than one trailing the other by a request.
+  # Drops the memoized schedule after an offset link changes. The contracted
+  # schedule does not read offsets, but a link change is the moment a caller
+  # holding this loan expects every figure to be read afresh; projections are
+  # never memoized (#payoff_projection), so there is nothing else to drop.
   def invalidate_offset_cache!
     clear_amortization_schedule_cache!
-    @payoff_projection = nil
-    @payoff_projection_signature = nil
   end
 
   # What the loan was written for, which is not always what the account has
@@ -328,8 +328,6 @@ class Loan < ApplicationRecord
 
   def reload(*)
     clear_amortization_schedule_cache!
-    @payoff_projection = nil
-    @payoff_projection_signature = nil
     super
   end
 
@@ -377,33 +375,31 @@ class Loan < ApplicationRecord
   # without interest in it would understate the loan rather than decline to
   # answer.
   def total_cost
-    return nil unless amortizable?
+    schedule = amortization_schedule
+    return nil if schedule.nil?
 
-    amortization_schedule.total_cost + total_insurance
+    schedule.total_paid + total_insurance
   end
 
-  # How far into the term the loan is: the scheduled payment dates on or before
-  # `as_of`, counted off the schedule's own dates
-  # (AmortizationSchedule#scheduled_payment_dates) so the instalment this
-  # names is the one the schedule beside it has due.
+  # How far into the term the loan is, measured from origination rather than
+  # from `start_date` alone: a loan drawn down before the account tracking it
+  # was created has no start_date, and #origination_date already answers that
+  # from the account.
   #
   # A month counts once it has been served in full, so a loan originated on the
-  # 15th is one month in on the 15th of the next month, not on the 1st. Bounded
-  # by the term, since there are only `term_months` dates: a loan running past
-  # its last payment is finished, not further in than it can be.
-  #
-  # Upstream counts calendar months from origination (`origin + n.months`),
-  # which matches ITS schedule's `start_date >> n` dates. The fork's schedule
-  # chains `next_month`, which drifts for a loan drawn down on the 29th-31st
-  # (31 January pays on 29 February, then 29 March), so the upstream count
-  # would put such a borrower on an instalment already paid.
+  # 15th is one month in on the 15th of the next month, not on the 1st. Clamped
+  # to the term: a loan running past its last payment is finished, not further
+  # in than it can be. Counted on the calendar the schedule pays on
+  # (`origination >> n`), so the instalment it names is the one the schedule
+  # beside it has due.
   def months_elapsed(as_of: Date.current)
-    return 0 if term_months.nil? || !term_months.positive?
-
     origin = origination_date
-    return 0 if origin.nil? || as_of < origin
+    return 0 if origin.nil? || term_months.nil? || as_of < origin
 
-    amortization_schedule.scheduled_payment_dates.count { |date| date <= as_of }
+    months = (as_of.year * 12 + as_of.month) - (origin.year * 12 + origin.month)
+    months -= 1 if origin + months.months > as_of
+
+    months.clamp(0, term_months)
   end
 
   def remaining_months(as_of: Date.current)
@@ -422,10 +418,8 @@ class Loan < ApplicationRecord
   # rather than re-derived, so it cannot drift from the table beside it.
   def remaining_balance_at(payment_number)
     return nil unless payment_number&.positive?
-    return nil unless amortizable?
 
-    row = amortization_schedule.payments[payment_number - 1]
-    row && Money.new(row[:ending_balance], account.currency)
+    amortization_schedule&.payments&.dig(payment_number - 1)&.ending_balance
   end
 
   # One instalment, split into what it repays, what it costs and what it
@@ -437,10 +431,8 @@ class Loan < ApplicationRecord
   # than money. A zero payment -- an interest-free loan repaid in full by its
   # opening instalment -- gives zeroes rather than a division by zero.
   def payment_breakdown(payment_number: nil, as_of: Date.current)
-    return nil unless amortizable?
-
-    payments = amortization_schedule.payments
-    return nil if payments.empty?
+    schedule = amortization_schedule
+    return nil if schedule.nil?
 
     if payment_number.nil?
       # A finished loan is on no instalment; the clamp below would otherwise
@@ -448,27 +440,25 @@ class Loan < ApplicationRecord
       # same holds once a schedule that rounding cleared early has run out,
       # though the term has not.
       elapsed = months_elapsed(as_of: as_of)
-      return nil if elapsed >= term_months || elapsed >= payments.size
+      return nil if elapsed >= term_months || elapsed >= schedule.payments.size
 
       payment_number = elapsed + 1
     end
 
-    payment = payments[payment_number.clamp(1, payments.size) - 1]
+    payment = schedule.payments[payment_number.clamp(1, schedule.payments.size) - 1]
     return nil if payment.nil?
 
-    principal = Money.new(payment[:principal_payment], account.currency)
-    interest = Money.new(payment[:interest_payment], account.currency)
-    premium = insurance&.premium_for(payment[:payment_number])&.amount || Money.new(0, account.currency)
-    total = principal + interest + premium
+    premium = insurance&.premium_for(payment.number)&.amount || Money.new(0, account.currency)
+    total = payment.principal + payment.interest + premium
 
     {
-      number: payment[:payment_number],
-      date: payment[:payment_date],
-      principal: principal,
-      interest: interest,
+      number: payment.number,
+      date: payment.date,
+      principal: payment.principal,
+      interest: payment.interest,
       insurance: premium,
       total: total,
-      ratios: payment_ratios(principal, interest, premium, total)
+      ratios: payment_ratios(payment, premium, total)
     }
   end
 
@@ -529,30 +519,25 @@ class Loan < ApplicationRecord
     @account_opening_anchor_date ||= account.opening_anchor_date
   end
 
-  # Recreate the calculator when any Loan or Account input changes. Account
-  # changes do not fire Loan callbacks, so the signature also protects callers
-  # that hold onto a Loan instance across an Account update.
+  # The contracted schedule, or nil when the loan is not amortizable
+  # (upstream's AmortizationSchedule.for). Recreated when any Loan or Account
+  # input changes: Account changes do not fire Loan callbacks, so the
+  # signature also protects callers that hold onto a Loan instance across an
+  # Account update.
   def amortization_schedule
     signature = amortization_schedule_signature
-    if @amortization_schedule.nil? || @amortization_schedule_signature != signature
-      @amortization_schedule = AmortizationSchedule.new(self)
+    if !defined?(@amortization_schedule) || @amortization_schedule_signature != signature
+      @amortization_schedule = AmortizationSchedule.for(self)
       @amortization_schedule_signature = signature
     end
     @amortization_schedule
   end
 
-  # Get or create the actual-balance-based payoff projection calculator.
-  # Recreated when its inputs change -- primarily account.balance, which
-  # (like Account changes generally) does not fire a Loan callback, so a
-  # long-lived Loan instance would otherwise keep returning a projection
-  # computed against a balance that's since moved.
-  def payoff_projection
-    signature = payoff_projection_signature
-    if @payoff_projection.nil? || @payoff_projection_signature != signature
-      @payoff_projection = PayoffProjection.new(self)
-      @payoff_projection_signature = signature
-    end
-    @payoff_projection
+  # Where the loan is heading from the balance on `as_of`. Not memoised:
+  # `as_of` makes each call a different question, and the balance it reads
+  # moves without a Loan callback.
+  def payoff_projection(as_of: Date.current)
+    PayoffProjection.new(self, as_of: as_of)
   end
 
   # A scenario's projection: the same actual-balance projection, with the
@@ -562,8 +547,8 @@ class Loan < ApplicationRecord
   # recompute against the loan's current balance, rate and offset on every
   # view, because a scenario pinned to a stale balance cannot answer the only
   # question it is asked: given where I am now, what if?
-  def payoff_projection_for_scenario(scenario)
-    PayoffProjection.new(self, scenario: scenario)
+  def payoff_projection_for_scenario(scenario, as_of: Date.current)
+    PayoffProjection.new(self, scenario: scenario, as_of: as_of)
   end
 
   # A fresh (unmemoized) projection modeling a hypothetical extra payment on
@@ -586,12 +571,6 @@ class Loan < ApplicationRecord
     ExtraRepaymentComparison.new(self, amount: amount, as_of: as_of)
   end
 
-  # One annual percentage -> monthly decimal rate conversion, so the two
-  # callers of the annuity formula cannot drift apart on it.
-  def self.monthly_rate(annual_percentage)
-    (BigDecimal(annual_percentage.to_s) / BigDecimal("100")) / BigDecimal("12")
-  end
-
   # Whether this loan's rate can move over its life. The one place the answer
   # is defined -- callers must not compare rate_type to a string.
   def variable_rate_type?
@@ -599,11 +578,20 @@ class Loan < ApplicationRecord
   end
 
   # Whether a schedule can be built at all: an account, a positive original
-  # balance, a positive term, an interest rate, and a rate type the calculator
-  # supports. Subtype is NOT consulted -- a line of credit carrying all of those
-  # is amortizable as far as this is concerned.
+  # balance, a positive term the simulator will walk, an interest rate, and a
+  # rate type the calculator supports (AMORTIZABLE_RATE_TYPES, the one list
+  # the status rake task also filters on). Subtype is NOT consulted -- a line
+  # of credit carrying all of those is amortizable as far as this is concerned.
+  #
+  # `account` first: original_balance reads through it, and a Loan can exist
+  # without one (Loan.new in a form, a fixture built in isolation).
   def amortizable?
-    amortization_schedule.amortizable?
+    account.present? &&
+      AMORTIZABLE_RATE_TYPES.include?(rate_type) &&
+      interest_rate.present? &&
+      term_months.to_i.positive? &&
+      term_months.to_i <= Loan::Simulator::MAX_PERIODS &&
+      original_balance.amount.positive?
   end
 
   # FR-204: the repayment a lender would quote TODAY.
@@ -624,24 +612,60 @@ class Loan < ApplicationRecord
   # quoted less than the borrower must pay. This reverses #15's "level payment
   # on the current interest-bearing balance".
   #
-  # The rows come from the in-memory simulation, never the persisted rows,
+  # The rows come from the in-memory schedule, never the persisted rows,
   # which may be stale.
   #
-  # The maturity checks come FIRST, before the fixed-rate branch. Past maturity
+  # A payment due ON `as_of` has been made, so the one in force is the next.
+  # That is deliberately not AmortizationSchedule#payment_in_force, which
+  # counts a payment due today as still to come.
+  #
+  # The maturity check comes FIRST, before the fixed-rate branch. Past maturity
   # there are no payments left, so there is no repayment to quote -- and that
   # is true of a fixed loan as much as a variable one (CodeRabbit, #79). A
-  # fixed loan quotes `amortization_schedule.monthly_payment` for every day of
-  # its term.
+  # fixed loan quotes its level repayment for every day of its term.
   def current_minimum_payment(as_of: Date.current)
-    return nil unless amortizable?
+    schedule = amortization_schedule
+    return nil if schedule.nil?
 
-    remaining = amortization_schedule.remaining_payment_count(as_of: as_of)
-    return nil unless remaining.positive?
+    in_force = schedule.payments.find { |payment| payment.date > as_of }
+    return nil if in_force.nil?
 
-    return amortization_schedule.monthly_payment unless variable_rate_type?
+    return schedule.periodic_payment unless variable_rate_type?
 
-    payment = amortization_schedule.payment_in_force(as_of: as_of)
-    payment if payment&.positive?
+    in_force.payment if in_force.payment.positive?
+  end
+
+  # FR-205: which scheduled payments close an accrual period carrying a new
+  # rate, keyed by payment number and valued by the rate that period ends on.
+  #
+  # Derived from the recorded changes themselves, NOT by comparing rows'
+  # rates: a change effective ON a payment date sizes that payment but is
+  # charged from the following period (C10), and a change that moves and
+  # reverts inside one period shows up in no row's rate at all, though the
+  # borrower was charged it for part of the period (#189). The first row is
+  # included: its period opens at origination, as the schedule's does.
+  #
+  # `payments` are the schedule's rows (AmortizationSchedule#payments). One
+  # pass over the two date-ordered lists together.
+  def accrual_rate_change_markers(payments)
+    return {} unless variable_rate_type?
+    return {} if payments.empty?
+
+    origin = origination_date
+    changes = variable_rates.select { |date, _| date >= origin && date < payments.last.date }
+    return {} if changes.empty?
+
+    next_change = 0
+    payments.each_with_object({}) do |payment, markers|
+      latest = nil
+
+      while next_change < changes.length && changes[next_change].first < payment.date
+        latest = changes[next_change]
+        next_change += 1
+      end
+
+      markers[payment.number] = latest.last if latest
+    end
   end
 
   # The offset accounts whose balances count against this loan: those in the
@@ -726,11 +750,16 @@ class Loan < ApplicationRecord
     save!
   end
 
-  # The rate schedule in DATE ORDER, for calculation. Parses each key to sort,
-  # so it must only be called on validated data -- `rate_change_rows` is the
-  # form-safe reader that tolerates what the user just typed.
+  # Recorded rate changes as [Date, BigDecimal] pairs, oldest first. The one
+  # place the column is parsed for calculation: RateResolver reads these pairs
+  # rather than the raw JSON, so every reader agrees on what a row means.
+  # Parses each entry, so it must only be called on validated data --
+  # `rate_change_rows` is the form-safe reader that tolerates what the user
+  # just typed.
   def variable_rates
-    (variable_rate_schedule || {}).sort_by { |date, _| Date.iso8601(date.to_s) }
+    (variable_rate_schedule || {})
+      .map { |date, rate| [ Date.iso8601(date.to_s), BigDecimal(rate.to_s) ] }
+      .sort_by(&:first)
   end
 
   # Rows for the form, in a shape the form can render without parsing anything.
@@ -748,27 +777,16 @@ class Loan < ApplicationRecord
       .sort_by { |date, _| [ parseable_date(date) ? 0 : 1, date ] }
   end
 
-  # The rate in force on a date: the latest change at or before it, falling
-  # back to the loan's base rate when none has taken effect yet.
+  # The rate in force on a given date: the latest change effective on or before
+  # it, falling back to the loan's own rate before any change applies. One
+  # implementation of that lookup, RateResolver's, so the Overview tab and the
+  # schedule cannot disagree about which rate a date carries. A fixed loan's
+  # rate is its rate, whatever rows its column retains from a variable past.
   #
-  # `as_of_date` is injectable so a caller can pin one reference date across
+  # `as_of` is injectable so a caller can pin one reference date across
   # several reads rather than letting each take its own `Date.current`.
-  def current_variable_rate(as_of_date = Date.current)
-    # A fixed loan's rate is its rate, whatever is sitting in the column.
-    #
-    # `variable_rate_schedule` is RETAINED when a loan is switched to fixed, so
-    # that switching back does not lose the rows -- which means a fixed loan can
-    # hold a schedule that no longer applies to it. Every caller happened to
-    # guard on rate type externally, so this was unreachable until the Overview
-    # card started calling it; stating it here makes the method honest on its
-    # own terms rather than correct only by the grace of its callers.
-    return interest_rate unless variable_rate_type?
-
-    rate = variable_rates.reverse.find do |date_str, _|
-      Date.iso8601(date_str.to_s) <= as_of_date
-    end&.last
-
-    rate.nil? ? interest_rate : normalized_rate(rate)
+  def current_variable_rate(as_of = Date.current)
+    RateResolver.for(self).accrual_rate_for(as_of)
   end
 
   # What a provider should write when it reports this loan's rate on `as_of`,
@@ -846,11 +864,12 @@ class Loan < ApplicationRecord
   end
 
   # This is derived rather than stored because a persisted "next" date becomes
-  # stale when the current date passes it.
-  def next_rate_change_date
+  # stale when the current date passes it. `as_of` is the caller's "today", so
+  # a response quoting several date-sensitive figures quotes them on one date.
+  def next_rate_change_date(as_of: Date.current)
     return nil unless variable_rate_type?
 
-    variable_rates.map { |date, _| Date.iso8601(date.to_s) }.find { |date| date > Date.current }
+    variable_rates.map(&:first).find { |date| date > as_of }
   end
 
   # Fingerprint every input used by AmortizationSchedule. It lets persisted
@@ -870,7 +889,7 @@ class Loan < ApplicationRecord
     account.reload
 
     components = [
-      AmortizationSchedule::ALGORITHM_VERSION,
+      LoanAmortization::ALGORITHM_VERSION,
       account.id,
       original_balance.amount.to_s,
       account.currency,
@@ -894,6 +913,38 @@ class Loan < ApplicationRecord
     components << day_count_convention unless day_count_convention == LEGACY_DAY_COUNT_CONVENTION
 
     Digest::SHA256.hexdigest(components.to_json)
+  end
+
+  # The contracted schedule's rows in the shape the persisted cache stores and
+  # the API serves (#184 phase 4e): upstream's Payment rows plus the two
+  # figures the cache has always carried beside them. `beginning_balance` is
+  # the balance the period opened on -- the previous row's ending balance, or
+  # the principal -- and `interest_rate` the annual rate in force when the
+  # period opened, which is the rate Loan::Simulator records on its row: a
+  # change part-way through a period shows on the row after it.
+  def amortization_rows
+    schedule = amortization_schedule
+    return [] if schedule.nil?
+
+    resolver = RateResolver.for(self)
+    opening_balance = schedule.principal
+    period_start = schedule.start_date
+
+    schedule.payments.map do |payment|
+      row = {
+        payment_number: payment.number,
+        payment_date: payment.date,
+        payment_amount: payment.payment.amount,
+        principal_payment: payment.principal.amount,
+        interest_payment: payment.interest.amount,
+        beginning_balance: opening_balance,
+        ending_balance: payment.ending_balance.amount,
+        interest_rate: BigDecimal(resolver.accrual_rate_for(period_start).to_s)
+      }
+      opening_balance = payment.ending_balance.amount
+      period_start = payment.date
+      row
+    end
   end
 
   # Rebuild the persisted amortization schedule under a loan lock so readers
@@ -966,9 +1017,9 @@ class Loan < ApplicationRecord
     def schedule_current_for_signature?(signature)
       return !amortizations.exists? unless amortizable?
 
-      schedule = amortization_schedule
+      row_count = amortization_schedule.payments.length
       matching_rows = amortizations.where(schedule_signature: signature).count
-      matching_rows == schedule.payment_count && amortizations.count == schedule.payment_count
+      matching_rows == row_count && amortizations.count == row_count
     end
 
     # Rewrites the persisted schedule inside the caller's row lock. Deletes the
@@ -983,26 +1034,17 @@ class Loan < ApplicationRecord
         return
       end
 
-      schedule = amortization_schedule
       signature = amortization_schedule_signature
       now = Time.current
-      rows = schedule.payments.map do |payment_data|
-        {
+      rows = amortization_rows.map do |row|
+        row.merge(
           loan_id: id,
-          payment_number: payment_data[:payment_number],
-          payment_date: payment_data[:payment_date],
-          payment_amount: payment_data[:payment_amount],
-          principal_payment: payment_data[:principal_payment],
-          interest_payment: payment_data[:interest_payment],
-          beginning_balance: payment_data[:beginning_balance],
-          ending_balance: payment_data[:ending_balance],
-          interest_rate: payment_data[:interest_rate],
           schedule_signature: signature,
-          algorithm_version: AmortizationSchedule::ALGORITHM_VERSION,
+          algorithm_version: LoanAmortization::ALGORITHM_VERSION,
           generated_at: now,
           created_at: now,
           updated_at: now
-        }
+        )
       end
 
       transaction do
@@ -1162,14 +1204,14 @@ class Loan < ApplicationRecord
     end
 
     # The share of one instalment each part takes, for a progress bar.
-    def payment_ratios(principal, interest, premium, total)
+    def payment_ratios(payment, premium, total)
       return { principal: 0.0, interest: 0.0, insurance: 0.0 } unless total.amount.positive?
 
       whole = total.amount.to_f
 
       {
-        principal: principal.amount.to_f / whole,
-        interest: interest.amount.to_f / whole,
+        principal: payment.principal.amount.to_f / whole,
+        interest: payment.interest.amount.to_f / whole,
         insurance: premium.amount.to_f / whole
       }
     end
@@ -1187,26 +1229,6 @@ class Loan < ApplicationRecord
     # bypasses the association and would otherwise leave it holding stale rows.
     def reset_amortizations_association!
       association(:amortizations).reset
-    end
-
-    # PayoffProjection's only input beyond AmortizationSchedule's own
-    # (already covered by amortization_schedule_signature) is the account's
-    # current balance -- combine them so the projection is recreated
-    # whenever either changes.
-    def payoff_projection_signature
-      "#{amortization_schedule_signature}:#{account&.balance}:#{offset_account_signature}"
-    end
-
-    # Offset BALANCES, not just which accounts are linked: an offset changes the
-    # interest charged, so a projection must be recreated when one moves even
-    # though nothing about the loan or its links has changed. Currencies too:
-    # they decide which offsets count (`countable_offset_accounts`), so a
-    # stranded link must rebuild the projection even while it survives (#328).
-    def offset_account_signature
-      LoanOffsetAccount.joins(:account)
-        .where(loan_id: id)
-        .order(:account_id)
-        .pluck(:account_id, "accounts.balance", "accounts.currency")
     end
 
     # Guards the jsonb column's shape at the model layer -- dates parseable,

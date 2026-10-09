@@ -1,8 +1,8 @@
 require "application_system_test_case"
 
-# Ported from upstream (we-promise/sure#3474, #4006) and adapted to the fork's
-# loan engine and its fourth series, the Extra repayments tab's extra line
-# (#390).
+# Upstream's (we-promise/sure#3474, #4006), on upstream's engine since #184's
+# core swap, plus the fork's fourth series, the Extra repayments tab's extra
+# line (#390).
 #
 # The one thing the Ruby and controller-level tests cannot say.
 #
@@ -170,10 +170,10 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
       # The split at the currency's precision (cents for USD), so a small
       # component never shows as zero; the balance stays in whole units.
       money = ->(value, digits) { page.evaluate_script("new Intl.NumberFormat('en', { style: 'currency', currency: 'USD', minimumFractionDigits: #{digits}, maximumFractionDigits: #{digits} }).format(#{value})") }
-      expected = "#{principal_label}: #{money.(first_payment[:principal_payment].to_f, 2)} · " \
-                 "#{I18n.t('loans.tabs.schedule.interest')}: #{money.(first_payment[:interest_payment].to_f, 2)}"
+      expected = "#{principal_label}: #{money.(first_payment.principal.amount.to_f, 2)} · " \
+                 "#{I18n.t('loans.tabs.schedule.interest')}: #{money.(first_payment.interest.amount.to_f, 2)}"
       assert_includes tooltip.text(:all), expected
-      assert_includes tooltip.text(:all), money.(first_payment[:ending_balance].to_f, 0)
+      assert_includes tooltip.text(:all), money.(first_payment.ending_balance.amount.to_f, 0)
     end
   end
 
@@ -336,14 +336,14 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
     # different test.
     def on_contract_loan_account
       account = loan_account
-      rows = account.loan.amortization_schedule.payments.select { |p| p[:payment_date] <= TODAY }
-      account.update!(balance: rows.last[:ending_balance])
+      rows = account.loan.amortization_schedule.payments.select { |p| p.date <= TODAY }
+      account.update!(balance: rows.last.ending_balance.amount)
       account.balances.delete_all
       account.balances.create!(date: Date.new(2026, 1, 1), balance: 500_000, currency: "USD",
                                start_cash_balance: 500_000, flows_factor: -1)
       rows.each do |row|
-        account.balances.create!(date: row[:payment_date], balance: row[:ending_balance], currency: "USD",
-                                 start_cash_balance: row[:ending_balance], flows_factor: -1)
+        account.balances.create!(date: row.date, balance: row.ending_balance.amount, currency: "USD",
+                                 start_cash_balance: row.ending_balance.amount, flows_factor: -1)
       end
       account.reload
     end

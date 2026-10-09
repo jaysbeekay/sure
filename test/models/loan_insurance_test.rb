@@ -75,9 +75,7 @@ class LoanInsuranceTest < ActiveSupport::TestCase
     schedule = loan.amortization_schedule
 
     assert_operator schedule.total_interest.amount, :>, 0, "or this proves nothing about interest"
-    # The fork's schedule calls its principal-plus-interest figure `total_cost`
-    # (upstream: `total_paid`); it is what the Schedule tab's card prints.
-    assert_equal schedule.total_cost, loan.total_cost, "no premium: the Schedule tab's figure exactly"
+    assert_equal schedule.total_paid, loan.total_cost, "no premium: the Schedule tab's figure exactly"
 
     uninsured = loan.total_cost
     loan.insurance_rate = 1.2
@@ -88,12 +86,11 @@ class LoanInsuranceTest < ActiveSupport::TestCase
   end
 
   # The fork validates a positive term, so "nothing to amortise" is a loan with
-  # no term recorded rather than upstream's zero-month one, and its schedule
-  # is an object that says it is not amortisable rather than nil.
+  # no term recorded rather than upstream's zero-month one.
   test "a loan with nothing to amortise has no cost to report" do
     loan = build_loan(insurance_rate: 1.2, insurance_rate_type: "level_term", term: nil)
 
-    assert_not loan.amortizable?, "precondition: no schedule to charge against"
+    assert_nil loan.amortization_schedule
     assert_nil loan.insurance
     assert_nil loan.total_cost, "nil rather than a cost with no interest in it"
   end

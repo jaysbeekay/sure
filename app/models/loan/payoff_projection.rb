@@ -1,676 +1,195 @@
 class Loan
-  # Projects a loan's payoff from its *current actual balance* rather than
-  # its original contracted balance -- so a user who has made extra
-  # principal payments sees a sooner payoff date and the interest they
-  # saved, instead of the static original-terms schedule from
-  # AmortizationSchedule.
+  # Where the loan is actually heading, starting from today's real balance
+  # rather than from the contract.
   #
-  # Deliberately keeps the ORIGINAL schedule's monthly payment amount fixed
-  # and simulates forward from today's balance, rather than re-amortizing
-  # the remaining term at the current balance. Re-amortizing would *lower*
-  # the payment to fit the remaining term; what we want is "same payment,
-  # paid off sooner" -- the real-world effect of an extra/lump-sum payment.
+  # The contracted schedule answers "what did you agree to?". This answers "what
+  # is going to happen?", and the gap between them is the whole point: a
+  # borrower who has overpaid is ahead of the schedule, one whose balance has
+  # grown is behind, and neither is visible from the contract alone.
   #
-  # Not persisted: computed live from loan.account.balance on every call, so
-  # it's automatically current after every sync or manual balance update.
+  # It pays the repayment the CONTRACT requires in each period -- the
+  # schedule's own row, re-amortised wherever the schedule re-amortises --
+  # against a balance that is no longer the contracted one. That is deliberate:
+  # re-sizing the repayment to today's balance would answer a different and much
+  # less useful question, and would land every borrower who is ahead back on
+  # the original maturity. Paying what the contract asks against a smaller
+  # balance is how they finish sooner.
   #
-  # Caveat: treats account.balance as principal-only (same assumption
-  # AmortizationSchedule makes about original_balance). A provider-synced
-  # balance that includes escrow will understate interest/time saved.
+  # Extra payments the borrower has already made are in here without being
+  # named: they are why today's balance is what it is.
+  #
+  # Fork (#184, direction C): the lines marked "Fork" are the seams for
+  # Loan::PayoffProjection::ForkAdapters -- daily interest and offsets, the
+  # window past maturity (#401), the what-if extra (#304) and scenarios.
   class PayoffProjection
-    MAX_ITERATIONS_MULTIPLIER = 2
-    PAYMENT_STRATEGIES = %i[scheduled hold reamortize].freeze
-    EXTRA_PAYMENT_FREQUENCIES = %w[weekly monthly yearly].freeze
+    include ForkAdapters
 
-    attr_reader :loan, :extra_payment, :as_of
+    attr_reader :loan, :as_of
 
-    # extra_payment: an optional hypothetical monthly-equivalent Money
-    # amount added on top of the original schedule's payment -- used to
-    # model "what if I also paid an extra $X/week|month|year" without
-    # touching the account's real balance or the persisted schedule. See
-    # .monthly_equivalent for how a user-entered amount + cadence becomes
-    # this value.
-    # `repayment_plan:` carries a scenario's extra repayments (#16). It is a
-    # separate input from `extra_payment:` on purpose, and they answer
-    # different questions:
-    #
-    #   extra_payment   -- "what if I paid $X MORE every month", modelled by
-    #                      raising the recurring repayment amount;
-    #   repayment_plan  -- dated lump sums and cadences that reduce the balance
-    #                      on their own effective dates (C6), leaving the
-    #                      contracted repayment where it is.
-    #
-    # Collapsing the second into a monthly equivalent of the first is exactly
-    # what C6 forbids: it would charge interest the borrower did not owe
-    # between the real repayment date and the notional month end.
-    # payment_strategy: how the repayment behaves when the rate changes.
-    #
-    #   :scheduled  (default) -- each period pays the contracted schedule's
-    #               repayment for that date, so a recorded rate change resizes
-    #               the projected repayment exactly where the schedule resizes
-    #               its own, and the loan clears sooner or later against the
-    #               ACTUAL balance (#100, decision 1). A variable loan ahead of
-    #               schedule therefore clears early rather than shrinking its
-    #               repayment back onto the original maturity. On a fixed loan
-    #               every row carries the contracted repayment, so this is
-    #               byte-identical to :hold.
-    #   :hold       -- the contracted FIRST repayment, carried across every
-    #               period. Was the default; on a variable loan it ignores every
-    #               rate change since origination.
-    #   :reamortize -- the repayment is re-sized at each rate change to clear
-    #               the loan by its original maturity, which is what a lender
-    #               actually does. `UI::Loan::RateChangeTable` needs this: it
-    #               quotes the re-amortised repayment, so its balance
-    #               trajectory has to be the one that repayment produces.
-    #
-    # Under :hold a large enough future rate rise makes the projection never
-    # converge -- the held repayment no longer covers the interest -- so
-    # `applicable?` goes false and the table renders NOTHING, exactly when a
-    # borrower most needs to see what their repayment becomes (CodeRabbit, #79).
-    # `as_of` is the projection's "today": where the simulation starts, which
-    # contracted rows still count as remaining, and the date the starting
-    # balance is anchored to. Injectable so a caller rendering several
-    # date-sensitive figures together can pin one date across all of them --
-    # without it a render crossing midnight can classify a rate change against
-    # one date while pricing it from a projection anchored to the next
-    # (CodeRabbit, #89). Defaults to today so every existing caller is
-    # unaffected.
-    def initialize(loan, extra_payment: nil, scenario: nil, payment_strategy: :scheduled, as_of: Date.current)
+    def initialize(loan, as_of: Date.current, extra_payment: nil, scenario: nil)
       @loan = loan
-      @extra_payment = extra_payment
-      @scenario = scenario
       @as_of = as_of
-      # `.to_s` first: `nil.to_sym` and `1.to_sym` raise NoMethodError, which
-      # would bypass the ArgumentError contract documented right below for
-      # exactly the sloppy inputs it exists to catch (CodeRabbit, #79).
-      @payment_strategy = payment_strategy.to_s.to_sym
-      # Validated HERE, not left to Simulator. Simulator does reject an unknown
-      # strategy, but only when the schedule is first generated -- and until
-      # then every branch in this class reads `== :hold` or `== :reamortize`, so
-      # a typo like :reamortised silently selects a hybrid that is neither:
-      # re-amortised repayments over the doubled :hold window, with no
-      # settlement. Failing at construction is both earlier and clearer
-      # (CodeRabbit, #79).
-      unless PAYMENT_STRATEGIES.include?(@payment_strategy)
-        raise ArgumentError, "unsupported payment strategy: #{payment_strategy.inspect}"
-      end
-      # No rebuild is enqueued here. The version of this on #4 did so from the
-      # constructor, which makes merely instantiating a projection a
-      # side-effecting act. Since #39 the read paths own that: the Schedule tab
-      # and Api::V1::LoansController both enqueue LoanAmortizationRebuildJob
-      # when the persisted rows are not current.
+      @extra_payment = extra_payment # Fork
+      @scenario = scenario # Fork
     end
 
-    # Converts a user-entered amount + cadence into the monthly-equivalent
-    # Money this class models payments in. This is an approximation --
-    # weekly extra payments really do compound faster than a monthly lump
-    # sum, because they reduce principal between the monthly accrual points
-    # this simulation (and the rest of the amortization feature) uses -- but
-    # no part of this codebase models daily/weekly accrual, so a monthly
-    # equivalent is consistent with the existing granularity rather than a
-    # new gap. Returns nil for a blank/zero/invalid amount; raises on an
-    # unrecognized frequency (callers are expected to validate frequency at
-    # the request boundary, not rely on this method to sanitize it).
-    def self.monthly_equivalent(amount:, frequency:, currency:)
-      unless EXTRA_PAYMENT_FREQUENCIES.include?(frequency.to_s)
-        raise ArgumentError, "unsupported frequency: #{frequency.inspect}"
-      end
-
-      return nil if amount.blank?
-
-      parsed = begin
-        BigDecimal(amount.to_s)
-      rescue ArgumentError, TypeError
-        nil
-      end
-      # finite? first: BigDecimal("NaN") and BigDecimal("Infinity") both survive
-      # `parsed <= 0` -- NaN because every comparison against it is false, and
-      # Infinity because it is genuinely positive. Money.new accepts either, so
-      # a non-finite extra payment would reach Loan::Simulator and poison the
-      # projection. The controller already rejects these at the request
-      # boundary; this is the same check where the value is actually converted,
-      # for callers that do not come through it.
-      return nil if parsed.nil? || !parsed.finite? || parsed <= 0
-
-      monthly_amount = case frequency.to_s
-      when "weekly" then parsed * 52 / 12
-      when "yearly" then parsed / 12
-      else parsed
-      end
-
-      Money.new(monthly_amount, currency)
-    end
-
-    # Coarser eligibility than #applicable? -- true whenever a hypothetical
-    # extra payment *could* make this loan's projection applicable, even if
-    # the baseline (no-extra) payment currently doesn't cover interest or
-    # converge. Used to decide whether to show the what-if input at all: a
-    # loan whose current payment barely covers interest is exactly the case
-    # where a user most wants to model paying more, so the input shouldn't
-    # be hidden based on the unboosted result.
-    # Deliberately does NOT require fixed_rate?.
+    # False when there is nothing to project: no schedule, nothing left to owe,
+    # no payments remaining, or no repayment to hold.
     #
-    # It used to, which made this disagree with #applicable? after #12 removed
-    # the same gate there: a variable-rate loan would show a projection and a
-    # payoff chart but no way to model paying extra -- and a variable-rate
-    # borrower is arguably the one who most wants to, because their contracted
-    # payment moves under them (#54).
+    # `&&` binds tighter than `||`, so the trailing `|| false` applies to the
+    # whole chain. It turns the nil that `contracted_payment&.positive?` gives for
+    # a missing payment into false, so callers always get a boolean.
     #
-    # The what-if holds the payment flat while simulating forward. For a
-    # variable loan that compounds two hypotheticals, so the UI discloses the
-    # assumption rather than the control being withheld.
-    def self.eligible_for_extra_payment?(loan)
-      loan.amortization_schedule.amortizable? &&
-        loan.account.present? &&
-        loan.account.balance.present? &&
-        loan.account.balance.positive?
-    end
-
-    # The account's currency, memoized. Every Money an INSTANCE returns is built
-    # with it, so a projection cannot mix currencies with its own loan.
-    #
-    # The class method `monthly_equivalent` is outside that invariant: it has no
-    # loan to read and builds Money in the currency its caller supplies.
-    def currency
-      @currency ||= loan.account.currency
-    end
-
-    # Loans with a real payment amount and a positive
-    # current balance are eligible -- and only when there's actually
-    # something to project (the original schedule must be amortizable) AND
-    # the simulation actually converges to zero within the iteration cap
-    # (see #converged? -- a payment that technically covers interest but
-    # would take an implausibly long time is treated as not applicable
-    # rather than silently reporting a truncated, non-payoff "payoff date").
+    # Fork: the dates are the projection's own, which run past maturity
+    # (#401), so a matured loan still owing is projected rather than dropped.
     def applicable?
-      # Checked first, and deliberately before anything that builds the
-      # simulation: with no horizon there is no schedule to build.
-      return false if reamortize_without_horizon?
-
-      loan.amortization_schedule.amortizable? &&
-        original_schedule_rows.any? &&
-        monthly_payment.present? && monthly_payment.amount.positive? &&
+      schedule.present? &&
         current_balance.amount.positive? &&
-        # Only :hold can be defeated by an insufficient repayment, because only
-        # :hold is stuck with the contracted one. :reamortize computes a
-        # repayment that covers the interest by construction, so asking whether
-        # the CONTRACTED payment covers it is asking about a number this
-        # projection never uses -- and answering "no" blanked the rate-change
-        # table for a loan whose rate has already risen, which is the loan most
-        # in need of it (CodeRabbit, #79).
-        (@payment_strategy == :reamortize || extra_repayments_may_cover_shortfall? || !unamortizable_payment?) &&
-        converged?
+        projected_payment_dates.any? &&
+        contracted_payment&.positive? || false
     end
 
-    # Today's ACTUAL balance, which is what separates this class from the
-    # contracted schedule. Read live on every call, so the projection is current
-    # after a sync or a manual balance edit without any cache to invalidate.
+    def currency
+      loan.account.currency
+    end
+
+    # `accounts.balance` is nullable, and Money.new(nil) raises. A loan with no
+    # balance yet has nothing to project, so it reads as zero: applicable? is
+    # then false and the Schedule tab's card says so instead of the page failing.
     def current_balance
-      Money.new(loan.account.balance, currency)
+      @current_balance ||= Money.new(loan.account.balance || 0, currency)
     end
 
-    # The repayment this projection models in its first period -- the
-    # contract's repayment then (under :hold, its first repayment ever), plus
-    # the hypothetical extra when one is present. Under :scheduled a later
-    # recorded rate change moves it in later periods; see #scheduled_payment_on.
-    def monthly_payment
-      base = if @payment_strategy == :scheduled
-        Money.new(scheduled_payment_on(first_projected_payment_date), currency)
-      else
-        loan.amortization_schedule.monthly_payment
-      end
-      return base if base.nil? || extra_payment.blank? || extra_payment.amount.zero?
-      base + extra_payment
-    end
-
-    # The simulated forward schedule from today until the balance is paid off.
     def payments
-      return [] unless applicable?
-      raw_schedule
+      simulation&.payments || []
     end
 
-    # How many payments remain under this projection. Zero when the projection
-    # is not applicable, which callers read as "nothing to show".
-    def payment_count
-      payments.length
-    end
-
-    # Reports whether the raw simulation reaches an exact zero balance within
-    # its bounded horizon, independently of whether the result is displayable.
-    def converged?
-      schedule = raw_schedule
-      schedule.present? && schedule.last[:ending_balance].zero?
-    end
-
-    # When the loan clears under this projection. Under :hold this is the
-    # answer being DISCOVERED -- extra payments move it earlier, an
-    # under-serviced loan later. Under :reamortize it is fixed at the original
-    # maturity by construction.
     def payoff_date
-      return nil if payments.empty?
-      payments.last[:payment_date]
+      simulation&.payoff_date
     end
 
-    # Interest still to be paid from today onward -- not over the loan's whole
-    # life. Compared against `original_remaining_interest` to show what a
-    # scenario or extra payment saves.
     def total_interest
-      return Money.new(0, currency) if payments.empty?
-      Money.new(payments.sum { |p| p[:interest_payment] }, currency)
+      Money.new(simulation&.total_interest || 0, currency)
     end
 
-    # How many fewer payments this projection takes versus the original
-    # schedule's remaining payments as of today. Positive means ahead of
-    # schedule (paid off sooner); negative means behind.
+    # False when the contracted repayment does not clear the balance by the
+    # original maturity -- the borrower is far enough behind that the contract
+    # no longer pays the loan off. There is no payoff date in that case.
+    def converged?
+      simulation ? simulation.converged? : false
+    end
+
+    def balloon_amount
+      Money.new(simulation&.balloon_amount || 0, currency)
+    end
+
+    # Positive means the loan finishes earlier than the contract said. Zero for
+    # a run that never clears the balance. Fork: that run walks the window
+    # past maturity (#401), not just the remaining dates, so it needs the
+    # convergence guard upstream's does not.
     def months_saved
-      return nil unless applicable?
-      original_remaining_payment_count - payment_count
+      return 0 unless converged?
+
+      remaining_payment_dates.length - payments.length
     end
 
-    # Whether this projection differs from the contracted schedule by enough
-    # to be worth showing the user.
-    #
-    # The two simulations terminate independently. The contracted schedule
-    # knows its final period in advance and resizes that payment to clear the
-    # balance exactly (C14); this projection keeps paying the level payment
-    # and only adjusts once a payment would overshoot. So a loan sitting
-    # exactly on its contract can still trail by one small "cleanup" payment
-    # -- a real artefact of two independently-terminated runs, not a real
-    # divergence, and one this class has always tolerated.
-    #
-    # That artefact used to be bounded by a hardcoded $1, which fitted the
-    # monthly-accrual residue and nothing else: under daily accrual the same
-    # untouched loan trails by $1.10 and every chart would have claimed the
-    # borrower was behind schedule. The bound here is the artefact itself --
-    # the trailing payment's own interest -- so it holds for any accrual
-    # model rather than for the one it was measured against.
-    def diverges_from_schedule?
-      return false unless applicable?
-      return true if months_saved.abs > 1
-      return false if cleanup_payment_artefact?
-
-      interest_saved.abs >= 1
-    end
-
-    # True when the whole interest difference is accounted for by a single
-    # trailing cleanup payment, i.e. the projection ran exactly one payment
-    # longer and paid no more interest than that payment itself charged.
-    def cleanup_payment_artefact?
-      return false unless months_saved == -1
-
-      interest_saved.abs <= payments.last[:interest_payment]
-    end
-
-    # How much less interest this projection pays versus the original
-    # schedule's remaining interest as of today. Positive means savings;
-    # negative means more interest will be paid (behind schedule).
-    # Both sides of the comparison come from the same accrual model as the
-    # persisted schedule (see `generate_schedule`), so this figure is a
-    # like-for-like difference rather than an artefact of two calculations.
+    # Positive means less interest than the contract's remaining interest.
+    # Fork: guarded on convergence, as #months_saved is.
     def interest_saved
-      return nil unless applicable?
-      (original_remaining_interest - total_interest.amount)
-    end
+      return Money.new(0, currency) unless converged?
 
-    # How much less interest this projection pays than `baseline` -- the
-    # Extra repayments tab's question, "what does paying extra save me?",
-    # rather than #interest_saved's "where am I against the contract?". On a
-    # loan already ahead of schedule the two differ by whatever was paid ahead,
-    # which is exactly what this comparison must not count (#304). nil when
-    # either side cannot be projected.
-    def interest_saved_versus(baseline)
-      return nil unless applicable? && baseline.applicable?
-      baseline.total_interest.amount - total_interest.amount
-    end
-
-    # How many fewer payments this projection takes than `baseline`. The
-    # #months_saved sibling measures against the contract; see
-    # #interest_saved_versus for why the tab needs this one instead.
-    def months_sooner_than(baseline)
-      return nil unless applicable? && baseline.applicable?
-      baseline.payment_count - payment_count
+      Money.new(remaining_contracted_interest - (simulation&.total_interest || 0), currency)
     end
 
     private
+      def schedule
+        @schedule ||= loan.amortization_schedule
+      end
 
-      # True when the MODELLED repayment is no greater than the first period's
-      # estimated interest, so the balance would never fall. `<=` rather than
-      # `<`: a repayment exactly equal to the interest leaves the balance flat,
-      # which never amortises either.
+      # The contract's rows still ahead, in order. The projection walks exactly
+      # these dates, so position `index` in its run is position `index` here.
+      def remaining_scheduled_payments
+        @remaining_scheduled_payments ||= (schedule&.payments || [])
+          .select { |payment| payment.date > as_of }
+      end
+
+      # The payment dates still ahead. A projection runs to the ORIGINAL
+      # maturity and no further: extending it would invent a term the borrower
+      # never agreed to.
+      def remaining_payment_dates
+        @remaining_payment_dates ||= remaining_scheduled_payments.map(&:date)
+      end
+
+      # The repayment in force: the next scheduled payment's amount. For a
+      # re-amortising loan that is the figure the current rate produced, which
+      # is what the borrower is actually paying. Fork: read for the first
+      # projected date, so past maturity it is the last level repayment.
+      def contracted_payment
+        @contracted_payment ||= projected_payment_dates.first && level_payment_on(projected_payment_dates.first)
+      end
+
+      # What the contract asks for in the projection's period `index`: the
+      # schedule's row for the same date. The two walks share their dates, so a
+      # recorded rate change re-sizes this exactly where the schedule re-sizes
+      # its own repayment. Fork: past the last row the last LEVEL repayment
+      # holds (#401), and the what-if extra and a scenario's repayments in the
+      # period ride on top.
+      def scheduled_payment_for(index:, **)
+        level_payment_on(projected_payment_dates[index]) + extra_amount + scenario_repayments_in(index)
+      end
+
+      def remaining_contracted_interest
+        remaining_scheduled_payments.sum(BigDecimal("0")) { |payment| payment.interest.amount }
+      end
+
+      # The date the period containing `as_of` opened: the last scheduled
+      # payment on or before it, or origination before the first. The simulator
+      # charges a period at the rate in force when it OPENED, so the projection's
+      # first period opens where the schedule's does. Opened at `as_of`, a rate
+      # change recorded between the last payment and today re-rated a month the
+      # schedule charges at the old rate, and a borrower exactly on contract was
+      # quoted interest they will never pay.
       #
-      # "Modelled" includes a recurring `extra_payment` when one is set, but not
-      # a scenario's DATED repayments, and not a re-amortised repayment --
-      # which is why both of those bypass this in `applicable?` and defer to
-      # `converged?`, the only check that runs the full simulation.
-      def unamortizable_payment?
-        rate = Loan::RateResolver.for(loan).accrual_rate_for(first_projected_payment_date)
-        monthly_rate = (BigDecimal(rate.to_s) / BigDecimal("100")) / BigDecimal("12")
-        return false if monthly_rate.zero?
-
-        first_interest = current_balance.amount * monthly_rate
-        monthly_payment.amount <= first_interest
+      # Fork: read off the contract's calendar rather than its rows, which is
+      # the same date until maturity and keeps going past it (#401).
+      def current_period_start
+        schedule.start_date >> (first_calendar_index - 1)
       end
 
-      # The contracted schedule this projection is compared against.
-      #
-      # Read through AmortizationSchedule#display_rows rather than
-      # loan.amortizations directly, so the projection uses the same rows the
-      # table and the summary cards show. The persisted rows are used when they
-      # are current; when they are stale the schedule recomputes them in memory.
-      #
-      # This used to read loan.amortizations and required rows to exist, which
-      # silently disabled the projection whenever the persisted schedule was
-      # missing -- previously masked because the Schedule tab rebuilt it inside
-      # the request. It no longer does (#39), so a display calculation must not
-      # depend on a write having happened.
-      def original_schedule_rows
-        @original_schedule_rows ||= loan.amortization_schedule.display_rows
-      end
+      def simulation
+        return nil unless applicable?
 
-      # Nil rather than an empty lambda when there is no scenario, so the
-      # simulator keeps its own default and a baseline projection is
-      # byte-identical to what it was before scenarios existed.
-      #
-      # `closes_on` is the projection's own last payment date: the plan's
-      # windows are half-open to avoid double-applying a repayment that lands on
-      # a payment date, which leaves the final date in no window at all unless
-      # the last one is told to close inclusively.
-      def extra_repayment_resolver
-        return nil if @scenario.nil?
-
-        Loan::RepaymentPlan.for(@scenario, closes_on: projected_payment_dates.last)
-          .method(:change_points)
-      end
-
-      # The contract's repayment for the period ending on `date` (#100,
-      # decision 1). The projection steps its dates the way the schedule does,
-      # so each projected date is a schedule row's date until maturity.
-      #
-      # The schedule's LAST row is not a repayment the contract asks of a loan
-      # in any other position: it settles the schedule's own rounding and
-      # drift to exactly zero. So that row, and every period past maturity --
-      # where a loan behind schedule still owes -- pays the last LEVEL
-      # repayment, the one before it. A fixed loan's level repayment is its
-      # contracted one throughout, so it projects exactly as :hold did.
-      def scheduled_payment_on(date)
-        rows = original_schedule_rows
-        return BigDecimal("0") if rows.empty?
-
-        level_rows = rows.length > 1 ? rows[0..-2] : rows
-        @level_rows_by_date ||= level_rows.index_by(&:payment_date)
-        row = @level_rows_by_date[date] ||
-          level_rows.reverse_each.find { |candidate| candidate.payment_date <= date } ||
-          level_rows.first
-        BigDecimal(row.payment_amount.to_s)
-      end
-
-      # The contracted schedule's rows still ahead of today. The baseline this
-      # projection is compared against, for months and interest saved.
-      def original_remaining_payments
-        @original_remaining_payments ||= original_schedule_rows.select do |row|
-          row.payment_date > as_of
-        end
-      end
-
-      # Where the simulation starts paying. Falls back to a month out for a loan
-      # whose contracted rows are all in the past, so a matured loan still gets a
-      # well-formed (if inapplicable) projection rather than a nil date.
-      def first_projected_payment_date
-        original_remaining_payments.first&.payment_date || as_of.next_month
-      end
-
-      # Contracted payments still to come, for the "months saved" comparison.
-      def original_remaining_payment_count
-        original_remaining_payments.count
-      end
-
-      # Interest the borrower would still pay on the CONTRACTED schedule. The
-      # figure `total_interest` is subtracted from to show what was saved.
-      def original_remaining_interest
-        original_remaining_payments.sum(BigDecimal("0")) { |row| row.interest_payment }
-      end
-
-      # The raw simulation, independent of #applicable? (which itself needs
-      # to inspect this to determine convergence -- see #converged?).
-      # Memoized: safe to call repeatedly within one instance's lifetime.
-      def raw_schedule
-        @raw_schedule ||= generate_schedule
-      end
-
-      # Under :hold the repayment is a constant -- today's contracted payment,
-      # carried across every segment. Under :reamortize each rate segment sizes
-      # its own repayment from the ACTUAL balance it opens with, net of offset,
-      # over the payments still remaining: what the repayment would be if the
-      # loan were re-amortised today. That is not the lender's minimum, which is
-      # sized on the scheduled balance (`current_minimum_payment`, #392).
-      def payment_amount_for
-        return ->(**_kwargs) { monthly_payment.amount } if @payment_strategy == :hold
-
-        if @payment_strategy == :scheduled
-          extra = extra_payment.present? ? extra_payment.amount : BigDecimal("0")
-          return ->(payment_number:, **_kwargs) {
-            scheduled_payment_on(projected_payment_dates[payment_number - 1]) + extra
-          }
-        end
-
-        # On a resize the simulator passes the interest the opening period
-        # actually charged, as it does for the schedule (#184).
-        ->(rate:, balance:, remaining_payments:, first_period_interest: nil, **_kwargs) {
-          Loan::AmortizationMath.level_payment(
-            balance: interest_bearing(balance),
-            monthly_rate: Loan.monthly_rate(rate),
-            remaining_payments: remaining_payments,
-            currency_precision: currency_precision,
-            first_period_interest: first_period_interest
-          )
-        }
-      end
-
-      # Simulator tracks and hands out the GROSS balance -- an offset reduces the
-      # interest charged, not the principal owed -- but a repayment is quoted on
-      # the interest-bearing balance, so an actual-balance re-amortisation sizes
-      # on net (CodeRabbit, #79). Since #392 neither `current_minimum_payment`
-      # nor `UI::Loan::RateChangeTable` reads this; both are on the schedule.
-      #
-      # Gross is still what gets amortised; only the SIZING basis is net. The
-      # offset is held flat at today's total, which is the assumption the
-      # caption under the table already states.
-      def interest_bearing(balance)
-        [ BigDecimal(balance.to_s) - offset_total, BigDecimal("0") ].max
-      end
-
-      # Today's linked-offset total, summed once per projection and held flat
-      # for its life -- the assumption the rate-change table's caption states.
-      def offset_total
-        @offset_total ||= BigDecimal(loan.countable_offset_accounts.sum(:balance).to_s)
-      end
-
-      # Runs the simulation. Everything above decides WHAT to feed the simulator;
-      # this assembles those inputs and hands them over.
-      def generate_schedule
-        payment_dates = projected_payment_dates
-        rate_resolver = scenario_rate_resolver || Loan::RateResolver.for(loan)
-
-        Loan::Simulator.new(
+        @simulation ||= Simulator.new(
           starting_balance: current_balance.amount,
-          starting_balance_as_of: as_of,
-          accrual_start_date: as_of,
-          payment_schedule: payment_dates,
+          accrual_start_date: current_period_start,
+          payment_schedule: projected_payment_dates, # Fork: past maturity (#401)
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
-          # The ACCRUAL clock's change points, which segment a daily accrual
-          # window (C7/C10). Omitting this defaulted the simulator to "no rate
-          # changes", so a rate effective between two payment dates moved the
-          # persisted schedule's interest but not this projection's -- the same
-          # phantom divergence as running two accrual models, arriving instead
-          # through one model missing half its inputs. It only bites on the
-          # daily branch, which is why it was invisible while the projection
-          # ran daily solely for offset loans.
-          accrual_rate_changes: rate_resolver.method(:accrual_rate_changes),
           re_amortisation_events: rate_resolver.method(:re_amortisation_events),
-          payment_strategy: @payment_strategy,
-          payment_amount_for: payment_amount_for,
+          # The contract's own repayment, period by period. Not :reamortize:
+          # that re-sizes off the balance in front of it, and for a borrower
+          # who is ahead that shrinks the repayment until the loan lands back
+          # on the original maturity -- the opposite of what paying the
+          # contracted amount against a smaller balance actually does. On a
+          # fixed loan every row carries the same figure, so this is the held
+          # contracted payment; on a variable loan it moves exactly where the
+          # schedule's does.
+          payment_amount: method(:scheduled_payment_for),
+          payment_strategy: :scheduled,
           currency_precision: currency_precision,
-          max_iterations: payment_dates.length,
-          # :hold discovers the payoff date, so the last scheduled row must NOT
-          # be forced to clear -- forcing it would manufacture the very date
-          # the projection exists to find. :reamortize fixes the date and moves
-          # the repayment instead, so its last row settles, exactly as the
-          # contracted schedule's does. Without this the loan finishes a few
-          # hundred dollars short on accumulated rounding, `converged?` is
-          # false, and the table renders nothing.
-          settle_at_schedule_end: @payment_strategy == :reamortize,
-          # Follow the persisted schedule's accrual mode. The projection is
-          # compared against that schedule row-for-row (see
-          # `original_remaining_interest` and `months_saved`), so if the two
-          # run different accrual models an untouched loan reads as diverging
-          # from its own contract -- a phantom "ahead of schedule" on every
-          # chart. Offset loans stay on daily regardless, since a daily
-          # offset balance has no monthly equivalent; a zero-balance link is
-          # mathematically the no-offset case and is kept off the offset
-          # branch so linking an empty asset does not change figures merely
-          # by changing the calculation mode.
-          daily_accrual: Loan::AmortizationSchedule::SCHEDULE_DAILY_ACCRUAL ||
-            assumed_offset_balance.present? ||
-            (loan.countable_offset_accounts.any? && loan.countable_offset_accounts.sum(:balance).positive?),
-          day_count_convention: loan.day_count_convention,
-          offset_for: offset_resolver,
-          extra_for: extra_repayment_resolver
-        ).run.payments
+          # A projection that cannot clear the balance must SAY so. Settling the
+          # final payment regardless would manufacture a payoff date for a loan
+          # the contract no longer pays off.
+          settle_at_schedule_end: false,
+          interest_for: interest_calculation # Fork: Loan::DailyInterest
+        ).run
       end
 
-      # `unamortizable_payment?` asks whether the contracted repayment covers the
-      # FIRST period's interest. A scenario's extra repayments are not in that
-      # comparison, so a lump sum large enough to fix the shortfall was rejected
-      # before it could be applied and the scenario returned no payments at all
-      # -- the same shape as the :reamortize case above (CodeRabbit, #83).
-      #
-      # This does not assume the repayments are sufficient; it defers to
-      # `converged?`, which runs the real simulation with them applied. A
-      # scenario that genuinely cannot amortise still comes back inapplicable.
-      def extra_repayments_may_cover_shortfall?
-        extra_repayment_resolver.present?
+      def rate_resolver
+        @rate_resolver ||= scenario_rate_resolver || RateResolver.for(loan) # Fork: a scenario's pinned rate
       end
 
-      # A scenario may pin the rate for the whole projection. Overriding the
-      # rate means there are no rate CHANGES either, so both the change points
-      # and the re-amortisation events go empty -- leaving the real loan's
-      # changes in place would model a rate that both is and is not pinned.
-      def scenario_rate_resolver
-        override = @scenario&.rate_override
-        return nil if override.blank?
-
-        FlatRateResolver.new(override)
-      end
-
-      # Supplies the simulator's offset clock, held flat for the life of the
-      # projection -- the assumption the rate-change table's caption states.
-      #
-      # A scenario's assumed balance REPLACES the linked accounts rather than
-      # adding to them: the question is "what if my offset held $X", not "$X on
-      # top of what I have" (CodeRabbit, #83).
-      def offset_resolver
-        assumed = assumed_offset_balance
-        return Loan::OffsetResolver.new(loan).method(:change_points) if assumed.nil?
-
-        ->(from_date, to_date) {
-          next [] if from_date >= to_date
-          [ { date: from_date, amount: assumed } ]
-        }
-      end
-
-      # The scenario's assumed offset as a BigDecimal, or nil when unset. Blank
-      # normalises to nil so callers can branch on presence alone.
-      def assumed_offset_balance
-        value = @scenario&.assumed_offset_balance
-        value.blank? ? nil : BigDecimal(value.to_s)
-      end
-
-      # Supplies the Simulator's rate interface for a pinned rate.
-      class FlatRateResolver
-        # `rate` is the scenario's `rate_override`, an annual percentage.
-        def initialize(rate)
-          @rate = rate
-        end
-
-
-        # A pinned rate applies on every date, and therefore never changes and
-        # never triggers a re-amortisation. Returning the loan's real change
-        # points here would model a rate that is both overridden and moving.
-        def accrual_rate_for(_date) = @rate
-        # Both empty by construction -- see the note above `accrual_rate_for`.
-        def accrual_rate_changes(_from_date, _to_date) = []
-
-        # A pinned rate never triggers a re-amortisation event.
-        def re_amortisation_events(_from_date, _to_date) = []
-      end
-
-      # Under :hold the window is deliberately longer than the term -- the whole
-      # point is that the payoff date MOVES, and a rate rise can push it past
-      # the original maturity, so the schedule needs headroom to find it.
-      #
-      # Under :reamortize the maturity is FIXED and the repayment is what moves,
-      # so the window is exactly the payments remaining to it. This is not a
-      # tidiness point: the simulator sizes each segment's repayment over
-      # `payment_schedule.length - payment_number + 1`, so leaving the doubled
-      # window in place would amortise over ~720 periods instead of ~277 --
-      # a repayment far too small to cover the interest, and a balance that
-      # climbs instead of falling.
-      def projected_payment_dates
-        return @projected_payment_dates if defined?(@projected_payment_dates)
-
-        first_date = first_projected_payment_date
-        periods = if @payment_strategy == :reamortize
-          remaining_payments_to_original_maturity
-        else
-          MAX_ITERATIONS_MULTIPLIER * loan.term_months
-        end
-        # Unreachable via applicable?, which rejects a horizonless re-amortising
-        # projection above. Guarded anyway so a direct caller gets this message
-        # rather than Simulator's "payment schedule must not be empty".
-        raise ArgumentError, "no payments remain to the original maturity" unless periods.positive?
-
-        # Stepped from the previous date, not offset from the first, because
-        # that is what the contracted schedule does (C5) and the two calendars
-        # have to be the same calendar. `Date#next_month` clamps and never
-        # recovers -- 29 Jan -> 28 Feb -> 28 Mar -- while `>>` recovers the
-        # anchor day, so from the first February onwards the two disagreed on
-        # 334 of a 360-month schedule. Accrual is daily, so every one of those
-        # shifted period boundaries moved interest.
-        date = first_date
-        @projected_payment_dates = Array.new(periods) do |index|
-          index.zero? ? date : (date = date.next_month)
-        end
-      end
-
-      # Payments left to the ORIGINAL maturity, counted from the first date this
-      # projection will pay on: the term a re-amortisation spreads the balance
-      # over, never a fresh one.
-      def remaining_payments_to_original_maturity
-        loan.amortization_schedule.remaining_payment_count(
-          as_of: first_projected_payment_date, including_on_date: true
-        )
-      end
-
-      # A re-amortising projection spreads the balance over the payments left to
-      # the ORIGINAL maturity. Past maturity there are none, so there is nothing
-      # to spread it over and no projection to make.
-      #
-      # This previously fell back to the doubled :hold window, which INVENTED a
-      # horizon: a matured loan still carrying $250,000 came back applicable and
-      # reported a payoff three years after the date it was supposed to end
-      # (CodeRabbit, #79). `:hold` legitimately discovers a date past maturity --
-      # an underpaid loan really does run long -- but :reamortize holds the date
-      # fixed, so for it that answer is fiction.
-      #
-      # `current_minimum_payment` returns nil for exactly this loan too.
-      def reamortize_without_horizon?
-        @payment_strategy == :reamortize && !remaining_payments_to_original_maturity.positive?
-      end
-
-      # Decimal places for this currency, so every rounding in the simulation
-      # lands on a real cent (or its equivalent) rather than a fraction of one.
       def currency_precision
-        Money::Currency.new(currency).default_precision
+        @currency_precision ||= Money::Currency.new(currency).default_precision || 2
       end
   end
 end

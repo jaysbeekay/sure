@@ -1,11 +1,9 @@
 require "test_helper"
 
-# Ported from upstream's test/models/loan/payoff_chart_test.rb (we-promise/sure
-# #3474, #4006) and adapted to the fork's loan engine (#390): origination is
-# `start_date` or the account's opening anchor, the schedule's rows are
-# AmortizationSchedule#display_rows, the projection is
-# Loan::PayoffProjection.new(loan, as_of:), and the chart carries a fourth
-# series, `extra`, from the Extra repayments tab.
+# Upstream's test/models/loan/payoff_chart_test.rb (we-promise/sure #3474,
+# #4006), run against upstream's engine since #184's core swap. The fork adds
+# the fourth series, `extra`, from the Extra repayments tab (#390), and keeps
+# its own origination: `start_date` or the account's opening anchor.
 class Loan::PayoffChartTest < ActiveSupport::TestCase
   setup do
     @family = families(:dylan_family)
@@ -15,10 +13,11 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     @all_time = Period.new(key: "all_time", start_date: Date.new(2020, 1, 1), end_date: @today)
   end
 
-  test "carries the recorded balance, the schedule and the projection" do
+  test "carries the recorded balance, the original schedule and the projection" do
     loan = on_contract_loan
     payload = Loan::PayoffChart.new(loan, as_of: @today).payload
 
+    assert_not payload.key?(:accelerated), "the what-if left this tranche (#100 decision 10)"
     assert payload[:actual].length > 1
     assert payload[:scheduled].length > 1
     assert payload[:projected].length > 1
@@ -32,21 +31,20 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
   test "the scheduled series is the schedule, opening at origination with the full principal" do
     loan = on_contract_loan
     payload = Loan::PayoffChart.new(loan, as_of: @today).payload
-    rows = loan.amortization_schedule.display_rows.index_by { |row| row.payment_date.iso8601 }
+    rows = loan.amortization_schedule.payments.index_by { |row| row.date.iso8601 }
 
     assert_equal origination(loan).iso8601, payload[:scheduled].first[:date]
-    assert_equal loan.original_balance.amount.to_f, payload[:scheduled].first[:balance]
+    assert_equal loan.amortization_schedule.principal.to_f, payload[:scheduled].first[:balance]
     payload[:scheduled].drop(1).each do |point|
-      assert_equal rows.fetch(point[:date]).ending_balance.to_f, point[:balance],
+      assert_equal rows.fetch(point[:date]).ending_balance.amount.to_f, point[:balance],
         "the scheduled point on #{point[:date]} must be the schedule's own row"
     end
     assert_equal rows.size, payload[:scheduled].size - 1
     assert_equal loan.amortization_schedule.payoff_date.iso8601, payload[:scheduled].last[:date]
   end
 
-  # Risk R21, carried over from the payload this replaces: the chart must plot
-  # the schedule the cards and the table read, not persisted rows a rate change
-  # has made stale.
+  # Risk R21: the chart plots the schedule the cards and the table read -- the
+  # in-memory one -- never persisted rows a rate change has made stale.
   test "the scheduled series follows the current schedule when the persisted rows are stale" do
     loan = on_contract_loan
     loan.rebuild_amortization_schedule
@@ -54,14 +52,14 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
 
     loan.update!(interest_rate: loan.interest_rate + 2)
     loan.reload
-    assert_predicate loan.amortization_schedule, :stale?, "the persisted rows must be stale for this to mean anything"
+    assert_not loan.schedule_current?, "the persisted rows must be stale for this to mean anything"
 
     payload = Loan::PayoffChart.new(loan, as_of: @today).payload
-    current = loan.amortization_schedule.display_rows.map { |row| row.ending_balance.to_f }
+    current = loan.amortization_schedule.payments.map { |row| row.ending_balance.amount.to_f }
 
     assert_not_equal persisted, current, "the rate change must move the schedule, or this proves nothing"
     assert_equal current, payload[:scheduled].drop(1).map { |point| point[:balance] }
-    assert_predicate loan.amortization_schedule, :stale?, "drawing the chart must not rebuild the persisted rows"
+    assert_not loan.schedule_current?, "drawing the chart must not rebuild the persisted rows"
   end
 
   test "the projection opens at today's real balance" do
@@ -113,10 +111,10 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     assert_not_includes without[:aria_description], I18n.l(extra.payoff_date, format: :long)
   end
 
-  test "an extra projection that cannot run adds no series" do
+  test "an extra projection that never clears the loan adds no series" do
     loan = on_contract_loan
     extra = loan.payoff_projection_with_extra(amount: "250", as_of: @today)
-    extra.stubs(:applicable?).returns(false)
+    extra.stubs(:converged?).returns(false)
 
     payload = Loan::PayoffChart.new(loan, as_of: @today, extra_projection: extra).payload
 
@@ -371,8 +369,20 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     payload = Loan::PayoffChart.new(loan, as_of: @today).payload
 
     assert_nil payload[:projected_payoff_date]
-    assert_empty payload[:projected]
+    assert_empty payload[:projected], "a projection that never clears draws no line (#390)"
     assert_match I18n.t("UI.account.chart.loan.no_payoff"), payload[:aria_description]
+    # The balloon travels with the payload; on a loan that does pay off it is
+    # nil, so a figure of zero is never quoted.
+    assert_operator payload[:balloon], :>, 0
+    assert_nil Loan::PayoffChart.new(on_contract_loan, as_of: @today).payload[:balloon]
+  end
+
+  # Owner review of #3474: the chart has no data table; the Schedule tab
+  # carries the figures, so the payload builds no rows for one.
+  test "the payload carries no data table rows" do
+    payload = Loan::PayoffChart.new(on_contract_loan, as_of: @today, period: @all_time).payload
+
+    assert_not payload.key?(:rows), "nothing renders table rows, so the payload must not build them"
   end
 
   # The recorded series never starts before the loan does. A balance row dated
@@ -437,15 +447,15 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
   test "each scheduled payment point carries the payment's principal and interest" do
     loan = on_contract_loan
     payload = Loan::PayoffChart.new(loan, as_of: @today, period: @all_time).payload
-    rows = loan.amortization_schedule.display_rows.index_by { |row| row.payment_date.iso8601 }
+    rows = loan.amortization_schedule.payments.index_by { |row| row.date.iso8601 }
 
     payments = payload[:scheduled].drop(1)
     assert_equal rows.size, payments.size
     payments.each do |point|
       row = rows.fetch(point[:date])
-      assert_equal row.principal_payment.to_f, point[:principal], "principal on #{point[:date]}"
-      assert_equal row.interest_payment.to_f, point[:interest], "interest on #{point[:date]}"
-      assert_in_delta row.payment_amount.to_f, point[:principal] + point[:interest], 0.005,
+      assert_equal row.principal.amount.to_f, point[:principal], "principal on #{point[:date]}"
+      assert_equal row.interest.amount.to_f, point[:interest], "interest on #{point[:date]}"
+      assert_in_delta row.payment.amount.to_f, point[:principal] + point[:interest], 0.005,
         "the split on #{point[:date]} must add up to the payment"
     end
   end
@@ -501,11 +511,11 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     loan.update!(variable_rate_schedule: { "2026-06-01" => "9.0" })
     loan.reload
     changed = Loan::PayoffChart.new(loan, as_of: @today, period: @all_time).payload[:scheduled]
-    rows = loan.amortization_schedule.display_rows
+    rows = loan.amortization_schedule.payments
 
     assert_not_equal flat.map { |p| p[:balance] }, changed.map { |p| p[:balance] },
       "the rate change must move the scheduled line"
-    assert_equal rows.map { |row| row.ending_balance.to_f }, changed.drop(1).map { |p| p[:balance] }
+    assert_equal rows.map { |row| row.ending_balance.amount.to_f }, changed.drop(1).map { |p| p[:balance] }
   end
 
   # #21 AC#4, carried over from the payload this replaces: the accessible
@@ -527,7 +537,7 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     as_of = Date.new(2026, 3, 20)
     loan = build_loan
     assert_equal 1, loan.start_date.day
-    next_scheduled = loan.amortization_schedule.display_rows.map(&:payment_date).find { |date| date > as_of }
+    next_scheduled = loan.amortization_schedule.payments.map(&:date).find { |date| date > as_of }
     assert_not_equal as_of.next_month, next_scheduled, "the setup must separate the anchor from today's day"
 
     payload = Loan::PayoffChart.new(loan, as_of: as_of).payload
@@ -633,7 +643,7 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     end
 
     def scheduled_balance_at(loan, date)
-      loan.amortization_schedule.payments.select { |p| p[:payment_date] <= date }.last[:ending_balance]
+      loan.amortization_schedule.payments.select { |p| p.date <= date }.last.ending_balance.amount
     end
 
     # Materialised balance rows the way the balance calculator writes them for
@@ -645,13 +655,13 @@ class Loan::PayoffChartTest < ActiveSupport::TestCase
     def record_balances(account, from: Date.new(2026, 1, 1), through: Date.new(2026, 6, 30), closing: nil)
       account.balances.delete_all
       schedule_rows = account.loan.amortization_schedule&.payments || []
-      opening = schedule_rows.select { |p| p[:payment_date] <= from }.last&.dig(:ending_balance) || 500_000
-      rows = schedule_rows.select { |p| p[:payment_date] > from && p[:payment_date] <= through }
+      opening = schedule_rows.select { |p| p.date <= from }.last&.ending_balance&.amount || 500_000
+      rows = schedule_rows.select { |p| p.date > from && p.date <= through }
       account.balances.create!(date: from, balance: opening, currency: "USD",
                                start_cash_balance: opening, flows_factor: -1)
       rows.each do |row|
-        account.balances.create!(date: row[:payment_date], balance: row[:ending_balance], currency: "USD",
-                                 start_cash_balance: row[:ending_balance], flows_factor: -1)
+        account.balances.create!(date: row.date, balance: row.ending_balance.amount, currency: "USD",
+                                 start_cash_balance: row.ending_balance.amount, flows_factor: -1)
       end
       return if closing.nil?
 

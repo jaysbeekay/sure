@@ -79,7 +79,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     get account_path(@account, tab: "schedule")
     assert_equal uninsured.first(1), card_values("Total Cost"),
                  "one card still calls itself Total Cost, and it has not moved"
-    assert_equal [ format_money(loan.amortization_schedule.total_cost + loan.total_insurance) ],
+    assert_equal [ format_money(loan.amortization_schedule.total_paid + loan.total_insurance) ],
                  card_values("Total Cost incl. Insurance"),
                  "the Overview names the premium it adds, and adds it to the Schedule's figure"
   end

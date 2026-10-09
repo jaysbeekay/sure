@@ -23,10 +23,10 @@ class Loan::ExtraRepaymentComparisonTest < ActiveSupport::TestCase
     comparison = @loan.extra_repayment_comparison(amount: nil)
 
     assert_nil comparison.extra
-    assert_not comparison.extra_applicable?
+    assert_not comparison.extra_converged?
     assert_nil comparison.months_sooner
     assert_nil comparison.interest_saved
-    assert comparison.baseline.applicable?, "an on-schedule loan still has its baseline to compare against"
+    assert comparison.baseline.converged?, "an on-schedule loan still has its baseline to compare against"
   end
 
   test "a blank amount is the same as no amount" do
@@ -41,7 +41,7 @@ class Loan::ExtraRepaymentComparisonTest < ActiveSupport::TestCase
 
     assert_equal as_of, comparison.baseline.as_of
     assert_equal as_of, comparison.extra.as_of
-    assert comparison.extra_applicable?
+    assert comparison.extra_converged?
     assert_equal comparison.baseline.payment_count - comparison.extra.payment_count, comparison.months_sooner
     assert_equal Money.new(comparison.baseline.total_interest.amount - comparison.extra.total_interest.amount, "USD"),
       comparison.interest_saved
@@ -57,11 +57,11 @@ class Loan::ExtraRepaymentComparisonTest < ActiveSupport::TestCase
     assert_equal :enter_amount, loan.extra_repayment_comparison(amount: nil).non_convergence_notice
 
     cleared = loan.extra_repayment_comparison(amount: "200000")
-    assert cleared.extra_applicable?, "test setup: this extra should clear the loan"
+    assert cleared.extra_converged?, "test setup: this extra should clear the loan"
     assert_equal :cleared_by_extra, cleared.non_convergence_notice
 
     still_stuck = loan.extra_repayment_comparison(amount: "0.01")
-    assert_not still_stuck.extra_applicable?, "test setup: a cent should not clear the loan"
+    assert_not still_stuck.extra_converged?, "test setup: a cent should not clear the loan"
     assert_equal :not_cleared_by_extra, still_stuck.non_convergence_notice
   end
 
@@ -88,11 +88,11 @@ class Loan::ExtraRepaymentComparisonTest < ActiveSupport::TestCase
         entryable: Valuation.new(kind: "opening_anchor")
       )
       loan = account.loan.tap(&:ensure_amortization_schedule_current!)
-      payment = loan.amortization_schedule.monthly_payment.amount
+      payment = loan.amortization_schedule.periodic_payment.amount
       threshold = payment / (BigDecimal("5.0") / 100 / 12)
       account.update!(balance: (threshold * BigDecimal("0.995")).round(2))
       loan.reload
-      assert_not loan.payoff_projection.applicable?, "test setup: the baseline should not converge"
+      assert_not loan.payoff_projection.converged?, "test setup: the baseline should not converge"
       loan
     end
 end

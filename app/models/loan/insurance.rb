@@ -2,9 +2,9 @@
 #
 # Charged ALONGSIDE the instalment, never inside it. The amortisation repays
 # principal and interest and nothing else -- that is what makes its rows agree
-# with a lender's own table -- so a premium folded into a row's
-# `payment_amount` would make every figure derived from the schedule disagree
-# with the loan. This reads the schedule and returns a parallel series instead.
+# with a lender's own table -- so a premium folded into `Payment#payment` would
+# make every figure derived from the schedule disagree with the loan. This
+# reads the schedule and returns a parallel series instead.
 #
 # Two policies, which is what lenders sell:
 #
@@ -41,9 +41,8 @@ class Loan::Insurance
     def for(loan)
       return nil unless loan.insurance_rate&.positive?
 
-      # The fork's schedule is never nil; it says whether it can amortise.
       schedule = loan.amortization_schedule
-      return nil unless schedule.amortizable?
+      return nil if schedule.nil?
 
       new(
         schedule: schedule,
@@ -63,19 +62,18 @@ class Loan::Insurance
     @currency = currency
   end
 
-  # One premium per scheduled payment, oldest first. The schedule's rows are
-  # hashes of BigDecimals (Loan::AmortizationSchedule#payments).
+  # One premium per scheduled payment, oldest first.
   def premiums
     @premiums ||= begin
       opening = principal.amount
 
       schedule.payments.map do |payment|
         base = level_term? ? principal.amount : opening
-        opening = payment[:ending_balance]
+        opening = payment.ending_balance.amount
 
         Premium.new(
-          number: payment[:payment_number],
-          date: payment[:payment_date],
+          number: payment.number,
+          date: payment.date,
           amount: money((base * monthly_rate).round(currency_precision))
         )
       end

@@ -1,34 +1,28 @@
 class Loan
-  # The series the loan balance chart at the top of a loan's account page
-  # draws, and the figures its accessible description quotes (#390).
+  # The series the loan balance chart draws, and the figures its accessible
+  # description quotes.
   #
   #   actual     the recorded balances, origination -> today (or the period's
   #              end, whichever is earlier). Solid: this is fact.
-  #   scheduled  the contract, origination -> maturity, re-amortised at each
-  #              recorded rate change -- the rows the Schedule tab's table
-  #              prints (AmortizationSchedule#display_rows). Dashed.
-  #   projected  where today's recorded balance is heading on the schedule's
-  #              repayment (Loan::PayoffProjection). Dashed.
-  #   extra      the same projection with the Extra repayments tab's modelled
-  #              monthly extra. Present only when the caller passes one that
-  #              can be projected. Dotted.
-  #
-  # Ported from upstream's Loan::PayoffChart (we-promise/sure#3474, #4006) and
-  # adapted to the fork's engine: origination is `start_date` or the account's
-  # opening anchor (the date AmortizationSchedule amortises from), the scheduled
-  # rows are display_rows so a stale persisted schedule is never plotted beside
-  # live figures (risk R21), and the projection is the fork's PayoffProjection
-  # for the caller's `as_of`.
+  #   scheduled  the original contract, origination -> maturity. Dashed.
+  #   projected  where today's recorded balance is heading on the contract's
+  #              repayment. Dashed. Extra payments the borrower has already
+  #              made are in here without being named: they are why today's
+  #              balance is what it is.
+  #   extra      (fork, #403) the same projection with the Extra repayments
+  #              tab's modelled monthly extra. Present only when the caller
+  #              passes one that clears the loan. Dotted.
   #
   # The picked period governs the x-domain, and it means what it means on
   # every other chart: 1Y is the last year, YTD the current calendar year,
   # clamped so no window opens before the loan does. Under "All" the domain
   # runs origination -> the later payoff date so every series has room. A
-  # bounded window ends today, so the forward series draw under All alone.
+  # bounded window ends today, so the forward series draw under All alone;
+  # the cards beside the chart quote the projection whatever the window.
   # `Period` is not touched to achieve this: the payload carries the domain
   # and the controller draws to it.
   #
-  # The actual series is never queried past `as_of`. Balance::ChartSeriesBuilder
+  # The actual series is never queried past today. Balance::ChartSeriesBuilder
   # carries the last observation forward, so asking it for future dates would
   # draw a flat line asserting the balance never moves again.
   class PayoffChart
@@ -59,9 +53,8 @@ class Loan
 
     # `projection` lets a caller that also shows the forecast elsewhere on the
     # page build it once; it must be the loan's projection for this `as_of`.
-    # `extra_projection` is the Extra repayments tab's projection with the
-    # modelled monthly extra, for the same `as_of`, or nil when no amount was
-    # entered.
+    # `extra_projection` (fork) is the Extra repayments tab's projection with
+    # the modelled monthly extra, for the same `as_of`, or nil.
     def initialize(loan, as_of: Date.current, period: nil, projection: nil, extra_projection: nil)
       @loan = loan
       @as_of = as_of
@@ -73,7 +66,7 @@ class Loan
     # nil when there is nothing to draw. The page falls back to the plain
     # balance chart, so the chart's absence is not the page's absence.
     def payload
-      return nil unless schedule.amortizable? && scheduled_rows.any?
+      return nil unless schedule&.payments&.any?
 
       series = {
         actual: actual_series,
@@ -98,6 +91,15 @@ class Loan
         scheduled_payoff_date: schedule.payoff_date&.iso8601,
         projected_payoff_date: projection.payoff_date&.iso8601,
         **(extra? ? { extra_payoff_date: extra_projection.payoff_date&.iso8601 } : {}),
+        # The figures the cards beside the chart quote. nil when the projection
+        # cannot run or never clears the balance, so a card is not shown for a
+        # comparison that does not exist.
+        months_saved: projection.converged? ? projection.months_saved : nil,
+        interest_saved: projection.converged? ? projection.interest_saved.amount.to_f : nil,
+        # What the contracted repayment leaves owing at the original maturity
+        # when it does not clear the balance; nil when it does. The one figure
+        # the not-converged notice can quote.
+        balloon: projection.applicable? && !projection.converged? ? projection.balloon_amount.amount.to_f : nil,
         labels: labels,
         aria_description: aria_description(actual: series[:actual])
       }
@@ -110,49 +112,43 @@ class Loan
         @schedule ||= loan.amortization_schedule
       end
 
-      # Read once: display_rows either loads the persisted rows or recomputes
-      # them, and both are work the payload must not repeat per point.
-      def scheduled_rows
-        @scheduled_rows ||= schedule.display_rows
-      end
-
       def projection
-        @projection ||= PayoffProjection.new(loan, as_of: as_of)
+        @projection ||= loan.payoff_projection(as_of: as_of)
       end
 
-      # Only a projection that ran draws a line. One whose extra still leaves
-      # the loan unpaid has no payoff to show; the tab says so in words.
+      # Fork: only an extra that clears the loan draws a line. One that still
+      # leaves it unpaid has no payoff to show; the tab says so in words.
       def extra?
-        extra_projection.present? && extra_projection.applicable?
+        extra_projection.present? && extra_projection.converged?
       end
 
       def currency
         loan.account.currency
       end
 
-      # The date AmortizationSchedule amortises from. Memoised: a loan with no
-      # start date finds it through the account's opening anchor, and the
-      # domain reads it for every point.
-      def origination_date
-        @origination_date ||= loan.start_date || loan.account_opening_anchor_date
-      end
-
       # No period, "All", and any period the loan chart does not offer -- the
       # picker's choice is shared with every account -- mean the whole life.
+      # Upstream's "All" starts at the family's oldest entry, which for a loan
+      # younger than the family is years before it existed, so the whole life
+      # takes its own dates from the loan rather than from the period.
       def whole_life?
         period.nil? || period.key.to_s == "all_time" || !WINDOW_KEYS.include?(period.key.to_s)
       end
 
+      # Memoised, as is domain_end: visible? reads the domain for every point,
+      # and a loan with no start date finds its origination through the
+      # account's first valuation, which is a lookup each time it is asked.
+      #
       # A window opens where the period does, but never before the loan: a
       # lead-in before origination would read as a balance that was not there.
       def domain_start
-        @domain_start ||= whole_life? ? origination_date : [ period.start_date, origination_date ].max
+        @domain_start ||= whole_life? ? loan.origination_date : [ period.start_date, loan.origination_date ].max
       end
 
       # The whole life reaches far enough to hold every line: the contract's
-      # payoff and the projections', whichever is latest, and never before
-      # today. A window ends where the period does, but never past that and
-      # never on its start.
+      # payoff and the projection's, whichever is later, and never before today.
+      # A window ends where the period does, but never past that and never on
+      # its start.
       def domain_end
         @domain_end ||= begin
           whole_life_end = [
@@ -162,7 +158,7 @@ class Loan
         end
       end
 
-      # Recorded balances inside the domain and no later than `as_of`. Nothing
+      # Recorded balances inside the domain and no later than today. Nothing
       # before the first materialised balance: the series builder carries the
       # last observation forward and reports zero before there is one, and a
       # flat zero lead-in reads as a balance that was not there.
@@ -170,7 +166,7 @@ class Loan
         first_balance_date = loan.account.balances.minimum(:date)
         return [] if first_balance_date.nil?
 
-        from = [ domain_start, first_balance_date ].max
+        from = [ domain_start, first_balance_date ].compact.max
         to = [ domain_end, as_of ].min
         return [] if from > to
 
@@ -179,30 +175,40 @@ class Loan
         end
       end
 
-      # Opens at origination with the amount borrowed. Starting at the first
+      # Opens at origination with the full principal. Starting at the first
       # payment omits the amount borrowed entirely, and leaves a one-payment
       # loan with a single point and therefore no line at all.
-      #
-      # Each payment carries what it is made of, for the tooltip (#21). The
-      # opening point is the amount borrowed, not a payment, so it carries no
-      # split.
       def scheduled_series
-        opening = { date: origination_date.iso8601, balance: loan.original_balance.amount.to_f }
-        [ opening ] + scheduled_rows.map do |row|
-          { date: row.payment_date.iso8601, balance: row.ending_balance.to_f,
-            principal: row.principal_payment.to_f, interest: row.interest_payment.to_f }
+        rows = schedule.payments
+        return [] if rows.empty?
+
+        # Each payment carries what it is made of, for the tooltip. The opening
+        # point is the amount borrowed, not a payment, so it carries no split.
+        opening = { date: loan.origination_date.iso8601, balance: schedule.principal.to_f }
+        [ opening ] + rows.map do |p|
+          { date: p.date.iso8601, balance: p.ending_balance.amount.to_f,
+            principal: p.principal.amount.to_f, interest: p.interest.amount.to_f }
         end
       end
 
       # A projection opens at today's real balance, so the line starts there
       # rather than at its first payment -- otherwise it appears to begin
       # wherever the first payment happens to leave it.
+      #
+      # Fork: drawn only when it clears the loan. Followed past maturity on the
+      # last level repayment (#401), a projection that still never clears has
+      # no line worth drawing; the Extra repayments tab explains instead.
       def projection_series(source)
-        return [] unless source&.applicable?
+        return [] unless source&.converged?
 
         opening = { date: as_of.iso8601, balance: source.current_balance.amount.to_f }
-        [ opening ] + source.payments.map do |payment|
-          { date: payment[:payment_date].iso8601, balance: payment[:ending_balance].to_f }
+        [ opening ] + series(source.payments) { |p| [ p[:payment_date], p[:ending_balance] ] }
+      end
+
+      def series(rows)
+        rows.map do |row|
+          date, balance = yield(row)
+          { date: date.iso8601, balance: balance.to_f }
         end
       end
 
@@ -243,8 +249,8 @@ class Loan
           projected_payoff_date: long_date(projection.payoff_date, I18n.t("UI.account.chart.loan.no_payoff"))
         ) ]
 
-        # What the tooltip shows on each scheduled point (#21), in the schedule
-        # table's own words.
+        # Fork (#21): what the tooltip shows on each scheduled point, in the
+        # schedule table's own words.
         sentences << I18n.t(
           "UI.account.chart.loan.aria_composition",
           principal: I18n.t("loans.tabs.schedule.principal"),

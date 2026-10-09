@@ -24,12 +24,15 @@ class Api::V1::LoansController < Api::V1::BaseController
 
     limit = safe_per_page_param
     offset = (safe_page_param - 1) * limit
+    # One reference date for every date-sensitive figure in the response: the
+    # projection and the next rate change answer for the same day.
+    as_of = Date.current
 
     render :amortization_schedule, locals: {
       loan: @loan,
       status: status,
-      schedule: @loan.amortization_schedule,
-      projection: @loan.payoff_projection,
+      as_of: as_of,
+      projection: @loan.payoff_projection(as_of: as_of),
       payments: @loan.amortizations.ordered.offset(offset).limit(limit),
       total_count: @loan.amortizations.count,
       limit: limit,

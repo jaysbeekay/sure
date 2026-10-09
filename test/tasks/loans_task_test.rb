@@ -112,9 +112,9 @@ class LoansTaskTest < ActiveSupport::TestCase
   # when the release it evidences was being prepared.
   #
   # What must stay true is that the report is not describing a calculation
-  # nobody runs: the column matching SCHEDULE_DAILY_ACCRUAL has to equal what
-  # the persisted schedule actually produces. Asserted against the constant so
-  # this holds whichever way it is set.
+  # nobody runs: the daily column -- the loan's own schedule, charged through
+  # Loan::DailyInterest since #184's core swap -- has to equal what the
+  # persisted schedule actually produces.
   test "the variance column matching the shipped accrual mode equals what production persists" do
     output = Rails.root.join("tmp", "loan-variance-parity.csv")
     FileUtils.rm_f(output)
@@ -123,8 +123,7 @@ class LoansTaskTest < ActiveSupport::TestCase
     row = CSV.read(output, headers: true).first
     loan = Loan.find(row["loan_id"])
 
-    shipped_column =
-      Loan::AmortizationSchedule::SCHEDULE_DAILY_ACCRUAL ? "daily_interest" : "monthly_interest"
+    shipped_column = "daily_interest"
 
     # Compare against the PERSISTED rows, not a fresh
     # `amortization_schedule.payments`. Recomputing here would run the same code
@@ -143,9 +142,9 @@ class LoansTaskTest < ActiveSupport::TestCase
     FileUtils.rm_f(output)
   end
 
-  # The other column is the comparison side. It must be the OTHER mode, not a
-  # second copy of the shipped one -- the defect that made this report useless
-  # the moment SCHEDULE_DAILY_ACCRUAL flipped.
+  # The other column is the comparison side: upstream's monthly engine, the
+  # schedule without the interest hook. It must be the OTHER mode, not a second
+  # copy of the shipped one -- the defect that once made this report useless.
   test "the variance report's two columns are genuinely different accrual modes" do
     output = Rails.root.join("tmp", "loan-variance-modes.csv")
     FileUtils.rm_f(output)
@@ -154,8 +153,8 @@ class LoansTaskTest < ActiveSupport::TestCase
     row = CSV.read(output, headers: true).first
     loan = Loan.find(row["loan_id"])
 
-    monthly = loan.amortization_schedule.simulation(daily_accrual: false).total_interest
-    daily = loan.amortization_schedule.simulation(daily_accrual: true).total_interest
+    monthly = Loan::AmortizationSchedule.for(loan, interest_for: nil).total_interest.amount
+    daily = loan.amortization_schedule.total_interest.amount
 
     # Without this, a loan whose two modes happen to coincide (any 0% loan, for
     # one) would let a report that wrote a single mode into both columns pass
@@ -235,7 +234,7 @@ class LoansTaskTest < ActiveSupport::TestCase
     loan = loans(:characterization_fixed)
     loan.update!(rate_type: "adjustable")
     loan.amortizations.delete_all
-    assert_predicate loan.reload.amortization_schedule, :amortizable?,
+    assert_predicate loan.reload, :amortizable?,
       "the fixture must be amortizable as an adjustable loan, or this proves nothing"
 
     output, exit_error, _stderr = capture_output_and_exit { Rake::Task["loans:schedule_version_status"].invoke }
@@ -256,7 +255,7 @@ class LoansTaskTest < ActiveSupport::TestCase
   end
 
   test "schedule version status reports loans left on an older algorithm version" do
-    current = Loan::AmortizationSchedule::ALGORITHM_VERSION
+    current = LoanAmortization::ALGORITHM_VERSION
     loan = loans(:characterization_fixed)
     loan.rebuild_amortization_schedule
     assert_predicate loan.amortizations.count, :positive?
@@ -302,7 +301,7 @@ class LoansTaskTest < ActiveSupport::TestCase
       accountable: Loan.new(subtype: "other", term_months: 12, rate_type: "fixed", start_date: Date.current)
     ).loan
 
-    assert_not non_amortizable.amortization_schedule.amortizable?,
+    assert_not non_amortizable.amortizable?,
       "test setup must produce a loan the rebuild will never give rows to"
     assert Loan.where.not(term_months: nil).exists?(id: non_amortizable.id),
       "test setup must produce a loan inside the rebuild scope, or it proves nothing"

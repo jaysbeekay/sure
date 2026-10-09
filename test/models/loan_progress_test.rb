@@ -199,26 +199,23 @@ class LoanProgressTest < ActiveSupport::TestCase
     assert_equal 0.0, reloaded_loan.balance_paid_ratio
   end
 
-  # Fork-side (#184 phase 2). The fork's schedule steps its payment dates with
-  # a chained `next_month`, so a loan drawn down on the 31st pays on the 29th
-  # of every month after a leap February -- not on the 31st, which is what
-  # upstream's `origin + n.months` counting assumes. Counting months the
-  # upstream way puts the borrower on an instalment the schedule beside it
-  # already shows as paid.
-  #
-  # Drawn down 31 January 2024: payments fall on 29 February, 29 March, 29
-  # April. On 30 March two have been made and the third is the one due.
+  # The instalment named is the one the schedule beside it has due. Since
+  # #184's core swap both count on upstream's calendar (`origination >> n`): a
+  # loan drawn down on 31 January 2024 pays on 29 February, 31 March and 30
+  # April. On 30 March one has been made and the 31 March one is due. (The
+  # fork's chained `next_month` calendar had drifted to the 29th, and counted
+  # instalments off its own dates to stay in step.)
   test "a month-end loan is on the instalment its schedule has due next" do
     loan = build_progress_loan(start_date: Date.new(2024, 1, 31))
     as_of = Date.new(2024, 3, 30)
-    dates = loan.amortization_schedule.payments.first(3).map { |row| row[:payment_date] }
-    assert_equal [ Date.new(2024, 2, 29), Date.new(2024, 3, 29), Date.new(2024, 4, 29) ], dates,
-      "precondition: the fork's schedule drifts to the 29th"
+    dates = loan.amortization_schedule.payments.first(3).map(&:date)
+    assert_equal [ Date.new(2024, 2, 29), Date.new(2024, 3, 31), Date.new(2024, 4, 30) ], dates,
+      "precondition: the schedule recovers the anchor day after February"
 
-    assert_equal 2, loan.months_elapsed(as_of: as_of)
+    assert_equal 1, loan.months_elapsed(as_of: as_of)
     breakdown = loan.payment_breakdown(as_of: as_of)
-    assert_equal 3, breakdown[:number]
-    assert_equal Date.new(2024, 4, 29), breakdown[:date], "the next payment due, not one already made"
+    assert_equal 2, breakdown[:number]
+    assert_equal Date.new(2024, 3, 31), breakdown[:date], "the next payment due, not one already made"
   end
 
   # The origin is the schedule's: with no start date recorded, the opening
@@ -241,7 +238,7 @@ class LoanProgressTest < ActiveSupport::TestCase
     breakdown = loan.payment_breakdown(as_of: Date.new(2026, 4, 20))
 
     assert_equal 4, breakdown[:number]
-    assert_equal loan.amortization_schedule.payments[3][:payment_date], breakdown[:date]
+    assert_equal loan.amortization_schedule.payments[3].date, breakdown[:date]
   end
 
   private

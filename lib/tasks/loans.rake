@@ -18,7 +18,7 @@ namespace :loans do
   # and the "is the prebuild finished?" signal stops being answerable.
   #
   # Note this is a superset of *amortizable* loans: `term_months` is the widest
-  # thing SQL can filter on, and `Loan::AmortizationSchedule#amortizable?` needs
+  # thing SQL can filter on, and `Loan#amortizable?` needs
   # the account and its opening valuation. The status task narrows it in Ruby.
   loan_rebuild_scope = -> { Loan.where.not(term_months: nil).order(:id) }
 
@@ -191,32 +191,25 @@ namespace :loans do
     max_p95_ms = loan_task_option.call(args, :max_p95_ms, "100").to_f
     max_p99_ms = loan_task_option.call(args, :max_p99_ms, "150").to_f
     payment_dates = Array.new(history_months + 1) { |index| Date.new(2024, 1, 1) >> index }
-    payment_amount = ->(rate:, balance:, remaining_payments:, **_) {
-      monthly_rate = BigDecimal(rate.to_s) / 100 / 12
-      next (balance / remaining_payments).round(2) if monthly_rate.zero?
 
-      factor = (1 + monthly_rate) ** remaining_payments
-      (balance * monthly_rate * factor / (factor - 1)).round(2)
-    }
+    interest = Loan::DailyInterest.new(
+      day_count_convention: :actual_365,
+      offset_for: ->(from_date, _to_date) {
+        (1...offset_frequency).map do |day|
+          { date: from_date + day, amount: BigDecimal("100000") }
+        end
+      }
+    )
 
     samples = loan_count.times.map do
       Benchmark.realtime do
         Loan::Simulator.new(
           starting_balance: BigDecimal("500000"),
-          starting_balance_as_of: payment_dates.first,
           accrual_start_date: payment_dates.first,
           payment_schedule: payment_dates.drop(1),
           accrual_rate_for: ->(_date) { BigDecimal("6") },
-          re_amortisation_events: ->(_from_date, _to_date) { [] },
-          payment_strategy: :reamortize,
-          payment_amount_for: payment_amount,
           currency_precision: 2,
-          daily_accrual: true,
-          offset_for: ->(from_date, _to_date) {
-            (1...offset_frequency).map do |day|
-              { date: from_date + day, amount: BigDecimal("100000") }
-            end
-          }
+          interest_for: interest
         ).run
       end * 1000
     end.sort
@@ -240,19 +233,27 @@ namespace :loans do
     output = loan_task_option.call(args, :output)
     rows = []
     Loan.where.not(term_months: nil).order(:id).limit(limit).find_each do |loan|
-      # Both modes are passed explicitly. Defaulting the monthly side to
-      # SCHEDULE_DAILY_ACCRUAL made this report compare daily against daily
-      # -- every delta zero -- the moment that constant flipped, i.e. exactly
-      # when the release it exists to evidence was being prepared.
-      monthly = loan.amortization_schedule.simulation(daily_accrual: false)
-      daily = loan.amortization_schedule.simulation(daily_accrual: true)
+      # Both runs are named explicitly. "monthly" is upstream's engine, one
+      # twelfth of the rate a period (no interest hook); "daily" is the loan's
+      # own schedule, charged through Loan::DailyInterest -- the one the
+      # persisted rows are written from. Defaulting either side to "whatever
+      # production ships" would compare a mode against itself.
+      #
+      # A loan that cannot be scheduled reports zero interest on both sides, as
+      # it always has. A contracted schedule settles its final payment (C14),
+      # so both runs always clear; the columns are kept so the report's shape
+      # is unchanged.
+      monthly = Loan::AmortizationSchedule.for(loan, interest_for: nil)
+      daily = loan.amortization_schedule
+      monthly_interest = monthly ? monthly.total_interest.amount : BigDecimal("0")
+      daily_interest = daily ? daily.total_interest.amount : BigDecimal("0")
       rows << {
         loan_id: loan.id,
-        monthly_interest: monthly.total_interest.to_s("F"),
-        daily_interest: daily.total_interest.to_s("F"),
-        interest_delta: (daily.total_interest - monthly.total_interest).to_s("F"),
-        monthly_converged: monthly.converged?,
-        daily_converged: daily.converged?
+        monthly_interest: monthly_interest.to_s("F"),
+        daily_interest: daily_interest.to_s("F"),
+        interest_delta: (daily_interest - monthly_interest).to_s("F"),
+        monthly_converged: monthly.nil? || monthly.payoff_date.present?,
+        daily_converged: daily.nil? || daily.payoff_date.present?
       }
     end
     columns = rows.first&.keys || %i[loan_id monthly_interest daily_interest interest_delta monthly_converged daily_converged]
@@ -277,7 +278,7 @@ namespace :loans do
   # with `schedule_current?`.
   desc "Report loan schedule staleness by algorithm version (deploy monitoring)"
   task schedule_version_status: :environment do
-    current = Loan::AmortizationSchedule::ALGORITHM_VERSION
+    current = LoanAmortization::ALGORITHM_VERSION
 
     # The same population `rebuild_schedules` walks, so "stale" counts what that
     # task would still have to do rather than a different set of loans.
@@ -318,7 +319,7 @@ namespace :loans do
 
     awaiting = 0
     candidates.in_batches(of: 500) do |batch|
-      awaiting += batch.includes(:account).count { |loan| loan.amortization_schedule.amortizable? }
+      awaiting += batch.includes(:account).count(&:amortizable?)
     end
     not_amortizable = missing.count - awaiting
 

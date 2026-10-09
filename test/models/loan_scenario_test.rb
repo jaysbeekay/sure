@@ -60,7 +60,7 @@ class LoanScenarioTest < ActiveSupport::TestCase
   test "a scenario records which engine produced its figures" do
     scenario = LoanScenario.create_in_free_slot(loan: @loan, attributes: { name: "Versioned" })
 
-    assert_equal Loan::AmortizationSchedule::ALGORITHM_VERSION, scenario.calculator_version
+    assert_equal LoanAmortization::ALGORITHM_VERSION, scenario.calculator_version
     assert_equal @account.currency, scenario.currency
   end
 
@@ -124,7 +124,7 @@ class LoanScenarioTest < ActiveSupport::TestCase
     # the retry delegates to the real `save`, so the assertion is on where the
     # scenario actually ended up.
     @loan.loan_scenarios.create!(name: "Competitor", slot: 2, currency: @loan.account.currency,
-      calculator_version: Loan::AmortizationSchedule::ALGORITHM_VERSION)
+      calculator_version: LoanAmortization::ALGORITHM_VERSION)
 
     original_save = LoanScenario.instance_method(:save)
     collided = false
@@ -148,23 +148,24 @@ class LoanScenarioTest < ActiveSupport::TestCase
       "the retry must land in the next free slot, not re-report the collided one"
   end
 
-  # CodeRabbit, #83. `unamortizable_payment?` asks whether the CONTRACTED
-  # repayment covers the first period's interest. A scenario's extra repayments
-  # are not in that comparison, so a lump sum big enough to fix the shortfall
-  # was rejected before it could be applied and the scenario showed nothing --
-  # the same shape as the gate bug fixed on #79.
+  # CodeRabbit, #83. A lump sum big enough to fix an interest shortfall was
+  # rejected before it could be applied, because the gate asked whether the
+  # CONTRACTED repayment covered the first period's interest. Since #184's core
+  # swap there is no such gate -- a projection runs and says whether it clears
+  # -- and the lump sum is what makes this one clear.
   test "a lump sum that fixes an interest shortfall is not rejected before it applies" do
     loan = under_serviced_loan
+    baseline = loan.payoff_projection_for_scenario(
+      LoanScenario.create_in_free_slot(loan: loan, attributes: { name: "None" }).reload
+    )
     scenario = LoanScenario.create_in_free_slot(loan: loan, attributes: { name: "Lump" })
     scenario.extra_repayments.create!(kind: "one_off", amount: 350_000, occurs_on: Date.current)
 
     projection = loan.payoff_projection_for_scenario(scenario.reload)
 
-    assert projection.send(:unamortizable_payment?),
-      "the fixture must actually trip the guard, or this test proves nothing"
-    assert projection.applicable?
-    assert projection.payments.any?,
-      "the repayment clears most of the balance; the scenario must produce a projection"
+    assert_not baseline.converged?, "the fixture must actually be under-serviced, or this test proves nothing"
+    assert projection.converged?,
+      "the repayment clears most of the balance; the scenario must produce a payoff"
   end
 
   # CodeRabbit, #83. Both columns were stored and validated but never read, so a
@@ -204,7 +205,7 @@ class LoanScenarioTest < ActiveSupport::TestCase
     scenario.record_calculation!
 
     assert_not_nil scenario.reload.last_calculated_at
-    assert_equal Loan::AmortizationSchedule::ALGORITHM_VERSION, scenario.calculator_version
+    assert_equal LoanAmortization::ALGORITHM_VERSION, scenario.calculator_version
   end
 
   test "a recurring repayment without a start date is refused at both layers" do

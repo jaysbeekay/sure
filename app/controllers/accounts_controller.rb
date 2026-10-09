@@ -121,9 +121,10 @@ class AccountsController < ApplicationController
     # so building it there would be work thrown away.
     @loan_chart = loan_payoff_chart if chart_card_requested?
 
-    # The loan chart reads the schedule's rows on every loan page now, not only
-    # on the Schedule and Extra repayments tabs, so any page that shows them
-    # enqueues the rebuild when the persisted rows are stale (#390).
+    # Any page showing the loan's schedule -- the chart, the Schedule and Extra
+    # repayments tabs -- enqueues a rebuild of the persisted rows when they are
+    # stale (#390). The page itself reads the in-memory schedule; the rows are
+    # the API's cache (#184), kept warm by the views that make it go stale.
     build_schedule_tab_data if @loan_chart || schedule_tab_active? || extra_repayments_tab_active?
 
     per_page = safe_per_page(stored_per_page_default)

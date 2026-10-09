@@ -9,9 +9,11 @@ require "test_helper"
 # each producing the same silent failure: two different loans' numbers on one
 # screen, with no exception and no failing test (risk R21).
 #
-# `Loan::AmortizationSchedule#display_rows` hides the distinction: persisted
-# rows when they are current, recomputed in memory when they are not. This test
-# makes reaching past it a build failure rather than a review catch (#56).
+# Since #184's core swap the account page reads no persisted rows at all:
+# every figure comes from the in-memory schedule (upstream's
+# Loan::AmortizationSchedule), and the rows are a cache for the API alone. This
+# test makes reaching for the cache anywhere else a build failure rather than a
+# review catch (#56).
 class Loan::AmortizationsReadGuardTest < ActiveSupport::TestCase
   # Exemptions are per METHOD, never per file.
   #
@@ -34,11 +36,6 @@ class Loan::AmortizationsReadGuardTest < ActiveSupport::TestCase
       # The association declaration itself. Narrow on purpose: anything else at
       # class-body level -- a scope, a delegate, a constant -- is still caught.
       outside_methods: [ /\Ahas_many :amortizations,/ ]
-    },
-    "app/models/loan/amortization_schedule.rb" => {
-      reason: "#display_rows is the sanctioned reader -- the one place allowed " \
-              "to choose between persisted and recomputed rows.",
-      methods: %w[display_rows]
     },
     "app/controllers/api/v1/loans_controller.rb" => {
       reason: "Reads persisted rows deliberately AND declares their freshness " \
@@ -92,9 +89,8 @@ class Loan::AmortizationsReadGuardTest < ActiveSupport::TestCase
         #{offenders.join("\n  ")}
 
       That association is a cache, valid only while `schedule_current?`, and no
-      read path rebuilds it since #39. Read
-      `Loan::AmortizationSchedule#display_rows` instead -- persisted rows when
-      current, recomputed when not.
+      read path rebuilds it since #39. Read `Loan#amortization_schedule` (or
+      `Loan#amortization_rows`) instead: the in-memory schedule.
 
       If a surface genuinely must read persisted rows it has to DECLARE their
       freshness, the way the API does with `status`, and be named in

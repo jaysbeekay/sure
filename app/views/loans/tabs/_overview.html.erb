@@ -1,11 +1,9 @@
 <%# locals: (account:, as_of: Date.current) %>
 
-<%# FR-404. Read from the schedule, not from loan.amortizations: the persisted
-    rows may legitimately be absent or stale on a read, because the Schedule tab
-    no longer rebuilds them inside the request (#39). Sourcing a display figure
-    from persisted rows is the same defect that silently removed the payoff
-    projection card -- see Loan::PayoffProjection#original_schedule_rows. %>
-<% payoff_date = account.loan.amortization_schedule.payoff_date %>
+<%# FR-404. Read from the in-memory schedule, not from loan.amortizations: the
+    persisted rows are a cache for the API and may legitimately be absent or
+    stale on a read (#39). %>
+<% payoff_date = account.loan.amortization_schedule&.payoff_date %>
 
 <%# ONE reference date for every figure on this tab, `as_of`, taken as a local
     so a caller (and a test) can pin it. It used to be declared inside the

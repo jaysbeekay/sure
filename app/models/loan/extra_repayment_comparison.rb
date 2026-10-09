@@ -29,8 +29,11 @@ class Loan
       @extra ||= loan.payoff_projection_with_extra(amount: amount, as_of: as_of)
     end
 
-    def extra_applicable?
-      extra.present? && extra.applicable?
+    # Whether the extra clears the loan. A projection can run without clearing
+    # it (Loan::PayoffProjection#applicable? is not #converged?), and one that
+    # never clears has no payoff date to show.
+    def extra_converged?
+      extra.present? && extra.converged?
     end
 
     # How many payments sooner the extra clears the loan than the baseline.
@@ -51,12 +54,12 @@ class Loan
     def non_convergence_notice
       return nil unless baseline_does_not_converge?
       return :enter_amount if amount.nil?
-      extra_applicable? ? :cleared_by_extra : :not_cleared_by_extra
+      extra_converged? ? :cleared_by_extra : :not_cleared_by_extra
     end
 
     private
       def baseline_does_not_converge?
-        loan.amortization_schedule.amortizable? &&
+        loan.amortizable? &&
           baseline.current_balance.amount.positive? &&
           !baseline.converged?
       end
