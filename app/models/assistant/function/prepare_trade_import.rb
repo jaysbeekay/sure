@@ -94,18 +94,23 @@ class Assistant::Function::PrepareTradeImport < Assistant::Function
     mapping = column_mapping(headers, params["column_mapping"], account)
     return mapping if mapping.key?(:error)
 
-    import = family.imports.create!(
-      type: "TradeImport",
-      account: account,
-      date_format: params["date_format"].presence || detect_date_format(parsed, mapping["date"]),
-      number_format: params["number_format"].presence,
-      signage_convention: params["signage_convention"].presence || "inflows_positive",
-      col_sep: col_sep,
-      raw_file_str: csv_content,
-      **mapping.transform_keys { |key| :"#{key}_col_label" }
-    )
-    import.generate_rows_from_csv
-    import.reload.sync_mappings
+    # One transaction, so a refusal raised while the rows are generated (the
+    # import's own header check, for one) leaves no pending import behind.
+    import = Import.transaction do
+      family.imports.create!(
+        type: "TradeImport",
+        account: account,
+        date_format: params["date_format"].presence || detect_date_format(parsed, mapping["date"]),
+        number_format: params["number_format"].presence,
+        signage_convention: params["signage_convention"].presence || "inflows_positive",
+        col_sep: col_sep,
+        raw_file_str: csv_content,
+        **mapping.transform_keys { |key| :"#{key}_col_label" }
+      ).tap do |created|
+        created.generate_rows_from_csv
+        created.reload.sync_mappings
+      end
+    end
 
     summary(import, mapping, headers)
   rescue ActiveRecord::RecordInvalid => e

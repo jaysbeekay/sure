@@ -93,6 +93,17 @@ class Assistant::Function::PrepareTradeImportTest < ActiveSupport::TestCase
     assert_equal "invalid_column_mapping", result[:error]
   end
 
+  # The import's own header check runs while the rows are generated, after
+  # the import has been saved. A refusal there must not leave the import behind.
+  test "headers that differ only by case are refused and create no import" do
+    csv = "Date,Ticker,Qty,Price,date\n2026-03-05,AAPL,10,150,2026-03-06\n"
+
+    result = assert_no_difference("Import.count") { @fn.call("csv_content" => csv, "account_id" => @account.id) }
+
+    assert_equal "import_invalid", result[:error]
+    assert_includes result[:message], "Date, date"
+  end
+
   test "rows that will not import are listed with their row numbers" do
     csv = BROKER_CSV + "31/31/2026,TSLA,1,700,USD,Bad date\n"
 
