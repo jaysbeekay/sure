@@ -1,6 +1,8 @@
 require "test_helper"
 
 class LoansControllerTest < ActionDispatch::IntegrationTest
+  OFFSET_SELECT = "account[accountable_attributes][offset_account_ids][]".freeze
+
   include AccountableResourceInterfaceTest
 
   setup do
@@ -885,6 +887,97 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     get account_url(@account, tab: "schedule")
     assert_response :success
     assert_not_includes response.body, "linked offset balance"
+  end
+
+  # --- #325: the new-loan form offers offsets ---------------------------------
+
+  test "the new-loan form lists a same-currency asset shared with the family" do
+    offset = shared_offset
+
+    get new_loan_path
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offset.id
+  end
+
+  test "the new-loan form leaves out what the save would refuse" do
+    assert @account.family.share_all_by_default?, "precondition"
+    private_offset = @account.family.accounts.create!(
+      name: "Private offset", balance: 100, currency: @account.currency, owner: @user, accountable: Depository.new
+    )
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+    other_family = families(:empty).accounts.create!(
+      name: "Other family offset", balance: 100, currency: @account.currency, accountable: Depository.new
+    )
+
+    get new_loan_path
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, private_offset.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, accounts(:credit_card).id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, other_family.id, count: 0
+  end
+
+  test "the new-loan form lists the owner's private asset when the family does not share by default" do
+    @account.family.update!(default_account_sharing: "private")
+    private_offset = @account.family.accounts.create!(
+      name: "Private offset", balance: 100, currency: @account.currency, owner: @user, accountable: Depository.new
+    )
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, private_offset.id
+  end
+
+  test "the new-loan form lists offsets in the submitted currency" do
+    usd = shared_offset
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+
+    get new_loan_path, params: { account: { currency: "EUR" } }
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id, count: 0
+  end
+
+  test "a failed create re-renders with the offsets listed" do
+    offset = shared_offset
+    params = variable_loan_params(currency: @account.currency, offset_ids: [ offset.id ])
+    params[:accountable_attributes][:interest_rate] = -1
+
+    assert_no_difference -> { Account.where(accountable_type: "Loan").count } do
+      post loans_path, params: { account: params }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offset.id
+  end
+
+  test "every account the new-loan form offers is one the save accepts" do
+    offered = shared_offset
+
+    get new_loan_path
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offered.id
+
+    post loans_path, params: { account: variable_loan_params(currency: @account.currency, offset_ids: [ offered.id ]) }
+
+    created = Account.where(accountable_type: "Loan").order(:created_at).last.accountable
+    assert_equal [ offered.id ], created.offset_accounts.pluck(:id)
+  end
+
+  test "the edit form lists the same offsets as before" do
+    offset = shared_offset
+    expected = LoanOffsetAccount.eligible_accounts_for(@account.loan, viewer: @user).map(&:id)
+    assert_includes expected, offset.id, "precondition"
+
+    get edit_loan_path(@account)
+
+    expected.each { |id| assert_select "select[name=?] option[value=?]", OFFSET_SELECT, id }
+    assert_select "select[name='#{OFFSET_SELECT}'] option", count: expected.size
   end
 
   private
