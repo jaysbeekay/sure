@@ -657,8 +657,12 @@ class Loan < ApplicationRecord
     in_force = current_variable_rate(as_of)
     return nil if in_force.present? && BigDecimal(in_force.to_s) == rate
 
+    # A same-day row under another ISO spelling ("20260115") is replaced
+    # rather than joined by a second row for the day (cubic, #400).
+    day = as_of.to_date
     schedule = (variable_rate_schedule || {}).stringify_keys
-    { variable_rate_schedule: schedule.merge(as_of.to_date.iso8601 => rate.to_s) }
+      .reject { |key, _| Date.iso8601(key.to_s) == day }
+    { variable_rate_schedule: schedule.merge(day.iso8601 => rate.to_s) }
   end
 
   # The one write for what a source OTHER than the user says about this loan:

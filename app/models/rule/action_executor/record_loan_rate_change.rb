@@ -87,7 +87,10 @@ class Rule::ActionExecutor::RecordLoanRateChange < Rule::ActionExecutor
       end
 
       date = entry.date
-      existing = (loan.variable_rate_schedule || {}).stringify_keys[date.iso8601]
+      # Matched by parsed date, not by key: ISO-8601 spells a day more than one
+      # way ("2026-09-14", "20260914"), and a row under either is on this date
+      # (cubic, #400).
+      existing = loan.variable_rates.find { |key, _| Date.iso8601(key.to_s) == date }&.last
       if existing.present? && BigDecimal(existing.to_s) != rate
         report(entry, "A loan rate clashes with a rate already recorded on that date; recording none",
                problem: "date_clash", read: rate.to_s, recorded: existing.to_s)
