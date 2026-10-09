@@ -991,6 +991,18 @@ class LoanTest < ActiveSupport::TestCase
     assert_nil loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
   end
 
+  # cubic, #400 (sibling of the rule's clash check): a same-day row stored under
+  # another ISO spelling is replaced, not joined by a second row for that day,
+  # which would leave the rate in force to hash order.
+  test "variable_rate_update_for replaces a same-day row under another ISO spelling" do
+    loan = Loan.new(rate_type: "variable", interest_rate: 4.5,
+                    variable_rate_schedule: { "2025-06-01" => 4.8, "20260115" => 5.0 })
+
+    update = loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
+
+    assert_equal({ "2025-06-01" => 4.8, "2026-01-15" => "5.2" }, update[:variable_rate_schedule])
+  end
+
   test "variable_rate_update_for leaves a fixed loan to its caller" do
     loan = Loan.new(rate_type: "fixed", interest_rate: 4.5)
 

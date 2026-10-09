@@ -19,9 +19,10 @@
 # - Without a marker, the text must hold exactly ONE distinct percentage.
 #   "Rate 6.25% comparison rate 6.40%" is refused as ambiguous rather than
 #   guessed at: a wrong rate silently re-prices every period after it.
-# - A percentage after "by", "increase of", "cut of" and the like, or carrying a
-#   sign ("-0.25%"), is how far the rate MOVED, never what it is. Read as a
-#   rate, a quarter-point cut would put the loan at 0.25%.
+# - A percentage after "by", "increase of", "cut of" and the like, straight
+#   after a bare verb ("decreased", "rose", "cut", "down"), or carrying a sign
+#   ("-0.25%"), is how far the rate MOVED, never what it is. Read as a rate, a
+#   quarter-point cut would put the loan at 0.25%.
 # - The rate is rounded to three places, which is what the loan stores
 #   (Loan#quantize_variable_rate_schedule), and must then be above 0 and below
 #   100. A rate the loan's own validation would accept at exactly 0 or 100 is
@@ -46,8 +47,10 @@ class Loan::RateChangeText
   # What, immediately before a percentage, makes it the new rate.
   NEW_RATE_MARKER = /(?:\bto|\bnow|\bnew\s+(?:interest\s+)?rate(?:\s+(?:is|of))?)\s*:?\s*\z/i
 
-  # What, immediately before a percentage, makes it a change amount.
-  CHANGE_MARKER = /(?:\bby|\b(?:increase|increased|decrease|decreased|rise|cut|reduction|change)\s+of)\s*:?\s*\z/i
+  # What, immediately before a percentage, makes it a change amount: "by", a
+  # noun with "of" ("a cut of"), or a bare verb ("decreased 0.25%", cubic on
+  # #400). The nouns need "of" because "rate change 6.24%" is not a movement.
+  CHANGE_MARKER = /(?:\bby|\b(?:increase|increased|decrease|decreased|rise|cut|reduction|change)\s+of|\b(?:increased|decreased|rose|fell|cut|raised|lowered|reduced|up|down))\s*:?\s*\z/i
 
   def self.read(text)
     new(text).reading

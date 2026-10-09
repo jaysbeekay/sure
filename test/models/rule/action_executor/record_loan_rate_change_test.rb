@@ -195,6 +195,20 @@ class Rule::ActionExecutor::RecordLoanRateChangeTest < ActiveSupport::TestCase
     assert_equal({ "2026-09-14" => BigDecimal("6.3") }, rates)
   end
 
+  # cubic, #400: ISO-8601 spells a day more than one way. A row stored under the
+  # basic spelling is still on the transaction's date, and a different rate
+  # there is a clash, not a second row for the same day.
+  test "a row on the transaction's date under another ISO spelling is a clash too" do
+    @loan.update_columns(variable_rate_schedule: { "20260914" => "6.30" })
+    loan_transaction "NEW RATE 6.24% P.A."
+
+    assert_difference -> { DebugLogEntry.where(category: "loan_rate").count }, 1 do
+      @rule.apply
+    end
+
+    assert_equal({ "20260914" => BigDecimal("6.3") }, rates)
+  end
+
   test "running the rule twice records one row and queues one rebuild" do
     loan_transaction "NEW RATE 6.24% P.A."
 

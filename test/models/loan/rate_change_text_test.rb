@@ -113,6 +113,23 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
     assert_equal :change_amount_only, reading.problem
   end
 
+  # cubic, #400: a bare change verb, with no "by" or "of", still names how far
+  # the rate moved. Read as a rate, "decreased 0.25%" would put the loan there.
+  test "a percentage straight after a bare change verb is a change amount" do
+    [ "Your variable rate decreased 0.25%", "Rate increased 0.5%", "Rate cut 0.25%",
+      "Interest rate rose 0.25%", "Rate fell 0.25%", "Rate reduced 0.15%", "Rate down 0.25%" ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, text
+      assert_equal :change_amount_only, reading.problem, text
+    end
+  end
+
+  test "a bare change verb beside the new rate gives the new rate" do
+    assert_rate "6.24", "Rate decreased 0.25% to 6.24% p.a."
+    assert_rate "6.24", "Rate cut to 6.24%"
+  end
+
   test "a change amount beside the new rate gives the new rate" do
     assert_rate "6.24", "Rate decreased by 0.25% to 6.24% p.a."
   end
