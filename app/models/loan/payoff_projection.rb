@@ -19,7 +19,7 @@ class Loan
   # balance that includes escrow will understate interest/time saved.
   class PayoffProjection
     MAX_ITERATIONS_MULTIPLIER = 2
-    PAYMENT_STRATEGIES = %i[hold reamortize].freeze
+    PAYMENT_STRATEGIES = %i[scheduled hold reamortize].freeze
     EXTRA_PAYMENT_FREQUENCIES = %w[weekly monthly yearly].freeze
 
     attr_reader :loan, :extra_payment, :as_of
@@ -45,9 +45,18 @@ class Loan
     # between the real repayment date and the notional month end.
     # payment_strategy: how the repayment behaves when the rate changes.
     #
-    #   :hold       (default) -- the repayment stays where it is and the loan
-    #               clears sooner or later. This is what "what if I pay extra"
-    #               means, and every existing caller wants it.
+    #   :scheduled  (default) -- each period pays the contracted schedule's
+    #               repayment for that date, so a recorded rate change resizes
+    #               the projected repayment exactly where the schedule resizes
+    #               its own, and the loan clears sooner or later against the
+    #               ACTUAL balance (#100, decision 1). A variable loan ahead of
+    #               schedule therefore clears early rather than shrinking its
+    #               repayment back onto the original maturity. On a fixed loan
+    #               every row carries the contracted repayment, so this is
+    #               byte-identical to :hold.
+    #   :hold       -- the contracted FIRST repayment, carried across every
+    #               period. Was the default; on a variable loan it ignores every
+    #               rate change since origination.
     #   :reamortize -- the repayment is re-sized at each rate change to clear
     #               the loan by its original maturity, which is what a lender
     #               actually does. `UI::Loan::RateChangeTable` needs this: it
@@ -66,7 +75,7 @@ class Loan
     # one date while pricing it from a projection anchored to the next
     # (CodeRabbit, #89). Defaults to today so every existing caller is
     # unaffected.
-    def initialize(loan, extra_payment: nil, scenario: nil, payment_strategy: :hold, as_of: Date.current)
+    def initialize(loan, extra_payment: nil, scenario: nil, payment_strategy: :scheduled, as_of: Date.current)
       @loan = loan
       @extra_payment = extra_payment
       @scenario = scenario
@@ -200,11 +209,17 @@ class Loan
       Money.new(loan.account.balance, currency)
     end
 
-    # The payment this projection actually models -- the original
-    # schedule's payment, plus the hypothetical extra when one is present.
+    # The repayment this projection models in its first period -- the
+    # contract's repayment then (under :hold, its first repayment ever), plus
+    # the hypothetical extra when one is present. Under :scheduled a later
+    # recorded rate change moves it in later periods; see #scheduled_payment_on.
     def monthly_payment
-      base = loan.amortization_schedule.monthly_payment
-      return base if extra_payment.blank? || extra_payment.amount.zero?
+      base = if @payment_strategy == :scheduled
+        Money.new(scheduled_payment_on(first_projected_payment_date), currency)
+      else
+        loan.amortization_schedule.monthly_payment
+      end
+      return base if base.nil? || extra_payment.blank? || extra_payment.amount.zero?
       base + extra_payment
     end
 
@@ -367,6 +382,28 @@ class Loan
           .method(:change_points)
       end
 
+      # The contract's repayment for the period ending on `date` (#100,
+      # decision 1). The projection steps its dates the way the schedule does,
+      # so each projected date is a schedule row's date until maturity.
+      #
+      # The schedule's LAST row is not a repayment the contract asks of a loan
+      # in any other position: it settles the schedule's own rounding and
+      # drift to exactly zero. So that row, and every period past maturity --
+      # where a loan behind schedule still owes -- pays the last LEVEL
+      # repayment, the one before it. A fixed loan's level repayment is its
+      # contracted one throughout, so it projects exactly as :hold did.
+      def scheduled_payment_on(date)
+        rows = original_schedule_rows
+        return BigDecimal("0") if rows.empty?
+
+        level_rows = rows.length > 1 ? rows[0..-2] : rows
+        @level_rows_by_date ||= level_rows.index_by(&:payment_date)
+        row = @level_rows_by_date[date] ||
+          level_rows.reverse_each.find { |candidate| candidate.payment_date <= date } ||
+          level_rows.first
+        BigDecimal(row.payment_amount.to_s)
+      end
+
       # The contracted schedule's rows still ahead of today. The baseline this
       # projection is compared against, for months and interest saved.
       def original_remaining_payments
@@ -408,6 +445,13 @@ class Loan
       # trajectory is driven by the very repayment the table puts on screen.
       def payment_amount_for
         return ->(**_kwargs) { monthly_payment.amount } if @payment_strategy == :hold
+
+        if @payment_strategy == :scheduled
+          extra = extra_payment.present? ? extra_payment.amount : BigDecimal("0")
+          return ->(payment_number:, **_kwargs) {
+            scheduled_payment_on(projected_payment_dates[payment_number - 1]) + extra
+          }
+        end
 
         ->(rate:, balance:, remaining_payments:, **_kwargs) {
           Loan::AmortizationMath.level_payment(

@@ -339,7 +339,7 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert projection.payoff_date
   end
 
-  test "extra-payment projection applies recorded variable rates while holding the repayment" do
+  test "extra-payment projection applies recorded variable rates to the scheduled repayment" do
     loan = build_loan(balance: 500000, rate_type: "variable")
     payment_dates = loan.amortizations.where("payment_date > ?", Date.current).ordered.pluck(:payment_date)
     loan.update!(variable_rate_schedule: {
@@ -358,9 +358,17 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert projection.applicable?
     assert_equal [ BigDecimal("3.5"), BigDecimal("4.5"), BigDecimal("4.5"), BigDecimal("5.5"), BigDecimal("5.5") ],
       projection.payments.first(5).map { |payment| payment[:interest_rate] }
-    expected_payment = loan.amortization_schedule.monthly_payment.amount + extra_payment.amount
-    assert projection.payments.first(5).all? { |payment| payment[:payment_amount] == expected_payment },
-      "recorded rate changes must not replace the held repayment in the what-if projection"
+    # #100, decision 1 reverses this test's earlier premise ("recorded rate
+    # changes must not replace the held repayment in the what-if"): the extra
+    # rides on top of the contract's repayment for each period, so a recorded
+    # change resizes the what-if exactly where it resizes the schedule.
+    schedule = loan.amortization_schedule.payments.index_by { |payment| payment[:payment_date] }
+    projection.payments.first(5).each do |payment|
+      assert_equal schedule.fetch(payment[:payment_date])[:payment_amount] + extra_payment.amount, payment[:payment_amount]
+    end
+    held = Loan::PayoffProjection.new(loan, extra_payment: extra_payment, payment_strategy: :hold)
+    assert held.payments.first(5).all? { |payment| payment[:payment_amount] == loan.amortization_schedule.monthly_payment.amount + extra_payment.amount },
+      ":hold still holds the contracted repayment plus the extra"
   end
 
   test "not applicable when the fixed payment no longer covers interest at the current balance" do
@@ -670,16 +678,25 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
 
   # Every existing caller wants :hold, and nothing about adding the option may
   # move their numbers.
-  test "the default projection is unchanged by the new option" do
+  # :hold still carries the contracted first repayment. The default is now
+  # :scheduled (#100, decision 1): it follows the schedule's repayment, so the
+  # recorded change two months out resizes it where the schedule does.
+  test "the held projection keeps the contracted repayment; the default follows the schedule" do
     loan = reamortize_loan
 
     default = Loan::PayoffProjection.new(loan)
-    explicit = Loan::PayoffProjection.new(loan, payment_strategy: :hold)
+    held = Loan::PayoffProjection.new(loan, payment_strategy: :hold)
 
-    assert_equal explicit.payments, default.payments
-    assert_equal loan.amortization_schedule.monthly_payment.amount,
-      default.payments.first[:payment_amount],
+    assert_equal [ loan.amortization_schedule.monthly_payment.amount ],
+      held.payments.first(3).map { |row| row[:payment_amount] }.uniq,
       ":hold carries the contracted repayment, not a re-amortised one"
+
+    schedule = loan.amortization_schedule.payments.index_by { |row| row[:payment_date] }
+    default.payments.first(3).each do |row|
+      assert_equal schedule.fetch(row[:payment_date])[:payment_amount], row[:payment_amount]
+    end
+    assert_not_equal held.payments.second[:payment_amount], default.payments.second[:payment_amount],
+      "the recorded change must move the default projection's repayment"
   end
 
   # CodeRabbit, #79. `unamortizable_payment?` asks whether the CONTRACTED
