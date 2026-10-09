@@ -101,6 +101,21 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal "last_5_years", @user.reload.default_period
   end
 
+  # The picker used to take a row of its own between the heading and the first
+  # section, so the gap there was a picker's height plus two margins rather
+  # than the one gap the Plan page has. It shares the heading's row instead,
+  # and that row is the frame's first child so the first section follows it.
+  test "the period picker shares the heading's row, directly above the sections" do
+    get portfolio_path(period: "last_5_years")
+
+    assert_response :success
+    assert_select "turbo-frame#portfolio_sections > div:first-child" do
+      assert_select "h1", text: I18n.t("portfolios.show.title")
+      assert_select "button[aria-label=?]", I18n.t("UI.period_picker.aria_label", period: "5Y")
+    end
+    assert_select "turbo-frame#portfolio_sections > div:first-child + div[role=list]"
+  end
+
   test "an unknown period falls back rather than erroring" do
     get portfolio_path(period: "not_a_period")
 
