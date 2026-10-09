@@ -75,6 +75,57 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert json.key?("payoff_projection")
   end
 
+  # #184 phase 4e: the persisted rows are a cache of the in-memory schedule
+  # (upstream's engine). Served current, the response is that schedule figure
+  # for figure, summary included.
+  test "the cached rows are the schedule's own rows, figure for figure" do
+    loan = @loan_account.accountable
+    get api_v1_loan_amortization_schedule_path(loan), params: { per_page: 100 }, headers: api_headers
+    assert_response :success
+
+    json = JSON.parse(response.body)
+    expected = loan.reload.amortization_rows.first(100).map do |row|
+      row.merge(payment_date: row[:payment_date].iso8601).transform_values(&:to_s).stringify_keys
+    end
+    assert_equal "current", json["schedule"]["status"]
+    assert_equal expected, json["payments"].map { |payment| payment.transform_values(&:to_s) }
+    assert_equal loan.amortization_schedule.periodic_payment.amount.to_s, json["schedule"]["monthly_payment"]
+    assert_equal loan.amortization_schedule.total_interest.amount, BigDecimal(json["schedule"]["total_interest"])
+    assert_equal loan.amortization_schedule.payoff_date.iso8601, json["schedule"]["payoff_date"]
+  end
+
+  # A row's rate is the rate its period OPENED on (upstream's row): a change
+  # effective on a payment date shows on the row after it.
+  test "a cached variable row carries the rate its period opened on" do
+    loan = @variable_loan_account.accountable
+    change_on = loan.amortization_schedule.payments[3].date
+    loan.add_variable_rate_change(change_on, 5.0)
+    perform_enqueued_jobs
+
+    get api_v1_loan_amortization_schedule_path(loan), params: { per_page: 10 }, headers: api_headers
+    assert_response :success
+
+    rates = JSON.parse(response.body)["payments"].map { |payment| BigDecimal(payment["interest_rate"]) }
+    assert_equal [ BigDecimal("3.5") ] * 4 + [ BigDecimal("5") ] * 6, rates
+  end
+
+  # The projection is reported only when it clears the loan: one that runs but
+  # never clears has no payoff date, and the response says null rather than
+  # quoting figures for a payoff that does not exist.
+  test "a projection that never clears the loan is reported as null" do
+    loan = @loan_account.accountable
+    # The amount borrowed is recorded, so the schedule stays on 500,000 while
+    # the balance moves.
+    loan.update!(initial_balance: 500_000)
+    @loan_account.update!(balance: 50_000_000)
+
+    get api_v1_loan_amortization_schedule_path(loan), headers: api_headers
+    assert_response :success
+
+    assert loan.reload.payoff_projection.applicable?, "precondition: the projection runs"
+    assert_nil JSON.parse(response.body)["payoff_projection"]
+  end
+
   test "returns a payoff projection reflecting extra principal already paid" do
     start_date = Date.current
     loan_account = Account.create! \
