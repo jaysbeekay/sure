@@ -169,6 +169,64 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_empty result.index_series
   end
 
+  # The same withholding for the fee ratio. Fees and income are money and are
+  # still reported (see Portfolio::Drivers), but a ratio over a value some of
+  # which could not be converted is a percentage of the wrong number.
+  #
+  # Mixed currencies on purpose: with only the EUR account nothing converts, the
+  # average value is zero and the ratio is nil for that reason and not this one.
+  # Here the USD account gives it a perfectly good denominator, which is the case
+  # where a ratio over only the currencies that converted would be shown.
+  test "the fee ratio is withheld when an exchange rate is missing" do
+    eur = eur_account_with_fee
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 995, cash_flow: -5
+    fee_entry account: @account, date: @day_two, amount: 5
+
+    result = performance(account_ids: [ eur.id, @account.id ])
+
+    assert result.rate_missing?
+    assert result.income[:average_value].positive?, "the USD account is a real denominator"
+    assert_equal BigDecimal(5), result.income[:fees], "the fees themselves are still reported"
+    assert_nil result.income[:fee_ratio]
+  end
+
+  # The control for the test above: with the rates present the same fixture has
+  # a ratio, so a nil there is the withholding and not an empty fixture.
+  test "the fee ratio is reported when the rates are present" do
+    eur = eur_account_with_fee
+    set_rate from: "EUR", to: "USD", date: @day_one, rate: 1.0
+    set_rate from: "EUR", to: "USD", date: @day_two, rate: 1.0
+
+    result = performance(account_ids: [ eur.id ])
+
+    assert_not result.rate_missing?
+    assert_in_delta 10 / 995.0, result.income[:fee_ratio].to_f, 0.000001
+  end
+
+  # #income is its own cache entry so that asking for it does not pay for the
+  # returns, and that has to hold on a cold instance too. It needs one fact the
+  # returns also use -- whether a rate is missing -- and reading that from the
+  # metrics ran the whole of #compute first: eligibility, the drivers and an
+  # XIRR solve, none of which the income reads. The fee ratio is still withheld
+  # here, so the flag is read; it is read from the daily returns.
+  test "reading the income alone computes none of the returns" do
+    eur = eur_account_with_fee
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 995, cash_flow: -5
+    fee_entry account: @account, date: @day_two, amount: 5
+    result = performance(account_ids: [ eur.id, @account.id ])
+
+    result.expects(:compute).never
+    Portfolio::ReturnScope.expects(:resolve_all).never
+    Portfolio::Xirr.expects(:new).never
+
+    income = result.income
+
+    assert_equal BigDecimal(5), income[:fees], "the USD fee converts; the EUR one has no rate"
+    assert_nil income[:fee_ratio], "the missing rate still withholds the ratio"
+  end
+
   # Regression: the key was built from family, user, accounts and period only,
   # so two instances whose rows genuinely differ shared one cache entry and
   # whichever ran first decided what both saw.
@@ -685,6 +743,16 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
         Portfolio::Xirr::Flow.new(date: ambiguous_end_date, amount: BigDecimal(-500)),
         Portfolio::Xirr::Flow.new(date: ambiguous_end_date + 1, amount: BigDecimal(710))
       ]
+    end
+
+    # 1,000 EUR, then a 10 EUR fee: closing values 1,000 and 990, so the mean is
+    # 995 and the ratio 10 / 995. No exchange rate is stored.
+    def eur_account_with_fee
+      eur = create_portfolio_account(family: @family, currency: "EUR")
+      fee_entry account: eur, date: @day_two, amount: 10
+      lay_balance account: eur, date: @day_one, opening: 1_000, closing: 1_000
+      lay_balance account: eur, date: @day_two, opening: 1_000, closing: 990, cash_flow: -10
+      eur
     end
 
     def build_valuation_tracked_account
