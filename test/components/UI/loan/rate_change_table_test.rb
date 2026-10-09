@@ -74,6 +74,24 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert row[:new_payment] < row[:current_payment], "a rate cut must lower the quoted repayment"
   end
 
+  # cubic, #394: two changes landing before the same payment are priced at that
+  # payment on the later rate, so the earlier one never reaches a repayment.
+  # Listing it would pair its rate with the later rate's repayment.
+  test "a change superseded before its payment is not listed" do
+    payment_date = @loan.amortization_schedule.payments
+      .find { |p| p[:payment_date] >= Date.current + 2.months }[:payment_date]
+    @loan.add_variable_rate_change(payment_date - 10.days, 5.93)
+    @loan.add_variable_rate_change(payment_date - 3.days, 6.4)
+    @loan.reload
+
+    row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
+    schedule_row = @loan.amortization_schedule.payments.find { |p| p[:payment_date] == payment_date }
+
+    assert_equal payment_date - 3.days, row[:effective_date]
+    assert_equal BigDecimal("6.4"), row[:new_rate]
+    assert_equal Money.new(schedule_row[:payment_amount], "USD"), row[:new_payment]
+  end
+
   # The base moved off the actual balance: neither an offset nor paying ahead
   # changes what the lender's letter quotes.
   test "an offset and a lower actual balance change neither column" do
