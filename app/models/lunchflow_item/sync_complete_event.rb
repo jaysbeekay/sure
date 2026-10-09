@@ -16,7 +16,7 @@ class LunchflowItem::SyncCompleteEvent
       lunchflow_item.family,
       target: "lunchflow_item_#{lunchflow_item.id}",
       partial: "lunchflow_items/lunchflow_item",
-      locals: { lunchflow_item: lunchflow_item }
+      locals: { lunchflow_item: lunchflow_item, visible_accounts: lunchflow_item.accounts }
     )
 
     # Let family handle sync notifications

@@ -12,7 +12,7 @@ class AkahuItem::SyncCompleteEvent
       akahu_item.family,
       target: "akahu_item_#{akahu_item.id}",
       partial: "akahu_items/akahu_item",
-      locals: { akahu_item: akahu_item }
+      locals: { akahu_item: akahu_item, visible_accounts: akahu_item.accounts }
     )
 
     akahu_item.family.broadcast_sync_complete

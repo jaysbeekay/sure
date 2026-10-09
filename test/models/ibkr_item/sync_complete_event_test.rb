@@ -14,7 +14,7 @@ class IbkrItem::SyncCompleteEventTest < ActiveSupport::TestCase
       family,
       target: "ibkr_item_#{ibkr_item.id}",
       partial: "ibkr_items/ibkr_item",
-      locals: { ibkr_item: ibkr_item }
+      locals: { ibkr_item: ibkr_item, visible_accounts: [ account ] }
     ).once
     family.expects(:broadcast_sync_complete).once
 

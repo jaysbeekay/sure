@@ -185,7 +185,7 @@ class SimplefinItem::Syncer
         card_html = ApplicationController.render(
           partial: "simplefin_items/simplefin_item",
           formats: [ :html ],
-          locals: { simplefin_item: simplefin_item }
+          locals: { simplefin_item: simplefin_item, visible_accounts: simplefin_item.accounts }
         )
         target_id = ActionView::RecordIdentifier.dom_id(simplefin_item)
         Turbo::StreamsChannel.broadcast_replace_to(simplefin_item.family, target: target_id, html: card_html)

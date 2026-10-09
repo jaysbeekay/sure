@@ -14,7 +14,7 @@ class IbkrItem::SyncCompleteEvent
       ibkr_item.family,
       target: "ibkr_item_#{ibkr_item.id}",
       partial: "ibkr_items/ibkr_item",
-      locals: { ibkr_item: ibkr_item }
+      locals: { ibkr_item: ibkr_item, visible_accounts: ibkr_item.accounts }
     )
 
     ibkr_item.family.broadcast_sync_complete

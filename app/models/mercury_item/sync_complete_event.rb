@@ -16,7 +16,7 @@ class MercuryItem::SyncCompleteEvent
       mercury_item.family,
       target: "mercury_item_#{mercury_item.id}",
       partial: "mercury_items/mercury_item",
-      locals: { mercury_item: mercury_item }
+      locals: { mercury_item: mercury_item, visible_accounts: mercury_item.accounts }
     )
 
     # Let family handle sync notifications

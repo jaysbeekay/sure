@@ -22,7 +22,7 @@ class BinanceItem::SyncCompleteEvent
       binance_item.family,
       target: "binance_item_#{binance_item.id}",
       partial: "binance_items/binance_item",
-      locals: { binance_item: binance_item }
+      locals: { binance_item: binance_item, visible_accounts: binance_item.accounts }
     )
 
     # Let family handle sync notifications

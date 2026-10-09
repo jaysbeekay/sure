@@ -14,7 +14,7 @@ class PlaidItem::SyncCompleteEvent
       plaid_item.family,
       target: "plaid_item_#{plaid_item.id}",
       partial: "plaid_items/plaid_item",
-      locals: { plaid_item: plaid_item }
+      locals: { plaid_item: plaid_item, visible_accounts: plaid_item.accounts }
     )
 
     plaid_item.family.broadcast_sync_complete

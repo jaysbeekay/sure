@@ -33,7 +33,8 @@ class IndexaCapitalActivitiesFetchJob < ApplicationJob
       @indexa_capital_account.indexa_capital_item&.broadcast_replace_to(
         @indexa_capital_account.indexa_capital_item.family,
         target: "indexa_capital_item_#{@indexa_capital_account.indexa_capital_item.id}",
-        partial: "indexa_capital_items/indexa_capital_item"
+        partial: "indexa_capital_items/indexa_capital_item",
+        locals: { indexa_capital_item: @indexa_capital_account.indexa_capital_item, visible_accounts: @indexa_capital_account.indexa_capital_item.accounts }
       )
     rescue => e
       Rails.logger.warn("IndexaCapitalActivitiesFetchJob - Broadcast failed: #{e.message}")

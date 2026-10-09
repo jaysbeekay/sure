@@ -12,7 +12,7 @@ class KrakenItem::SyncCompleteEvent
       @kraken_item.family,
       target: ActionView::RecordIdentifier.dom_id(@kraken_item),
       partial: "kraken_items/kraken_item",
-      locals: { kraken_item: @kraken_item }
+      locals: { kraken_item: @kraken_item, visible_accounts: @kraken_item.accounts }
     )
   rescue StandardError => e
     Rails.logger.warn("KrakenItem::SyncCompleteEvent failed for #{@kraken_item.id}: #{e.class}")
