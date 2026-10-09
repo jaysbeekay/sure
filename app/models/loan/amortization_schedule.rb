@@ -17,8 +17,14 @@ class Loan
     # docs/loans/release-evidence.md: read paths enqueue rebuilds rather than
     # performing them (#39), so without a controlled prebuild the estate
     # restages itself through the job queue on first view.
+    #
+    # Version 4 (#184): a re-amortisation is sized from the interest its
+    # opening period actually charged. Every variable loan's rows change from
+    # its first rate change on, so the persisted rows must be restaged; without
+    # the bump their signature still matched and `display_rows` would serve the
+    # old rows beside cards computed by the new code.
     SCHEDULE_DAILY_ACCRUAL = true
-    ALGORITHM_VERSION = 3
+    ALGORITHM_VERSION = 4
 
     attr_reader :loan
 

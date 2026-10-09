@@ -585,11 +585,12 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
   #
   # #36's defect was the version advancing while the calculation did not, so
   # every persisted row was invalidated to regenerate identical numbers. The
-  # pairing is pinned in both directions: version 3 means daily accrual, and
-  # daily accrual means version 3.
+  # pairing is pinned in both directions: version 3 meant daily accrual, and
+  # version 4 is daily accrual with a resize sized from its opening period's
+  # interest (#184), which changes every variable loan's rows.
   test "the persisted schedule accrues daily, and the algorithm version says so" do
     assert_equal true, Loan::AmortizationSchedule::SCHEDULE_DAILY_ACCRUAL
-    assert_equal 3, Loan::AmortizationSchedule::ALGORITHM_VERSION,
+    assert_equal 4, Loan::AmortizationSchedule::ALGORITHM_VERSION,
       "SCHEDULE_DAILY_ACCRUAL and ALGORITHM_VERSION move together -- the version is baked " \
       "into the schedule signature, so a version that disagrees with the calculation either " \
       "restages every row to produce identical numbers or serves rows the code did not " \
