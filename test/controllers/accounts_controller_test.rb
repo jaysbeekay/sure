@@ -1132,6 +1132,23 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame[src='#{account_path(loan_account, tab: 'schedule')}']"
   end
 
+  # #390: the chart at the top of every loan page reads the schedule's rows, so
+  # a plain visit to a loan whose persisted rows are stale enqueues the same
+  # rebuild the Schedule tab does -- and still writes nothing itself.
+  test "a plain visit to a loan with a stale schedule enqueues a rebuild for the chart's rows" do
+    loan_account = accounts(:loan)
+    assert_not loan_account.loan.schedule_current?, "the fixture loan has no persisted rows, so they are stale"
+
+    assert_no_difference -> { LoanAmortization.count } do
+      assert_enqueued_with job: LoanAmortizationRebuildJob, args: [ loan_account.loan.id ] do
+        get account_url(loan_account)
+      end
+    end
+
+    assert_response :success
+    assert_select "##{chart_card_id(loan_account)} [data-controller='loan-payoff-chart']", count: 1
+  end
+
   # Rewritten for #39. This previously asserted the GET *built* the schedule --
   # ensure_amortization_schedule_current! takes a row lock and does
   # delete_all + insert_all! inline, so the first page view after any signature
@@ -1178,7 +1195,9 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date")
     assert_select "*", text: I18n.t("loans.tabs.schedule.interest_saved")
-    assert_select "[data-controller='loan-payoff-chart']"
+    # The chart is the account chart card's, not the tab's (#390).
+    assert_select "##{chart_card_id(loan_account)} [data-controller='loan-payoff-chart']", count: 1
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)} [data-controller='loan-payoff-chart']", count: 0
   end
 
   # Regression: the projection used to anchor on Date.current.next_month
@@ -1230,7 +1249,9 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     get account_url(loan_account, tab: "schedule")
     assert_response :success
     assert_select "*", text: I18n.t("loans.tabs.schedule.projected_payoff_date"), count: 0
-    assert_select "[data-controller='loan-payoff-chart']", count: 0
+    # An on-contract loan still has its one chart at the top (#390); the tab
+    # carries none.
+    assert_select "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :schedule_tab)} [data-controller='loan-payoff-chart']", count: 0
   end
 
   test "schedule tab enqueues nothing once the persisted schedule is current" do
@@ -1338,19 +1359,19 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "input[name='extra_payment[amount]']", count: 0
   end
 
-  test "the Extra repayments chart shows the baseline for an on-schedule loan before any amount is entered" do
+  test "the top chart draws the projection for an on-schedule loan before any amount is entered" do
     loan_account = on_schedule_loan_account
     baseline = Loan::PayoffProjection.new(loan_account.loan)
     assert_not baseline.diverges_from_schedule?, "test setup should be on schedule"
 
     get account_url(loan_account, tab: "extra_repayments")
 
-    payload = extra_repayments_chart_payload
-    assert_equal baseline.payoff_date.iso8601, payload["accelerated_payoff_date"]
-    assert_not payload.key?("extra_projection")
+    payload = loan_chart_payload(loan_account)
+    assert_equal baseline.payoff_date.iso8601, payload["projected_payoff_date"]
+    assert_not payload.key?("extra")
   end
 
-  test "an amount draws the extra line beside the baseline, with cards measured against not paying extra" do
+  test "an amount draws the extra line on the top chart, with cards measured against not paying extra" do
     loan_account = on_schedule_loan_account
     loan_account.update!(balance: 450_000) # ahead of schedule, so the two comparisons differ
     loan = loan_account.loan
@@ -1363,31 +1384,15 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     get account_url(loan_account, tab: "extra_repayments", extra_payment: { amount: "200" })
 
     assert_response :success
-    payload = extra_repayments_chart_payload
-    assert_equal baseline.payoff_date.iso8601, payload["accelerated_payoff_date"]
+    payload = loan_chart_payload(loan_account)
+    assert_equal baseline.payoff_date.iso8601, payload["projected_payoff_date"]
     assert_equal extra.payoff_date.iso8601, payload["extra_payoff_date"]
-    assert_equal extra.payoff_date.iso8601, payload["extra_projection"].last["date"]
+    assert_equal extra.payoff_date.iso8601, payload["extra"].last["date"]
 
     assert_select "[data-testid='extra-payoff-date']", text: I18n.l(extra.payoff_date, format: :long)
     assert_select "[data-testid='extra-months-sooner']",
       text: I18n.t("loans.tabs.extra_repayments.months_sooner", count: sooner)
     assert_select "[data-testid='extra-interest-saved']", text: Money.new(saved, "USD").format
-  end
-
-  test "malformed amounts fall back to the baseline chart without an error" do
-    loan_account = on_schedule_loan_account
-
-    [ "", "0", "-5", "abc", "NaN", "Infinity", "1e400" ].each do |amount|
-      get account_url(loan_account, tab: "extra_repayments", extra_payment: { amount: amount })
-
-      assert_response :success, "amount #{amount.inspect} must not error"
-      payload = extra_repayments_chart_payload
-      assert_not payload.key?("extra_projection"), "amount #{amount.inspect} must not draw an extra line"
-    end
-
-    get account_url(loan_account, tab: "extra_repayments", extra_payment: "200")
-    assert_response :success
-    assert_not extra_repayments_chart_payload.key?("extra_projection")
   end
 
   test "modelling an extra payment mutates nothing" do
@@ -1454,6 +1459,138 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "button[data-id='extra_repayments']", count: 0
+  end
+
+  # --- #390: one loan chart, at the top of the page ------------------------
+
+  # Test 3. One chart for the whole page, in the account chart card, whichever
+  # loan tab is open. On a loan ahead of its contract the Schedule tab used to
+  # mount its own chart under the table, and the Extra repayments tab another
+  # under its cards.
+  test "a loan page mounts exactly one loan chart, in the chart card, on every loan tab" do
+    loan_account = variable_rate_loan_account
+    assert Loan::PayoffProjection.new(loan_account.loan).diverges_from_schedule?,
+      "the Schedule tab drew its own chart only for a diverging loan, so the setup must diverge"
+
+    [ nil, "schedule", "extra_repayments" ].each do |tab|
+      get account_url(loan_account, tab: tab)
+
+      assert_response :success
+      assert_select "[data-controller='loan-payoff-chart']", { count: 1 }, "tab #{tab.inspect}"
+      assert_select "##{chart_card_id(loan_account)} [data-controller='loan-payoff-chart']", { count: 1 }, "tab #{tab.inspect}"
+      assert_select "[data-controller='time-series-chart']", { count: 0 }, "tab #{tab.inspect}"
+    end
+
+    # The tabs' own frames, as Turbo lazy-loads them, carry no chart either.
+    { "schedule" => :schedule_tab, "extra_repayments" => :extra_repayments_tab }.each do |tab, frame|
+      get account_url(loan_account, tab: tab, extra_payment: { amount: "250" }),
+        headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, frame) }
+
+      assert_response :success
+      assert_select "[data-controller='loan-payoff-chart']", { count: 0 }, "the #{tab} frame"
+    end
+  end
+
+  # Test 4. The extra line is the difference an amount makes, measured against
+  # the same request without one, and it ends on the date the tab's card says.
+  test "an extra amount adds the extra series to the top chart, ending on the card's payoff date" do
+    loan_account = variable_rate_loan_account
+
+    get account_url(loan_account, tab: "extra_repayments")
+    without = loan_chart_payload(loan_account)
+
+    get account_url(loan_account, tab: "extra_repayments", extra_payment: { amount: "250" })
+    with = loan_chart_payload(loan_account)
+
+    assert_not without.key?("extra"), "no amount, no extra line"
+    assert_not_includes without["visible"], "extra"
+    assert with.key?("extra"), "the amount must add the extra line"
+    assert with["extra"].length > 1
+    assert_includes with["visible"], "extra"
+    assert_equal without.except("extra", "extra_payoff_date", "visible", "labels", "aria_description"),
+      with.except("extra", "extra_payoff_date", "visible", "labels", "aria_description"),
+      "the amount adds the extra line and changes nothing else the chart draws"
+    assert_operator with["extra_payoff_date"], :<, with["projected_payoff_date"]
+    assert_equal with["extra_payoff_date"], with["extra"].last["date"]
+
+    card = css_select("[data-testid='extra-payoff-date']").first
+    assert card, "the Payoff with extra card must render"
+    assert_equal I18n.l(Date.iso8601(with["extra_payoff_date"]), format: :long), card.text.strip
+  end
+
+  # Test 5. Input the request boundary rejects draws no extra line and raises
+  # nothing; the chart itself still renders.
+  test "a zero, negative, blank or non-numeric amount draws no extra series" do
+    loan_account = variable_rate_loan_account
+
+    [ "", "0", "-5", "abc", "NaN", "Infinity", "1e400" ].each do |amount|
+      get account_url(loan_account, tab: "extra_repayments", extra_payment: { amount: amount })
+
+      assert_response :success, "amount #{amount.inspect} must not error"
+      payload = loan_chart_payload(loan_account)
+      assert_not payload.key?("extra"), "amount #{amount.inspect} must not draw an extra line"
+      assert_not_includes payload["visible"], "extra"
+    end
+
+    get account_url(loan_account, tab: "extra_repayments", extra_payment: "200")
+    assert_response :success
+    assert_not loan_chart_payload(loan_account).key?("extra")
+  end
+
+  # Test 6. A period change keeps the extra line: every period link carries the
+  # amount and the tab it was entered on.
+  test "with an extra amount every period-picker link carries the amount and the tab" do
+    loan_account = variable_rate_loan_account
+
+    get account_url(loan_account, tab: "extra_repayments", extra_payment: { amount: "250" })
+
+    links = css_select("##{chart_card_id(loan_account)} a[role='menuitemradio']")
+    assert links.any?, "the chart card must carry the period picker"
+    links.each do |link|
+      query = Rack::Utils.parse_nested_query(URI.parse(link["href"]).query)
+      assert_equal "250", query.dig("extra_payment", "amount"), link["href"]
+      assert_equal "extra_repayments", query["tab"], link["href"]
+    end
+
+    get account_url(loan_account, tab: "extra_repayments")
+    css_select("##{chart_card_id(loan_account)} a[role='menuitemradio']").each do |link|
+      assert_not_includes link["href"], "extra_payment", "no amount, nothing to carry"
+    end
+  end
+
+  # The form redraws the whole page, top chart included, on the period the
+  # chart is showing, so the line it adds lands where the reader is looking.
+  test "the Extra repayments form targets the whole page and keeps the tab and the period" do
+    loan_account = variable_rate_loan_account
+
+    get account_url(loan_account, tab: "extra_repayments", period: "last_5_years", extra_payment: { amount: "250" })
+
+    assert_select "form[data-turbo-frame='_top']:has(input[name='extra_payment[amount]'])", count: 1 do
+      assert_select "input[type='hidden'][name='tab'][value='extra_repayments']", count: 1
+      assert_select "input[type='hidden'][name='period'][value='last_5_years']", count: 1
+    end
+    assert_select "a[data-turbo-frame='_top'][href*='tab=extra_repayments']", text: I18n.t("loans.tabs.extra_repayments.clear")
+  end
+
+  # Test 2 at the page. A loan whose schedule cannot be drawn, and every other
+  # account, keep the plain balance chart.
+  test "a loan without a schedule and a depository keep the time-series chart" do
+    no_rate = Account.create!(
+      family: @user.family, name: "No Rate Chart Loan", balance: 10_000, currency: "USD",
+      accountable: Loan.create!(subtype: "other", interest_rate: nil, term_months: 360, rate_type: "fixed")
+    )
+
+    [ no_rate, accounts(:depository) ].each do |account|
+      get account_url(account)
+
+      assert_response :success
+      assert_select "[data-controller='loan-payoff-chart']", { count: 0 }, account.name
+      assert_select "##{chart_card_id(account)}" do
+        # The chart card's own mount; a depository's page can carry other
+        # time-series sparklines elsewhere.
+        assert_select "[data-controller='time-series-chart']", { count: 1 }, account.name
+      end
+    end
   end
 
   # --- #65: the day-count basis is disclosed, not silently assumed ---------
@@ -1811,9 +1948,14 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       ActionView::RecordIdentifier.dom_id(account, :extra_repayments_tab)
     end
 
-    def extra_repayments_chart_payload
-      chart = css_select("[data-controller='loan-payoff-chart']").first
-      assert chart, "the Extra repayments tab must mount the payoff chart"
+    def chart_card_id(account)
+      ActionView::RecordIdentifier.dom_id(account, :chart)
+    end
+
+    # The one loan chart on the page, in the account chart card (#390).
+    def loan_chart_payload(account)
+      chart = css_select("##{chart_card_id(account)} [data-controller='loan-payoff-chart']").first
+      assert chart, "the account chart card must mount the loan chart"
       JSON.parse(chart["data-loan-payoff-chart-data-value"])
     end
 end

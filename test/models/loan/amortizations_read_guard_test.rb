@@ -17,8 +17,8 @@ class Loan::AmortizationsReadGuardTest < ActiveSupport::TestCase
   #
   # A file-wide exemption would let a new method in an already-permitted file
   # read the cache silently -- and that is not hypothetical: #payoff_chart_payload
-  # in loan.rb was the fourth defect, in the file that most obviously owns the
-  # association.
+  # in loan.rb (since replaced by Loan::PayoffChart, #390) was the fourth
+  # defect, in the file that most obviously owns the association.
   PERMITTED_METHODS = {
     "app/models/loan.rb" => {
       reason: "Owns the cache: the rebuild/delete write paths and the freshness " \

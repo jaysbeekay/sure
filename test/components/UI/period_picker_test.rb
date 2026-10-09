@@ -134,4 +134,61 @@ class UI::PeriodPickerTest < ViewComponent::TestCase
     # and stays reachable with Back — the drag-select that set it advanced too.
     assert_equal "advance", links.first["data-turbo-action"]
   end
+
+  # A loan's Extra repayments amount travels as a nested param, so a period
+  # change keeps the extra line drawn (#390).
+  test "nested extra_params are composed into every option href" do
+    render_inline(UI::PeriodPicker.new(
+      selected: "last_30_days",
+      url: "/accounts/abc",
+      extra_params: { tab: "extra_repayments", extra_payment: { amount: "250" } }
+    ))
+
+    links = page.all("a[role='menuitemradio']")
+    assert_equal Period.all.size, links.size
+    links.each do |link|
+      query = Rack::Utils.parse_nested_query(URI.parse(link[:href]).query)
+      assert_equal "250", query.dig("extra_payment", "amount")
+      assert_equal "extra_repayments", query["tab"]
+    end
+  end
+
+  # The loan chart offers its own timescales under the shared period keys.
+  LOAN_OPTIONS = [ [ "current_month", "M" ], [ "last_5_years", "5Y" ], [ "all_time", "All" ] ].freeze
+
+  test "options narrow the menu to their pairs, labelled from the options" do
+    render_inline(UI::PeriodPicker.new(selected: "last_5_years", url: "/accounts/abc", options: LOAN_OPTIONS))
+
+    links = page.all("a[role='menuitemradio']")
+    assert_equal LOAN_OPTIONS.size, links.size
+    LOAN_OPTIONS.zip(links).each do |(key, label), link|
+      assert_match(/period=#{key}/, link[:href])
+      assert_equal label, link.text.strip
+    end
+    assert_no_selector "a[href*='period=last_30_days']"
+
+    checked = page.all("a[role='menuitemradio'][aria-checked='true']")
+    assert_equal 1, checked.size
+    assert_equal "replace", checked.first["data-turbo-action"]
+    assert_selector "a[role='menuitemradio'][aria-checked='false'][data-turbo-action='advance']", count: LOAN_OPTIONS.size - 1
+  end
+
+  test "with options the trigger shows the option's label for the selected key" do
+    # A label no Period uses, so the assertion cannot pass on Period's own label.
+    options = [ [ "last_5_years", "Five years" ], [ "all_time", "Whole life" ] ]
+    assert_not_equal "Five years", Period.from_key("last_5_years").label_short
+
+    render_inline(UI::PeriodPicker.new(selected: "last_5_years", url: "/", options: options))
+
+    assert_selector "button[aria-label='Time period: Five years']"
+  end
+
+  test "options leave out the custom range row" do
+    custom_period = Period.custom(start_date: 15.days.ago.to_date, end_date: Date.current)
+
+    render_inline(UI::PeriodPicker.new(selected: custom_period, url: "/", options: LOAN_OPTIONS))
+
+    assert_equal LOAN_OPTIONS.size, page.all("a[role='menuitemradio']").size
+    assert_no_selector "a[href*='start_date=']"
+  end
 end
