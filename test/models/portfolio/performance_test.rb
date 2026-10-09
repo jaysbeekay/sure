@@ -242,20 +242,16 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     ).cache_key, "figures converted into USD must not be served to an EUR family"
   end
 
-  test "cache key distinguishes different flow scopes" do
-    build_textbook_case
-    period = Period.custom(start_date: @day_one, end_date: @day_two)
-    other = create_portfolio_account(family: @family)
-
-    narrow = Portfolio::Performance.new(
-      family: @family, account_ids: [ @account.id ], period: period
-    )
-    wide = Portfolio::Performance.new(
-      family: @family, account_ids: [ @account.id ], period: period,
-      scope_account_ids: [ @account.id, other.id ]
-    )
-
-    refute_equal narrow.cache_key, wide.cache_key
+  # The flow scope is the accounts themselves (see Portfolio::DailyReturns),
+  # so there is no second set to pass, and none to key the cache on.
+  test "the flow scope cannot be widened beyond the accounts measured" do
+    assert_raises(ArgumentError) do
+      Portfolio::Performance.new(
+        family: @family, account_ids: [ @account.id ],
+        period: Period.custom(start_date: @day_one, end_date: @day_two),
+        scope_account_ids: [ @account.id, create_portfolio_account(family: @family).id ]
+      )
+    end
   end
 
   test "an empty scope reports nothing rather than raising" do
@@ -307,20 +303,6 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     result = performance(start_date: @day_one, end_date: @day_one)
 
     assert_nil result.mwr
-  end
-
-  # An omitted scope means "the accounts themselves"; an explicit empty scope
-  # means nothing is inside, so every transfer is external. Those are different
-  # figures and must not share a cache entry.
-  test "cache key distinguishes an omitted flow scope from an empty one" do
-    period = Period.custom(start_date: @day_one, end_date: @day_two)
-
-    omitted = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period)
-    empty = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period, scope_account_ids: [])
-    explicit = Portfolio::Performance.new(family: @family, account_ids: [ @account.id ], period: period, scope_account_ids: [ @account.id ])
-
-    refute_equal omitted.cache_key, empty.cache_key
-    assert_equal omitted.cache_key, explicit.cache_key, "the same effective scope may share an entry"
   end
 
   # Regression. DailyReturns compacts active_until_dates, so `{ id => nil }` is
@@ -411,6 +393,42 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_empty result.index_series
   end
 
+  # The empty-account carve-out below must not swallow the whole scope. With
+  # no account holding a balance, DailyReturns still emits a row per calendar
+  # day, every one zero, and chaining them reads as a 0% return and a flat
+  # index -- a figure for a portfolio that held nothing.
+  test "time weighted figures are withheld when no account holds a balance in the period" do
+    empty = create_portfolio_account(family: @family)
+
+    result = performance(account_ids: [ @account.id, empty.id ])
+
+    assert result.any?, "the period still has its calendar rows"
+    assert_nil result.twr, "nothing was held, so nothing was returned (was 0%)"
+    assert_nil result.volatility
+    assert_nil result.max_drawdown
+    assert_empty result.index_series
+  end
+
+  # Eligibility reads the same window DailyReturns does. The account has two
+  # balance days in the period, but its cut-off is the first, so the series
+  # holds one day of it and that supports no return. Counted over the whole
+  # period, it passed and the chained zero of its departure day was quoted.
+  test "a cut-off that leaves one in-window balance day withholds time weighted figures" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_010, market_flow: 10
+
+    uncut = performance
+    cut = Portfolio::Performance.new(
+      family: @family, account_ids: [ @account.id ],
+      period: Period.custom(start_date: @day_one, end_date: @day_two),
+      active_until_dates: { @account.id => @day_one }
+    )
+
+    assert_in_delta 0.01, uncut.twr.to_f, 0.000001, "without the cut-off the account supports a return"
+    assert_nil cut.twr, "one day in the window supports none"
+    assert_empty cut.index_series
+  end
+
   # The rule must not overreach, mirroring the MWR carve-out: an account with no
   # balance rows in the period contributes nothing and cannot make the figure
   # unsupported.
@@ -432,7 +450,7 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
   # period so the account is trade-tracked without adding an in-period flow.
   test "the money weighted return is the return over the period, not annualised" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
-    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_035.714286, market_flow: 35.714286
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_035.7143, market_flow: 35.7143
     deposit account: @account, date: @day_one - 10.days, amount: 1_000
 
     result = performance
@@ -565,15 +583,143 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
                  "money_weighted_supported? reads the resolution time_weighted_supported? already paid for"
   end
 
+  # Opening value out, a withdrawal back, a later deposit out and the closing
+  # value back: the flows change sign three times, so more than one rate can
+  # solve them (Portfolio::Xirr, MULTIPLE ROOTS). The figure is still quoted,
+  # and it is the rate Portfolio::Xirr gives for exactly these flows; what
+  # changes is that it now says it may be one of several.
+  test "an ambiguous money-weighted series is flagged" do
+    build_ambiguous_case
+
+    result = performance(end_date: ambiguous_end_date)
+
+    assert result.money_weighted_return_ambiguous?
+    assert_equal Portfolio::Xirr.rate(ambiguous_flows, days_per_unit: 3), result.mwr,
+                 "the flag travels with the rate; the rate itself is unchanged"
+  end
+
+  # The control: deposit-then-growth changes sign once, so its rate is unique.
+  test "a single-sign-change series is not flagged" do
+    build_textbook_case
+
+    result = performance
+
+    assert_not_nil result.mwr
+    assert_not result.money_weighted_return_ambiguous?
+  end
+
+  # The hedge belongs beside a figure. Whenever the rate is withheld there is
+  # no figure to hedge, so the flag is false -- including when the flows that
+  # were NOT solved would have read as ambiguous, which is the case each of
+  # these is built on.
+  test "a withheld money-weighted return is not flagged" do
+    build_ambiguous_case
+
+    [ Portfolio::Xirr::ConvergenceError, Portfolio::Xirr::NoSignChangeError, Portfolio::Xirr::NoDurationError ].each do |error|
+      Portfolio::Xirr.any_instance.stubs(:rate).raises(error)
+      result = performance(end_date: ambiguous_end_date)
+
+      assert_nil result.mwr, "#{error.name.demodulize} withholds the rate"
+      assert_not result.money_weighted_return_ambiguous?, "#{error.name.demodulize}: no rate, no hedge"
+    ensure
+      Portfolio::Xirr.any_instance.unstub(:rate)
+    end
+
+    unsupported = performance(account_ids: [ @account.id, build_valuation_tracked_account.id ], end_date: ambiguous_end_date)
+    assert_nil unsupported.mwr, "a valuation-tracked account withholds the rate"
+    assert_not unsupported.money_weighted_return_ambiguous?
+
+    eur = create_portfolio_account(family: @family, currency: "EUR")
+    build_ambiguous_case(account: eur)
+    missing_rate = performance(account_ids: [ eur.id ], end_date: ambiguous_end_date)
+    assert missing_rate.rate_missing?
+    assert_nil missing_rate.mwr
+    assert_not missing_rate.money_weighted_return_ambiguous?
+  end
+
+  # The flag is part of the cached figures, so a warm read has to carry it --
+  # and the version has to have moved, because entries written before the flag
+  # existed have no `mwr_ambiguous` and would read as false.
+  test "the cached metrics carry the ambiguity flag" do
+    build_ambiguous_case
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+
+    assert performance(end_date: ambiguous_end_date).money_weighted_return_ambiguous?, "the cold read computes it"
+
+    warm = performance(end_date: ambiguous_end_date)
+    warm.expects(:compute).never
+    assert warm.money_weighted_return_ambiguous?, "the warm read is served from the cache with the flag intact"
+
+    assert_includes warm.cache_key, "_#{Portfolio::Performance::CACHE_VERSION}_"
+    refute_equal "v7", Portfolio::Performance::CACHE_VERSION, "v7 entries were cached without the flag"
+  end
+
+  # End to end, with nothing set by hand between the layers. Every other
+  # journal test lays the balance row's market flow itself, so it assumes the
+  # two valuations of the arriving position agree rather than checking it:
+  # Balance::BaseCalculator books the journal's value as market movement from
+  # the holdings it materialises, and DailyReturns values the same journal as
+  # an external flow from the same holding's price and takes it back out of
+  # market. If those two numbers ever differ, `unexplained` carries the gap.
+  #
+  # So the journal arrives through the real Balance::Materializer: 1,000 cash,
+  # five units journalled in at 100 on day two, the price 110 on day three.
+  # The arrival is a flow and earns nothing; day three earns 50 on 1,500.
+  test "a journal through the real balance calculator is valued once, and the drivers reconcile" do
+    day_three = @day_two + 1.day
+    @account.entries.create!(
+      name: "Opening balance", date: @day_one - 1.day, amount: 1_000, currency: "USD",
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    Security::Price.create!(security: security_under_test, date: @day_two, price: 100, currency: "USD")
+    Security::Price.create!(security: security_under_test, date: day_three, price: 110, currency: "USD")
+    security_journal account: @account, date: @day_two, qty: 5
+
+    Balance::Materializer.new(@account, strategy: :forward).materialize_balances
+
+    booked = @account.balances.find_by!(date: @day_two, currency: "USD")
+    result = performance(end_date: day_three)
+    journal_day = result.daily_returns.rows.find { |row| row.date == @day_two }
+
+    assert_equal BigDecimal(500), booked.net_market_flows, "the calculator books the arrival as market movement"
+    assert_equal booked.net_market_flows, journal_day.external_flow,
+                 "and DailyReturns values the same journal at the same 500"
+    assert_not journal_day.suppressed
+    assert_equal BigDecimal(0), journal_day.market, "so the arrival is a flow and not a gain"
+
+    drivers = result.drivers
+    assert_equal BigDecimal(0), drivers[:unexplained], "the two valuations agree: #{drivers.inspect}"
+    assert_equal BigDecimal(500), drivers[:external_net]
+    assert_equal BigDecimal(50), drivers[:market]
+    assert_equal 0, drivers[:suppressed_days]
+    assert_in_delta 50 / 1_500.0, result.twr.to_f, 0.000001, "the journal earns nothing; the price move does"
+  end
+
   private
-    # 1,000 EUR, then a 10 EUR fee: closing values 1,000 and 990, so the mean is
-    # 995 and the ratio 10 / 995. No exchange rate is stored.
-    def eur_account_with_fee
-      eur = create_portfolio_account(family: @family, currency: "EUR")
-      fee_entry account: eur, date: @day_two, amount: 10
-      lay_balance account: eur, date: @day_one, opening: 1_000, closing: 1_000
-      lay_balance account: eur, date: @day_two, opening: 1_000, closing: 990, cash_flow: -10
-      eur
+    # Day one holds 1,000; day two withdraws 800; day three deposits 500 and
+    # gains 10. See "an ambiguous money-weighted series is flagged".
+    def build_ambiguous_case(account: @account)
+      day_three = @day_two + 1.day
+      lay_balance account: account, date: @day_one, opening: 1_000, closing: 1_000
+      lay_balance account: account, date: @day_two, opening: 1_000, closing: 200, cash_flow: -800
+      lay_balance account: account, date: day_three, opening: 200, closing: 710, cash_flow: 500, market_flow: 10
+      deposit account: account, date: @day_two, amount: -800
+      deposit account: account, date: day_three, amount: 500
+    end
+
+    def ambiguous_end_date
+      @day_two + 1.day
+    end
+
+    # The flows Performance#money_weighted builds from build_ambiguous_case,
+    # the closing value dated at the end of the last day.
+    def ambiguous_flows
+      [
+        Portfolio::Xirr::Flow.new(date: @day_one, amount: BigDecimal(-1_000)),
+        Portfolio::Xirr::Flow.new(date: @day_two, amount: BigDecimal(800)),
+        Portfolio::Xirr::Flow.new(date: ambiguous_end_date, amount: BigDecimal(-500)),
+        Portfolio::Xirr::Flow.new(date: ambiguous_end_date + 1, amount: BigDecimal(710))
+      ]
     end
 
     def build_valuation_tracked_account
