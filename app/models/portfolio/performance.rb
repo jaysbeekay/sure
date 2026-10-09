@@ -18,7 +18,7 @@ class Portfolio::Performance
   # Bumped whenever the meaning of a cached figure changes, so warm caches stop
   # serving the old interpretation under the same name (the pattern #3350 used
   # for totals_query/v2).
-  CACHE_VERSION = "v7".freeze
+  CACHE_VERSION = "v8".freeze
 
   # The balance rows are calendar daily, so the series includes weekends and
   # holidays as structural zeros. Annualising that by the trading-day convention
@@ -37,15 +37,14 @@ class Portfolio::Performance
   # Annualising anything shorter produces a number nobody should be shown.
   MIN_DAYS_FOR_ANNUALISATION = 365
 
-  attr_reader :family, :account_ids, :period, :user, :active_until_dates, :scope_account_ids
+  attr_reader :family, :account_ids, :period, :user, :active_until_dates
 
-  def initialize(family:, account_ids:, period:, user: nil, active_until_dates: {}, scope_account_ids: nil)
+  def initialize(family:, account_ids:, period:, user: nil, active_until_dates: {})
     @family = family
     @account_ids = Array(account_ids).compact.map(&:to_s)
     @period = period
     @user = user
     @active_until_dates = active_until_dates || {}
-    @scope_account_ids = scope_account_ids
   end
 
   # Chained daily returns, as a BigDecimal fraction (0.21 == 21%).
@@ -75,6 +74,15 @@ class Portfolio::Performance
     metrics[:annualized_mwr]
   end
   alias_method :annualized_mwr, :annualized_money_weighted_return
+
+  # True when the money-weighted return's flows change sign more than once, so
+  # more than one rate may solve them and the figure is one of possibly several
+  # (Portfolio::Xirr#ambiguous?, a conservative bound: "may", not "has"). The
+  # figure is still reported. False whenever the rate is withheld, for any
+  # reason: there is no figure to hedge.
+  def money_weighted_return_ambiguous?
+    metrics[:mwr_ambiguous]
+  end
 
   # Annualised standard deviation of daily returns.
   def volatility
@@ -107,9 +115,12 @@ class Portfolio::Performance
   # Its OWN cache entry rather than part of #metrics, and computed only when
   # asked. The by-security figures cost a query, and a caller that builds a
   # Performance only to read index_series or the returns never needs them:
-  # folded into the shared blob, every one of them would run it.
+  # folded into the shared blob, every one of them would run it. The other way
+  # round holds too: the missing-rate flag it needs is read from the daily
+  # returns, not from #metrics, so a caller reading only the income never runs
+  # the returns' compute.
   def income
-    @income ||= Rails.cache.fetch("#{cache_key}_income") { income_metrics(rate_missing?) }
+    @income ||= Rails.cache.fetch("#{cache_key}_income") { income_metrics(daily_returns.rate_missing?) }
   end
 
   # True when a currency pair had no rate anywhere in the period, in which
@@ -134,25 +145,22 @@ class Portfolio::Performance
       account_ids: account_ids,
       currency: family.currency,
       period: period,
-      active_until_dates: active_until_dates,
-      scope_account_ids: scope_account_ids
+      active_until_dates: active_until_dates
     )
   end
 
   # Every constructor argument that can change a figure has to be in here.
-  # `active_until_dates` and `scope_account_ids` are easy to forget because
-  # neither is passed today, but both change the underlying rows materially --
-  # a cut-off date drops an account's later history entirely -- so omitting them
-  # would let the first caller to use them read another caller's cached answer.
+  # `active_until_dates` is easy to forget because it is not passed today, but
+  # it changes the underlying rows materially -- a cut-off date drops an
+  # account's later history entirely -- so omitting it would let the first
+  # caller to use it read another caller's cached answer.
   #
-  # Both the flow scope and the cut-off dates are keyed as DailyReturns resolves
-  # them, not as they were passed. For the scope: an omitted one means "the
-  # accounts themselves" while an explicit `[]` means "nothing is inside", and
-  # those classify transfers differently. For the cut-offs: DailyReturns
-  # compacts them and normalises each value to an ISO8601 string, so
-  # `{ id => nil }` is valid input meaning "no cut-off" and has to key
-  # identically to an omitted hash -- which it does only after that compaction,
-  # and a key-type difference would key two identical scopes differently.
+  # The cut-off dates are keyed as DailyReturns resolves them, not as they were
+  # passed: DailyReturns compacts them and normalises each value to an ISO8601
+  # string, so `{ id => nil }` is valid input meaning "no cut-off" and has to
+  # key identically to an omitted hash -- which it does only after that
+  # compaction, and a key-type difference would key two identical scopes
+  # differently.
   #
   # Nothing is converted here for the same reason: the resolved values are
   # already the strings DailyReturns keyed its own query on, so a `to_date`
@@ -168,7 +176,6 @@ class Portfolio::Performance
         Digest::SHA256.hexdigest(
           [
             account_ids.sort.join(","),
-            "scope:" + daily_returns.scope_account_ids.sort.join(","),
             daily_returns.active_until_dates.map { |id, date| "#{id}:#{date}" }.sort.join(",")
           ].join("|")
         ),
@@ -199,7 +206,8 @@ class Portfolio::Performance
       # history supports no return, so it withholds every time-weighted figure.
       withhold_time_weighted = rate_missing || !time_weighted_supported?
       chained = withhold_time_weighted ? nil : chain(returns)
-      money_weighted_rate = rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows)
+      money_weighted_result = rate_missing || !money_weighted_supported?(rows) ? nil : money_weighted(rows)
+      money_weighted_rate = money_weighted_result&.fetch(:rate)
 
       {
         twr: chained,
@@ -207,6 +215,8 @@ class Portfolio::Performance
         # Period basis. The annualised form is :annualized_mwr, nil under a year.
         mwr: money_weighted_rate,
         annualized_mwr: annualize(money_weighted_rate),
+        # From the same solve as :mwr, and false whenever :mwr is nil.
+        mwr_ambiguous: money_weighted_result.present? && money_weighted_result.fetch(:ambiguous),
         volatility: withhold_time_weighted ? nil : annualized_volatility(returns),
         max_drawdown: withhold_time_weighted ? nil : drawdown(returns),
         index_series: withhold_time_weighted ? [] : rebased_index(returns),
@@ -266,10 +276,15 @@ class Portfolio::Performance
     # both run inside the uncached compute behind Rails.cache.fetch, so a
     # cache miss costs the account load plus three resolution queries, once,
     # rather than that load plus up to four queries per account, twice.
+    #
+    # Resolved over the same cut-offs DailyReturns applies, as it resolved
+    # them: a row after an account's cut-off is not in the series, so it cannot
+    # count towards the days that support a return.
     def return_scopes
       @return_scopes ||= Portfolio::ReturnScope.resolve_all(
         accounts: Account.where(id: account_ids),
-        period: period
+        period: period,
+        active_until_dates: daily_returns.active_until_dates
       )
     end
 
@@ -277,9 +292,14 @@ class Portfolio::Performance
     # #money_weighted_supported?: an account with exactly one day of balance
     # history has no return to contribute, so it withholds the aggregate. An
     # account with no balance rows in the period contributes nothing and does
-    # not block it.
+    # not block it -- but some account has to hold a balance on two days, or
+    # the scope as a whole held nothing and its calendar rows of zeros would
+    # chain into a 0% return.
     def time_weighted_supported?
-      return_scopes.values.none? { |scope| scope.balance_days == 1 }
+      scopes = return_scopes.values
+
+      scopes.none? { |scope| scope.balance_days == 1 } &&
+        scopes.any? { |scope| scope.balance_days >= 2 }
     end
 
     # The opening value is the investor's first outlay; every flow
@@ -299,6 +319,11 @@ class Portfolio::Performance
     # instead would compress the series by a day: the money was at work for N
     # days but discounted over N-1, which annualised to a figure about four
     # basis points off the annual XIRR of the same flows over a year.
+    #
+    # Returns { rate:, ambiguous: } from ONE Portfolio::Xirr, so the rate and
+    # whether it may be one of several cannot come from different flows, or nil
+    # when there is no rate -- the three errors Xirr.rate_or_nil rescues, the
+    # same ones rescued here.
     def money_weighted(rows)
       return nil if rows.empty?
 
@@ -321,7 +346,10 @@ class Portfolio::Performance
 
       flows << Portfolio::Xirr::Flow.new(date: closing_date, amount: closing) unless closing.zero?
 
-      Portfolio::Xirr.rate_or_nil(flows, days_per_unit: span_in_days)
+      xirr = Portfolio::Xirr.new(flows, days_per_unit: span_in_days)
+      { rate: xirr.rate, ambiguous: xirr.ambiguous? }
+    rescue Portfolio::Xirr::NoSignChangeError, Portfolio::Xirr::NoDurationError, Portfolio::Xirr::ConvergenceError
+      nil
     end
 
     def annualized_volatility(returns)

@@ -92,9 +92,15 @@ class Portfolio::Income
   # Rails.cache the way Portfolio::Drivers#to_h does. `by_security` is the raw
   # { "security-uuid" => amount } for Portfolio::IncomeBySecurity, not Security
   # records, for the same reason.
+  #
+  # Each bucket's `month` is an ISO 8601 date string ("2026-03-01"), not a
+  # Date. A Marshal-based store would hand a Date back, but one with a JSON
+  # serializer turns it into this string anyway, so a caller would read a Date
+  # or a String depending on the store. As a string it reads the same from
+  # every store; `Date.iso8601` turns it back into the month.
   def to_h
     {
-      buckets: buckets.map { |bucket| { month: bucket.month, amount: bucket.amount } },
+      buckets: buckets.map { |bucket| { month: bucket.month.iso8601, amount: bucket.amount } },
       total: total,
       fees: fees,
       average_value: average_value,
@@ -110,9 +116,16 @@ class Portfolio::Income
 
     # nil for a month in which no income row is non-zero, which is a month that
     # paid nothing. A month with activity is kept even when it nets to zero (a
-    # payout and its reversal) or negative (a reversal larger than that month's
-    # payments): dropping it would report an active month as absent, and a
-    # negative one would leave the buckets short of #total.
+    # payout and its reversal on different days) or negative (a reversal larger
+    # than that month's payments): dropping it would report an active month as
+    # absent, and a negative one would leave the buckets short of #total.
+    #
+    # "Activity" is read from the DAILY rows, which already net each day's
+    # income. A payout and its reversal on the same day leave that day's row at
+    # zero, so a month whose only income was such a pair is absent. That is
+    # accepted rather than worked around: the buckets still sum to #total
+    # (the pair adds nothing), and telling it apart would mean re-reading the
+    # entries this class exists not to re-derive.
     def build_bucket(month, month_rows)
       return nil if month_rows.all? { |row| row.income.zero? }
 
