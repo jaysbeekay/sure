@@ -1,204 +1,224 @@
 class Loan
-  # Resolver-driven calculation loop. It accepts values and callables rather
-  # than a Loan so projections, persisted schedules, and future offset/scenario
-  # calculations can share one period engine.
+  # The period engine. Walks a payment schedule, charging interest and applying
+  # payments, and returns a SimulationResult.
+  #
+  # It takes values and callables rather than a Loan, so the contracted schedule
+  # and (later) a projection from today's balance can share one loop instead of
+  # growing two implementations that drift.
+  #
+  # ## Accrual is monthly
+  #
+  # One interest charge per period, on the balance outstanding when the period
+  # opened. Daily accrual is a different engine and is deliberately not here.
+  #
+  # ## Two rates, not one
+  #
+  # A period is bounded by two dates, and on a variable loan they can sit either
+  # side of a rate change. Which rate applies depends on what is being asked:
+  #
+  #   * **Interest** for the period [previous payment date, this payment date)
+  #     accrues at the rate in force when the period **opened**. A rate that
+  #     becomes effective on this period's closing date belongs to the NEXT
+  #     window, not to the month that has already run at the old rate.
+  #   * **Payment sizing** uses the rate in force **on** the payment date, so a
+  #     change effective on a payment date resizes that payment.
+  #
+  # Reading a single rate for both re-rates the period ending on the boundary --
+  # the borrower is charged a rate that did not apply for any day of the month
+  # being billed. Keeping them apart is the whole reason `accrual_rate_for` is
+  # called twice with different dates below.
+  #
+  # Under monthly accrual a rate change *mid*-period cannot move that period's
+  # interest: there is one charge, computed at the period's opening rate. It
+  # takes effect from the following period. That is a property of monthly
+  # accrual, not an approximation to be corrected here.
+  #
+  # ## The interest hook (fork)
+  #
+  # `interest_for:` replaces that one charge with a caller's calculation. It
+  # is asked once per period for the interest on [from_date, to_date) given
+  # the balance the period opened with and the annual rate in force when it
+  # opened, and returns it unrounded; the charge is rounded here, once, as the
+  # monthly one is. Omitted, the charge is the monthly one above, so a run
+  # that does not pass it is upstream's run figure for figure.
+  #
+  # It exists so the fork's daily accrual -- day-count bases, a rate change
+  # part-way through a period, offset balances (Loan::DailyInterest) -- sits
+  # behind one seam instead of inside this loop (#184, direction C). Payment
+  # sizing still reads the interest it returns: a period that straddles a rate
+  # change sizes its resize from what the hook actually charged.
   class Simulator
-    MAX_TERM_MONTHS = Loan::MAX_TERM_MONTHS
-    EVENT_ORDER = %i[accrual extra_repayment offset_movement payment re_amortisation].freeze
-    # :hold sizes one repayment and carries it; :reamortize re-sizes it at each
-    # rate segment; :scheduled asks `payment_amount_for` every period, for a
-    # caller that already knows what each period's repayment is (#100,
-    # decision 1: the payoff projection paying the contract's repayment).
-    PAYMENT_STRATEGIES = %i[hold reamortize scheduled].freeze
+    # Guards a runaway schedule: a hundred years of monthly payments. Refused
+    # outright rather than truncated -- silently walking the first 1,200 of a
+    # longer schedule returns totals and a payoff date describing a loan that
+    # was never asked for, and loses the remaining balance without saying so.
+    MAX_PERIODS = 1200
 
-    attr_reader :starting_balance, :starting_balance_as_of, :accrual_start_date,
-      :payment_schedule, :payment_strategy
+    # How the repayment behaves from one period to the next:
+    #
+    #   :reamortize  sized from the balance in front of it, and re-sized
+    #                whenever the sizing rate moves -- what a lender does to a
+    #                contracted schedule
+    #   :hold        one figure, seeded or sized on the first period, held to
+    #                the end whatever the rate does
+    #   :scheduled   asked for every period from a callable, regardless of the
+    #                balance -- what a projection uses to pay the CONTRACT's
+    #                repayment against a balance that is no longer the
+    #                contracted one, so a borrower who is ahead finishes early
+    #                instead of being re-sized back onto the original maturity
+    PAYMENT_STRATEGIES = %i[reamortize hold scheduled].freeze
+
+    # Built once: `monthly_rate` runs twice per period, up to MAX_PERIODS times
+    # per simulation. The two-step division is kept as it was so results stay
+    # bit-identical to the schedules already asserted in the tests.
+    PERCENT = BigDecimal("100")
+    MONTHS_PER_YEAR = BigDecimal("12")
 
     def initialize(
       starting_balance:,
-      starting_balance_as_of:,
       accrual_start_date:,
       payment_schedule:,
       accrual_rate_for:,
-      re_amortisation_events:,
-      accrual_rate_changes: nil,
-      payment_strategy:,
-      payment_amount_for:,
       currency_precision:,
-      interest_for: nil,
-      daily_accrual: false,
-      day_count_convention: InterestAccrual::DEFAULT_DAY_COUNT_CONVENTION,
-      max_iterations: nil,
-      extra_for: nil,
-      offset_for: nil,
-      settle_at_schedule_end: true
+      re_amortisation_events: nil,
+      payment_strategy: :reamortize,
+      payment_amount: nil,
+      settle_at_schedule_end: true,
+      interest_for: nil
     )
-      @starting_balance = decimal(starting_balance)
-      @starting_balance_as_of = starting_balance_as_of
+      @starting_balance = BigDecimal(starting_balance.to_s)
       @accrual_start_date = accrual_start_date
       @payment_schedule = payment_schedule.to_a.freeze
       @accrual_rate_for = callable!(accrual_rate_for, :accrual_rate_for)
-      @re_amortisation_events = callable!(re_amortisation_events, :re_amortisation_events)
-      # The two rate clocks are SEPARATE inputs (C7/C8).
-      #
-      # accrual_rate_changes drives where interest accrual segments; the rate
-      # in force at each payment date drives payment sizing. They previously
-      # both came from re_amortisation_events, which made a rate that moves
-      # accrual without moving the contracted repayment unrepresentable (#25).
-      #
-      # The default is "no intra-period rate change", NOT "fall back to the
-      # payment clock" -- falling back is the conflation this exists to remove.
-      # Sampling accrual_rate_for day by day was considered and rejected: the
-      # resolver is an arbitrary caller-supplied callable, and calling it ~30x
-      # per period punishes anything stateful or expensive.
-      @accrual_rate_changes = callable!(
-        accrual_rate_changes || ->(_from_date, _to_date) { [] },
-        :accrual_rate_changes
+      @re_amortisation_events = callable!(
+        re_amortisation_events || ->(_from, _to) { [] }, :re_amortisation_events
       )
-      @payment_amount_for = callable!(payment_amount_for, :payment_amount_for)
       @currency_precision = currency_precision
-      @daily_accrual = daily_accrual
-      @day_count_convention = day_count_convention
-      @interest_for = interest_for
       @payment_strategy = payment_strategy.to_sym
-      @max_iterations = [ max_iterations || @payment_schedule.length, MAX_TERM_MONTHS ].min
-      @extra_for = extra_for || ->(_from_date, _to_date) { [] }
-      @offset_for = offset_for || ->(_from_date, _to_date) { [] }
+      # A caller-supplied repayment. Under :hold and :reamortize a number that
+      # seeds the run; under :scheduled a callable, asked every period for the
+      # amount the contract requires then -- see #run.
+      @payment_amount =
+        if payment_amount.respond_to?(:call) then payment_amount
+        elsif payment_amount.nil? then nil
+        else BigDecimal(payment_amount.to_s)
+        end
       @settle_at_schedule_end = settle_at_schedule_end
+      @interest_for = interest_for.nil? ? method(:monthly_interest) : callable!(interest_for, :interest_for)
 
-      validate_boundaries!
-      raise ArgumentError, "unsupported payment strategy: #{payment_strategy.inspect}" unless PAYMENT_STRATEGIES.include?(@payment_strategy)
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
+      if @payment_schedule.length > MAX_PERIODS
+        raise ArgumentError,
+          "payment schedule has #{@payment_schedule.length} periods (#{@payment_schedule.first} to #{@payment_schedule.last}), " \
+          "more than the #{MAX_PERIODS} allowed"
+      end
+      unless PAYMENT_STRATEGIES.include?(@payment_strategy)
+        raise ArgumentError, "unsupported payment strategy: #{@payment_strategy.inspect}"
+      end
+      if (@payment_strategy == :scheduled) != @payment_amount.respond_to?(:call)
+        raise ArgumentError, ":scheduled takes a callable payment_amount; the other strategies take a number"
+      end
     end
 
     def run
-      balance = starting_balance
+      balance = @starting_balance
       payments = []
-      payment_number = 1
-      held_payment = nil
-      # The ACCRUAL rate is a step function carried across periods, seeded once
-      # and moved only by the accrual clock (C10). It is deliberately NOT
-      # re-read from segment[:rate] each period: that is the PAYMENT-sizing
-      # rate, and a re-amortisation event effective on a payment date belongs
-      # to that date's payment but to the FOLLOWING accrual window -- accrual
-      # windows are half-open, so a rate effective 1 March belongs to
-      # [Mar 1, Apr 1), not to the February that ran entirely at the old rate.
-      # Reading segment[:rate] re-rated the period ENDING on the boundary (#48).
-      accrual_rate = nil
+      payment = nil
+      previous_sizing_rate = nil
+      (0...@payment_schedule.length).each do |index|
+        break if balance <= 0
 
-      rate_segments.each_with_index do |segment, segment_index|
-        remaining_payments = payment_schedule.length - payment_number + 1
-        # A re-amortisation after the first segment is sized once its opening
-        # period's interest is known (#184). That period accrued, wholly or in
-        # part, at the OLD rate -- a change effective on a payment date sizes
-        # that payment but belongs to the next accrual window -- while the plain
-        # annuity assumes every remaining period accrues at the new one. Sized
-        # that way the payment mis-covers the period and the error compounds
-        # into the final settlement (hundreds to thousands on a long loan).
-        # The first segment is sized as before, so a loan with no change keeps
-        # its schedule bit for bit.
-        resize_after_accrual = payment_strategy == :reamortize && @daily_accrual && @interest_for.nil? &&
-          segment_index.positive?
-        payment = if payment_strategy == :hold
-          held_payment ||= payment_amount(segment[:rate], balance, remaining_payments, payment_number)
-        elsif resize_after_accrual
-          nil
-        elsif payment_strategy == :scheduled
-          nil # asked for each period below
-        else
-          payment_amount(segment[:rate], balance, remaining_payments, payment_number)
-        end
+        payment_date = @payment_schedule[index]
+        period_start = index.zero? ? @accrual_start_date : @payment_schedule[index - 1]
 
-        segment[:payment_count].times do
-          break if balance <= 0 || payment_number > @max_iterations
+        # See the class comment: opening rate charges the period, closing rate
+        # sizes the payment.
+        opening_annual_rate = @accrual_rate_for.call(period_start)
+        accrual_rate = monthly_rate(opening_annual_rate)
+        sizing_rate = monthly_rate(rate_on(payment_date))
 
-          if payment_strategy == :scheduled
-            payment = payment_amount(segment[:rate], balance, payment_schedule.length - payment_number + 1, payment_number)
-          end
+        # Interest first, on the balance the period OPENED with: one charge per
+        # period under monthly accrual. Sizing needs it when the two rates
+        # differ, see below. Asked of the interest hook, then rounded once.
+        interest = BigDecimal(@interest_for.call(
+          from_date: period_start,
+          to_date: payment_date,
+          balance: balance,
+          annual_rate: opening_annual_rate,
+          monthly_rate: accrual_rate
+        ).to_s).round(@currency_precision)
 
-          opening_balance = balance
-          opening_accrual_rate = nil
-          period_rate_changes = []
-
-          payment_date = payment_schedule[payment_number - 1]
-          previous_date = payment_number == 1 ? accrual_start_date : payment_schedule[payment_number - 2]
-          # These resolvers are intentionally called at the period boundary.
-          # Their change-point semantics are used by the daily-accrual and
-          # offset extensions; L3 preserves the existing monthly result.
-          extra_changes = @extra_for.call(previous_date, payment_date)
-          offset_changes = @offset_for.call(previous_date, payment_date)
-          monthly_rate = (decimal(segment[:rate]) / BigDecimal("100")) / BigDecimal("12")
-
-          interest = if @interest_for
-            @interest_for.call(
-              from_date: previous_date,
-              to_date: payment_date,
-              balance: balance,
-              interest_bearing_balance: balance,
-              rate: segment[:rate]
-            )
-          elsif @daily_accrual
-            # Seeded from the ACCRUAL clock at accrual_start_date, not from
-            # segment[:rate]. A rate change effective on the FIRST payment date
-            # is already in that segment, so seeding from it would accrue the
-            # opening period at the new rate -- the same defect this fixes,
-            # surviving at the first boundary.
-            accrual_rate ||= decimal(@accrual_rate_for.call(accrual_start_date))
-            opening_accrual_rate = accrual_rate
-            period_rate_changes = accrual_rate_changes_between(previous_date, payment_date)
-
-            interest, balance = accrue_daily_period(
-              from_date: previous_date,
-              to_date: payment_date,
-              balance: balance,
-              annual_rate: accrual_rate,
-              annual_rate_changes: period_rate_changes,
-              extra_changes: extra_changes,
-              offset_changes: offset_changes
-            )
-            # Carry the clock forward: whatever rate the window ended on is the
-            # rate the next window opens on.
-            accrual_rate = period_rate_changes.last.fetch(:amount) if period_rate_changes.any?
-            interest.round(@currency_precision)
-          else
-            # Monthly accrual still honours extra repayments: they reduce the
-            # interest-bearing balance from their effective date (C6). Without
-            # this the resolver's return value was computed and thrown away
-            # on the path production actually runs (#25).
-            balance = apply_extra_repayments(balance, extra_changes, previous_date, payment_date)
-            (balance * monthly_rate).round(@currency_precision)
-          end
-
-          if payment.nil?
-            sizing_rate = decimal(segment[:rate])
-            straddled = opening_accrual_rate != sizing_rate ||
-              period_rate_changes.any? { |change| change.fetch(:amount) != sizing_rate }
-            payment = payment_amount(
-              segment[:rate], opening_balance, remaining_payments, payment_number,
-              first_period_interest: (interest if straddled)
-            )
-          end
-
-          step = AmortizationMath.step(
+        if @payment_strategy == :scheduled
+          # The contract's repayment for THIS period, whatever balance is in
+          # front of it. Sizing from the balance would shrink a borrower who is
+          # ahead back onto the original maturity; paying what the contract
+          # asks is how they finish sooner.
+          payment = BigDecimal(@payment_amount.call(
+            index: index,
             balance: balance,
-            payment: payment,
-            monthly_rate: monthly_rate,
-            currency_precision: @currency_precision,
-            final: (@settle_at_schedule_end && payment_number == payment_schedule.length) || payment >= balance + interest,
-            interest: interest
-          )
-
-          payments << {
-            payment_number: payment_number,
-            payment_date: payment_date,
-            interest_rate: decimal(segment[:rate]),
-            **step
-          }
-
-          balance = step[:ending_balance]
-          payment_number += 1
-          break if balance <= 0
+            sizing_rate: sizing_rate,
+            remaining_payments: @payment_schedule.length - index
+          ).to_s)
+        else
+          # Resize only when the sizing rate actually moves. Recomputing every
+          # period would be arithmetically identical while the rate holds, but
+          # it would also silently absorb a payment the borrower is contracted
+          # to, which is what `:hold` exists to refuse.
+          if payment.nil?
+            # A supplied amount seeds the run -- a projection opens on the
+            # repayment the borrower is contracted to, not one re-derived from
+            # today's balance, which would make every loan look on track.
+            payment = @payment_amount
+          end
+          # `previous_sizing_rate.nil?` guards the first period: there is no
+          # earlier rate to have moved away from, so the opening rate is not a
+          # rate CHANGE. Without it, a seeded repayment is overwritten on the
+          # very first period it was supposed to govern.
+          rate_moved = !previous_sizing_rate.nil? && sizing_rate != previous_sizing_rate
+          # When the period straddles the change -- accrued at the old rate,
+          # sized at the new -- the annuity formula alone over-covers this
+          # period and the payment is not level to maturity (a final
+          # settlement thousands short). The sizing is told what this period
+          # actually charged so the figure covers it and amortises the rest
+          # evenly.
+          if payment.nil? || (@payment_strategy == :reamortize && rate_moved)
+            payment = AmortizationMath.level_payment(
+              balance: balance,
+              monthly_rate: sizing_rate,
+              remaining_payments: @payment_schedule.length - index,
+              currency_precision: @currency_precision,
+              first_period_interest: (interest if sizing_rate != accrual_rate)
+            )
+          end
         end
+        previous_sizing_rate = sizing_rate
+
+        final = (@settle_at_schedule_end && index == @payment_schedule.length - 1) ||
+          payment >= balance + interest
+
+        step = AmortizationMath.step(
+          balance: balance,
+          payment: payment,
+          monthly_rate: accrual_rate,
+          currency_precision: @currency_precision,
+          final: final,
+          interest: interest
+        )
+
+        # Two rates on the row, named for what each did: `interest_rate` is
+        # the one the interest column was computed with, so a reader who
+        # recomputes beginning_balance * rate / 12 gets this row's figure;
+        # `sizing_rate` is the one the payment was sized at. They differ only
+        # on a row whose period straddles a rate change.
+        payments << {
+          payment_number: index + 1,
+          payment_date: payment_date,
+          interest_rate: BigDecimal(@accrual_rate_for.call(period_start).to_s),
+          sizing_rate: BigDecimal(rate_on(payment_date).to_s),
+          **step
+        }
+
+        balance = step[:ending_balance]
       end
 
       SimulationResult.new(
@@ -210,141 +230,38 @@ class Loan
     end
 
     private
-
-      def rate_segments
-        segments = []
-        re_amortisation_rates = normalized_re_amortisation_rates
-
-        payment_schedule.each do |payment_date|
-          rate = re_amortisation_rate_for(payment_date, re_amortisation_rates) || @accrual_rate_for.call(payment_date)
-          if segments.last && segments.last[:rate] == rate
-            segments.last[:payment_count] += 1
-          else
-            segments << { rate: rate, start_date: payment_date, end_date: payment_date, payment_count: 1 }
-          end
-          segments.last[:end_date] = payment_date
-        end
-
-        segments
+      # The default interest: one charge per period on the opening balance at
+      # the opening monthly rate -- upstream's formula, unrounded here so the
+      # rounding stays in one place in #run.
+      def monthly_interest(balance:, monthly_rate:, **)
+        balance * monthly_rate
       end
 
-      def normalized_re_amortisation_rates
-        @re_amortisation_events.call(payment_schedule.first, payment_schedule.last).filter_map do |event|
-          date = event.fetch(:date)
-          rate = event.fetch(:rate)
-          [ date, decimal(rate) ]
-        end.sort_by(&:first)
+      # The contracted rate on a given payment date: a re-amortisation event
+      # effective that day, otherwise whatever the rate curve says.
+      def rate_on(date)
+        event = re_amortisation_rates.reverse.find { |effective, _| effective <= date }
+        event ? event.last : @accrual_rate_for.call(date)
       end
 
-      # Change points for the ACCRUAL clock over one period, normalised to the
-      # {date:, amount:} shape the accrual segmenter consumes.
-      def accrual_rate_changes_between(from_date, to_date)
-        Array(@accrual_rate_changes.call(from_date, to_date)).filter_map do |change|
-          date = change.fetch(:date)
-          next unless date >= from_date && date < to_date
-
-          { date: date, amount: decimal(change.fetch(:rate, change[:amount])) }
-        end.sort_by { |change| change.fetch(:date) }
+      def re_amortisation_rates
+        @re_amortisation_rates ||= @re_amortisation_events
+          .call(@payment_schedule.first, @payment_schedule.last)
+          .map { |event| [ event.fetch(:date), event.fetch(:rate) ] }
+          .sort_by(&:first)
       end
 
-      def apply_extra_repayments(balance, extra_changes, from_date, to_date)
-        reduced = normalize_amount_changes(extra_changes, from_date, to_date)
-          .values
-          .sum(BigDecimal("0"))
-        [ balance - reduced, BigDecimal("0") ].max
-      end
-
-      def accrue_daily_period(from_date:, to_date:, balance:, annual_rate:, annual_rate_changes:, extra_changes:, offset_changes:)
-        extras = normalize_amount_changes(extra_changes, from_date, to_date)
-        rates = normalize_amount_changes(annual_rate_changes, from_date, to_date)
-        offsets = normalize_amount_changes(offset_changes, from_date, to_date)
-        dates = ([ from_date ] + extras.keys + rates.keys + offsets.keys + [ to_date ]).uniq.sort
-        interest = BigDecimal("0")
-        current_balance = balance
-        current_rate = annual_rate
-        current_offset = BigDecimal("0")
-        change_points = dates.filter_map do |date|
-          # EVENT_ORDER is executed here, not merely declared. C9 fixes the
-          # sequence in which same-day events are applied; running the constant
-          # rather than hardcoding an equivalent order means the contract and
-          # the code cannot drift apart, and reordering the constant reorders
-          # the calculation.
-          EVENT_ORDER.each do |event|
-            case event
-            when :accrual
-              current_rate = rates[date] if rates.key?(date)
-            when :extra_repayment
-              next unless extras.key?(date)
-
-              current_balance = [ current_balance - extras[date], BigDecimal("0") ].max
-            when :offset_movement
-              current_offset = offsets[date] if offsets.key?(date)
-            when :payment, :re_amortisation
-              # Both occur at the period boundary, which the outer loop owns.
-              # Named here so an unhandled event raises rather than passing
-              # silently if EVENT_ORDER gains a member.
-              nil
-            else
-              raise ArgumentError, "unhandled event in EVENT_ORDER: #{event.inspect}"
-            end
-          end
-          next if date == to_date
-
-          { date: date, balance: current_balance, offset: current_offset, rate: current_rate }
-        end
-
-        interest = InterestAccrual.calculate(
-          from_date: from_date,
-          to_date: to_date,
-          balance: balance,
-          annual_rate: annual_rate,
-          change_points: change_points,
-          day_count_convention: @day_count_convention
-        )
-
-        [ interest, current_balance ]
-      end
-
-      def normalize_amount_changes(changes, from_date, to_date)
-        Array(changes).each_with_object({}) do |change, normalized|
-          date, amount = change.is_a?(Array) ? change : [ change.fetch(:date), change.fetch(:amount) ]
-          next unless date >= from_date && date <= to_date
-
-          normalized[date] = decimal(amount)
-        end
-      end
-
-      def re_amortisation_rate_for(payment_date, events)
-        events.reverse_each do |date, rate|
-          return rate if date <= payment_date
-        end
-        nil
-      end
-
-      # `first_period_interest` is passed only when there is one, so a caller's
-      # callable that does not take it keeps working.
-      def payment_amount(rate, balance, remaining_payments, payment_number, first_period_interest: nil)
-        args = { rate: rate, balance: balance, remaining_payments: remaining_payments, payment_number: payment_number }
-        args[:first_period_interest] = first_period_interest if first_period_interest
-        decimal(@payment_amount_for.call(**args))
+      # `annual_percentage` is whatever the caller's rate callable returned --
+      # an Integer in the tests, a BigDecimal from RateResolver -- so the
+      # coercion at this boundary stays.
+      def monthly_rate(annual_percentage)
+        (BigDecimal(annual_percentage.to_s) / PERCENT) / MONTHS_PER_YEAR
       end
 
       def callable!(value, name)
-        return value if value.respond_to?(:call)
-        raise ArgumentError, "#{name} must be callable"
-      end
+        raise ArgumentError, "#{name} must respond to #call" unless value.respond_to?(:call)
 
-      def validate_boundaries!
-        return unless starting_balance_as_of && accrual_start_date
-        return if starting_balance_as_of <= accrual_start_date
-
-        raise ArgumentError, "starting balance date must be on or before accrual start date"
-      end
-
-      def decimal(value)
-        BigDecimal(value.to_s)
-      rescue ArgumentError, TypeError
-        raise ArgumentError, "simulation values must be numeric"
+        value
       end
   end
 end

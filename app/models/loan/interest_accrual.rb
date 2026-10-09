@@ -65,12 +65,13 @@ class Loan
     private
 
       # 30/360 (#188): upstream's flat 1/12, on this daily engine. The accrual
-      # range is one scheduled period (Loan::Simulator calls this once per
-      # payment), and a period that is one calendar-month step -- the way the
-      # schedule and the projection generate their dates, `next_month` clamp
-      # included -- is one month of 30 days, so it charges exactly a twelfth
-      # of the annual rate whatever its calendar length. That keeps a 30/360
-      # schedule equal row for row to the flat-twelfth engine.
+      # range is one scheduled period (Loan::Simulator asks once per payment),
+      # and a period that is one calendar-month step on the schedule's anchor
+      # day -- clamped into a short month and recovered after it, as upstream's
+      # `origination >> n` calendar pays (#184) -- is one month of 30 days, so
+      # it charges exactly a twelfth of the annual rate whatever its calendar
+      # length. That keeps a 30/360 schedule equal row for row to upstream's
+      # flat-twelfth engine.
       #
       # Any other range (the payoff projection's first stub from `as_of`)
       # counts 30E/360 days. A change part-way through splits the period's
@@ -89,11 +90,26 @@ class Loan
       end
 
       def thirty_360_months(from_date, to_date)
-        return BigDecimal("1") if from_date.next_month == to_date
+        return BigDecimal("1") if calendar_month_step?(from_date, to_date)
 
         days = (to_date.year - from_date.year) * 360 + (to_date.month - from_date.month) * 30 +
           [ to_date.day, 30 ].min - [ from_date.day, 30 ].min
         BigDecimal(days.to_s) / DAYS_PER_30_360_MONTH
+      end
+
+      # Whether [from_date, to_date) is one month on some anchor day: the next
+      # calendar month, on the same day clamped to that month's length. A
+      # `from_date` on a month end may itself be a clamp (28 February for an
+      # anchor on the 31st), so from there any later day up to the next
+      # month's end is the anchor recovered.
+      def calendar_month_step?(from_date, to_date)
+        return false unless (to_date.year * 12 + to_date.month) - (from_date.year * 12 + from_date.month) == 1
+
+        days_in_to_month = Time.days_in_month(to_date.month, to_date.year)
+        floor = [ from_date.day, days_in_to_month ].min
+        return to_date.day == floor unless from_date == from_date.end_of_month
+
+        to_date.day >= floor
       end
 
       def legacy_change_points(offset_changes, annual_rate_changes, from_date, to_date)

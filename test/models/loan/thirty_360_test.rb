@@ -14,7 +14,10 @@ class Loan::Thirty360Test < ActiveSupport::TestCase
       [ Date.new(2026, 2, 1), Date.new(2026, 3, 1) ] => "28 days",
       [ Date.new(2028, 2, 1), Date.new(2028, 3, 1) ] => "29 days, leap",
       [ Date.new(2026, 4, 1), Date.new(2026, 5, 1) ] => "30 days",
-      [ Date.new(2026, 1, 31), Date.new(2026, 2, 28) ] => "month-end clamp"
+      [ Date.new(2026, 1, 31), Date.new(2026, 2, 28) ] => "month-end clamp",
+      [ Date.new(2026, 2, 28), Date.new(2026, 3, 31) ] => "anchor day recovered after a clamp",
+      [ Date.new(2028, 2, 29), Date.new(2028, 3, 30) ] => "anchor on the 30th, after a leap clamp",
+      [ Date.new(2026, 4, 30), Date.new(2026, 5, 31) ] => "from a 30-day month end to the 31st"
     }.each do |(from, to), label|
       assert_equal BigDecimal("1500"), accrue(from, to), label
     end
@@ -48,22 +51,27 @@ class Loan::Thirty360Test < ActiveSupport::TestCase
     assert_equal BigDecimal("500"), accrue(Date.new(2026, 1, 20), Date.new(2026, 1, 31)).round(10)
   end
 
-  test "a schedule on thirty_360 equals the flat-twelfth schedule row for row" do
+  # #184 phase 4a's evidence: a 30/360 loan equals upstream's engine row for
+  # row. Upstream's calendar pays on the anchor day again after a short month
+  # (31 January -> 28 February -> 31 March), so the February-to-March period
+  # is 31 calendar days with its start on a clamped month end; it is still one
+  # month, and must charge exactly a twelfth.
+  test "a schedule on thirty_360 equals upstream's flat-twelfth schedule row for row" do
     loan = loan_on("thirty_360")
 
-    daily = loan.amortization_schedule.payments
-    flat = loan.amortization_schedule.simulation(daily_accrual: false).payments
+    hooked = loan.amortization_schedule.payments
+    flat = upstream_schedule(loan).payments
 
-    assert_equal 360, daily.length
-    assert_equal flat, daily
-    assert_equal BigDecimal("1500.00"), daily.first[:interest_payment]
+    assert_equal 360, hooked.length
+    assert_equal Date.new(2026, 3, 31), hooked[1].date, "precondition: upstream's calendar recovers the anchor day"
+    assert_equal flat, hooked
+    assert_equal Money.new(BigDecimal("1500.00"), "USD"), hooked.first.interest
   end
 
   test "the same loan on actual/365 does not" do
     loan = loan_on("actual_365")
 
-    assert_not_equal loan.amortization_schedule.simulation(daily_accrual: false).payments,
-      loan.amortization_schedule.payments
+    assert_not_equal upstream_schedule(loan).payments, loan.amortization_schedule.payments
   end
 
   test "a loan accepts thirty_360 and the database stores it" do
@@ -73,6 +81,12 @@ class Loan::Thirty360Test < ActiveSupport::TestCase
   end
 
   private
+
+    # The same loan on upstream's engine: no interest hook, so one twelfth of
+    # the rate on the opening balance every period.
+    def upstream_schedule(loan)
+      Loan::AmortizationSchedule.for(loan, interest_for: nil)
+    end
 
     def accrue(from, to, convention: :thirty_360, change_points: [])
       Loan::InterestAccrual.calculate(

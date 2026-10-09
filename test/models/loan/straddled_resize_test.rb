@@ -9,24 +9,26 @@ require "test_helper"
 # against +$424 for the same loan with no change.
 #
 # Upstream fixed this in AmortizationMath with `first_period_interest`; the
-# fork shares that file but never passed it.
+# fork shares that file but never passed it. Since #184's core swap the fork
+# runs upstream's simulator, which passes it -- with the interest the period
+# actually charged through the fork's daily hook.
 class Loan::StraddledResizeTest < ActiveSupport::TestCase
   test "a resize on a payment-date change is sized from the interest that period charged" do
     loan = loan_with({ "2030-02-15" => "6.0" })
-    rows = loan.amortization_schedule.payments
+    rows = loan.amortization_rows
     resized = rows.find { |row| row[:payment_date] == Date.new(2030, 2, 15) }
     before = rows[rows.index(resized) - 1]
 
     assert_not_equal before[:payment_amount], resized[:payment_amount], "precondition: this is the resize"
-    assert_equal expected_payment(resized, rows), resized[:payment_amount]
+    assert_equal expected_payment(resized, rows, loan), resized[:payment_amount]
   end
 
   test "a resize on a mid-period change is sized from the interest that period charged" do
     loan = loan_with({ "2030-02-01" => "6.0" })
-    rows = loan.amortization_schedule.payments
+    rows = loan.amortization_rows
     resized = rows.find { |row| row[:payment_date] == Date.new(2030, 2, 15) }
 
-    assert_equal expected_payment(resized, rows), resized[:payment_amount]
+    assert_equal expected_payment(resized, rows, loan), resized[:payment_amount]
   end
 
   # The outcome. Sized on the interest the opening period actually charged,
@@ -39,40 +41,44 @@ class Loan::StraddledResizeTest < ActiveSupport::TestCase
   test "after a resize the loan runs as a fresh loan on what the resized period leaves" do
     [ { "2030-02-15" => "6.0" }, { "2030-02-01" => "6.0" }, { "2030-02-01" => "3.6" } ].each do |schedule|
       loan = loan_with(schedule)
-      rows = loan.amortization_schedule.payments
+      rows = loan.amortization_rows
       resized = rows.find { |row| row[:payment_date] == Date.new(2030, 2, 15) }
       fresh = loan_with({}, rate: schedule.values.first, start: Date.new(2030, 2, 15),
                             principal: resized[:ending_balance], term: rows.length - rows.index(resized) - 1)
 
-      assert_in_delta fresh.amortization_schedule.payments.first[:payment_amount], resized[:payment_amount],
+      assert_in_delta fresh.amortization_rows.first[:payment_amount], resized[:payment_amount],
         BigDecimal("0.02"), "#{schedule}: the resized repayment must be the fresh loan's"
       assert_in_delta settlement_gap(fresh), settlement_gap(loan), BigDecimal("2"),
         "#{schedule}: the change must not move the final settlement beyond the drift a fresh loan carries"
     end
   end
 
-  # The sibling: the re-amortising projection sizes through the same
-  # simulator path and had the same straddle.
-  test "a re-amortising projection sizes a resize from the interest that period charged" do
+  # The sibling: the projection pays the schedule's own resize, so it carries
+  # the straddle-aware figure rather than sizing one of its own. (The fork's
+  # re-amortising projection, which sized its own and had the same straddle,
+  # went with the core swap.)
+  test "the projection pays the schedule's straddle-aware resize" do
     loan = loan_with({}, start: Date.current - 24.months)
     loan.update!(rate_type: "variable")
     change_on = Date.current + 3.months
     loan.add_variable_rate_change(change_on, 6.0)
     loan.reload
 
-    rows = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize).payments
+    schedule_rows = loan.amortization_rows
+    rows = loan.payoff_projection.payments
     resized = rows.find { |row| row[:payment_date] >= change_on }
     before = rows[rows.index(resized) - 1]
+    scheduled = schedule_rows.find { |row| row[:payment_date] == resized[:payment_date] }
 
     assert_not_equal before[:payment_amount], resized[:payment_amount], "precondition: this is the resize"
-    assert_equal expected_payment(resized, rows), resized[:payment_amount]
+    assert_equal expected_payment(scheduled, schedule_rows, loan), resized[:payment_amount]
   end
 
   # The negative: the first segment is sized as before, so a loan with no
   # change keeps its schedule (the golden master pins it row for row).
   test "a loan with no change is sized with the plain annuity" do
     loan = loan_with({})
-    first = loan.amortization_schedule.payments.first
+    first = loan.amortization_rows.first
 
     assert_equal Loan::AmortizationMath.level_payment(
       balance: BigDecimal("300000"), monthly_rate: Loan.monthly_rate("4.8"), remaining_payments: 360, currency_precision: 2
@@ -81,10 +87,12 @@ class Loan::StraddledResizeTest < ActiveSupport::TestCase
 
   private
 
-    def expected_payment(resized, rows)
+    # The row's interest_rate is the rate its period OPENED on; the resize is
+    # sized at the rate in force on its payment date.
+    def expected_payment(resized, rows, loan)
       Loan::AmortizationMath.level_payment(
         balance: resized[:beginning_balance],
-        monthly_rate: Loan.monthly_rate(resized[:interest_rate]),
+        monthly_rate: Loan.monthly_rate(loan.current_variable_rate(resized[:payment_date])),
         remaining_payments: rows.length - rows.index(resized),
         currency_precision: 2,
         first_period_interest: resized[:interest_payment]
@@ -92,7 +100,7 @@ class Loan::StraddledResizeTest < ActiveSupport::TestCase
     end
 
     def settlement_gap(loan)
-      rows = loan.amortization_schedule.payments
+      rows = loan.amortization_rows
       rows.last[:payment_amount] - rows[-2][:payment_amount]
     end
 

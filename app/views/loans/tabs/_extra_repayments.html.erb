@@ -52,7 +52,7 @@
   <% end %>
 
   <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
-    <% if comparison.extra_applicable? %>
+    <% if comparison.extra_converged? %>
       <%= summary_card title: t(".payoff_with_extra") do %>
         <span data-testid="extra-payoff-date"><%= l comparison.extra.payoff_date, format: :long %></span>
         <% if (sooner = comparison.months_sooner) %>
@@ -67,7 +67,7 @@
       <% end %>
     <% end %>
 
-    <% if comparison.baseline.applicable? %>
+    <% if comparison.baseline.converged? %>
       <%= summary_card title: t(".payoff_without_extra") do %>
         <span data-testid="baseline-payoff-date"><%= l comparison.baseline.payoff_date, format: :long %></span>
       <% end %>

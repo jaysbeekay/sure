@@ -42,7 +42,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
   test "a variable loan quotes the schedule's payment for the current period, not the actual-balance figure" do
     loan = issue_392_loan
 
-    row = loan.amortization_schedule.payments.find { |p| p[:payment_number] == 51 }
+    row = loan.amortization_rows.find { |p| p[:payment_number] == 51 }
     assert_equal ISSUE_392_AS_OF.next_month.change(day: 15), row[:payment_date], "precondition: payment 51 is next"
 
     assert_equal Money.new(row[:payment_amount], "USD"), loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
@@ -55,7 +55,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
 
   test "the figure is the one the schedule re-amortised at the rate change" do
     loan = issue_392_loan
-    schedule = loan.amortization_schedule.payments
+    schedule = loan.amortization_rows
     at_change = schedule.find { |p| p[:payment_number] == 13 }
 
     before_change = schedule.find { |p| p[:payment_number] == 12 }
@@ -108,11 +108,10 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     assert_operator after, :>, before
   end
 
-  # Both sides of the boundary, matching `remaining_payment_count`: a payment due
-  # on `as_of` has been made.
+  # Both sides of the boundary: a payment due on `as_of` has been made.
   test "a payment due on as_of is behind it; the day before, it is the one in force" do
     loan = issue_392_loan
-    rows = loan.amortization_schedule.payments
+    rows = loan.amortization_rows
     change = rows.find { |p| p[:payment_number] == 13 }
     before_change = rows.find { |p| p[:payment_number] == 12 }
 
@@ -129,7 +128,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
   test "before the first payment the figure is the first row's payment" do
     loan = issue_392_loan
 
-    assert_equal loan.amortization_schedule.payments.first[:payment_amount],
+    assert_equal loan.amortization_rows.first[:payment_amount],
       loan.current_minimum_payment(as_of: ISSUE_392_START).amount
   end
 
@@ -157,7 +156,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     assert_nil loan.start_date, "precondition"
 
     as_of = Date.new(2025, 3, 20)
-    row = loan.amortization_schedule.payments.find { |p| p[:payment_date] > as_of }
+    row = loan.amortization_rows.find { |p| p[:payment_date] > as_of }
 
     assert_equal Date.new(2025, 4, 10), row[:payment_date]
     assert_equal row[:payment_amount], loan.current_minimum_payment(as_of: as_of).amount
@@ -167,7 +166,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
     loan.update!(rate_type: "fixed")
 
-    assert_equal loan.amortization_schedule.monthly_payment, loan.current_minimum_payment
+    assert_equal loan.amortization_schedule.periodic_payment, loan.current_minimum_payment
   end
 
   # A loan past its maturity has no payments left to spread a balance over, so
@@ -176,7 +175,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
   test "no payments remaining yields no figure rather than a divide by zero" do
     loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 12, months_elapsed: 24)
 
-    assert_equal 0, loan.amortization_schedule.remaining_payment_count
+    assert_equal 0, remaining_payments(loan, Date.current)
     assert_nil loan.current_minimum_payment
   end
 
@@ -186,7 +185,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
     loan.update!(rate_type: "fixed")
 
-    assert_equal loan.reload.amortization_schedule.monthly_payment,
+    assert_equal loan.reload.amortization_schedule.periodic_payment,
       loan.current_minimum_payment
   end
 
@@ -200,8 +199,8 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     loan.update!(rate_type: "fixed")
     loan.reload
 
-    assert_equal 0, loan.amortization_schedule.remaining_payment_count
-    assert loan.amortization_schedule.monthly_payment.amount.positive?,
+    assert_equal 0, remaining_payments(loan, Date.current)
+    assert loan.amortization_schedule.periodic_payment.amount.positive?,
       "the contracted payment must still be a positive figure, or this proves nothing"
     assert_nil loan.current_minimum_payment,
       "a matured loan has no repayment to quote, whatever its rate type"
@@ -228,7 +227,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
         entryable: Valuation.new(kind: "opening_anchor")
       )
       loan = account.loan.reload
-      scheduled = loan.amortization_schedule.payments.find { |p| p[:payment_number] == 50 }[:ending_balance]
+      scheduled = loan.amortization_rows.find { |p| p[:payment_number] == 50 }[:ending_balance]
       account.update!(balance: scheduled - 40_000)
       loan.reload
     end
@@ -239,9 +238,14 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
       Loan::AmortizationMath.level_payment(
         balance: loan.interest_bearing_balance.amount,
         monthly_rate: Loan.monthly_rate(loan.current_variable_rate(ISSUE_392_AS_OF)),
-        remaining_payments: loan.amortization_schedule.remaining_payment_count(as_of: ISSUE_392_AS_OF),
+        remaining_payments: remaining_payments(loan, ISSUE_392_AS_OF),
         currency_precision: 2
       )
+    end
+
+    # Contracted payments still to come after `as_of`.
+    def remaining_payments(loan, as_of)
+      loan.amortization_schedule.payments.count { |payment| payment.date > as_of }
     end
 
     def variable_loan(balance:, rate:, term_months:, months_elapsed:)

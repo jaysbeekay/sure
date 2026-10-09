@@ -1269,10 +1269,11 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "p[role='status']", count: 0
   end
 
-  # The summary cards compute in memory. If a stale persisted table were shown
-  # beside them the page would carry two different loans' numbers at once
-  # (risk R21), so a stale read recomputes the rows for display and says so.
-  test "a stale schedule renders recalculated rows with a translated notice" do
+  # Risk R21: the summary cards compute in memory, so the table beside them
+  # must too. Since #184's core swap the page reads no persisted rows at all:
+  # a stale cache is invisible to it, needs no notice, and is left for the
+  # rebuild job.
+  test "a stale schedule cache never reaches the page" do
     loan_account = accounts(:loan)
     loan_account.loan.rebuild_amortization_schedule
     original_rows = loan_account.loan.reload.amortizations.ordered.map(&:payment_amount)
@@ -1285,14 +1286,15 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     end
 
     assert_response :success
-    assert_select "p[role='status']", text: I18n.t("loans.tabs.schedule.recalculating")
+    assert_select "p[role='status']", count: 0
 
-    schedule = loan_account.loan.reload.amortization_schedule
-    assert schedule.stale?, "the persisted rows must still be stale -- the read must not have rebuilt them"
-    assert_equal original_rows, loan_account.loan.amortizations.ordered.map(&:payment_amount),
+    loan = loan_account.loan.reload
+    assert_not loan.schedule_current?, "the persisted rows must still be stale -- the read must not have rebuilt them"
+    assert_equal original_rows, loan.amortizations.ordered.map(&:payment_amount),
       "the read must leave the persisted rows exactly as they were"
-    assert_not_equal original_rows, schedule.display_rows.map(&:payment_amount),
-      "display rows must be recomputed at the new rate, so they agree with the summary cards"
+    first_payment = loan.amortization_schedule.payments.first.payment
+    assert_not_equal original_rows.first, first_payment.amount, "the rate change must move the schedule"
+    assert_select "tbody tr:first-child td", text: ApplicationController.helpers.format_money(first_payment)
   end
 
   # perform_later is called on every stale view; sidekiq-unique-jobs is what
@@ -1379,7 +1381,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     extra = loan.payoff_projection_with_extra(amount: "200")
     saved = baseline.total_interest.amount - extra.total_interest.amount
     sooner = baseline.payment_count - extra.payment_count
-    assert_not_equal saved, extra.interest_saved, "test setup should separate the two comparisons"
+    assert_not_equal saved, extra.interest_saved.amount, "test setup should separate the two comparisons"
 
     get account_url(loan_account, tab: "extra_repayments", extra_payment: { amount: "200" })
 
@@ -1438,7 +1440,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       entryable: Valuation.new(kind: "opening_anchor")
     )
     loan = loan_account.loan.tap(&:ensure_amortization_schedule_current!)
-    threshold = loan.amortization_schedule.monthly_payment.amount / (BigDecimal("5.0") / 100 / 12)
+    threshold = loan.amortization_schedule.periodic_payment.amount / (BigDecimal("5.0") / 100 / 12)
     loan_account.update!(balance: (threshold * BigDecimal("0.995")).round(2))
     enter_amount = I18n.t("loans.tabs.extra_repayments.projection_not_converged.enter_amount")
     cleared = I18n.t("loans.tabs.extra_repayments.projection_not_converged.cleared_by_extra")
@@ -1620,7 +1622,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     loan_account = accounts(:loan)
     loan = loan_account.loan
     loan.update!(rate_type: "variable", interest_rate: 5, term_months: 12)
-    payment_dates = loan.amortization_schedule.payments.map { |p| p[:payment_date] }
+    payment_dates = loan.amortization_schedule.payments.map(&:date)
     loan.update!(rate_changes: [ { effective_date: payment_dates[3].iso8601, rate: "9.5" } ])
     loan.rebuild_amortization_schedule
 
@@ -1699,7 +1701,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
     assert_nil loan_account.loan.reload.current_minimum_payment,
       "the fixture must be past maturity for this test to prove anything"
-    contracted = loan_account.loan.amortization_schedule.monthly_payment
+    contracted = loan_account.loan.amortization_schedule.periodic_payment
     assert_not_nil contracted, "the contracted payment must exist, or the fallback could not have shown it"
 
     get account_path(loan_account, tab: "schedule")

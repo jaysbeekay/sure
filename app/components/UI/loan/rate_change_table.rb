@@ -93,13 +93,10 @@ class UI::Loan::RateChangeTable < ApplicationComponent
       loan.account.currency
     end
 
-    # `Loan#variable_rates` already returns entries in date order, so this
-    # preserves that ordering. One parse per entry, not two (Codacy, #79).
+    # `Loan#variable_rates` already returns parsed entries in date order, so
+    # this preserves that ordering.
     def future_rate_changes
-      loan.variable_rates.filter_map do |date, rate|
-        effective_date = Date.iso8601(date.to_s)
-        [ effective_date, rate ] if effective_date > as_of
-      end
+      loan.variable_rates.select { |effective_date, _| effective_date > as_of }
     end
 
     # Each forthcoming change with the schedule row it resizes, keeping only
@@ -115,9 +112,14 @@ class UI::Loan::RateChangeTable < ApplicationComponent
 
     # The first scheduled payment on or after the effective date: the payment a
     # change resizes (the payment clock, C8). A change effective ON a payment
-    # date resizes that payment. Read from the in-memory simulation, not the
-    # persisted rows, which may be stale.
+    # date resizes that payment. Read from the in-memory schedule, in the row
+    # shape that carries each payment's opening balance -- not the persisted
+    # rows, which may be stale.
     def schedule_row_at(effective_date)
-      loan.amortization_schedule.payments.find { |payment| payment[:payment_date] >= effective_date }
+      schedule_rows.find { |row| row[:payment_date] >= effective_date }
+    end
+
+    def schedule_rows
+      @schedule_rows ||= loan.amortization_rows
     end
 end
