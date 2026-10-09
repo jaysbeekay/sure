@@ -13,6 +13,7 @@ class LoansController < ApplicationController
   permitted_accountable_attributes(
     :id, :subtype, :rate_type, :interest_rate, :term_months, :initial_balance,
     :day_count_convention, :start_date, :collateral_account_id,
+    :down_payment, :insurance_rate, :insurance_rate_type,
     { offset_account_ids: [] },
     { rate_changes: [ :effective_date, :rate, :_destroy ] }
   )

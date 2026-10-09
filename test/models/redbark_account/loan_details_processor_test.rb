@@ -395,11 +395,13 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
     assert_equal 12, @loan.reload.term_months
   end
 
-  # #303. Loan#original_balance does not read `initial_balance` on this tree, so
-  # a bad principal reaches the loan form and the account-creation flow rather
-  # than the maths -- but it is still a figure no loan was ever drawn for. One
-  # test per value, NOT a loop: the processor caches its loan, so a loop would
-  # let the first stored value stop the later iterations writing anything.
+  # #303. A bad principal is a figure no loan was ever drawn for. Since #184
+  # phase 2 Loan#original_balance prefers a positive `initial_balance`, so a
+  # stored principal reaches the maths -- the schedule, insurance, repaid
+  # ratio and leverage -- as well as the loan form; a non-positive one is
+  # ignored there, but must still not be stored. One test per value, NOT a
+  # loop: the processor caches its loan, so a loop would let the first stored
+  # value stop the later iterations writing anything.
   [ "0", "-400000", "NaN", "Infinity" ].each do |amount|
     test "a principal of #{amount} is not stored" do
       @loan.update_columns(initial_balance: nil)

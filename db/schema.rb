@@ -1686,7 +1686,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_09_130000) do
     t.uuid "collateral_account_id"
     t.datetime "created_at", null: false
     t.string "day_count_convention", default: "thirty_360", null: false
+    t.decimal "down_payment", precision: 19, scale: 4
     t.decimal "initial_balance", precision: 19, scale: 4
+    t.decimal "insurance_rate", precision: 8, scale: 4
+    t.string "insurance_rate_type"
     t.decimal "interest_rate", precision: 10, scale: 3
     t.jsonb "locked_attributes", default: {}
     t.string "rate_type"
@@ -1697,6 +1700,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_09_130000) do
     t.jsonb "variable_rate_schedule", default: {}, null: false
     t.index ["collateral_account_id"], name: "index_loans_on_collateral_account_id"
     t.check_constraint "day_count_convention::text = ANY (ARRAY['actual_365'::character varying, 'actual_actual'::character varying, 'thirty_360'::character varying, 'actual_360'::character varying]::text[])", name: "chk_loans_day_count_convention"
+    t.check_constraint "down_payment IS NULL OR down_payment >= 0::numeric", name: "chk_loans_down_payment_non_negative"
+    t.check_constraint "insurance_rate IS NULL OR insurance_rate >= 0::numeric", name: "chk_loans_insurance_rate_non_negative"
+    t.check_constraint "insurance_rate_type IS NULL OR (insurance_rate_type::text = ANY (ARRAY['level_term'::character varying, 'decreasing_life'::character varying]::text[]))", name: "chk_loans_insurance_rate_type"
     t.check_constraint "interest_rate IS NULL OR interest_rate >= 0::numeric AND interest_rate <= 100::numeric", name: "chk_loans_interest_rate_bounds"
     t.check_constraint "term_months IS NULL OR term_months > 0 AND term_months <= 1200", name: "chk_loans_term_months_bounds"
   end
