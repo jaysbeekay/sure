@@ -58,15 +58,20 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     schedule = loan.amortization_schedule.payments
     at_change = schedule.find { |p| p[:payment_number] == 13 }
 
-    expected = Loan::AmortizationMath.level_payment(
+    before_change = schedule.find { |p| p[:payment_number] == 12 }
+    annuity = Loan::AmortizationMath.level_payment(
       balance: at_change[:beginning_balance],
       monthly_rate: Loan.monthly_rate("6.43"),
       remaining_payments: 348,
       currency_precision: 2
     )
 
-    assert_equal expected, at_change[:payment_amount], "precondition: payment 13 is the re-amortised one"
-    assert_equal expected, loan.current_minimum_payment(as_of: ISSUE_392_AS_OF).amount
+    # Payment 13 is the resize: it differs from payment 12 and is (within the
+    # engine's sizing of the straddled period, #184) the 6.43% annuity on the
+    # scheduled balance. The figure quoted is that row's, to the cent.
+    assert_not_equal before_change[:payment_amount], at_change[:payment_amount], "precondition: payment 13 is the resize"
+    assert_in_delta annuity, at_change[:payment_amount], BigDecimal("5"), "precondition: payment 13 is the 6.43% annuity"
+    assert_equal at_change[:payment_amount], loan.current_minimum_payment(as_of: ISSUE_392_AS_OF).amount
   end
 
   test "an offset does not change the current minimum repayment" do
