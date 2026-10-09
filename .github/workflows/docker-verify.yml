@@ -48,7 +48,7 @@ jobs:
           docker run -d --name redis --network host public.ecr.aws/docker/library/redis:7
           for i in $(seq 1 30); do docker exec pg pg_isready -U sure && break; sleep 2; done
 
-      - name: Run the image the way docker run does (entrypoint db:prepare), load demo data, check loans
+      - name: Run the image the way docker run does (entrypoint db:prepare), load demo data, check loans through the forms
         run: |
           ENVS="-e DB_HOST=127.0.0.1 -e POSTGRES_USER=sure -e POSTGRES_PASSWORD=sure -e POSTGRES_DB=sure_production -e REDIS_URL=redis://127.0.0.1:6379/1 -e SECRET_KEY_BASE=$(openssl rand -hex 64) -e RAILS_FORCE_SSL=false -e RAILS_ASSUME_SSL=false -e SELF_HOSTED=true"
           # The entrypoint runs db:prepare only for `rails server`; start the
@@ -60,5 +60,9 @@ jobs:
           curl -sS -o /dev/null -w "GET /sessions/new -> %{http_code}\n" http://127.0.0.1:3000/sessions/new
           docker stop app
           docker run --rm --network host $ENVS sure-loans:verify ./bin/rails demo_data:default | tail -3
-          docker run --rm --network host $ENVS -v "$PWD/.github/docker-verify/verify.rb:/tmp/verify.rb:ro" sure-loans:verify ./bin/rails runner /tmp/verify.rb 2>&1 | tee verify.log | grep -E "^(PASS|FAIL)|checks passed" || true
-          grep -q "29/29 checks passed" verify.log
+          V="-v $PWD/.github/docker-verify/verify.rb:/tmp/verify.rb:ro"
+          docker run --rm --network host $ENVS $V sure-loans:verify ./bin/rails runner /tmp/verify.rb ui 2>&1 | tee ui.log | grep -E "^(PASS|FAIL)|checks passed" || true
+          docker run --rm --network host $ENVS $V sure-loans:verify ./bin/rails runner /tmp/verify.rb model 2>&1 | tee model.log | grep -E "^(PASS|FAIL)|checks passed" || true
+          ! grep -q "^FAIL" ui.log model.log
+          grep -qE "^([0-9]+)/\1 checks passed" ui.log
+          grep -qE "^([0-9]+)/\1 checks passed" model.log
