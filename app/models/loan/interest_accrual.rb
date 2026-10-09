@@ -4,9 +4,10 @@ class Loan
   # not including, to_date. An offset change is effective on its date.
   class InterestAccrual
     DEFAULT_DAY_COUNT_CONVENTION = :actual_365
-    DAY_COUNT_CONVENTIONS = %i[actual_365 actual_actual thirty_360].freeze
+    DAY_COUNT_CONVENTIONS = %i[actual_365 actual_actual thirty_360 actual_360].freeze
     DAY_COUNT = BigDecimal("365")
     LEAP_YEAR_DAY_COUNT = BigDecimal("366")
+    ACTUAL_360_DAY_COUNT = BigDecimal("360")
     PERCENT = BigDecimal("100")
     MONTHS_PER_YEAR = BigDecimal("12")
     DAYS_PER_30_360_MONTH = BigDecimal("30")
@@ -147,10 +148,18 @@ class Loan
         dates.push(to_date).uniq.select { |date| date <= to_date }.sort
       end
 
+      # One explicit branch per basis. Before #284 anything other than
+      # actual/actual fell through to 365, so a basis added to the list without
+      # a branch here would have accrued silently as actual/365; now it raises.
+      # (30/360 never reaches this: it returns early above.)
       def day_count_denominator(date, day_count_convention)
-        return DAY_COUNT unless day_count_convention == :actual_actual
-
-        Date.leap?(date.year) ? LEAP_YEAR_DAY_COUNT : DAY_COUNT
+        case day_count_convention
+        when :actual_365 then DAY_COUNT
+        when :actual_actual then Date.leap?(date.year) ? LEAP_YEAR_DAY_COUNT : DAY_COUNT
+        when :actual_360 then ACTUAL_360_DAY_COUNT
+        else
+          raise ArgumentError, "no day-count denominator for #{day_count_convention.inspect}"
+        end
       end
 
       def normalize_day_count_convention(value)
