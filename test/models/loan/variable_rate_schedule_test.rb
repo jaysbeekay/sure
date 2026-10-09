@@ -16,7 +16,9 @@ require "test_helper"
 #     (the fork adopts the parsed reading; the form-row half differs)
 #   a rate outside the range the form declares is rejected, not persisted
 #   a term longer than the simulator will walk is not amortizable, rather than raising
-#     (the fork refuses such a term at validation, so the loan cannot be built)
+#     (the fork refuses such a term at validation and in the database, so the
+#     loan cannot be built; test/models/loan_test.rb reaches the same guard
+#     through an unsaved term instead)
 
 # The behaviour #104 exists for: a schedule that re-amortises at each recorded
 # rate change, and does so on the right dates.

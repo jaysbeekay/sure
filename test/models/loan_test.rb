@@ -93,6 +93,25 @@ class LoanTest < ActiveSupport::TestCase
     assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "fixed").amortizable?
   end
 
+  # Upstream's guard, kept: a term longer than the simulator will walk is not
+  # amortizable rather than raising. The fork refuses such a term at
+  # validation and in the database, so only a loan holding a rejected value in
+  # memory -- a form re-rendered after a failed save -- reaches the guard, and
+  # it must answer rather than raise.
+  test "a term longer than the simulator will walk is not amortizable, rather than raising" do
+    loan = Account.create!(
+      family: families(:dylan_family), name: "Overlong", balance: 500_000, currency: "USD",
+      accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "fixed")
+    ).loan
+    assert_not_nil loan.amortization_schedule, "precondition: schedulable at a valid term"
+
+    loan.term_months = Loan::Simulator::MAX_PERIODS + 1
+
+    assert_not loan.valid?
+    assert_not loan.amortizable?
+    assert_nil loan.amortization_schedule
+  end
+
   test "the principal is the recorded one, not the first tracked balance" do
     loan = build_imported_loan_account.loan
 
