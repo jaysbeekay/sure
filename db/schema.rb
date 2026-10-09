@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_09_120100) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_09_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1696,7 +1696,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_09_120100) do
     t.datetime "updated_at", null: false
     t.jsonb "variable_rate_schedule", default: {}, null: false
     t.index ["collateral_account_id"], name: "index_loans_on_collateral_account_id"
-    t.check_constraint "day_count_convention::text = ANY (ARRAY['actual_365'::character varying, 'actual_actual'::character varying, 'thirty_360'::character varying]::text[])", name: "chk_loans_day_count_convention"
+    t.check_constraint "day_count_convention::text = ANY (ARRAY['actual_365'::character varying, 'actual_actual'::character varying, 'thirty_360'::character varying, 'actual_360'::character varying]::text[])", name: "chk_loans_day_count_convention"
     t.check_constraint "interest_rate IS NULL OR interest_rate >= 0::numeric AND interest_rate <= 100::numeric", name: "chk_loans_interest_rate_bounds"
     t.check_constraint "term_months IS NULL OR term_months > 0 AND term_months <= 1200", name: "chk_loans_term_months_bounds"
   end
