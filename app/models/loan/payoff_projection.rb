@@ -402,10 +402,10 @@ class Loan
 
       # Under :hold the repayment is a constant -- today's contracted payment,
       # carried across every segment. Under :reamortize each rate segment sizes
-      # its own repayment from the balance it opens with, over the payments
-      # still remaining, which is the same annuity `current_minimum_payment`
-      # quotes. That is what makes the re-amortised table self-consistent: the
-      # trajectory is driven by the very repayment the table puts on screen.
+      # its own repayment from the ACTUAL balance it opens with, net of offset,
+      # over the payments still remaining: what the repayment would be if the
+      # loan were re-amortised today. That is not the lender's minimum, which is
+      # sized on the scheduled balance (`current_minimum_payment`, #392).
       def payment_amount_for
         return ->(**_kwargs) { monthly_payment.amount } if @payment_strategy == :hold
 
@@ -421,11 +421,9 @@ class Loan
 
       # Simulator tracks and hands out the GROSS balance -- an offset reduces the
       # interest charged, not the principal owed -- but a repayment is quoted on
-      # the interest-bearing balance. `current_minimum_payment` and
-      # `UI::Loan::RateChangeTable` both size on net, so sizing this projection
-      # on gross put two bases in one row for the third time on this PR: with a
-      # $100,000 offset the trajectory was driven by $2,719.33 while the table
-      # displayed $2,040.79 (CodeRabbit, #79).
+      # the interest-bearing balance, so an actual-balance re-amortisation sizes
+      # on net (CodeRabbit, #79). Since #392 neither `current_minimum_payment`
+      # nor `UI::Loan::RateChangeTable` reads this; both are on the schedule.
       #
       # Gross is still what gets amortised; only the SIZING basis is net. The
       # offset is held flat at today's total, which is the assumption the
@@ -598,8 +596,8 @@ class Loan
       end
 
       # Payments left to the ORIGINAL maturity, counted from the first date this
-      # projection will pay on -- the same term basis `current_minimum_payment`
-      # re-amortises over, so the table's balances and its quotes agree.
+      # projection will pay on: the term a re-amortisation spreads the balance
+      # over, never a fresh one.
       def remaining_payments_to_original_maturity
         loan.amortization_schedule.remaining_payment_count(
           as_of: first_projected_payment_date, including_on_date: true
@@ -617,8 +615,7 @@ class Loan
       # an underpaid loan really does run long -- but :reamortize holds the date
       # fixed, so for it that answer is fiction.
       #
-      # `current_minimum_payment` already returns nil for exactly this loan; the
-      # projection now agrees with it instead of contradicting it.
+      # `current_minimum_payment` returns nil for exactly this loan too.
       def reamortize_without_horizon?
         @payment_strategy == :reamortize && !remaining_payments_to_original_maturity.positive?
       end
