@@ -46,6 +46,11 @@ class UI::Loan::RateChangeTable < ApplicationComponent
   # new rate, the scheduled balance it lands on, and the repayment before and
   # after. A change with no scheduled payment on or after it (past maturity) is
   # skipped rather than shown with blanks.
+  #
+  # Two changes before the same payment are priced at that payment on the
+  # later rate, so the earlier one never sets a repayment of its own. Only the
+  # last change before each payment is listed; listing the earlier one would
+  # pair its rate with the later rate's repayment (cubic, #394).
   def rows
     # A fixed-rate loan can still carry rate rows: #14 keeps a loan's rate
     # history when its type changes rather than silently discarding it. Those
@@ -53,10 +58,7 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     # every loan's schedule tab.
     return [] unless loan.variable_rate_type?
 
-    @rows ||= future_rate_changes.filter_map do |effective_date, new_rate|
-      row = schedule_row_at(effective_date)
-      next if row.nil?
-
+    @rows ||= priced_changes.filter_map do |effective_date, new_rate, row|
       balance = BigDecimal(row[:beginning_balance].to_s)
       next unless balance.positive?
 
@@ -98,6 +100,17 @@ class UI::Loan::RateChangeTable < ApplicationComponent
         effective_date = Date.iso8601(date.to_s)
         [ effective_date, rate ] if effective_date > as_of
       end
+    end
+
+    # Each forthcoming change with the schedule row it resizes, keeping only
+    # the last change before any one payment. A change past maturity has no
+    # row and is dropped.
+    def priced_changes
+      priced = future_rate_changes.filter_map do |effective_date, new_rate|
+        row = schedule_row_at(effective_date)
+        [ effective_date, new_rate, row ] if row
+      end
+      priced.reverse.uniq { |_, _, row| row[:payment_date] }.reverse
     end
 
     # The first scheduled payment on or after the effective date: the payment a
