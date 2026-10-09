@@ -54,7 +54,7 @@ uk:
         unknown: Невідомо
         edit_loan_details: "Редагувати деталі позики"
         original_payoff_date: Початкова дата погашення
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         variable_with_offset: Variable + offset
       schedule:
         date: Дата
@@ -82,7 +82,7 @@ uk:
           other: "%{count} months later"
         projection_not_converged: The projected payoff does not converge within the supported term.
         recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
         rate_change_marker: "rate change"
         rate_change_marker_title: "The interest rate changes during this payment's period, to %{rate}%."

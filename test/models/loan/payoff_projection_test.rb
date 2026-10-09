@@ -641,9 +641,10 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
   # doubled window spreads the balance over ~720 periods instead of ~277: a
   # repayment far too small to cover the interest, and a balance that climbs.
   #
-  # Pinning the first projected payment to `current_minimum_payment` is what
-  # catches that, because that method re-amortises over the term to the ORIGINAL
-  # maturity. Assertions on the balance trajectory alone do NOT catch it -- the
+  # Pinning the first projected payment to the actual-balance annuity over the
+  # payments left to the ORIGINAL maturity is what catches that. (Until #392
+  # this compared against `current_minimum_payment`, which then computed that
+  # annuity; it now reads the contracted schedule instead.) Assertions on the balance trajectory alone do NOT catch it -- the
   # under-sized repayment leaves the balance roughly flat rather than obviously
   # wrong, which is exactly what makes it dangerous.
   test "a re-amortising projection pays the current minimum payment from the start" do
@@ -652,9 +653,9 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     projection = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
 
     assert projection.applicable?
-    assert_equal loan.current_minimum_payment.amount,
+    assert_equal actual_balance_annuity(loan),
       projection.payments.first[:payment_amount],
-      "the projection must be driven by the very repayment the table quotes"
+      "the projection must re-amortise over the term to the original maturity"
   end
 
   # A re-amortising loan clears at its ORIGINAL maturity by construction: the
@@ -701,7 +702,7 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_not held.applicable?, ":hold genuinely cannot amortise this loan"
     assert reamortized.applicable?,
       ":reamortize sizes its own repayment, so the contracted one cannot disqualify it"
-    assert_equal loan.current_minimum_payment.amount,
+    assert_equal actual_balance_annuity(loan),
       reamortized.payments.first[:payment_amount]
   end
 
@@ -756,8 +757,7 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
   #
   # Simulator tracks the GROSS balance -- an offset reduces the interest
   # charged, not the principal owed -- but a repayment is quoted on the
-  # interest-bearing balance, which is what `current_minimum_payment` and
-  # `UI::Loan::RateChangeTable` both use. Sizing this projection on gross drove
+  # interest-bearing balance. Sizing this projection on gross drove
   # the trajectory with a repayment $678.54 above the one on screen.
   #
   # The earlier "driven by one number" test passes on a loan with NO offset,
@@ -769,12 +769,23 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
 
     assert_operator loan.interest_bearing_balance.amount, :<, loan.account.balance,
       "the fixture must actually carry an offset, or this test proves nothing"
-    assert_equal loan.current_minimum_payment.amount,
+    assert_equal actual_balance_annuity(loan),
       projection.payments.first[:payment_amount],
-      "an offset loan's projection must be driven by the repayment the table quotes"
+      "an offset loan's re-amortisation must size on the balance net of offset"
   end
 
   private
+
+    # Today's balance net of offset, at today's rate, over the payments left to
+    # the original maturity: what `current_minimum_payment` quoted before #392.
+    def actual_balance_annuity(loan)
+      Loan::AmortizationMath.level_payment(
+        balance: loan.interest_bearing_balance.amount,
+        monthly_rate: Loan.monthly_rate(loan.current_variable_rate(Date.current)),
+        remaining_payments: loan.amortization_schedule.remaining_payment_count,
+        currency_precision: 2
+      )
+    end
 
     # $400,762.12 owed against a $100,000 offset.
     def offset_loan

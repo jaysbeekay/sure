@@ -204,8 +204,9 @@ class LoanOffsetAccountCurrencyChangeTest < ActiveSupport::TestCase
         interest_bearing_balance: loan.interest_bearing_balance.amount,
         countable_offsets: loan.countable_offset_accounts.exists?,
         offset_change_points: Loan::OffsetResolver.new(loan).change_points(today, today + 30),
-        projection_total_interest: Loan::PayoffProjection.new(loan, as_of: today).total_interest,
-        rate_change_table_rows: UI::Loan::RateChangeTable.new(loan: loan, as_of: today).rows.map(&:to_h)
+        # UI::Loan::RateChangeTable left this list in #392: it reads the
+        # contracted schedule, which no offset reaches.
+        projection_total_interest: Loan::PayoffProjection.new(loan, as_of: today).total_interest
       }
     end
 end

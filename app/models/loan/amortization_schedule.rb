@@ -253,6 +253,24 @@ class Loan
       end
     end
 
+    # The contracted repayment in force as of `as_of`: the payment of the first
+    # scheduled period still to come. The schedule re-amortises at each recorded
+    # rate change, so on a variable loan this is the lender's minimum, sized on
+    # the SCHEDULED balance (#392).
+    #
+    # The boundary matches `remaining_payment_count`'s default: a payment due on
+    # `as_of` has been made, so the one in force is the next. Read from the
+    # in-memory simulation, not the persisted rows.
+    def payment_in_force(as_of: Date.current)
+      row = payment_row_in_force(as_of: as_of)
+      Money.new(row[:payment_amount], currency) if row
+    end
+
+    # The schedule row behind `payment_in_force`, or nil past maturity.
+    def payment_row_in_force(as_of: Date.current)
+      payments.find { |payment| payment[:payment_date] > as_of }
+    end
+
     # Get a specific payment by date, or nil if not found
     def payment_for(date)
       payment = payments.find { |p| p[:payment_date] == date }
