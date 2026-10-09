@@ -1,558 +1,587 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
 import {
-  createChartTooltip,
   CHART_TOOLTIP_CONTEXT_CLASSES,
   CHART_TOOLTIP_VALUE_CLASSES,
+  createChartTooltip,
 } from "utils/chart_tooltip";
 
-// Payoff comparison chart for a loan. Renders:
-//   - Solid balance history from the schedule's start → today
-//   - Two dashed forward lines from today: the original schedule's
-//     remaining balance (neutral) and the actual-balance projection
-//     (green if ahead of schedule, amber if behind)
-//   - Today marker (vertical line + dot)
-//   - Optionally (#304, the Extra repayments tab) a fourth line from today:
-//     the same projection with an extra monthly payment, drawn BESIDE the
-//     no-extra projection rather than in place of it
+// The loan balance chart at the top of a loan's account page (#390): up to
+// four series on one axis, from Loan::PayoffChart.
 //
-// Data shape passed via `data-loan-payoff-chart-data-value` matches
-// Loan#payoff_chart_payload. Deliberately not a port of
-// goal_projection_chart_controller.js -- that chart draws one projection
-// line off a single on-track boolean; this draws two independently-dated
-// forward lines, which is a different shape of problem.
+//   actual     the recorded balance, origination -> today. Solid: fact.
+//   scheduled  the contract, origination -> maturity, re-amortised at each
+//              recorded rate change. Dashed.
+//   projected  where today's balance is heading on the schedule's repayment.
+//              Dashed.
+//   extra      the same projection with the Extra repayments tab's monthly
+//              extra, only when an amount was entered. Dotted.
+//
+// Series are distinguished by DASH PATTERN as well as colour. Hue alone fails
+// in greyscale and under deuteranopia, and red/green would be the worst
+// possible pair to rely on. Solid-versus-dashed also keeps "recorded fact"
+// and "forecast" visually separable, and the dotted extra line stays apart
+// from both forecasts it sits beside.
+//
+// Ported from upstream (we-promise/sure#3474, with the principal/interest
+// tooltip split of #4006); the extra series is the fork's (#304).
+//
+// The x-domain comes from the payload, not from the data: the period picker
+// governs it (#100, decision 4). Series are drawn through a clip so a line
+// that leaves the window is cut at its edge rather than stretching the axis.
+
+// Date-only strings parse as UTC midnight in `new Date`, shifting the day
+// back for anyone west of Greenwich. Parse the components instead.
+const parseDate = (s) => {
+  if (!s) return null;
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+
+let clipSerial = 0;
+
 export default class extends Controller {
-  static values = {
-    data: Object,
-  };
+  static values = { data: Object };
 
   connect() {
-    this._resize = this._draw.bind(this);
-    window.addEventListener("resize", this._resize);
-    // Container may have 0 width on initial connect (Turbo restoration,
-    // hidden parent, etc). Re-draw whenever the box settles into a real
-    // size. The first observer callback also performs the initial paint.
+    this._draw = this._draw.bind(this);
+    // A window resize also changes the element's box, so the resize listener
+    // and the ResizeObserver both fire for one event. Each draw rebuilds the
+    // whole SVG; coalesce them into one per animation frame.
+    this._scheduleDraw = () => {
+      if (this._frame) return;
+      this._frame = requestAnimationFrame(() => {
+        this._frame = null;
+        this._draw();
+      });
+    };
+    window.addEventListener("resize", this._scheduleDraw);
+    // The container can be zero-width on first connect (a Turbo restore, a
+    // hidden parent). Draw when the box settles.
     if (typeof ResizeObserver !== "undefined") {
-      this._observer = new ResizeObserver(() => this._draw());
+      this._observer = new ResizeObserver(this._scheduleDraw);
       this._observer.observe(this.element);
     } else {
       this._draw();
     }
+    // A Turbo render or frame load can replace the page around a mount that
+    // has not drawn yet; draw then rather than waiting for a resize.
     this._onTurboRender = () => {
-      if (!this.element.querySelector("svg")) this._draw();
+      if (!this.element.querySelector("svg")) this._scheduleDraw();
     };
     document.addEventListener("turbo:render", this._onTurboRender);
     document.addEventListener("turbo:frame-load", this._onTurboRender);
   }
 
   disconnect() {
-    window.removeEventListener("resize", this._resize);
+    window.removeEventListener("resize", this._scheduleDraw);
+    document.removeEventListener("turbo:render", this._onTurboRender);
+    document.removeEventListener("turbo:frame-load", this._onTurboRender);
+    if (this._frame) cancelAnimationFrame(this._frame);
+    this._frame = null;
     this._observer?.disconnect();
-    if (this._onTurboRender) {
-      document.removeEventListener("turbo:render", this._onTurboRender);
-      document.removeEventListener("turbo:frame-load", this._onTurboRender);
-    }
+    this._tooltip?.remove();
   }
 
   _draw() {
     const root = this.element;
-    root.innerHTML = "";
-
-    const data = this.dataValue || {};
     const width = root.clientWidth;
     const height = root.clientHeight;
     if (width <= 0 || height <= 0) return;
 
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    const textPrimary = isDark ? "#ffffff" : "#171717";
-    const textSecondary = isDark ? "#cfcfcf" : "#737373";
-    const borderSubdued = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.10)";
-    const containerBg = isDark ? "#0a0a0a" : "#ffffff";
-    const accentColor = data.ahead ? "var(--color-green-600)" : "var(--color-yellow-600)";
+    root.innerHTML = "";
+    const data = this.dataValue || {};
 
-    // Date-only payload strings ("YYYY-MM-DD") parse as UTC midnight in
-    // `new Date(str)`, which shifts displayed days back one for users west
-    // of Greenwich. Parse components so points sit on local-midnight.
-    const parseLocalDate = (s) => {
-      if (!s) return null;
-      const [ y, m, d ] = s.split("-").map(Number);
-      return new Date(y, m - 1, d);
-    };
-    // `principal`/`interest` ride through for the tooltip's composition row.
-    // They are absent on `current_balance` and on the accelerated points,
-    // which is why the tooltip checks for them rather than assuming.
+    // `principal`/`interest` are on the scheduled payment points only; the
+    // tooltip checks for them rather than assuming.
     const toPoint = (p) => ({
-      date: parseLocalDate(p.date),
+      date: parseDate(p.date),
       balance: p.balance,
       principal: p.principal,
       interest: p.interest,
     });
 
-    const today = parseLocalDate(data.today);
-    const currentBalancePoint = data.current_balance ? toPoint(data.current_balance) : { date: today, balance: 0 };
+    const domainStart = parseDate(data.domain_start);
+    const domainEnd = parseDate(data.domain_end);
+    const today = parseDate(data.today);
+    if (!domainStart || !domainEnd || domainEnd <= domainStart) return;
 
-    const historySeries = (data.scheduled_history || []).map(toPoint);
-    // The contracted trajectory's last known point before today -- anchors
-    // originalSeries below so that purely-contracted line stays independent
-    // of the live balance even when it's diverged (extra payments made).
-    // Falls back to currentBalancePoint only for a brand-new loan with no
-    // scheduled history yet -- there's no contracted "before" to anchor to.
-    const lastContractedPoint = historySeries.length > 0 ? historySeries[historySeries.length - 1] : currentBalancePoint;
-    // Close the solid line at (today, currentBalance) -- the actual, live
-    // balance, which can differ from the last scheduled payment's balance
-    // when extra payments were made. That gap is deliberate: it's the
-    // visual signal of the extra payment.
-    historySeries.push(currentBalancePoint);
+    // Functional tokens, referenced as CSS variables and applied with
+    // .style(), never .attr(): a variable is substituted in an inline style
+    // property but not in an SVG presentation attribute, where it leaves the
+    // stroke at `none`. No fallback colours: a token that fails to
+    // resolve must fail visibly, and the browser test checks the resolved
+    // stroke. Because these are live variables the browser recolours the
+    // chart on a theme change by itself; no redraw is needed for that.
+    const success = "var(--color-success)";
+    const destructive = "var(--color-destructive)";
+    const info = "var(--color-info)";
+    const muted = "var(--color-tertiary)";
 
-    // originalSeries is the "if you'd only ever made the contracted
-    // payment" reference -- it must stay independent of the live balance,
-    // so it continues from the contracted trajectory's own last point, not
-    // currentBalancePoint (unlike acceleratedSeries below, which is
-    // *defined* as starting from today's real balance).
-    const originalSeries = [lastContractedPoint, ...(data.original_projection || []).map(toPoint)];
-    const acceleratedSeries = [currentBalancePoint, ...(data.accelerated_projection || []).map(toPoint)];
-    // Absent unless the payload carries one, so the Schedule tab draws exactly
-    // what it always has.
-    const extraSeries = data.extra_projection
-      ? [currentBalancePoint, ...data.extra_projection.map(toPoint)]
-      : [];
+    // Drawing order: forecasts underneath, fact on top.
+    const series = [
+      {
+        key: "scheduled",
+        points: (data.scheduled || []).map(toPoint),
+        color: destructive,
+        dash: "6 4",
+        width: 1.5,
+      },
+      {
+        key: "projected",
+        points: (data.projected || []).map(toPoint),
+        color: success,
+        dash: "4 4",
+        width: 2,
+      },
+      // Dotted: a zero-length dash with round caps draws a dot, so the
+      // modelled extra reads apart from both dashed forecasts by line style,
+      // not only by hue.
+      {
+        key: "extra",
+        points: (data.extra || []).map(toPoint),
+        color: info,
+        dash: "0 5",
+        width: 2.5,
+      },
+      {
+        key: "actual",
+        points: (data.actual || []).map(toPoint),
+        color: success,
+        dash: null,
+        width: 2,
+      },
+    ].filter((s) => s.points.length > 1);
+    if (series.length === 0) return;
 
-    if (historySeries.length < 2 && originalSeries.length < 2 && acceleratedSeries.length < 2) return;
-
-    const allDates = [
-      ...historySeries.map((d) => d.date),
-      ...originalSeries.map((d) => d.date),
-      ...acceleratedSeries.map((d) => d.date),
-      ...extraSeries.map((d) => d.date),
-    ];
-    const allBalances = [
-      ...historySeries.map((d) => d.balance),
-      ...originalSeries.map((d) => d.balance),
-      ...acceleratedSeries.map((d) => d.balance),
-      ...extraSeries.map((d) => d.balance),
-    ];
-    const startDate = d3.min(allDates);
-    const endDate = d3.max(allDates);
-    const yMax = Math.max(d3.max(allBalances) || 0, 1) * 1.05;
-
-    // Reserve gutter for y-axis labels when there's room. Mobile (< 320)
-    // keeps the tighter left margin and skips the y-axis entirely.
-    const yAxisVisible = width - 16 - 24 >= 320;
-    const margin = { top: 28, right: 24, bottom: 28, left: yAxisVisible ? 44 : 16 };
-    const innerWidth = width - margin.left - margin.right;
-    const innerHeight = height - margin.top - margin.bottom;
-
-    const x = d3.scaleTime().domain([startDate, endDate]).range([margin.left, margin.left + innerWidth]);
-    const y = d3.scaleLinear().domain([0, yMax]).range([margin.top + innerHeight, margin.top]);
+    const margin = { top: 12, right: 12, bottom: 24, left: 48 };
+    const x = d3
+      .scaleTime()
+      .domain([domainStart, domainEnd])
+      .range([margin.left, width - margin.right]);
+    // Scale the y-axis to what is inside the window plus each line's first
+    // point either side of it, so a line crossing the window fits without the
+    // window being sized for points it never shows.
+    const inWindow = (points) => {
+      const inside = points.filter(
+        (p) => p.date >= domainStart && p.date <= domainEnd,
+      );
+      const before = points.filter((p) => p.date < domainStart).at(-1);
+      const after = points.find((p) => p.date > domainEnd);
+      return [before, ...inside, after].filter(Boolean);
+    };
+    const scalePoints = series.flatMap((s) => inWindow(s.points));
+    const yMax = (d3.max(scalePoints, (d) => d.balance) || 1) * 1.05;
+    const y = d3
+      .scaleLinear()
+      .domain([0, yMax])
+      .range([height - margin.bottom, margin.top]);
 
     const svg = d3
       .select(root)
       .append("svg")
       .attr("width", width)
       .attr("height", height)
-      .attr("viewBox", `0 0 ${width} ${height}`);
-
-    // Server-built label/description (Loan#payoff_chart_payload) carry the
-    // chart's actual figures, not just a generic title -- the SVG's own
-    // <desc> is the only content assistive tech gets from it; the visible
-    // sr-only paragraph below the chart (see the schedule tab partial)
-    // duplicates aria_description as real DOM text so it doesn't depend on
-    // desc support either.
-    const descId = `payoff-chart-desc-${this._id()}`;
-    svg.attr("role", "img").attr("aria-label", data.aria_label || "Loan payoff comparison chart");
-    svg.append("desc").attr("id", descId).text(data.aria_description || "");
-    svg.attr("aria-describedby", descId);
-
+      .attr("role", "img")
+      .attr("aria-label", data.aria_description || "")
+      // The picture is also a keyboard control: arrow keys step the tooltip
+      // through the plotted dates. Say so, since role=img alone would not.
+      .attr(
+        "aria-roledescription",
+        data.labels?.interactive_chart || "interactive chart",
+      )
+      .attr("aria-keyshortcuts", "ArrowLeft ArrowRight Home End Escape");
+    // Clip-path ids must be unique in the document. The mount carries the
+    // account's own dom_id, which already is; a counter covers a mount without
+    // one. Nothing random: the ids are read by url(#...) only.
+    const id = `${root.id || `loan-chart-${++clipSerial}`}-clip`;
     const defs = svg.append("defs");
-    const gradient = defs
-      .append("linearGradient")
-      .attr("id", `payoff-history-fill-${this._id()}`)
-      .attr("x1", 0).attr("y1", 0).attr("x2", 0).attr("y2", 1);
-    gradient.append("stop").attr("offset", "0%").attr("stop-color", textPrimary).attr("stop-opacity", 0.18);
-    gradient.append("stop").attr("offset", "100%").attr("stop-color", textPrimary).attr("stop-opacity", 0);
-
-    const clipId = `payoff-plot-clip-${this._id()}`;
+    const plotClip = `${id}-plot`;
     defs
       .append("clipPath")
-      .attr("id", clipId)
+      .attr("id", plotClip)
       .append("rect")
-      .attr("x", margin.left - 2)
+      .attr("x", margin.left)
       .attr("y", margin.top)
-      .attr("width", innerWidth + 4)
-      .attr("height", innerHeight);
-    const plotClip = `url(#${clipId})`;
-
-    if (yAxisVisible) {
-      y.ticks(3).forEach((tickValue) => {
-        svg
-          .append("line")
-          .attr("x1", margin.left)
-          .attr("x2", margin.left + innerWidth)
-          .attr("y1", y(tickValue))
-          .attr("y2", y(tickValue))
-          .attr("stroke", borderSubdued)
-          .attr("stroke-width", 1);
-        svg
-          .append("text")
-          .attr("x", margin.left - 6)
-          .attr("y", y(tickValue) + 3)
-          .attr("text-anchor", "end")
-          .attr("font-size", 12)
-          .attr("fill", textSecondary)
-          .text(this._fmtMoneyShort(tickValue));
-      });
-    }
-
-    const area = d3
-      .area()
-      .x((d) => x(d.date))
-      .y0(margin.top + innerHeight)
-      .y1((d) => y(d.balance))
-      .curve(d3.curveMonotoneX);
+      .attr("width", Math.max(0, width - margin.left - margin.right))
+      .attr("height", Math.max(0, height - margin.top - margin.bottom));
+    // The hover split on the actual series: the recorded line stays coloured up
+    // to the cursor and greys past it. Two clips share one edge, moved on
+    // pointer events; at rest the edge sits at the window's end and the whole
+    // line is coloured. Forecasts have no "before the cursor" to speak of.
+    const splitAt = (px) => {
+      pastClip.attr("width", Math.max(0, px - margin.left));
+      futureClip
+        .attr("x", px)
+        .attr("width", Math.max(0, width - margin.right - px));
+    };
+    const pastClip = defs
+      .append("clipPath")
+      .attr("id", `${id}-past`)
+      .append("rect")
+      .attr("x", margin.left)
+      .attr("y", margin.top)
+      .attr("height", Math.max(0, height - margin.top - margin.bottom));
+    const futureClip = defs
+      .append("clipPath")
+      .attr("id", `${id}-future`)
+      .append("rect")
+      .attr("y", margin.top)
+      .attr("height", Math.max(0, height - margin.top - margin.bottom));
+    splitAt(width - margin.right);
 
     const line = d3
       .line()
       .x((d) => x(d.date))
       .y((d) => y(d.balance))
       .curve(d3.curveMonotoneX);
+    const area = d3
+      .area()
+      .x((d) => x(d.date))
+      .y0(height - margin.bottom)
+      .y1((d) => y(d.balance))
+      .curve(d3.curveMonotoneX);
 
-    if (historySeries.length > 1) {
-      svg
-        .append("path")
-        .datum(historySeries)
-        .attr("fill", `url(#payoff-history-fill-${this._id()})`)
-        .attr("clip-path", plotClip)
-        .attr("d", area);
-
-      svg
-        .append("path")
-        .datum(historySeries)
-        .attr("data-series", "history")
-        .attr("fill", "none")
-        .attr("stroke", textPrimary)
-        .attr("stroke-width", 2)
-        .attr("stroke-linejoin", "round")
-        .attr("stroke-linecap", "round")
-        .attr("clip-path", plotClip)
-        .attr("d", line);
-    }
-
-    if (originalSeries.length > 1) {
-      svg
-        .append("path")
-        .datum(originalSeries)
-        .attr("data-series", "original")
-        .attr("fill", "none")
-        .attr("stroke", textSecondary)
-        .attr("stroke-width", 1.5)
-        .attr("stroke-linecap", "round")
-        .attr("stroke-dasharray", "3 4")
-        .attr("opacity", 0.7)
-        .attr("d", line);
-    }
-
-    if (acceleratedSeries.length > 1) {
-      svg
-        .append("path")
-        .datum(acceleratedSeries)
-        .attr("data-series", "projected")
-        .attr("fill", "none")
-        .attr("stroke", accentColor)
-        .attr("stroke-width", 2)
-        .attr("stroke-linecap", "round")
-        .attr("stroke-dasharray", "4 4")
-        .attr("d", line);
-    }
-
-    // Solid where the two projections are dashed, so it stays distinguishable
-    // from them by line style as well as hue.
-    if (extraSeries.length > 1) {
-      svg
-        .append("path")
-        .datum(extraSeries)
-        .attr("data-series", "extra")
-        .attr("fill", "none")
-        .attr("stroke", "var(--color-blue-600)")
-        .attr("stroke-width", 2)
-        .attr("stroke-linecap", "round")
-        .attr("d", line);
-    }
-
-    svg
-      .append("line")
-      .attr("x1", x(today))
-      .attr("x2", x(today))
-      .attr("y1", margin.top)
-      .attr("y2", margin.top + innerHeight)
-      .attr("stroke", borderSubdued)
-      .attr("stroke-width", 1)
-      .attr("stroke-dasharray", "2 4");
-
-    svg
-      .append("circle")
-      .attr("cx", x(today))
-      .attr("cy", y(currentBalancePoint.balance))
-      .attr("r", 4)
-      .attr("fill", textPrimary)
-      .attr("stroke", containerBg)
-      .attr("stroke-width", 2);
-
-    if (innerWidth >= 320) {
-      svg
-        .append("text")
-        .attr("x", x(today))
-        .attr("y", margin.top - 4)
-        .attr("text-anchor", "middle")
-        .attr("font-size", 12)
-        .attr("fill", textSecondary)
-        .text((data.labels?.today) || "Today");
-    }
-
-    const tickFmt = d3.timeFormat("%b %Y");
-    const tickCount = Math.min(5, Math.max(2, Math.round(innerWidth / 80)));
-    const tickGroup = svg.append("g");
-    tickGroup
-      .selectAll("text")
-      .data(x.ticks(tickCount))
-      .enter()
-      .append("text")
-      .attr("x", (d) => x(d))
-      .attr("y", height - 8)
-      .attr("text-anchor", "middle")
-      .attr("font-size", 12)
-      .attr("fill", textSecondary)
-      .text((d) => tickFmt(d));
-    const tickNodes = tickGroup.selectAll("text").nodes();
-    for (let i = tickNodes.length - 1; i > 0; i--) {
-      if (tickNodes[i].textContent === tickNodes[i - 1].textContent) {
-        tickNodes[i].remove();
-      }
-    }
-
-    // Hover interactivity: crosshair + tooltip on pointermove. Past dates
-    // show the single history value; future dates show both forward lines
-    // side by side, since comparing them is the point of this chart.
-    const crosshair = svg
-      .append("line")
-      .attr("y1", margin.top)
-      .attr("y2", margin.top + innerHeight)
-      .attr("stroke", textSecondary)
-      .attr("stroke-width", 1)
-      .attr("stroke-dasharray", "2 2")
-      .attr("pointer-events", "none")
-      .style("display", "none");
-
-    if (getComputedStyle(root).position === "static") root.style.position = "relative";
-    const tooltip = createChartTooltip(root);
-    tooltip.style.transition = "left 80ms ease-out, top 80ms ease-out";
-    const tooltipDate = document.createElement("div");
-    tooltipDate.className = CHART_TOOLTIP_CONTEXT_CLASSES;
-    const tooltipOriginal = document.createElement("div");
-    tooltipOriginal.className = CHART_TOOLTIP_VALUE_CLASSES;
-    const tooltipAccelerated = document.createElement("div");
-    tooltipAccelerated.className = `${CHART_TOOLTIP_VALUE_CLASSES} mt-0.5`;
-    const tooltipExtra = document.createElement("div");
-    tooltipExtra.className = `${CHART_TOOLTIP_VALUE_CLASSES} mt-0.5`;
-    // What the payment on the hovered date is made of. Secondary styling: the
-    // balance is what the chart draws, and this is the answer to "why is it
-    // moving so slowly" that the line itself cannot give (#21).
-    const tooltipComposition = document.createElement("div");
-    tooltipComposition.className = `${CHART_TOOLTIP_CONTEXT_CLASSES} mt-0.5`;
-    tooltip.replaceChildren(
-      tooltipDate,
-      tooltipOriginal,
-      tooltipAccelerated,
-      tooltipExtra,
-      tooltipComposition,
-    );
-
-    const bisectDate = d3.bisector((d) => d.date).left;
-    const dateFmt = d3.timeFormat("%b %d, %Y");
-    const todayTs = today.getTime();
-
-    const nearestValue = (series, targetDate) => {
-      if (series.length === 0) return null;
-      const i = bisectDate(series, targetDate);
-      const a = series[Math.max(0, i - 1)];
-      const b = series[Math.min(series.length - 1, i)];
-      if (!a) return b;
-      if (!b) return a;
-      return Math.abs(targetDate - a.date) <= Math.abs(b.date - targetDate) ? a : b;
+    // The request's locale travels in the payload: the layout hard-codes
+    // lang="en", so the document cannot say. d3's default time ticks print
+    // English month names, so the x-axis formats its own: the same choice of
+    // unit as d3's (a year on 1 January, a month on the 1st, a day otherwise),
+    // in that locale.
+    const locale = data.locale || undefined;
+    const tickYear = new Intl.DateTimeFormat(locale, { year: "numeric" });
+    const tickMonth = new Intl.DateTimeFormat(locale, { month: "short" });
+    const tickDay = new Intl.DateTimeFormat(locale, {
+      day: "numeric",
+      month: "short",
+    });
+    const timeTick = (date) => {
+      if (d3.timeMonth(date) < date) return tickDay.format(date);
+      if (d3.timeYear(date) < date) return tickMonth.format(date);
+      return tickYear.format(date);
     };
 
-    const showAt = (xPos) => {
-      const hoverDate = x.invert(xPos);
-      const isFuture = hoverDate.getTime() >= todayTs;
-      const hoverX = x(hoverDate);
-      crosshair.attr("x1", hoverX).attr("x2", hoverX).style("display", null);
-      tooltipDate.textContent = dateFmt(hoverDate);
+    // Axes first, so the series draw over them. Text in currentColor: the
+    // container carries the text token, so the axis follows the theme.
+    const styleAxis = (g) => {
+      g.selectAll("text")
+        .style("fill", "currentColor")
+        .style("opacity", 0.7)
+        .style("font-size", "11px");
+      g.selectAll("line,path")
+        .style("stroke", "currentColor")
+        .style("opacity", 0.2);
+    };
+    svg
+      .append("g")
+      .attr("transform", `translate(0,${height - margin.bottom})`)
+      .call(
+        d3
+          .axisBottom(x)
+          .ticks(Math.max(2, Math.floor(width / 140)))
+          .tickFormat(timeTick)
+          .tickSizeOuter(0),
+      )
+      .call(styleAxis);
+    svg
+      .append("g")
+      .attr("transform", `translate(${margin.left},0)`)
+      .call(
+        d3.axisLeft(y).ticks(4).tickFormat(d3.format("~s")).tickSizeOuter(0),
+      )
+      .call(styleAxis);
 
-      // The scheduled point either side of today: the original projection ahead
-      // of it, the scheduled history behind. Found ONCE -- the balance row and
-      // the composition row are two readings of the same point, and looking it
-      // up twice is how they would come to disagree about which date they are
-      // describing.
-      const scheduledPoint = isFuture
-        ? nearestValue(originalSeries, hoverDate)
-        : nearestValue(historySeries, hoverDate);
+    const stroke = (path, s, color) =>
+      path
+        .style("fill", "none")
+        .style("stroke", color)
+        .style("stroke-width", s.width)
+        .style("stroke-linecap", "round")
+        .style("stroke-linejoin", "round")
+        .style("stroke-dasharray", s.dash || "none");
 
-      if (isFuture) {
-        const acceleratedPoint = nearestValue(acceleratedSeries, hoverDate);
-        tooltipOriginal.textContent = scheduledPoint
-          ? `${(data.labels?.original) || "Original"}: ${this._fmtMoney(scheduledPoint.balance)}`
-          : "";
-        tooltipOriginal.style.display = scheduledPoint ? "" : "none";
-        tooltipAccelerated.textContent = acceleratedPoint
-          ? `${(data.labels?.accelerated) || "Projected"}: ${this._fmtMoney(acceleratedPoint.balance)}`
-          : "";
-        tooltipAccelerated.style.display = acceleratedPoint ? "" : "none";
-        const extraPoint = nearestValue(extraSeries, hoverDate);
-        tooltipExtra.textContent = extraPoint
-          ? `${(data.labels?.extra) || "With extra"}: ${this._fmtMoney(extraPoint.balance)}`
-          : "";
-        tooltipExtra.style.display = extraPoint ? "" : "none";
+    for (const s of series) {
+      if (s.key === "actual") {
+        svg
+          .append("path")
+          .datum(s.points)
+          .attr("d", area)
+          .attr("clip-path", `url(#${plotClip})`)
+          .style("fill", s.color)
+          .style("opacity", 0.08);
+        // The greyed remainder sits underneath; the coloured line on top is
+        // the one that carries data-series, so a test asking for the actual
+        // line finds the line that is meant to be seen.
+        stroke(svg.append("path").datum(s.points).attr("d", line), s, muted)
+          .attr("clip-path", `url(#${id}-future)`)
+          .attr("data-series-shadow", s.key)
+          .style("opacity", 0.6);
+        stroke(svg.append("path").datum(s.points).attr("d", line), s, s.color)
+          .attr("clip-path", `url(#${id}-past)`)
+          .attr("data-series", s.key);
       } else {
-        tooltipOriginal.textContent = scheduledPoint
-          ? `${(data.labels?.scheduled) || "Scheduled"}: ${this._fmtMoney(scheduledPoint.balance)}`
-          : "";
-        tooltipOriginal.style.display = scheduledPoint ? "" : "none";
-        tooltipAccelerated.style.display = "none";
-        tooltipExtra.style.display = "none";
+        stroke(svg.append("path").datum(s.points).attr("d", line), s, s.color)
+          .attr("clip-path", `url(#${plotClip})`)
+          .attr("data-series", s.key);
       }
 
-      // The accelerated series is deliberately not composed (see the payload).
-      const hasComposition =
-        scheduledPoint &&
-        scheduledPoint.principal != null &&
-        scheduledPoint.interest != null;
-      tooltipComposition.textContent = hasComposition
-        ? `${(data.labels?.principal) || "Principal"}: ${this._fmtMoney(scheduledPoint.principal)} · ` +
-          `${(data.labels?.interest) || "Interest"}: ${this._fmtMoney(scheduledPoint.interest)}`
-        : "";
-      tooltipComposition.style.display = hasComposition ? "" : "none";
+      // Interval markers, thinned to roughly one per 60px so a 360-payment
+      // schedule does not become a solid band of circles. Not the accessible
+      // signal: dash pattern is.
+      const step = Math.max(
+        1,
+        Math.ceil(s.points.length / Math.max(2, width / 60)),
+      );
+      svg
+        .append("g")
+        .attr("clip-path", `url(#${plotClip})`)
+        .selectAll("circle")
+        .data(s.points.filter((_, i) => i % step === 0))
+        .join("circle")
+        .attr("cx", (d) => x(d.date))
+        .attr("cy", (d) => y(d.balance))
+        .attr("r", 2.5)
+        .style("fill", s.color);
+    }
 
+    if (today && today >= domainStart && today <= domainEnd) {
+      svg
+        .append("line")
+        .attr("x1", x(today))
+        .attr("x2", x(today))
+        .attr("y1", margin.top)
+        .attr("y2", height - margin.bottom)
+        .style("stroke", "currentColor")
+        .style("stroke-dasharray", "2 3")
+        .style("opacity", 0.4);
+    }
+
+    this._installInteraction(svg, {
+      x,
+      series,
+      width,
+      height,
+      margin,
+      data,
+      domainStart,
+      domainEnd,
+      splitAt,
+    });
+  }
+
+  _installInteraction(
+    svg,
+    { x, series, width, height, margin, data, domainStart, domainEnd, splitAt },
+  ) {
+    this._tooltip?.remove();
+    this.element.style.position = "relative";
+    // The shared visual contract the other chart controllers use: the
+    // .chart-tooltip surface, z-50 and privacy-sensitive.
+    const tooltip = createChartTooltip(this.element);
+    this._tooltip = tooltip;
+
+    const bisect = d3.bisector((d) => d.date).left;
+    const nearest = (points, date) => {
+      if (!points.length) return null;
+      const i = bisect(points, date);
+      const a = points[Math.max(0, i - 1)];
+      const b = points[Math.min(points.length - 1, i)];
+      if (!a) return b;
+      if (!b) return a;
+      return date - a.date <= b.date - date ? a : b;
+    };
+    // The request's locale travels in the payload: the layout hard-codes
+    // lang="en", so the document cannot say. Both the date and the money in
+    // the tooltip follow it.
+    const locale = data.locale || undefined;
+    const monthYear = new Intl.DateTimeFormat(locale, {
+      month: "short",
+      year: "numeric",
+    });
+    const formatter = (() => {
+      try {
+        return new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency: data.currency || "USD",
+          maximumFractionDigits: 0,
+        });
+      } catch {
+        // A currency code Intl does not know must not take hover with it.
+        return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
+      }
+    })();
+    const money = (value) => formatter.format(value);
+    // The balance reads in whole units; the principal/interest split keeps the
+    // currency's minor units so a small component never rounds to nothing.
+    const splitFormatter = (() => {
+      const digits = data.currency_precision ?? 2;
+      try {
+        return new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency: data.currency || "USD",
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        });
+      } catch {
+        return formatter;
+      }
+    })();
+    const splitMoney = (value) => splitFormatter.format(value);
+
+    const showAt = (date) => {
+      const px = x(date);
+      const rows = series
+        .map((s) => {
+          // A series says nothing about dates outside its own span.
+          if (date < s.points[0].date || date > s.points.at(-1).date)
+            return null;
+          const point = nearest(s.points, date);
+          if (!point) return null;
+          // What the scheduled payment on this date is made of (#3958).
+          const split =
+            point.principal != null && point.interest != null
+              ? `${data.labels?.principal || "Principal"}: ${splitMoney(point.principal)} · ` +
+                `${data.labels?.interest || "Interest"}: ${splitMoney(point.interest)}`
+              : null;
+          return {
+            label: data.labels?.[s.key] || s.key,
+            value: money(point.balance),
+            split,
+          };
+        })
+        .filter(Boolean);
+      // The domain can open before the first series point (a period that
+      // starts before origination). Off every series there is nothing to
+      // say, and the previous position must not stay on screen.
+      if (!rows.length) {
+        hide();
+        return;
+      }
+
+      // Text nodes, never innerHTML. Date and figures take the shared content
+      // classes, as the other charts' tooltips do.
+      const dateRow = document.createElement("div");
+      dateRow.className = CHART_TOOLTIP_CONTEXT_CLASSES;
+      dateRow.textContent = monthYear.format(date);
+      const valueRows = rows.flatMap(({ label, value, split }) => {
+        const row = document.createElement("div");
+        const amount = document.createElement("span");
+        amount.className = CHART_TOOLTIP_VALUE_CLASSES;
+        amount.textContent = value;
+        row.append(`${label}: `, amount);
+        if (!split) return [row];
+        // Secondary styling, under the balance it explains.
+        const splitRow = document.createElement("div");
+        splitRow.className = CHART_TOOLTIP_CONTEXT_CLASSES;
+        splitRow.textContent = split;
+        return [row, splitRow];
+      });
+      tooltip.replaceChildren(dateRow, ...valueRows);
       tooltip.style.display = "block";
-      const tipRect = tooltip.getBoundingClientRect();
-      const left = Math.min(width - tipRect.width - 4, Math.max(4, xPos + 12));
-      const top = Math.max(4, margin.top);
-      tooltip.style.left = `${left}px`;
-      tooltip.style.top = `${top}px`;
+      // Measured once the content is in: the shared surface is padded, so a
+      // fixed allowance would let a long row run past the chart's right edge.
+      const left = Math.min(px + 12, width - tooltip.offsetWidth - 4);
+      tooltip.style.left = `${Math.max(margin.left, left)}px`;
+      tooltip.style.top = `${margin.top}px`;
+      splitAt(Math.max(margin.left, Math.min(px, width - margin.right)));
+    };
+    // The live region announces only what the keyboard asks for. Under a
+    // pointer the tooltip rewrites on every movement, and a live region that
+    // announces every one of those is noise for anyone using a pointer with a
+    // screen reader.
+    const announce = (on) => {
+      if (on) {
+        tooltip.setAttribute("role", "status");
+        tooltip.setAttribute("aria-live", "polite");
+      } else {
+        tooltip.removeAttribute("role");
+        tooltip.removeAttribute("aria-live");
+      }
     };
 
     const hide = () => {
-      crosshair.style("display", "none");
       tooltip.style.display = "none";
+      announce(false);
+      splitAt(width - margin.right);
     };
 
-    const overlay = svg
+    // The dates the tooltip stops at: the payment dates in the window -- the
+    // schedule's, and the forecasts', which run past it when the loan is
+    // behind -- or every plotted date when there are none. The recorded
+    // line's own points are weekly and would otherwise repeat the same month
+    // several times over.
+    const paymentDates = [data.scheduled, data.projected, data.extra]
+      .flatMap((points) => points || [])
+      .map((point) => parseDate(point.date))
+      .filter((date) => date && date >= domainStart && date <= domainEnd);
+    const stops = Array.from(
+      new Set(
+        (paymentDates.length
+          ? paymentDates
+          : series.flatMap((s) => s.points).map((p) => p.date)
+        )
+          .filter((date) => date >= domainStart && date <= domainEnd)
+          .map((date) => date.getTime()),
+      ),
+    )
+      .sort((a, b) => a - b)
+      .map((t) => new Date(t));
+    // The pointer snaps to those dates too, so the tooltip's heading is the
+    // date its figures come from. Unsnapped, a cursor just before a payment
+    // date headed the tooltip with the month it sat in while every row showed
+    // that payment's balance.
+    const stopPoints = stops.map((date) => ({ date }));
+    const snap = (date) =>
+      stopPoints.length ? nearest(stopPoints, date).date : date;
+
+    svg
       .append("rect")
       .attr("x", margin.left)
       .attr("y", margin.top)
-      .attr("width", innerWidth)
-      .attr("height", innerHeight)
-      .attr("fill", "transparent")
-      .style("cursor", "crosshair");
+      .attr("width", Math.max(0, width - margin.left - margin.right))
+      .attr("height", Math.max(0, height - margin.top - margin.bottom))
+      .style("fill", "transparent")
+      .style("cursor", "crosshair")
+      .on("pointermove", (event) => {
+        announce(false);
+        const [px] = d3.pointer(event);
+        showAt(snap(x.invert(px)));
+      })
+      .on("pointerleave", hide);
 
-    overlay.on("pointermove", (event) => {
-      const [ mx ] = d3.pointer(event);
-      showAt(mx);
-    });
-    overlay.on("pointerleave", hide);
+    // Keyboard traversal: the same stops, stepped with the arrow keys.
+    // Arrow keys move, Home/End jump, Escape clears.
+    if (!stops.length) return;
 
-    // Keyboard equivalent of the hover tooltip above -- the visible sr-only
-    // paragraph next to this chart (see the Schedule tab partial) already
-    // gives screen-reader users the key figures as real text, but only a
-    // pointer could previously inspect any *other* point on the lines.
-    // Arrow keys step through the same nearest-point data a hover would
-    // show, landing on each series' real monthly dates rather than an
-    // arbitrary pixel -- useful past pure screen-reader use too, for
-    // keyboard/low-vision users who can't drive a mouse precisely enough to
-    // scrub the chart. tooltip's aria-live announces each step's content.
-    tooltip.setAttribute("role", "status");
-    tooltip.setAttribute("aria-live", "polite");
-
-    const stopDates = Array.from(
-      new Set([ ...historySeries, ...originalSeries, ...acceleratedSeries, ...extraSeries ].map((d) => d.date.getTime()))
-    ).sort((a, b) => a - b).map((t) => new Date(t));
-
-    if (stopDates.length > 0) {
-      svg.attr("tabindex", 0);
-      let focusedIndex = null;
-
-      svg.on("keydown", (event) => {
-        if (![ "ArrowLeft", "ArrowRight", "Home", "End", "Escape" ].includes(event.key)) return;
-        event.preventDefault();
-
-        if (event.key === "Escape") {
-          focusedIndex = null;
-          hide();
-          return;
-        }
-
-        if (focusedIndex === null) {
-          focusedIndex = event.key === "ArrowLeft" ? stopDates.length - 1 : 0;
-        } else if (event.key === "ArrowLeft") {
-          focusedIndex = Math.max(0, focusedIndex - 1);
-        } else if (event.key === "ArrowRight") {
-          focusedIndex = Math.min(stopDates.length - 1, focusedIndex + 1);
-        } else if (event.key === "Home") {
-          focusedIndex = 0;
-        } else {
-          focusedIndex = stopDates.length - 1;
-        }
-
-        showAt(x(stopDates[focusedIndex]));
-      });
-
-      svg.on("blur", () => {
-        focusedIndex = null;
+    svg.attr("tabindex", 0);
+    let focused = null;
+    svg.on("keydown", (event) => {
+      if (
+        !["ArrowLeft", "ArrowRight", "Home", "End", "Escape"].includes(
+          event.key,
+        )
+      )
+        return;
+      event.preventDefault();
+      if (event.key === "Escape") {
+        focused = null;
         hide();
-      });
-    }
-  }
-
-  _fmtMoney(amount) {
-    try {
-      return new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: this.dataValue?.currency || "USD",
-        maximumFractionDigits: 0,
-      }).format(amount);
-    } catch {
-      return `$${Math.round(amount).toLocaleString()}`;
-    }
-  }
-
-  _fmtMoneyShort(amount) {
-    const abs = Math.abs(amount);
-    let value;
-    if (abs >= 1_000_000) {
-      value = `${(amount / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-    } else if (abs >= 1_000) {
-      value = `${(amount / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
-    } else {
-      value = `${Math.round(amount).toLocaleString()}`;
-    }
-    return `${this._currencySymbol()}${value}`;
-  }
-
-  _currencySymbol() {
-    try {
-      const parts = new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: this.dataValue?.currency || "USD",
-        maximumFractionDigits: 0,
-      }).formatToParts(0);
-      return parts.find((p) => p.type === "currency")?.value || "$";
-    } catch {
-      return "$";
-    }
-  }
-
-  _id() {
-    if (!this._cachedId) {
-      this._cachedId = Math.random().toString(36).slice(2, 8);
-    }
-    return this._cachedId;
+        return;
+      }
+      if (focused === null)
+        focused = event.key === "ArrowLeft" ? stops.length - 1 : 0;
+      else if (event.key === "ArrowLeft") focused = Math.max(0, focused - 1);
+      else if (event.key === "ArrowRight")
+        focused = Math.min(stops.length - 1, focused + 1);
+      else if (event.key === "Home") focused = 0;
+      else focused = stops.length - 1;
+      announce(true);
+      // `focused` is clamped to the array above; `.at()` reads the same
+      // element without the bracket form object-injection scanners flag.
+      showAt(stops.at(focused));
+    });
+    svg.on("blur", () => {
+      focused = null;
+      hide();
+    });
   }
 }

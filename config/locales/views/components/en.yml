@@ -82,6 +82,20 @@ en:
           start_principal: The principal balance at the beginning of this day
           start_value: The asset value at the beginning of this day
       chart:
+        loan:
+          actual: Recorded balance
+          scheduled: Contracted schedule
+          projected: Projected from today
+          extra: With %{amount} extra each month
+          today: Today
+          interactive_chart: interactive chart
+          no_payoff: not on the current repayment
+          aria_description: Loan balance chart. Recorded balance %{current_balance}. Contracted payoff %{scheduled_payoff_date}. Projected payoff from today's balance %{projected_payoff_date}.
+          aria_description_extra: With %{amount} extra each month, projected payoff %{extra_payoff_date}.
+          aria_composition: The tooltip on each scheduled payment breaks it down into its %{principal} and %{interest}.
+          aria_actual_history_starts: Recorded balance history begins %{date}.
+          legend: Chart series
+          since_start: since the loan started
         net_contributions:
           difference: Difference
           label: Net contributions
