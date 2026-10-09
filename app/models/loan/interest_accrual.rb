@@ -4,10 +4,13 @@ class Loan
   # not including, to_date. An offset change is effective on its date.
   class InterestAccrual
     DEFAULT_DAY_COUNT_CONVENTION = :actual_365
-    DAY_COUNT_CONVENTIONS = %i[actual_365 actual_actual].freeze
+    DAY_COUNT_CONVENTIONS = %i[actual_365 actual_actual thirty_360 actual_360].freeze
     DAY_COUNT = BigDecimal("365")
     LEAP_YEAR_DAY_COUNT = BigDecimal("366")
+    ACTUAL_360_DAY_COUNT = BigDecimal("360")
     PERCENT = BigDecimal("100")
+    MONTHS_PER_YEAR = BigDecimal("12")
+    DAYS_PER_30_360_MONTH = BigDecimal("30")
 
     def self.calculate(**args)
       new.calculate(**args)
@@ -50,12 +53,48 @@ class Loan
         next BigDecimal("0") if days.zero?
 
         interest_bearing_balance = [ current_balance - current_offset, BigDecimal("0") ].max
+        if day_count_convention == :thirty_360
+          next thirty_360_interest(interest_bearing_balance, current_rate, days, from_date, to_date)
+        end
+
         interest_bearing_balance * days * current_rate / PERCENT /
           day_count_denominator(segment_start, day_count_convention)
       end
     end
 
     private
+
+      # 30/360 (#188): upstream's flat 1/12, on this daily engine. The accrual
+      # range is one scheduled period (Loan::Simulator calls this once per
+      # payment), and a period that is one calendar-month step -- the way the
+      # schedule and the projection generate their dates, `next_month` clamp
+      # included -- is one month of 30 days, so it charges exactly a twelfth
+      # of the annual rate whatever its calendar length. That keeps a 30/360
+      # schedule equal row for row to the flat-twelfth engine.
+      #
+      # Any other range (the payoff projection's first stub from `as_of`)
+      # counts 30E/360 days. A change part-way through splits the period's
+      # months by elapsed actual days, since 30/360 does not say where inside
+      # a month a day falls.
+      #
+      # The twelfth is computed as (rate / 100) / 12, the order the monthly
+      # path uses, so a full period is the same BigDecimal and rounds alike.
+      def thirty_360_interest(balance, annual_rate, days, from_date, to_date)
+        monthly = (annual_rate / PERCENT) / MONTHS_PER_YEAR
+        months = thirty_360_months(from_date, to_date)
+        period_days = (to_date - from_date).to_i
+        return balance * monthly * months if days == period_days
+
+        balance * monthly * months * days / period_days
+      end
+
+      def thirty_360_months(from_date, to_date)
+        return BigDecimal("1") if from_date.next_month == to_date
+
+        days = (to_date.year - from_date.year) * 360 + (to_date.month - from_date.month) * 30 +
+          [ to_date.day, 30 ].min - [ from_date.day, 30 ].min
+        BigDecimal(days.to_s) / DAYS_PER_30_360_MONTH
+      end
 
       def legacy_change_points(offset_changes, annual_rate_changes, from_date, to_date)
         offsets = normalize_changes(offset_changes, from_date, to_date).to_h
@@ -109,10 +148,18 @@ class Loan
         dates.push(to_date).uniq.select { |date| date <= to_date }.sort
       end
 
+      # One explicit branch per basis. Before #284 anything other than
+      # actual/actual fell through to 365, so a basis added to the list without
+      # a branch here would have accrued silently as actual/365; now it raises.
+      # (30/360 never reaches this: it returns early above.)
       def day_count_denominator(date, day_count_convention)
-        return DAY_COUNT unless day_count_convention == :actual_actual
-
-        Date.leap?(date.year) ? LEAP_YEAR_DAY_COUNT : DAY_COUNT
+        case day_count_convention
+        when :actual_365 then DAY_COUNT
+        when :actual_actual then Date.leap?(date.year) ? LEAP_YEAR_DAY_COUNT : DAY_COUNT
+        when :actual_360 then ACTUAL_360_DAY_COUNT
+        else
+          raise ArgumentError, "no day-count denominator for #{day_count_convention.inspect}"
+        end
       end
 
       def normalize_day_count_convention(value)

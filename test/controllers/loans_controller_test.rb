@@ -10,6 +10,22 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     @account = accounts(:loan)
   end
 
+  test "saves the actual/360 day-count basis from the form (#284)" do
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, day_count_convention: "actual_360" } }
+    }
+
+    assert_redirected_to @account
+    assert_equal "actual_360", @account.accountable.reload.day_count_convention
+  end
+
+  test "the form offers the actual/360 basis (#284)" do
+    get edit_loan_path(@account)
+
+    assert_select "select[name='account[accountable_attributes][day_count_convention]'] option[value='actual_360']",
+      text: I18n.t("loans.form.day_count_convention_actual_360")
+  end
+
   test "updates the day-count basis" do
     patch loan_path(@account), params: {
       account: {

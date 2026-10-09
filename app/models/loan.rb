@@ -58,7 +58,14 @@ class Loan < ApplicationRecord
   # is right for every lender. `actual_365` stays the default, so an existing
   # loan keeps the figures it already had until someone changes it deliberately.
   DAY_COUNT_CONVENTIONS = InterestAccrual::DAY_COUNT_CONVENTIONS.map(&:to_s).freeze
-  DEFAULT_DAY_COUNT_CONVENTION = InterestAccrual::DEFAULT_DAY_COUNT_CONVENTION.to_s
+  # The basis a new loan starts on: 30/360, upstream's flat twelfth (#184,
+  # 2026-09-30). It is the column default; a provider sync does not set the
+  # column, so a synced loan starts here too, and the user can change it.
+  DEFAULT_DAY_COUNT_CONVENTION = "thirty_360".freeze
+  # The basis every loan was on before the column existed, and which loans
+  # created before #188 still carry. Its schedule signature leaves the basis
+  # out, so those loans keep the signature they always had.
+  LEGACY_DAY_COUNT_CONVENTION = "actual_365".freeze
 
   has_many :amortizations, class_name: "LoanAmortization", dependent: :destroy
   has_many :loan_scenarios, dependent: :destroy
@@ -691,8 +698,8 @@ class Loan < ApplicationRecord
       variable_rates.map { |date, rate| [ date.to_s, normalized_rate(rate).to_s ] }
     ]
 
-    # Only a NON-default convention extends the signature, and it is appended
-    # rather than inserted. A signature that changed for every loan would make
+    # Only a convention other than the legacy actual/365 extends the
+    # signature, and it is appended rather than inserted. A signature that changed for every loan would make
     # every persisted schedule stale at once: read paths (the Schedule tab, the
     # amortization_schedule API) check #schedule_current? and enqueue
     # LoanAmortizationRebuildJob when it is false (#39), so the cost is a
@@ -700,7 +707,7 @@ class Loan < ApplicationRecord
     # each -- to produce byte-identical figures, since actual/365 is what they
     # were already calculated on. Loans that opt into another basis do get a
     # new signature, which is the rebuild that has to happen.
-    components << day_count_convention unless day_count_convention == DEFAULT_DAY_COUNT_CONVENTION
+    components << day_count_convention unless day_count_convention == LEGACY_DAY_COUNT_CONVENTION
 
     Digest::SHA256.hexdigest(components.to_json)
   end

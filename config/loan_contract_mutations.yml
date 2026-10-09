@@ -22,8 +22,8 @@ C1:
 C2:
   file: app/models/loan/interest_accrual.rb
   defect: leap years silently switch to a 366 denominator instead of 366 elapsed days over 365
-  find: 'return DAY_COUNT unless day_count_convention == :actual_actual'
-  replace: 'return DAY_COUNT unless day_count_convention == :actual_actual || Date.leap?(date.year)'
+  find: 'when :actual_365 then DAY_COUNT'
+  replace: 'when :actual_365 then Date.leap?(date.year) ? LEAP_YEAR_DAY_COUNT : DAY_COUNT'
 C3:
   file: app/models/loan/simulator.rb
   defect: daily accrual stops receiving offset change points for the period

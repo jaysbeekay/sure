@@ -58,7 +58,7 @@ class Loan::GoldenMasterTest < ActiveSupport::TestCase
 
   private
     def build_loan(start_date:, rate_type: "fixed", interest_rate: 6, term_months: 360, balance: 285_000,
-                   variable_rate_schedule: {}, day_count_convention: nil, initial_balance: nil, offset_balance: nil)
+                   variable_rate_schedule: {}, day_count_convention: "actual_365", initial_balance: nil, offset_balance: nil)
       loan = Loan.new(rate_type: rate_type, interest_rate: interest_rate, term_months: term_months,
                       start_date: start_date, variable_rate_schedule: variable_rate_schedule,
                       initial_balance: initial_balance)
