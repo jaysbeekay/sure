@@ -70,6 +70,53 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
     assert_equal [ "expense", false, loan_account ], [ stream.kind, stream.indexed, stream.account ]
   end
 
+  # #184 phase 4g, per loan type. #401 answered the open question: the planner
+  # seeds the payment IN FORCE NOW -- what the projection pays first -- not the
+  # one the loan opened on. For a fixed loan the two are the same figure.
+  test "a fixed loan seeds its level repayment" do
+    loan = own_loan(balance: 50_000, term_months: 60).loan
+
+    @plan.seed_streams!(as_of: AS_OF)
+
+    assert_equal loan.amortization_schedule.periodic_payment.amount * 12,
+      @plan.streams.find_by!(source: "seeded_loan").annual_amount
+  end
+
+  # A recorded rise has re-amortised the repayment: the seed is the resized
+  # payment, measured against the opening one it replaced.
+  test "a variable loan seeds the repayment its last rate change set, not the one it opened on" do
+    loan = own_loan(balance: 50_000, term_months: 60, rate_type: "variable",
+                    variable_rate_schedule: { (AS_OF - 6.months).iso8601 => "9.0" }).loan
+    schedule = loan.amortization_schedule
+    in_force = schedule.payments.find { |payment| payment.date > AS_OF }.payment.amount
+    assert_operator in_force, :>, schedule.periodic_payment.amount, "precondition: the rise resized the repayment"
+
+    @plan.seed_streams!(as_of: AS_OF)
+
+    assert_equal in_force * 12, @plan.streams.find_by!(source: "seeded_loan").annual_amount
+  end
+
+  # A change still ahead does not move today's repayment.
+  test "a variable loan with a change still ahead seeds today's repayment" do
+    loan = own_loan(balance: 50_000, term_months: 60, rate_type: "variable",
+                    variable_rate_schedule: { (AS_OF + 6.months).iso8601 => "9.0" }).loan
+
+    @plan.seed_streams!(as_of: AS_OF)
+
+    assert_equal loan.amortization_schedule.periodic_payment.amount * 12,
+      @plan.streams.find_by!(source: "seeded_loan").annual_amount
+  end
+
+  # A repayment that never clears the balance has no year to end in, so it
+  # seeds nothing rather than an invented one.
+  test "a loan whose repayment never clears it seeds nothing" do
+    own_loan(balance: 5_000_000, term_months: 60)
+
+    @plan.seed_streams!(as_of: AS_OF)
+
+    assert_not @plan.streams.exists?(source: "seeded_loan")
+  end
+
   test "a loan with nothing left to pay seeds nothing" do
     own_loan(balance: 0, term_months: 60)
 
@@ -165,11 +212,12 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
       account
     end
 
-    def own_loan(balance:, term_months:)
+    def own_loan(balance:, term_months:, rate_type: "fixed", variable_rate_schedule: {})
       Account.create!(
         family: @family, owner: @member, name: "Loan #{SecureRandom.hex(3)}", currency: "USD", balance: balance,
-        accountable: Loan.new(rate_type: "fixed", interest_rate: 6, term_months: term_months,
-                              initial_balance: 60_000, start_date: AS_OF - 12.months)
+        accountable: Loan.new(rate_type: rate_type, interest_rate: 6, term_months: term_months,
+                              initial_balance: 60_000, start_date: AS_OF - 12.months,
+                              variable_rate_schedule: variable_rate_schedule)
       )
     end
 end
