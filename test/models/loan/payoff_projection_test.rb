@@ -696,7 +696,13 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     default.payments.first(3).each do |row|
       assert_equal schedule.fetch(row[:payment_date])[:payment_amount], row[:payment_amount]
     end
-    assert_not_equal held.payments.second[:payment_amount], default.payments.second[:payment_amount],
+    # Read at the payment the change resizes, not at a fixed position: the
+    # schedule's dates drift onto the 28th, so a change dated from the 29th-31st
+    # lands one payment later (cubic, #401).
+    change_date = loan.variable_rates.map { |date, _| Date.iso8601(date.to_s) }.max
+    resized = default.payments.find { |row| row[:payment_date] >= change_date }
+    held_then = held.payments.find { |row| row[:payment_date] == resized[:payment_date] }
+    assert_not_equal held_then[:payment_amount], resized[:payment_amount],
       "the recorded change must move the default projection's repayment"
   end
 
