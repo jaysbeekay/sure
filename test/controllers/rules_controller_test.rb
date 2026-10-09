@@ -106,6 +106,36 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  # #142 phase 2: an action with no value renders as its label alone, with the
+  # value input hidden, the way exclude_transaction does.
+  test "edit renders a record loan rate change action with no value input" do
+    rule = @user.family.rules.create!(
+      resource_type: "transaction",
+      name: "Loan rate changes",
+      actions: [ Rule::Action.new(action_type: "record_loan_rate_change") ]
+    )
+    label = I18n.t("rule.actions.record_loan_rate_change.label")
+
+    get edit_rule_url(rule)
+    assert_response :success
+
+    assert_select "select[name*='[action_type]'] option[selected][value='record_loan_rate_change']", text: label
+    assert_select "[data-rule--actions-target='actionValue'].hidden", count: 1
+  end
+
+  test "index shows a record loan rate change action by its label" do
+    @user.family.rules.create!(
+      resource_type: "transaction",
+      name: "Loan rate changes",
+      actions: [ Rule::Action.new(action_type: "record_loan_rate_change") ]
+    )
+
+    get rules_url
+    assert_response :success
+
+    assert_includes response.body, I18n.t("rule.actions.record_loan_rate_change.label")
+  end
+
   # "Set all transactions with a name like 'starbucks' and an amount between 20 and 40 to the 'food and drink' category"
   test "creates rule with nested conditions" do
     post rules_url, params: {

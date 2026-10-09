@@ -661,6 +661,44 @@ class Loan < ApplicationRecord
     { variable_rate_schedule: schedule.merge(as_of.to_date.iso8601 => rate.to_s) }
   end
 
+  # The one write for what a source OTHER than the user says about this loan:
+  # Plaid, Redbark and the record-loan-rate-change rule action (#142). Returns
+  # nil when the values were written or there was nothing to write, and the
+  # model's error messages when it refused them. Reporting a refusal is the
+  # caller's job, since only the caller knows what it was reading.
+  #
+  # Every write goes through Enrichable: it skips locked attributes -- a value
+  # the user corrected stays corrected -- records provenance as a
+  # DataEnrichment, and calls `save` rather than `save!`, so a value the model
+  # refuses returns false instead of raising and taking a sync or a rule run
+  # with it. Locks are ALWAYS honoured here: no caller of this has the standing
+  # to override the user.
+  #
+  # `false` from Enrichable is NOT a refusal on its own. It also returns false
+  # when every attribute was locked or already held the value, which are the
+  # ordinary quiet paths; only populated `errors` mark a refusal.
+  #
+  # A refusal is tidied up here because Enrichable does not: it assigns, calls
+  # `save`, and when `save` returns false the REJECTED VALUES are still on the
+  # loan and its errors are still populated. Left there, a later write in the
+  # same pass is judged against values the model would not store, and -- since
+  # `enrich_attributes` returns early without saving when nothing changed --
+  # finds the old errors still sitting there and reports a refusal that did not
+  # happen (CodeRabbit on #213, cubic on #222). Extracted from the Redbark and
+  # Plaid writers, which each carried their own copy, when the rule became a
+  # third caller.
+  def enrich_reporting_refusal(attrs, source:, metadata: {})
+    return nil if attrs.blank?
+
+    enrich_attributes(attrs, source: source, metadata: metadata)
+    return nil if errors.empty?
+
+    messages = errors.full_messages
+    restore_attributes(attrs.keys.map(&:to_s))
+    errors.clear
+    messages
+  end
+
   # This is derived rather than stored because a persisted "next" date becomes
   # stale when the current date passes it.
   def next_rate_change_date
