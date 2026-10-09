@@ -93,15 +93,18 @@ class LoanTest < ActiveSupport::TestCase
     assert_includes loan.errors[:day_count_convention], "is not included in the list"
   end
 
-  test "defaults to the actual/365 day-count convention" do
-    assert_equal "actual_365", Loan.new.day_count_convention
+  # #184's 2026-09-30 decision: new loans start on upstream's basis.
+  test "a new loan defaults to the 30/360 day-count convention" do
+    assert_equal "thirty_360", Loan.new.day_count_convention
+    assert_equal "thirty_360", Loan::DEFAULT_DAY_COUNT_CONVENTION
   end
 
-  # The signature gates a rebuild that runs on READ paths, so a loan left on
-  # the default basis must hash exactly as it did before the attribute existed
-  # -- otherwise deploying this rebuilds every persisted schedule on first view
-  # to produce identical figures.
-  test "the default day-count convention leaves the schedule signature untouched" do
+  # The signature gates a rebuild that runs on READ paths, so a loan on the
+  # legacy actual/365 basis -- every loan created before #188 -- must hash
+  # exactly as it did before the attribute existed. Otherwise deploying this
+  # rebuilds every persisted schedule on first view to produce identical
+  # figures.
+  test "the legacy day-count convention leaves the schedule signature untouched" do
     loan_account = Account.create! \
       family: families(:dylan_family),
       name: "Mortgage Loan",
@@ -111,7 +114,8 @@ class LoanTest < ActiveSupport::TestCase
         subtype: "mortgage",
         interest_rate: 3.5,
         term_months: 360,
-        rate_type: "fixed"
+        rate_type: "fixed",
+        day_count_convention: "actual_365"
       )
 
     loan = loan_account.loan
@@ -130,14 +134,19 @@ class LoanTest < ActiveSupport::TestCase
 
     assert_equal "actual_365", loan.day_count_convention
     assert_equal legacy_signature, loan.send(:amortization_schedule_signature),
-      "a loan on the default basis must keep the signature it had before the attribute existed"
+      "a loan on the legacy basis must keep the signature it had before the attribute existed"
+
+    loan.update!(day_count_convention: "thirty_360")
+    assert_not_equal legacy_signature, loan.send(:amortization_schedule_signature),
+      "the new default is not the legacy basis, so it must reach the signature"
+    loan.update!(day_count_convention: "actual_365")
 
     loan.update!(day_count_convention: "actual_actual")
     assert_not_equal legacy_signature, loan.send(:amortization_schedule_signature)
 
     loan.update!(day_count_convention: "actual_365")
     assert_equal legacy_signature, loan.send(:amortization_schedule_signature),
-      "returning to the default must return the loan to its original schedule identity"
+      "returning to actual/365 must return the loan to its original schedule identity"
   end
 
   test "changing the day-count convention rebuilds the amortization schedule" do
