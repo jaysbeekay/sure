@@ -206,7 +206,7 @@ class Loan
       # re-sorts every rate change once per payment: 190 ms on a 360-row
       # schedule with 30 changes, on a page render, for a marker.
       changes = RateResolver.for(loan).accrual_rate_changes(
-        loan.start_date || loan.account_opening_anchor_date,
+        loan.origination_date,
         rows.last.payment_date
       )
       return {} if changes.empty?
@@ -270,6 +270,28 @@ class Loan
       }
     end
 
+    # `Loan#origination_date` (the recorded start date, falling back to the
+    # account's opening-anchor valuation date when unset) is the loan's
+    # ORIGINATION/anchor date -- e.g. the closing date on a mortgage -- not the
+    # first payment date. The first payment falls one calendar month after it,
+    # and every subsequent payment one month after that, regardless of which
+    # day-of-month the anchor falls on (`Date#next_month` clamps to the
+    # shorter month where needed, e.g. Jan 31 -> Feb 28/29 -> Mar 28/29,
+    # not Mar 31 -- see `Date#next_month` boundary tests in
+    # test/models/loan/amortization_schedule_test.rb).
+    #
+    # Public so Loan#months_elapsed counts the same dates the schedule pays on
+    # (#184 phase 2): counting calendar months from origination, as upstream
+    # does, disagrees with these for a loan drawn down on the 29th-31st.
+    def scheduled_payment_dates
+      @scheduled_payment_dates ||= begin
+        date = loan.origination_date
+        Array.new(loan.term_months) do
+          date = date.next_month
+        end
+      end
+    end
+
     private
 
       # Configure and run the simulator. This is the ONLY place the production
@@ -282,8 +304,8 @@ class Loan
 
         Simulator.new(
           starting_balance: loan.original_balance.amount,
-          starting_balance_as_of: loan.start_date || loan.account_opening_anchor_date,
-          accrual_start_date: loan.start_date || loan.account_opening_anchor_date,
+          starting_balance_as_of: loan.origination_date,
+          accrual_start_date: loan.origination_date,
           payment_schedule: payment_dates,
           accrual_rate_for: rate_resolver.method(:accrual_rate_for),
           accrual_rate_changes: rate_resolver.method(:accrual_rate_changes),
@@ -307,24 +329,6 @@ class Loan
       # the origination date itself. See the note below on why the two differ.
       def first_payment_date
         scheduled_payment_dates.first
-      end
-
-      # `Loan#start_date` (falling back to the account's opening-anchor
-      # valuation date when unset) is the loan's ORIGINATION/anchor date --
-      # e.g. the closing date on a mortgage -- not the first payment date.
-      # The first payment falls one calendar month after it, and every
-      # subsequent payment one month after that, regardless of which
-      # day-of-month the anchor falls on (`Date#next_month` clamps to the
-      # shorter month where needed, e.g. Jan 31 -> Feb 28/29 -> Mar 28/29,
-      # not Mar 31 -- see `Date#next_month` boundary tests in
-      # test/models/loan/amortization_schedule_test.rb).
-      def scheduled_payment_dates
-        @scheduled_payment_dates ||= begin
-          date = loan.start_date || loan.account_opening_anchor_date
-          Array.new(loan.term_months) do
-            date = date.next_month
-          end
-        end
       end
 
       # Calculate the payment amount for a segment with a specific rate,

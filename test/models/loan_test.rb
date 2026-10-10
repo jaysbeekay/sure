@@ -3,6 +3,196 @@ require "test_helper"
 class LoanTest < ActiveSupport::TestCase
   include ActiveJob::TestHelper
 
+  # Leverage is what the down payment is FOR: 80,000 borrowed against 20,000 put
+  # in is 4x, and the same loan against 5,000 is 16x. Bands are read off the
+  # ratio rather than stored, so a loan re-read after an edit cannot disagree
+  # with its own figure.
+  test "leverage is the borrowed amount over the down payment" do
+    loan = build_loan_account(balance: 80_000, down_payment: 20_000).loan
+
+    assert_in_delta 4.0, loan.initial_leverage_ratio, 0.001
+    assert_equal :conservative, loan.leverage_band, "4x sits on the conservative boundary"
+
+    loan.down_payment = 5_000
+    assert_in_delta 16.0, loan.initial_leverage_ratio, 0.001
+    assert_equal :high, loan.leverage_band
+  end
+
+  test "a moderate loan lands in the middle band" do
+    loan = build_loan_account(balance: 80_000, down_payment: 16_000).loan
+
+    assert_in_delta 5.0, loan.initial_leverage_ratio, 0.001
+    assert_equal :moderate, loan.leverage_band
+  end
+
+  # No deposit recorded is not a deposit of zero: a loan nobody has told us
+  # about is not infinitely leveraged, and a view must be able to tell the two
+  # apart to decide whether to show the figure at all.
+  test "a loan with no down payment recorded has no leverage figure" do
+    loan = build_loan_account(balance: 80_000, down_payment: nil).loan
+
+    assert_nil loan.initial_leverage_ratio
+    assert_nil loan.leverage_band
+
+    loan.down_payment = 0
+    assert_nil loan.initial_leverage_ratio, "zero is not a deposit either"
+  end
+
+  # Imports can open a loan at a negative valuation. That is no amount borrowed
+  # to measure a deposit against, and a ratio from it has no band to name.
+  test "a negative opening balance has no leverage figure" do
+    loan = loans(:one)
+    loan.down_payment = 100_000
+    loan.stubs(:original_balance).returns(Money.new(-500_000, "USD"))
+
+    assert_nil loan.initial_leverage_ratio
+    assert_nil loan.leverage_band
+  end
+
+  test "rejects a negative down payment or insurance rate" do
+    loan = Loan.new(down_payment: -1, insurance_rate: -1, insurance_rate_type: "nonsense")
+
+    assert_not loan.valid?
+    assert_includes loan.errors[:down_payment], "must be greater than or equal to 0"
+    assert_includes loan.errors[:insurance_rate], "must be greater than or equal to 0"
+    assert_includes loan.errors[:insurance_rate_type], "is not included in the list"
+  end
+
+  # An imported loan is the case where what was borrowed and what has been seen
+  # are different numbers. Plaid sends `origination_principal_amount`, which
+  # lands in `initial_balance`; the first valuation the account carries is
+  # whatever the balance was on the day it was linked, years of repayments in.
+  #
+  # 20,000 borrowed, 10,000 outstanding, 5,000 deposit, a level-term policy at
+  # 0.36% a year. Every figure below was measured against the 10,000 before
+  # this: the schedule amortised half a loan, the borrower had repaid "none" of
+  # it, the deposit looked twice as effective as it was, and the premium was
+  # half what the policy charges.
+  # Four separate tests rather than four assertions, so each figure is observed
+  # to fail on its own: one of them failing first would otherwise hide the rest.
+  test "the principal is the recorded one, not the first tracked balance" do
+    loan = build_imported_loan_account.loan
+
+    assert_equal 20_000, loan.original_balance.amount
+  end
+
+  test "the schedule amortises what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    # The fork's schedule rows are hashes of BigDecimals (upstream: Payment
+    # structs carrying Money).
+    repaid = loan.amortization_schedule.payments.sum(BigDecimal("0")) { |payment| payment[:principal_payment] }
+
+    assert_in_delta 20_000, repaid, 1, "half a loan was being amortised"
+  end
+
+  test "repaid is measured against what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    assert_in_delta 0.5, loan.balance_paid_ratio, 0.0001, "10,000 outstanding on 20,000 borrowed is half repaid"
+  end
+
+  test "leverage is measured against what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    assert_in_delta 4.0, loan.initial_leverage_ratio, 0.001, "20,000 against a 5,000 deposit"
+  end
+
+  test "a level-term premium is charged on what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    assert_equal 6, Loan::Insurance.for(loan).premium_for(1).amount.amount, "0.36% a year on 20,000"
+  end
+
+  # The fallback, which is every loan created here: no principal is recorded
+  # separately from the opening valuation, and the two must not disagree.
+  test "a loan with no recorded principal still reads its first valuation" do
+    loan = build_loan_account(balance: 80_000, down_payment: 20_000).loan
+
+    assert_nil loan.initial_balance
+    assert_equal 80_000, loan.original_balance.amount
+  end
+
+  # An import can write either, and neither is an amount borrowed, so both fall
+  # back rather than producing a zero or a negative principal.
+  test "a zero or negative recorded principal falls back to the first valuation" do
+    account = build_loan_account(balance: 80_000, down_payment: 20_000)
+
+    account.loan.update!(initial_balance: 0)
+    assert_equal 80_000, account.loan.reload.original_balance.amount
+
+    account.loan.update!(initial_balance: -5_000)
+    assert_equal 80_000, account.loan.reload.original_balance.amount
+  end
+
+  # Fork-side, #184 phase 2. `original_balance` is memoised so one
+  # check-then-rebuild cycle reads the account once. Now that it reads a Loan
+  # column as well, assigning that column has to drop the memo, or a loan
+  # edited in memory keeps amortising the principal it was loaded with.
+  test "assigning a principal drops the memoised original balance" do
+    loan = build_imported_loan_account.loan
+    assert_equal 20_000, loan.original_balance.amount, "precondition: memoised"
+
+    loan.initial_balance = 25_000
+
+    assert_equal 25_000, loan.original_balance.amount
+    assert_equal 25_000, loan.amortization_schedule.payments.first[:beginning_balance],
+      "and the schedule is rebuilt from it"
+  end
+
+  # The same memo, reached through `reload`: update_columns writes without
+  # the attribute writer, which is what any other process's write looks like
+  # to an instance held across it.
+  test "reloading drops the memoised original balance" do
+    loan = build_imported_loan_account.loan
+    assert_equal 20_000, loan.original_balance.amount, "precondition: memoised"
+
+    loan.update_columns(initial_balance: 30_000)
+
+    assert_equal 30_000, loan.reload.original_balance.amount
+  end
+
+  # The signature restages persisted schedules on read (#39). A loan whose
+  # recorded principal agrees with its opening valuation -- every loan the
+  # account form creates -- must hash exactly as it did when the principal
+  # was read from the valuation, or deploying this restages the estate to
+  # produce identical figures. Measured as a delta: the same loan with the
+  # principal recorded and with it cleared.
+  test "a recorded principal equal to the opening valuation leaves the schedule signature untouched" do
+    loan = build_imported_loan_account.loan
+    loan.update_columns(initial_balance: 10_000)
+    recorded = Loan.find(loan.id).amortization_schedule_signature
+
+    loan.update_columns(initial_balance: nil)
+    unrecorded = Loan.find(loan.id).amortization_schedule_signature
+
+    assert_equal unrecorded, recorded
+  end
+
+  # The other side of the boundary: a principal that disagrees with the
+  # valuation IS a different schedule, so persisted rows built from the
+  # valuation must read as stale.
+  test "a recorded principal that differs from the opening valuation changes the schedule signature" do
+    loan = build_imported_loan_account.loan
+    differing = Loan.find(loan.id).amortization_schedule_signature
+
+    loan.update_columns(initial_balance: nil)
+
+    assert_not_equal differing, Loan.find(loan.id).amortization_schedule_signature
+  end
+
+  # The principal is now a schedule input, so saving a new one queues the
+  # rebuild the other schedule columns queue. The read path would notice the
+  # signature change anyway; this keeps the write path from relying on it.
+  test "saving a new principal queues a schedule rebuild" do
+    loan = build_imported_loan_account.loan
+    clear_enqueued_jobs
+
+    assert_enqueued_with(job: LoanAmortizationRebuildJob, args: [ loan.id ]) do
+      loan.update!(initial_balance: 25_000)
+    end
+  end
+
   test "rejects invalid subtype" do
     loan = Loan.new(subtype: "invalid")
 
@@ -998,6 +1188,42 @@ class LoanTest < ActiveSupport::TestCase
   end
 
   private
+    # A loan imported part way through its life: the principal it was written
+    # for is recorded, and the only valuation the account carries is the
+    # balance on the day it was linked.
+    def build_imported_loan_account
+      account = Account.create!(
+        family: families(:dylan_family),
+        name: "Imported #{SecureRandom.hex(3)}",
+        balance: 10_000,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage", interest_rate: 5, term_months: 120, rate_type: "fixed",
+          initial_balance: 20_000, down_payment: 5_000,
+          insurance_rate: 0.36, insurance_rate_type: "level_term",
+          start_date: 5.years.ago.to_date
+        )
+      )
+      account.entries.create!(
+        name: "Starting balance", amount: 10_000, currency: "USD",
+        date: 5.years.ago.to_date, entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account
+    end
+
+    def build_loan_account(balance:, down_payment:)
+      Account.create!(
+        family: families(:dylan_family),
+        name: "Leveraged #{SecureRandom.hex(3)}",
+        balance: balance,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage", interest_rate: 5, term_months: 120,
+          rate_type: "fixed", down_payment: down_payment
+        )
+      )
+    end
+
     def build_chart_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
       account = Account.create! \
         family: families(:dylan_family),

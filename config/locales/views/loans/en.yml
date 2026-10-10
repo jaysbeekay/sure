@@ -33,6 +33,13 @@ en:
       day_count_convention_actual_365: Actual/365
       day_count_convention_actual_actual: Actual/actual (366 in a leap year)
       day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
+      down_payment: Down payment
+      insurance_rate: Insurance rate
+      insurance_rate_placeholder: '0.36'
+      insurance_rate_hint: An annual rate, charged monthly alongside the repayment. Level term is charged on the original balance; decreasing on what is still owed.
+      insurance_rate_type: Insurance type
+      insurance_rate_type_decreasing_life: Decreasing
+      insurance_rate_type_level_term: Level term
     new:
       title: Enter loan details
     tabs:
@@ -49,6 +56,23 @@ en:
         unknown: Unknown
         edit_loan_details: "Edit loan details"
         variable_with_offset: Variable + offset
+        insurance_rate_only: "%{rate} a year"
+        leverage: Leverage
+        leverage_band_conservative: Conservative
+        leverage_band_high: High
+        leverage_band_moderate: Moderate
+        leverage_multiple: "%{ratio}x"
+        total_cost: Total Cost
+        total_cost_with_insurance: Total Cost incl. Insurance
+        total_insurance: Insurance
+      repayment_progress:
+        instalment: Payment %{number} · %{date}
+        insurance: Insurance
+        interest: Interest
+        of_original: of %{amount}
+        principal: Principal
+        repaid: Repaid
+        total: Total
       extra_repayments:
         intro: "See how much sooner the loan is paid off, and how much interest you save, if you pay an extra amount each month on top of the current repayment."
         amount_label: Extra each month
