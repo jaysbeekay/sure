@@ -131,7 +131,7 @@
       <div class="space-y-2 hidden" data-loan-offset-target="offsetAccounts">
         <%= loan_form.select :offset_account_ids,
                   @offset_accounts.map { |account| [ account.name, account.id ] },
-                  { label: t("loans.form.offset_accounts"), include_hidden: false },
+                  { label: t("loans.form.offset_accounts"), include_hidden: true },
                   { multiple: true, size: [ @offset_accounts.size, 4 ].min.clamp(1, 4) } %>
         <p class="text-sm text-secondary"><%= t("loans.form.offset_accounts_hint") %></p>
       </div>
