@@ -461,29 +461,28 @@ class Loan < ApplicationRecord
   #
   # `AmortizationSchedule#monthly_payment` sizes the contracted payment from
   # the ORIGINAL balance at the rate effective on the FIRST payment date. For a
-  # variable loan several years in, that number describes a loan that no longer
-  # exists -- which is why the Overview card printed a hardcoded "N/A" for
-  # every non-fixed loan rather than show it.
+  # variable loan several years in, that number ignores every rate change since
+  # -- which is why the Overview card once printed "N/A" for every non-fixed
+  # loan rather than show it.
   #
-  # This re-amortises today's interest-bearing balance at today's rate over the
-  # payments still remaining to the ORIGINAL maturity. Re-amortising to the
-  # original maturity rather than to a fresh full term is what makes it the
-  # lender's figure: a rate change resizes the repayment, it does not extend
-  # the loan.
+  # For a variable loan this is the contracted schedule's payment in force
+  # (#392): the schedule re-amortises the SCHEDULED balance at each recorded
+  # rate change over the payments left to the original maturity, which is how a
+  # lender sets the minimum. It is deliberately NOT sized on the actual balance
+  # or net of an offset. Paying ahead and holding an offset lower the interest
+  # and shorten the loan -- the payoff projection models both -- but neither
+  # changes what the lender requires, and re-amortising the actual balance
+  # quoted less than the borrower must pay. This reverses #15's "level payment
+  # on the current interest-bearing balance".
   #
-  # Display only. The contracted schedule never tracks the live balance
-  # (invariant A7), so nothing here is persisted or fed back into it.
+  # The rows come from the in-memory simulation, never the persisted rows,
+  # which may be stale.
+  #
   # The maturity checks come FIRST, before the fixed-rate branch. Past maturity
-  # there are no payments left to spread a balance over, so there is no
-  # repayment to quote -- and that is true of a fixed loan as much as a variable
-  # one. Answering the question for one rate type and not the other left a
-  # matured fixed loan quoting its contracted repayment while a matured variable
-  # loan next to it said "Unknown" (CodeRabbit, #79).
-  #
-  # This does change what a matured FIXED loan displays. #15's "fixed-rate loans
-  # are unaffected" is about the figure quoted while the loan is live, which is
-  # untouched: a fixed loan still quotes `amortization_schedule.monthly_payment`
-  # for every day of its term.
+  # there are no payments left, so there is no repayment to quote -- and that
+  # is true of a fixed loan as much as a variable one (CodeRabbit, #79). A
+  # fixed loan quotes `amortization_schedule.monthly_payment` for every day of
+  # its term.
   def current_minimum_payment(as_of: Date.current)
     return nil unless amortizable?
 
@@ -492,16 +491,8 @@ class Loan < ApplicationRecord
 
     return amortization_schedule.monthly_payment unless variable_rate_type?
 
-    payment = AmortizationMath.level_payment(
-      balance: interest_bearing_balance.amount,
-      monthly_rate: Loan.monthly_rate(current_variable_rate(as_of)),
-      remaining_payments: remaining,
-      currency_precision: Money::Currency.new(account.currency).default_precision
-    )
-
-    return nil unless payment.positive?
-
-    Money.new(payment, account.currency)
+    payment = amortization_schedule.payment_in_force(as_of: as_of)
+    payment if payment&.positive?
   end
 
   # The offset accounts whose balances count against this loan: those in the

@@ -43,9 +43,9 @@
 
   <%# FR-204: a variable loan printed "N/A" here, because the contracted
       monthly_payment is sized from the ORIGINAL balance at the FIRST payment
-      date and describes a loan that no longer exists. current_minimum_payment
-      re-amortises today's balance at today's rate over the payments left to
-      the original maturity -- the figure a lender quotes. The Schedule tab
+      date and ignores every rate change since. current_minimum_payment is the
+      contracted schedule's payment in force, re-amortised on the scheduled
+      balance at each recorded rate change -- the figure a lender quotes (#392). The Schedule tab
       shows the same value from the same method, so the two cannot disagree. %>
   <%= summary_card title: t(".current_monthly_payment") do %>
     <% current_payment = account.loan.current_minimum_payment(as_of: as_of) %>
