@@ -541,8 +541,15 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
       # the half-open accrual window [03-01, 04-01) -- row 3 -- while row 2's
       # window ran entirely at the old 0%. Payment sizing moves on the first
       # payment on or after the effective date, which is row 2.
-      characterized_row(2, "2024-03-01", "12.0", "338.34", "338.34", "0.00", "666.67", "328.33"),
-      characterized_row(3, "2024-04-01", "0.0", "331.68", "328.33", "3.35", "328.33", "0.00")
+      #
+      # Row 2's resize is sized from the interest that period actually charged
+      # (#184's straddle fix): 0.00 at 0%, then a level 12% annuity for the one
+      # payment after it, a = (1.01 - 1) / (0.01 x 1.01) = 0.990099, so
+      # (666.67 + 0.00) / (1 + 0.990099) = 334.99. Row 3 then charges March's
+      # 31 days at 12% on 331.68 = 3.38 and settles 335.06, seven cents off
+      # level. The plain annuity had sized 338.34 and settled 331.68.
+      characterized_row(2, "2024-03-01", "12.0", "334.99", "334.99", "0.00", "666.67", "331.68"),
+      characterized_row(3, "2024-04-01", "0.0", "335.06", "331.68", "3.38", "331.68", "0.00")
     ]
   end
 
@@ -578,11 +585,12 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
   #
   # #36's defect was the version advancing while the calculation did not, so
   # every persisted row was invalidated to regenerate identical numbers. The
-  # pairing is pinned in both directions: version 3 means daily accrual, and
-  # daily accrual means version 3.
+  # pairing is pinned in both directions: version 3 meant daily accrual, and
+  # version 4 is daily accrual with a resize sized from its opening period's
+  # interest (#184), which changes every variable loan's rows.
   test "the persisted schedule accrues daily, and the algorithm version says so" do
     assert_equal true, Loan::AmortizationSchedule::SCHEDULE_DAILY_ACCRUAL
-    assert_equal 3, Loan::AmortizationSchedule::ALGORITHM_VERSION,
+    assert_equal 4, Loan::AmortizationSchedule::ALGORITHM_VERSION,
       "SCHEDULE_DAILY_ACCRUAL and ALGORITHM_VERSION move together -- the version is baked " \
       "into the schedule signature, so a version that disagrees with the calculation either " \
       "restages every row to produce identical numbers or serves rows the code did not " \

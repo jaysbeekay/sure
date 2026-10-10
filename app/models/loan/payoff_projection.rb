@@ -409,12 +409,15 @@ class Loan
       def payment_amount_for
         return ->(**_kwargs) { monthly_payment.amount } if @payment_strategy == :hold
 
-        ->(rate:, balance:, remaining_payments:, **_kwargs) {
+        # On a resize the simulator passes the interest the opening period
+        # actually charged, as it does for the schedule (#184).
+        ->(rate:, balance:, remaining_payments:, first_period_interest: nil, **_kwargs) {
           Loan::AmortizationMath.level_payment(
             balance: interest_bearing(balance),
             monthly_rate: Loan.monthly_rate(rate),
             remaining_payments: remaining_payments,
-            currency_precision: currency_precision
+            currency_precision: currency_precision,
+            first_period_interest: first_period_interest
           )
         }
       end

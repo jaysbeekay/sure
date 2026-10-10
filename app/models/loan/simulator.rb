@@ -81,16 +81,33 @@ class Loan
       # Reading segment[:rate] re-rated the period ENDING on the boundary (#48).
       accrual_rate = nil
 
-      rate_segments.each do |segment|
+      rate_segments.each_with_index do |segment, segment_index|
         remaining_payments = payment_schedule.length - payment_number + 1
+        # A re-amortisation after the first segment is sized once its opening
+        # period's interest is known (#184). That period accrued, wholly or in
+        # part, at the OLD rate -- a change effective on a payment date sizes
+        # that payment but belongs to the next accrual window -- while the plain
+        # annuity assumes every remaining period accrues at the new one. Sized
+        # that way the payment mis-covers the period and the error compounds
+        # into the final settlement (hundreds to thousands on a long loan).
+        # The first segment is sized as before, so a loan with no change keeps
+        # its schedule bit for bit.
+        resize_after_accrual = payment_strategy == :reamortize && @daily_accrual && @interest_for.nil? &&
+          segment_index.positive?
         payment = if payment_strategy == :hold
           held_payment ||= payment_amount(segment[:rate], balance, remaining_payments, payment_number)
+        elsif resize_after_accrual
+          nil
         else
           payment_amount(segment[:rate], balance, remaining_payments, payment_number)
         end
 
         segment[:payment_count].times do
           break if balance <= 0 || payment_number > @max_iterations
+
+          opening_balance = balance
+          opening_accrual_rate = nil
+          period_rate_changes = []
 
           payment_date = payment_schedule[payment_number - 1]
           previous_date = payment_number == 1 ? accrual_start_date : payment_schedule[payment_number - 2]
@@ -116,6 +133,7 @@ class Loan
             # opening period at the new rate -- the same defect this fixes,
             # surviving at the first boundary.
             accrual_rate ||= decimal(@accrual_rate_for.call(accrual_start_date))
+            opening_accrual_rate = accrual_rate
             period_rate_changes = accrual_rate_changes_between(previous_date, payment_date)
 
             interest, balance = accrue_daily_period(
@@ -138,6 +156,16 @@ class Loan
             # on the path production actually runs (#25).
             balance = apply_extra_repayments(balance, extra_changes, previous_date, payment_date)
             (balance * monthly_rate).round(@currency_precision)
+          end
+
+          if payment.nil?
+            sizing_rate = decimal(segment[:rate])
+            straddled = opening_accrual_rate != sizing_rate ||
+              period_rate_changes.any? { |change| change.fetch(:amount) != sizing_rate }
+            payment = payment_amount(
+              segment[:rate], opening_balance, remaining_payments, payment_number,
+              first_period_interest: (interest if straddled)
+            )
           end
 
           step = AmortizationMath.step(
@@ -282,13 +310,12 @@ class Loan
         nil
       end
 
-      def payment_amount(rate, balance, remaining_payments, payment_number)
-        decimal(@payment_amount_for.call(
-          rate: rate,
-          balance: balance,
-          remaining_payments: remaining_payments,
-          payment_number: payment_number
-        ))
+      # `first_period_interest` is passed only when there is one, so a caller's
+      # callable that does not take it keeps working.
+      def payment_amount(rate, balance, remaining_payments, payment_number, first_period_interest: nil)
+        args = { rate: rate, balance: balance, remaining_payments: remaining_payments, payment_number: payment_number }
+        args[:first_period_interest] = first_period_interest if first_period_interest
+        decimal(@payment_amount_for.call(**args))
       end
 
       def callable!(value, name)
