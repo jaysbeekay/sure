@@ -19,15 +19,14 @@ class Loan::ExtraRepaymentComparisonTest < ActiveSupport::TestCase
     @loan = @account.loan
   end
 
-  test "with no amount only the baseline is built and charted" do
+  test "with no amount only the baseline is built" do
     comparison = @loan.extra_repayment_comparison(amount: nil)
 
     assert_nil comparison.extra
     assert_not comparison.extra_applicable?
     assert_nil comparison.months_sooner
     assert_nil comparison.interest_saved
-    assert comparison.chart_payload.present?, "an on-schedule loan still gets its baseline chart"
-    assert_not comparison.chart_payload.key?(:extra_projection)
+    assert comparison.baseline.applicable?, "an on-schedule loan still has its baseline to compare against"
   end
 
   test "a blank amount is the same as no amount" do
@@ -46,8 +45,6 @@ class Loan::ExtraRepaymentComparisonTest < ActiveSupport::TestCase
     assert_equal comparison.baseline.payment_count - comparison.extra.payment_count, comparison.months_sooner
     assert_equal Money.new(comparison.baseline.total_interest.amount - comparison.extra.total_interest.amount, "USD"),
       comparison.interest_saved
-    assert_equal comparison.extra.payoff_date.iso8601, comparison.chart_payload[:extra_payoff_date]
-    assert_equal "Modeling an extra $200.00 per month", comparison.chart_payload[:extra_payment_label]
   end
 
   # A loan whose current repayment never clears it has no baseline to chart,
