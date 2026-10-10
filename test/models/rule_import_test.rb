@@ -428,4 +428,31 @@ class RuleImportTest < ActiveSupport::TestCase
 
     assert_equal 'C:\new\test', condition.value
   end
+
+  # The JSON carries the escape \u0000, which JSON.parse turns into a NUL.
+  test "a null byte in a condition value fails the import with a validation error" do
+    csv = CSV.generate do |out|
+      out << %w[name resource_type active effective_date conditions actions]
+      out << [
+        "Null byte rule",
+        "transaction",
+        true,
+        "",
+        [ { condition_type: "transaction_name", operator: "like", value: "cof\x00fee" } ].to_json,
+        [ { action_type: "set_transaction_name", value: "Coffee" } ].to_json
+      ]
+    end
+
+    import = @family.imports.create!(type: "RuleImport", raw_file_str: csv, col_sep: ",")
+    import.generate_rows_from_csv
+
+    assert_no_difference -> { Rule.where(family: @family).count } do
+      import.publish
+    end
+
+    import.reload
+    assert_equal "failed", import.status
+    assert_not_equal "string contains null byte", import.error
+    assert_match(/value is invalid/i, import.error)
+  end
 end

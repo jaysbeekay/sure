@@ -292,4 +292,31 @@ class Rule::ActionTest < ActiveSupport::TestCase
     assert_equal 0, result
     assert_nil @txn1.reload.investment_activity_label
   end
+
+  test "an action value containing a null byte is invalid" do
+    action = Rule::Action.new(rule: @transaction_rule, action_type: "set_transaction_name", value: "cof\x00fee")
+
+    assert_not action.valid?
+    assert_includes action.errors.details[:value], { error: :invalid }
+
+    action.value = "coffee"
+    assert action.valid?, "the same action without the null byte must be valid"
+  end
+
+  # The value= writer joins a multi-select array before validation runs, so
+  # the check sees the stored string.
+  test "a null byte in one element of a multi-select action value is invalid" do
+    action = Rule::Action.new(rule: @transaction_rule, action_type: "set_transaction_tags", value: [ "tag-a", "tag\x00b" ])
+
+    assert_not action.valid?
+    assert_includes action.errors.details[:value], { error: :invalid }
+  end
+
+  test "an action value with a tab, a newline or a non-ASCII character stays valid" do
+    [ "cof\tfee", "cof\nfee", "Café" ].each do |value|
+      action = Rule::Action.new(rule: @transaction_rule, action_type: "set_transaction_name", value: value)
+
+      assert action.valid?, "#{value.inspect} must be valid: #{action.errors.full_messages.inspect}"
+    end
+  end
 end

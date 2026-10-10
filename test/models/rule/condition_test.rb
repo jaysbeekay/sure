@@ -821,6 +821,38 @@ class Rule::ConditionTest < ActiveSupport::TestCase
     assert_not filtered.map(&:id).include?(contribution_entry.transaction.id)
   end
 
+  # Postgres text cannot hold a NUL, so the pg driver raises ArgumentError on
+  # the INSERT. The model has to reject it first.
+  test "a condition value containing a null byte is invalid" do
+    condition = Rule::Condition.new(
+      rule: @transaction_rule, condition_type: "transaction_name", operator: "like", value: "cof\x00fee"
+    )
+
+    assert_not condition.valid?
+    assert_includes condition.errors.details[:value], { error: :invalid }
+
+    condition.value = "coffee"
+    assert condition.valid?, "the same condition without the null byte must be valid"
+  end
+
+  test "a condition value with a tab, a newline or a non-ASCII character stays valid" do
+    [ "cof\tfee", "cof\nfee", "Café" ].each do |value|
+      condition = Rule::Condition.new(
+        rule: @transaction_rule, condition_type: "transaction_name", operator: "like", value: value
+      )
+
+      assert condition.valid?, "#{value.inspect} must be valid: #{condition.errors.full_messages.inspect}"
+    end
+  end
+
+  test "a valueless operator with a nil value stays valid" do
+    condition = Rule::Condition.new(
+      rule: @transaction_rule, condition_type: "transaction_notes", operator: "is_null", value: nil
+    )
+
+    assert condition.valid?, condition.errors.full_messages.inspect
+  end
+
   private
     # @param operator [String] a transaction_details operator
     # @param value [String] the text the rule searches for

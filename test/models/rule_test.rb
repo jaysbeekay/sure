@@ -348,4 +348,78 @@ class RuleTest < ActiveSupport::TestCase
     assert_nil transaction_entry2.transaction.category,
       "Transaction on other account should not be categorized"
   end
+
+  test "a rule name containing a null byte is invalid" do
+    rule = Rule.new(
+      family: @family,
+      resource_type: "transaction",
+      name: "Cof\x00fee",
+      conditions: [ Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: "coffee") ],
+      actions: [ Rule::Action.new(action_type: "set_transaction_category", value: @groceries_category.id) ]
+    )
+
+    assert_not rule.valid?
+    assert_includes rule.errors.details[:name], { error: :invalid }
+
+    rule.name = "Coffee"
+    assert rule.valid?, "the same rule without the null byte must be valid"
+  end
+
+  test "a null byte in a compound sub-condition makes the rule invalid" do
+    sub_condition = Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: "cof\x00fee")
+    rule = Rule.new(
+      family: @family,
+      resource_type: "transaction",
+      conditions: [
+        Rule::Condition.new(condition_type: "compound", operator: "and", sub_conditions: [ sub_condition ])
+      ],
+      actions: [ Rule::Action.new(action_type: "set_transaction_category", value: @groceries_category.id) ]
+    )
+
+    assert_not rule.valid?
+    assert_includes sub_condition.errors.details[:value], { error: :invalid }
+
+    sub_condition.value = "coffee"
+    assert rule.valid?, "the same rule without the null byte must be valid"
+  end
+
+  test "create_from_grouping returns nil for a grouping key with a null byte" do
+    assert_no_difference -> { Rule.count } do
+      assert_nil Rule.create_from_grouping(@family, "cof\x00fee", @groceries_category)
+    end
+
+    assert_difference -> { Rule.count }, 1 do
+      assert Rule.create_from_grouping(@family, "coffee", @groceries_category)&.persisted?
+    end
+  end
+
+  # The null-byte check must not catch other control characters or non-ASCII
+  # text: each of these saves, and still matches the transaction it names.
+  test "a rule with a tab, a newline or a non-ASCII character in its text still saves and matches" do
+    [ "Tab\tbar", "New\nline", "Café" ].each do |text|
+      entry = create_transaction(date: Date.current, account: @account, name: "#{text} shop", amount: 10)
+
+      rule = Rule.create!(
+        family: @family,
+        resource_type: "transaction",
+        name: "#{text} rule",
+        effective_date: 1.day.ago.to_date,
+        conditions: [ Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: text) ],
+        actions: [
+          Rule::Action.new(action_type: "set_transaction_category", value: @groceries_category.id),
+          Rule::Action.new(action_type: "set_transaction_name", value: "#{text} renamed")
+        ]
+      )
+
+      assert_equal 1, rule.affected_resource_count, "#{text.inspect} must match its transaction"
+      assert_equal "#{text} rule", rule.reload.name
+      assert_equal text, rule.conditions.first.value
+
+      rule.apply
+      entry.reload
+
+      assert_equal @groceries_category, entry.transaction.category, "#{text.inspect} rule must apply"
+      assert_equal "#{text} renamed", entry.name
+    end
+  end
 end
