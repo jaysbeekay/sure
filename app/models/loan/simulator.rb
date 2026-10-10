@@ -5,6 +5,11 @@ class Loan
   class Simulator
     MAX_TERM_MONTHS = Loan::MAX_TERM_MONTHS
     EVENT_ORDER = %i[accrual extra_repayment offset_movement payment re_amortisation].freeze
+    # :hold sizes one repayment and carries it; :reamortize re-sizes it at each
+    # rate segment; :scheduled asks `payment_amount_for` every period, for a
+    # caller that already knows what each period's repayment is (#100,
+    # decision 1: the payoff projection paying the contract's repayment).
+    PAYMENT_STRATEGIES = %i[hold reamortize scheduled].freeze
 
     attr_reader :starting_balance, :starting_balance_as_of, :accrual_start_date,
       :payment_schedule, :payment_strategy
@@ -62,7 +67,7 @@ class Loan
       @settle_at_schedule_end = settle_at_schedule_end
 
       validate_boundaries!
-      raise ArgumentError, "unsupported payment strategy: #{payment_strategy.inspect}" unless %i[hold reamortize].include?(@payment_strategy)
+      raise ArgumentError, "unsupported payment strategy: #{payment_strategy.inspect}" unless PAYMENT_STRATEGIES.include?(@payment_strategy)
       raise ArgumentError, "payment schedule must not be empty" if @payment_schedule.empty?
     end
 
@@ -85,12 +90,18 @@ class Loan
         remaining_payments = payment_schedule.length - payment_number + 1
         payment = if payment_strategy == :hold
           held_payment ||= payment_amount(segment[:rate], balance, remaining_payments, payment_number)
+        elsif payment_strategy == :scheduled
+          nil # asked for each period below
         else
           payment_amount(segment[:rate], balance, remaining_payments, payment_number)
         end
 
         segment[:payment_count].times do
           break if balance <= 0 || payment_number > @max_iterations
+
+          if payment_strategy == :scheduled
+            payment = payment_amount(segment[:rate], balance, payment_schedule.length - payment_number + 1, payment_number)
+          end
 
           payment_date = payment_schedule[payment_number - 1]
           previous_date = payment_number == 1 ? accrual_start_date : payment_schedule[payment_number - 2]

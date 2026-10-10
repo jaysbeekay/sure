@@ -156,7 +156,7 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert component.render?
     assert row[:new_payment] > row[:current_payment],
       "a rate rise must raise the quoted repayment"
-    assert_not Loan::PayoffProjection.new(@loan).applicable?,
+    assert_not Loan::PayoffProjection.new(@loan, payment_strategy: :hold).applicable?,
       "the fixture must actually break the HELD projection, or this proves nothing"
   end
 
@@ -188,7 +188,7 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
 
     component = UI::Loan::RateChangeTable.new(loan: @loan.reload)
 
-    assert_not Loan::PayoffProjection.new(@loan).applicable?,
+    assert_not Loan::PayoffProjection.new(@loan, payment_strategy: :hold).applicable?,
       "the fixture must actually defeat the held projection, or this proves nothing"
     assert_equal 1, component.rows.length,
       "the already-effective rise is the current rate, so only the future one is listed"
