@@ -56,7 +56,7 @@ C7:
   replace: 'dates = ([ from_date ] + extras.keys + offsets.keys + [ to_date ]).uniq.sort'
 C8:
   file: app/models/loan/simulator.rb
-  defect: the accrual clock is seeded from the payment-sizing rate, re-rating the period that ENDS on the boundary (the #48 defect)
+  defect: 'the accrual clock is seeded from the payment-sizing rate, re-rating the period that ENDS on the boundary (the #48 defect)'
   find: 'accrual_rate ||= decimal(@accrual_rate_for.call(accrual_start_date))'
   replace: 'accrual_rate = decimal(segment[:rate])'
 C9:

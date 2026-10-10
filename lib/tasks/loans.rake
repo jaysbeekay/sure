@@ -223,7 +223,7 @@ namespace :loans do
     abort "rows whose tests do not run clean before mutation: #{unprovable.join(', ')}" if unprovable.any?
     abort "rows whose tests survived their mutation: #{survivors.join(', ')}" if survivors.any?
 
-    puts "Verified #{ids.length} contract rows (#{jobs.length} mutations): every row's tests pass unmutated and fail when its behaviour is broken"
+    puts "Verified #{ids.length} contract rows (#{jobs.length} #{'mutation'.pluralize(jobs.length)}): every row's tests pass unmutated and fail when its behaviour is broken"
   end
 
   desc "Benchmark production-shaped daily accrual and report p95/p99 latency"
