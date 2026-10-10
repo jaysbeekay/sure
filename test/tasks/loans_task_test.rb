@@ -12,13 +12,15 @@ RakeTaskTestHelper.load_task("loans:rebuild_schedules", "loans")
 # task with no test is a script nobody has run.
 #
 # The exception is `loans:verify_contract_mutations`, which is in LOANS_TASKS --
-# so the one-action invariant covers it -- but is never invoked. It breaks
-# production code in place and shells out to a full `bin/rails test` run per
-# contract row, sixteen times; invoking that from inside a test would be slow,
-# and it would race the parallel workers it mutates files underneath. Its
-# manifest is covered by test/models/loan/contract_mutation_manifest_test.rb and
-# its transcript is in docs/loans/contract-mutation-evidence.md, but the task
-# body itself runs in neither CI nor any test.
+# so the one-action invariant covers it -- but is never invoked for real. It
+# breaks production code in place and shells out to a full `bin/rails test` run
+# per mutation; invoking that from inside a test would be slow, and it would
+# race the parallel workers it mutates files underneath. Its manifest is
+# covered by test/models/loan/contract_mutation_manifest_test.rb and its
+# transcript is in docs/loans/contract-mutation-evidence.md. Since #406 its
+# bookkeeping (which mutation, which file, whose tests) is invoked here with
+# the file writes and the subprocess replaced; the real run still happens in
+# neither CI nor any test.
 #
 # Recording that plainly rather than leaving the sentence above quietly false,
 # which is what it was until CodeRabbit asked why the task was missing from the
@@ -52,6 +54,137 @@ class LoansTaskTest < ActiveSupport::TestCase
 
   test "contract coverage task verifies every C1-C16 row against an existing test" do
     assert_nothing_raised { Rake::Task["loans:verify_contract_coverage"].invoke }
+  end
+
+  # #406: C16 names two test classes, one per half of the row. The gate used to
+  # read only the first backticked name, so a manifest binding one class passed
+  # while the contract named two.
+  test "contract coverage task fails a manifest that leaves out a class the contract row names" do
+    manifest = contract_tests_manifest
+    manifest["C16"] = Array.wrap(manifest.fetch("C16")).first
+
+    _out, exit_error, err = with_contract_manifests(tests: manifest) do
+      capture_output_and_exit { Rake::Task["loans:verify_contract_coverage"].invoke }
+    end
+
+    assert_failed_exit exit_error, "a manifest missing a class the contract names must fail the gate"
+    assert_includes err, "C16"
+    assert_includes err, "Loan::OffsetResolverTest"
+  end
+
+  test "contract coverage task fails a manifest class the contract row does not name" do
+    manifest = contract_tests_manifest
+    manifest["C15"] = Array.wrap(manifest.fetch("C15")) + [ {
+      "file" => "test/models/loan/simulator_test.rb",
+      "class" => "Loan::SimulatorTest",
+      "tests" => [ "hold strategy keeps the payment and settles the final period" ]
+    } ]
+
+    _out, exit_error, err = with_contract_manifests(tests: manifest) do
+      capture_output_and_exit { Rake::Task["loans:verify_contract_coverage"].invoke }
+    end
+
+    assert_failed_exit exit_error, "a manifest naming a class the contract does not must fail the gate"
+    assert_includes err, "C15"
+    assert_includes err, "Loan::SimulatorTest"
+  end
+
+  test "contract coverage task checks the tests of every entry in a row" do
+    manifest = contract_tests_manifest
+    entries = Array.wrap(manifest.fetch("C16")).map(&:deep_dup)
+    entries.last["tests"] = [ "a test that is not in the file" ]
+    manifest["C16"] = entries
+
+    _out, exit_error, err = with_contract_manifests(tests: manifest) do
+      capture_output_and_exit { Rake::Task["loans:verify_contract_coverage"].invoke }
+    end
+
+    assert_failed_exit exit_error, "a missing test in a row's second entry must fail the gate"
+    assert_includes err, "a test that is not in the file"
+  end
+
+  # The mutation task below is invoked with its two side effects replaced:
+  # `File.write` (so no production file is mutated underneath the parallel
+  # workers) and `Open3.capture2e` (so no `bin/rails test` subprocess runs).
+  # What is left is the task's own bookkeeping -- which mutation is applied
+  # to which file, and whose tests are run against it -- which is the part
+  # #406 changes.
+  test "contract mutation task applies each of a row's mutations against its own entry's tests" do
+    runs, writes = [], []
+    # Odd calls are baselines (pass), even calls run against a mutation (fail).
+    run = ->(_env, *command, **_options) { runs << command; [ "", Struct.new(:success?).new(runs.length.odd?) ] }
+
+    output, exit_error, err = capture_output_and_exit do
+      stub_mutation_side_effects(run, writes) { Rake::Task["loans:verify_contract_mutations"].invoke("C16") }
+    end
+
+    assert_nil exit_error, "both C16 mutations were caught, so the task must succeed: #{err}"
+    assert_equal %w[
+      test/models/loan/interest_accrual_test.rb
+      test/models/loan/interest_accrual_test.rb
+      test/models/loan/offset_resolver_test.rb
+      test/models/loan/offset_resolver_test.rb
+    ], runs.map { |command| command[2] }
+    assert_match(/holds.*today.*flat/, runs[2].last)
+    assert_equal %w[
+      app/models/loan/interest_accrual.rb
+      app/models/loan/interest_accrual.rb
+      app/models/loan/offset_resolver.rb
+      app/models/loan/offset_resolver.rb
+    ], writes.map(&:first)
+    assert_includes writes[2].last, 'amount: BigDecimal("0") } ] if from_date >= today'
+    assert_equal Rails.root.join("app/models/loan/offset_resolver.rb").read, writes[3].last,
+      "the second mutation's file must be restored to its original content"
+    assert_match(/^C16#1 +baseline=pass +mutated=failed/, output)
+    assert_match(/^C16#2 +baseline=pass +mutated=failed/, output)
+  end
+
+  test "contract mutation task names the one mutation of a row that survived" do
+    runs, writes = [], []
+    # The second mutation's tests pass when mutated: a survivor.
+    run = ->(_env, *_command, **_options) { runs << true; [ "", Struct.new(:success?).new(runs.length != 2) ] }
+
+    _out, exit_error, err = capture_output_and_exit do
+      stub_mutation_side_effects(run, writes) { Rake::Task["loans:verify_contract_mutations"].invoke("C16") }
+    end
+
+    assert_failed_exit exit_error, "a surviving mutation must fail the task"
+    assert_includes err, "survived their mutation: C16#2"
+    assert_not_includes err, "C16#1"
+  end
+
+  test "contract mutation task aborts before running anything when any of a row's anchors is stale" do
+    mutations = contract_mutations_manifest
+    entries = Array.wrap(mutations.fetch("C16")).map(&:deep_dup)
+    entries.last["find"] = "this line is not in the file"
+    mutations["C16"] = entries
+    never = ->(*) { flunk "nothing may run or be written once an anchor is stale" }
+
+    _out, exit_error, err = with_contract_manifests(mutations: mutations) do
+      capture_output_and_exit do
+        Open3.stub(:capture2e, never) { File.stub(:write, never) { Rake::Task["loans:verify_contract_mutations"].invoke("C16") } }
+      end
+    end
+
+    assert_failed_exit exit_error, "a stale anchor must fail the task"
+    assert_includes err, "C16"
+    assert_includes err, "matches 0 times"
+  end
+
+  test "contract mutation task aborts when a row's mutations and test entries differ in number" do
+    mutations = contract_mutations_manifest
+    mutations["C16"] = Array.wrap(mutations.fetch("C16")).first(1)
+    never = ->(*) { flunk "nothing may run or be written when a row is unpaired" }
+
+    _out, exit_error, err = with_contract_manifests(mutations: mutations) do
+      capture_output_and_exit do
+        Open3.stub(:capture2e, never) { File.stub(:write, never) { Rake::Task["loans:verify_contract_mutations"].invoke("C16") } }
+      end
+    end
+
+    assert_failed_exit exit_error, "a row with fewer mutations than test entries must fail the task"
+    assert_includes err, "C16"
+    assert_includes err, "2 test entries but 1 mutation"
   end
 
   test "benchmark task reports p95 and p99 for the configured workload" do
@@ -556,5 +689,28 @@ class LoansTaskTest < ActiveSupport::TestCase
 
     def capture_io_with_env(env, &block)
       with_env(env) { capture_io(&block).first }
+    end
+
+    def contract_tests_manifest
+      YAML.load_file(Rails.root.join("config/loan_contract_tests.yml"))
+    end
+
+    def contract_mutations_manifest
+      YAML.load_file(Rails.root.join("config/loan_contract_mutations.yml"))
+    end
+
+    # Serves the given contents for the two contract manifests. Mocha rather
+    # than Minitest's `stub`: Bootsnap prepends its own `load_file` to Psych's
+    # singleton class, which shadows a method Minitest aliases there, so the
+    # task went on reading the real files.
+    def with_contract_manifests(tests: contract_tests_manifest, mutations: contract_mutations_manifest)
+      YAML.stubs(:load_file).with { |path, *| path.to_s.end_with?("config/loan_contract_tests.yml") }.returns(tests)
+      YAML.stubs(:load_file).with { |path, *| path.to_s.end_with?("config/loan_contract_mutations.yml") }.returns(mutations)
+      yield
+    end
+
+    def stub_mutation_side_effects(run, writes, &block)
+      write = ->(path, content) { writes << [ Pathname(path).relative_path_from(Rails.root).to_s, content ] }
+      Open3.stub(:capture2e, run) { File.stub(:write, write, &block) }
     end
 end
