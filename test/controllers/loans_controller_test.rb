@@ -1125,6 +1125,37 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "select[name='#{OFFSET_SELECT}'] option", count: expected.size
   end
 
+  # Gatekeeper light review on #393: the collateral list narrows to `visible`
+  # accounts and this one did not, so an account being deleted, or one the user
+  # disabled, was offered as a new offset. The control differs from them only in
+  # its status.
+  test "the new-loan form leaves out an account that is pending deletion or disabled" do
+    control = shared_offset
+    deleting = shared_offset.tap { |account| account.update_columns(status: "pending_deletion") }
+    disabled = shared_offset.tap { |account| account.update_columns(status: "disabled") }
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, control.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, deleting.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, disabled.id, count: 0
+  end
+
+  # The select submits only what it lists (`include_hidden: false`), so a linked
+  # offset left off it is unlinked the next time the form is saved with any
+  # selection. Narrowing to `visible` must not do that to a link the loan
+  # already has, as `set_collateral_candidates` keeps the current collateral.
+  test "the edit form keeps listing an offset the loan already has once it is disabled" do
+    offset = shared_offset
+    @account.loan.update!(rate_type: "variable") unless @account.loan.variable_rate_type?
+    LoanOffsetAccount.create!(loan: @account.loan, account: offset)
+    offset.update_columns(status: "disabled")
+
+    get edit_loan_path(@account)
+
+    assert_select "select[name=?] option[value=?][selected]", OFFSET_SELECT, offset.id
+  end
+
   private
     def shared_offset(balance: 0)
       @account.family.accounts.create!(
