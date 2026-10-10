@@ -17,6 +17,15 @@ class LoanOffsetAccount < ApplicationRecord
     # is judged on the account the create would build, in `family` and
     # `currency` and owned by `viewer`, so the list matches what the save checks
     # (#325). A loan with an account ignores both and is judged on it.
+    #
+    # New offsets come only from `visible` accounts, as the collateral list's
+    # do, so an account being deleted or one the user disabled is not offered.
+    # An account the loan is already linked to stays listed whatever its
+    # status: the select submits only what it lists, so leaving a link off it
+    # would unlink it the next time the form is saved. An existing link is
+    # judged as itself; a fresh record for it would fail the uniqueness check
+    # (the fix #338 makes for #329, carried here so the order they merge in
+    # does not matter).
     def eligible_accounts_for(loan, viewer:, family: nil, currency: nil)
       return Account.none unless viewer
 
@@ -26,10 +35,15 @@ class LoanOffsetAccount < ApplicationRecord
       end
 
       loan_account = loan.owning_account
-      Account.accessible_by(viewer)
+      existing_links = loan.loan_offset_accounts.index_by(&:account_id)
+      candidates = Account.accessible_by(viewer)
         .where(family_id: loan_account.family_id, classification: "asset", currency: loan_account.currency)
         .where.not(id: loan_account.id)
-        .select { |account| new(loan: loan, account: account).valid? }
+
+      candidates.visible.or(candidates.where(id: existing_links.keys))
+        .select do |account|
+          (existing_links[account.id] || new(loan: loan, account: account)).valid?
+        end
     end
 
     def invalidate_for_sharing_change!(account)
