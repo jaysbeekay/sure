@@ -5,13 +5,13 @@ en:
       rate_change_table:
         title: Scheduled rate changes
         effective_date: Effective date
-        balance: Projected balance
+        balance: Scheduled balance
         current_rate: Current rate
         new_rate: New rate
         current_payment: Current repayment
         new_payment: New repayment
         unknown: Unknown
-        assumptions: "Projected from the recorded rate changes: the repayment is re-amortised over the payments remaining to the original payoff date, any linked offset balance is held at today's total, and no extra repayments are assumed. Your lender's figure may differ slightly through rounding."
+        assumptions: "Read from the contracted schedule: at each recorded rate change the scheduled balance is re-amortised over the payments remaining to the original payoff date, which is how lenders set the minimum repayment. Paying ahead or holding an offset lowers your interest, not this repayment. Your lender's figure may differ slightly through rounding."
     net_worth_pace:
       velocity: Velocity
       momentum: Momentum
@@ -82,6 +82,20 @@ en:
           start_principal: The principal balance at the beginning of this day
           start_value: The asset value at the beginning of this day
       chart:
+        loan:
+          actual: Recorded balance
+          scheduled: Contracted schedule
+          projected: Projected from today
+          extra: With %{amount} extra each month
+          today: Today
+          interactive_chart: interactive chart
+          no_payoff: not on the current repayment
+          aria_description: Loan balance chart. Recorded balance %{current_balance}. Contracted payoff %{scheduled_payoff_date}. Projected payoff from today's balance %{projected_payoff_date}.
+          aria_description_extra: With %{amount} extra each month, projected payoff %{extra_payoff_date}.
+          aria_composition: The tooltip on each scheduled payment breaks it down into its %{principal} and %{interest}.
+          aria_actual_history_starts: Recorded balance history begins %{date}.
+          legend: Chart series
+          since_start: since the loan started
         net_contributions:
           difference: Difference
           label: Net contributions

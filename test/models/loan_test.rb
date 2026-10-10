@@ -3,6 +3,236 @@ require "test_helper"
 class LoanTest < ActiveSupport::TestCase
   include ActiveJob::TestHelper
 
+  # Leverage is what the down payment is FOR: 80,000 borrowed against 20,000 put
+  # in is 4x, and the same loan against 5,000 is 16x. Bands are read off the
+  # ratio rather than stored, so a loan re-read after an edit cannot disagree
+  # with its own figure.
+  test "leverage is the borrowed amount over the down payment" do
+    loan = build_loan_account(balance: 80_000, down_payment: 20_000).loan
+
+    assert_in_delta 4.0, loan.initial_leverage_ratio, 0.001
+    assert_equal :conservative, loan.leverage_band, "4x sits on the conservative boundary"
+
+    loan.down_payment = 5_000
+    assert_in_delta 16.0, loan.initial_leverage_ratio, 0.001
+    assert_equal :high, loan.leverage_band
+  end
+
+  test "a moderate loan lands in the middle band" do
+    loan = build_loan_account(balance: 80_000, down_payment: 16_000).loan
+
+    assert_in_delta 5.0, loan.initial_leverage_ratio, 0.001
+    assert_equal :moderate, loan.leverage_band
+  end
+
+  # No deposit recorded is not a deposit of zero: a loan nobody has told us
+  # about is not infinitely leveraged, and a view must be able to tell the two
+  # apart to decide whether to show the figure at all.
+  test "a loan with no down payment recorded has no leverage figure" do
+    loan = build_loan_account(balance: 80_000, down_payment: nil).loan
+
+    assert_nil loan.initial_leverage_ratio
+    assert_nil loan.leverage_band
+
+    loan.down_payment = 0
+    assert_nil loan.initial_leverage_ratio, "zero is not a deposit either"
+  end
+
+  # Imports can open a loan at a negative valuation. That is no amount borrowed
+  # to measure a deposit against, and a ratio from it has no band to name.
+  test "a negative opening balance has no leverage figure" do
+    loan = loans(:one)
+    loan.down_payment = 100_000
+    loan.stubs(:original_balance).returns(Money.new(-500_000, "USD"))
+
+    assert_nil loan.initial_leverage_ratio
+    assert_nil loan.leverage_band
+  end
+
+  test "rejects a negative down payment or insurance rate" do
+    loan = Loan.new(down_payment: -1, insurance_rate: -1, insurance_rate_type: "nonsense")
+
+    assert_not loan.valid?
+    assert_includes loan.errors[:down_payment], "must be greater than or equal to 0"
+    assert_includes loan.errors[:insurance_rate], "must be greater than or equal to 0"
+    assert_includes loan.errors[:insurance_rate_type], "is not included in the list"
+  end
+
+  # An imported loan is the case where what was borrowed and what has been seen
+  # are different numbers. Plaid sends `origination_principal_amount`, which
+  # lands in `initial_balance`; the first valuation the account carries is
+  # whatever the balance was on the day it was linked, years of repayments in.
+  #
+  # 20,000 borrowed, 10,000 outstanding, 5,000 deposit, a level-term policy at
+  # 0.36% a year. Every figure below was measured against the 10,000 before
+  # this: the schedule amortised half a loan, the borrower had repaid "none" of
+  # it, the deposit looked twice as effective as it was, and the premium was
+  # half what the policy charges.
+  # Four separate tests rather than four assertions, so each figure is observed
+  # to fail on its own: one of them failing first would otherwise hide the rest.
+  # Upstream's (#104), adopted with #184's core swap: a variable loan has a
+  # schedule but no single monthly payment -- quoting the payment it opened
+  # with would present a stale figure as a current one. The figure a lender
+  # quotes today is `current_minimum_payment` (#392).
+  test "variable rate loans have a schedule but no single monthly payment" do
+    account = Account.create! \
+      family: families(:dylan_family),
+      name: "Variable Mortgage",
+      balance: 500000,
+      currency: "USD",
+      accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "variable")
+
+    assert_equal account, account.loan.account, "validating a Loan before attaching its Account must not cache a missing association"
+    assert account.loan.amortizable?
+    assert_not_nil account.loan.amortization_schedule
+    assert_nil account.loan.monthly_payment
+  end
+
+  test "a loan with no account is not amortizable rather than raising" do
+    assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "variable").amortizable?
+    assert_not Loan.new(interest_rate: 3.5, term_months: 360, rate_type: "fixed").amortizable?
+  end
+
+  # Upstream's guard, kept: a term longer than the simulator will walk is not
+  # amortizable rather than raising. The fork refuses such a term at
+  # validation and in the database, so only a loan holding a rejected value in
+  # memory -- a form re-rendered after a failed save -- reaches the guard, and
+  # it must answer rather than raise.
+  test "a term longer than the simulator will walk is not amortizable, rather than raising" do
+    loan = Account.create!(
+      family: families(:dylan_family), name: "Overlong", balance: 500_000, currency: "USD",
+      accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360, rate_type: "fixed")
+    ).loan
+    assert_not_nil loan.amortization_schedule, "precondition: schedulable at a valid term"
+
+    loan.term_months = Loan::Simulator::MAX_PERIODS + 1
+
+    assert_not loan.valid?
+    assert_not loan.amortizable?
+    assert_nil loan.amortization_schedule
+  end
+
+  test "the principal is the recorded one, not the first tracked balance" do
+    loan = build_imported_loan_account.loan
+
+    assert_equal 20_000, loan.original_balance.amount
+  end
+
+  test "the schedule amortises what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    repaid = loan.amortization_schedule.payments.sum(BigDecimal("0")) { |payment| payment.principal.amount }
+
+    assert_in_delta 20_000, repaid, 1, "half a loan was being amortised"
+  end
+
+  test "repaid is measured against what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    assert_in_delta 0.5, loan.balance_paid_ratio, 0.0001, "10,000 outstanding on 20,000 borrowed is half repaid"
+  end
+
+  test "leverage is measured against what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    assert_in_delta 4.0, loan.initial_leverage_ratio, 0.001, "20,000 against a 5,000 deposit"
+  end
+
+  test "a level-term premium is charged on what was borrowed" do
+    loan = build_imported_loan_account.loan
+
+    assert_equal 6, Loan::Insurance.for(loan).premium_for(1).amount.amount, "0.36% a year on 20,000"
+  end
+
+  # The fallback, which is every loan created here: no principal is recorded
+  # separately from the opening valuation, and the two must not disagree.
+  test "a loan with no recorded principal still reads its first valuation" do
+    loan = build_loan_account(balance: 80_000, down_payment: 20_000).loan
+
+    assert_nil loan.initial_balance
+    assert_equal 80_000, loan.original_balance.amount
+  end
+
+  # An import can write either, and neither is an amount borrowed, so both fall
+  # back rather than producing a zero or a negative principal.
+  test "a zero or negative recorded principal falls back to the first valuation" do
+    account = build_loan_account(balance: 80_000, down_payment: 20_000)
+
+    account.loan.update!(initial_balance: 0)
+    assert_equal 80_000, account.loan.reload.original_balance.amount
+
+    account.loan.update!(initial_balance: -5_000)
+    assert_equal 80_000, account.loan.reload.original_balance.amount
+  end
+
+  # Fork-side, #184 phase 2. `original_balance` is memoised so one
+  # check-then-rebuild cycle reads the account once. Now that it reads a Loan
+  # column as well, assigning that column has to drop the memo, or a loan
+  # edited in memory keeps amortising the principal it was loaded with.
+  test "assigning a principal drops the memoised original balance" do
+    loan = build_imported_loan_account.loan
+    assert_equal 20_000, loan.original_balance.amount, "precondition: memoised"
+
+    loan.initial_balance = 25_000
+
+    assert_equal 25_000, loan.original_balance.amount
+    assert_equal 25_000, loan.amortization_schedule.principal,
+      "and the schedule is rebuilt from it"
+  end
+
+  # The same memo, reached through `reload`: update_columns writes without
+  # the attribute writer, which is what any other process's write looks like
+  # to an instance held across it.
+  test "reloading drops the memoised original balance" do
+    loan = build_imported_loan_account.loan
+    assert_equal 20_000, loan.original_balance.amount, "precondition: memoised"
+
+    loan.update_columns(initial_balance: 30_000)
+
+    assert_equal 30_000, loan.reload.original_balance.amount
+  end
+
+  # The signature restages persisted schedules on read (#39). A loan whose
+  # recorded principal agrees with its opening valuation -- every loan the
+  # account form creates -- must hash exactly as it did when the principal
+  # was read from the valuation, or deploying this restages the estate to
+  # produce identical figures. Measured as a delta: the same loan with the
+  # principal recorded and with it cleared.
+  test "a recorded principal equal to the opening valuation leaves the schedule signature untouched" do
+    loan = build_imported_loan_account.loan
+    loan.update_columns(initial_balance: 10_000)
+    recorded = Loan.find(loan.id).amortization_schedule_signature
+
+    loan.update_columns(initial_balance: nil)
+    unrecorded = Loan.find(loan.id).amortization_schedule_signature
+
+    assert_equal unrecorded, recorded
+  end
+
+  # The other side of the boundary: a principal that disagrees with the
+  # valuation IS a different schedule, so persisted rows built from the
+  # valuation must read as stale.
+  test "a recorded principal that differs from the opening valuation changes the schedule signature" do
+    loan = build_imported_loan_account.loan
+    differing = Loan.find(loan.id).amortization_schedule_signature
+
+    loan.update_columns(initial_balance: nil)
+
+    assert_not_equal differing, Loan.find(loan.id).amortization_schedule_signature
+  end
+
+  # The principal is now a schedule input, so saving a new one queues the
+  # rebuild the other schedule columns queue. The read path would notice the
+  # signature change anyway; this keeps the write path from relying on it.
+  test "saving a new principal queues a schedule rebuild" do
+    loan = build_imported_loan_account.loan
+    clear_enqueued_jobs
+
+    assert_enqueued_with(job: LoanAmortizationRebuildJob, args: [ loan.id ]) do
+      loan.update!(initial_balance: 25_000)
+    end
+  end
+
   test "rejects invalid subtype" do
     loan = Loan.new(subtype: "invalid")
 
@@ -87,21 +317,24 @@ class LoanTest < ActiveSupport::TestCase
   end
 
   test "rejects an unsupported day-count convention" do
-    loan = Loan.new(day_count_convention: "thirty_360")
+    loan = Loan.new(day_count_convention: "actual_366")
 
     assert_not loan.valid?
     assert_includes loan.errors[:day_count_convention], "is not included in the list"
   end
 
-  test "defaults to the actual/365 day-count convention" do
-    assert_equal "actual_365", Loan.new.day_count_convention
+  # #184's 2026-09-30 decision: new loans start on upstream's basis.
+  test "a new loan defaults to the 30/360 day-count convention" do
+    assert_equal "thirty_360", Loan.new.day_count_convention
+    assert_equal "thirty_360", Loan::DEFAULT_DAY_COUNT_CONVENTION
   end
 
-  # The signature gates a rebuild that runs on READ paths, so a loan left on
-  # the default basis must hash exactly as it did before the attribute existed
-  # -- otherwise deploying this rebuilds every persisted schedule on first view
-  # to produce identical figures.
-  test "the default day-count convention leaves the schedule signature untouched" do
+  # The signature gates a rebuild that runs on READ paths, so a loan on the
+  # legacy actual/365 basis -- every loan created before #188 -- must hash
+  # exactly as it did before the attribute existed. Otherwise deploying this
+  # rebuilds every persisted schedule on first view to produce identical
+  # figures.
+  test "the legacy day-count convention leaves the schedule signature untouched" do
     loan_account = Account.create! \
       family: families(:dylan_family),
       name: "Mortgage Loan",
@@ -111,12 +344,13 @@ class LoanTest < ActiveSupport::TestCase
         subtype: "mortgage",
         interest_rate: 3.5,
         term_months: 360,
-        rate_type: "fixed"
+        rate_type: "fixed",
+        day_count_convention: "actual_365"
       )
 
     loan = loan_account.loan
     legacy_signature = Digest::SHA256.hexdigest([
-      Loan::AmortizationSchedule::ALGORITHM_VERSION,
+      LoanAmortization::ALGORITHM_VERSION,
       loan.account.id,
       loan.original_balance.amount.to_s,
       loan.account.currency,
@@ -130,14 +364,19 @@ class LoanTest < ActiveSupport::TestCase
 
     assert_equal "actual_365", loan.day_count_convention
     assert_equal legacy_signature, loan.send(:amortization_schedule_signature),
-      "a loan on the default basis must keep the signature it had before the attribute existed"
+      "a loan on the legacy basis must keep the signature it had before the attribute existed"
+
+    loan.update!(day_count_convention: "thirty_360")
+    assert_not_equal legacy_signature, loan.send(:amortization_schedule_signature),
+      "the new default is not the legacy basis, so it must reach the signature"
+    loan.update!(day_count_convention: "actual_365")
 
     loan.update!(day_count_convention: "actual_actual")
     assert_not_equal legacy_signature, loan.send(:amortization_schedule_signature)
 
     loan.update!(day_count_convention: "actual_365")
     assert_equal legacy_signature, loan.send(:amortization_schedule_signature),
-      "returning to the default must return the loan to its original schedule identity"
+      "returning to actual/365 must return the loan to its original schedule identity"
   end
 
   test "changing the day-count convention rebuilds the amortization schedule" do
@@ -235,11 +474,11 @@ class LoanTest < ActiveSupport::TestCase
       )
 
     schedule = loan_account.loan.amortization_schedule
-    assert schedule.amortizable?
-    assert_equal 360, schedule.payment_count
+    assert loan_account.loan.amortizable?
+    assert_equal 360, schedule.payments.length
     assert schedule.payoff_date.present?
     assert schedule.total_interest.positive?
-    assert schedule.monthly_payment.positive?
+    assert schedule.periodic_payment.positive?
   end
 
   test "amortization_schedule is amortizable for variable rate loan with a base rate" do
@@ -255,8 +494,8 @@ class LoanTest < ActiveSupport::TestCase
         rate_type: "variable"
       )
 
-    schedule = loan_account.loan.amortization_schedule
-    assert schedule.amortizable?
+    assert loan_account.loan.amortizable?
+    assert_not_nil loan_account.loan.amortization_schedule
   end
 
   test "amortization_schedule not amortizable for loan without an interest rate" do
@@ -272,8 +511,8 @@ class LoanTest < ActiveSupport::TestCase
         rate_type: "fixed"
       )
 
-    schedule = loan_account.loan.amortization_schedule
-    assert_not schedule.amortizable?
+    assert_not loan_account.loan.amortizable?
+    assert_nil loan_account.loan.amortization_schedule
   end
 
   test "amortizable? is false before the loan has an account" do
@@ -462,7 +701,7 @@ class LoanTest < ActiveSupport::TestCase
     assert_equal 4.5, loan.current_variable_rate(Date.new(2027, 6, 1))
   end
 
-  test "payoff_projection returns a memoized PayoffProjection for the loan" do
+  test "payoff_projection builds the projection for the date it is asked about" do
     loan_account = Account.create! \
       family: families(:dylan_family),
       name: "Mortgage Loan",
@@ -478,224 +717,10 @@ class LoanTest < ActiveSupport::TestCase
 
     loan = loan_account.loan
     assert_instance_of Loan::PayoffProjection, loan.payoff_projection
-    assert_same loan.payoff_projection, loan.payoff_projection
-  end
-
-  test "payoff_chart_payload is nil when the current balance matches the original schedule" do
-    loan = build_chart_loan(balance: 500000)
-
-    assert_nil loan.payoff_chart_payload
-  end
-
-  # Was "payoff_chart_payload is nil for a variable rate loan". That assertion
-  # predates #12: PayoffProjection#applicable? required fixed_rate?, so variable
-  # loans got no projection and therefore no chart. #35 removed that gate --
-  # giving variable loans a projection is the entire point of #12 -- so the
-  # chart must now render for them too.
-  # Regression for the fourth occurrence of the same defect: a display figure
-  # sourced from persisted rows while its neighbours are computed live. The
-  # chart previously read loan.amortizations for both scheduled series while
-  # original_payoff_date and the projection came from the current schedule, so
-  # a loan changed but not yet rebuilt plotted two different loans at once
-  # (risk R21).
-  test "chart series follow the current schedule when persisted rows are stale" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000)
-    loan.rebuild_amortization_schedule
-    stale_last = loan.reload.amortizations.ordered.last.ending_balance
-
-    loan.update!(interest_rate: loan.interest_rate + 2)
-
-    payload = loan.reload.payoff_chart_payload
-    assert_not_nil payload
-
-    assert_predicate loan.amortization_schedule, :stale?,
-      "the persisted rows must still be stale -- reading the chart must not rebuild them"
-
-    series = payload[:scheduled_history] + payload[:original_projection]
-    current = loan.amortization_schedule.display_rows.map { |row| row.ending_balance.to_f }
-    persisted = loan.amortizations.ordered.map { |row| row.ending_balance.to_f }
-
-    assert_not_equal persisted, current,
-      "the rate change must actually move the schedule, or this test proves nothing"
-    assert_equal current, series.map { |point| point[:balance] },
-      "the chart must plot the CURRENT schedule, not the stale persisted rows (risk R21)"
-    assert_equal stale_last.to_f, loan.amortizations.ordered.last.ending_balance.to_f,
-      "the persisted rows must be untouched by reading the chart"
-  end
-
-  # #21. The chart walks display_rows for ending_balance and used to drop the
-  # two payment fields on the same rows, so the one thing the picture could not
-  # say was what the payment is made of -- legible only in the 360-row table
-  # beside it.
-  #
-  # Asserted against the table's own source rather than against the payload's
-  # internal consistency: the point is that the chart and the table cannot
-  # disagree, which a self-comparison would not catch.
-  test "payoff_chart_payload composes each scheduled point from the rows the table prints" do
-    # Originated five years ago, so the schedule has PAST rows. `build_chart_loan`
-    # defaults to `start_date: Date.current`, which leaves scheduled_history
-    # empty and every point coming from original_projection -- I wrote that
-    # version first and watched the mutation that strips scheduled_history's
-    # composition pass it.
-    loan = build_chart_loan(balance: 500000, start_date: 5.years.ago.to_date)
-    loan.account.update!(balance: 450000)
-
-    payload = loan.reload.payoff_chart_payload
-    assert_not_nil payload
-
-    rows = loan.amortization_schedule.display_rows.index_by { |row| row.payment_date.iso8601 }
-    assert_not_empty payload[:scheduled_history], "the past series must be populated, or half the payload is untested"
-    assert_not_empty payload[:original_projection], "the future series must be populated too"
-
-    points = payload[:scheduled_history] + payload[:original_projection]
-    assert_operator points.size, :>, 1, "the schedule must have rows, or this proves nothing"
-
-    points.each do |point|
-      row = rows.fetch(point[:date])
-      assert_equal row.principal_payment.to_f, point[:principal]
-      assert_equal row.interest_payment.to_f, point[:interest]
-    end
-
-    # And the figures have to add up to the payment, or the composition is
-    # decorative: a split that does not reconcile is two numbers, not a split.
-    sample = points.first
-    row = rows.fetch(sample[:date])
-    assert_in_delta row.payment_amount.to_f, sample[:principal] + sample[:interest], 0.01
-  end
-
-  # The claim the feature rests on, asserted rather than assumed: on a long
-  # amortising loan the early payments are interest-dominant and the late ones
-  # are not. If this ever fails, either the schedule is wrong or the chart is
-  # composing the wrong rows -- and the tooltip would be telling users a
-  # comfortable falsehood.
-  test "payoff_chart_payload's composition shows interest front-loading" do
-    loan = build_chart_loan(balance: 500000, start_date: 5.years.ago.to_date)
-    loan.account.update!(balance: 450000)
-
-    payload = loan.reload.payoff_chart_payload
-    points = payload[:scheduled_history] + payload[:original_projection]
-
-    first = points.first
-    last = points.last
-
-    assert_operator first[:interest], :>, first[:principal],
-      "the first scheduled payment must be interest-dominant on a fresh long loan"
-    assert_operator last[:interest], :<, last[:principal],
-      "the last scheduled payment must be principal-dominant"
-    assert_operator first[:interest], :>, last[:interest],
-      "interest must fall over the life of the loan"
-  end
-
-  test "payoff_chart_payload is produced for a variable rate loan" do
-    loan = build_chart_loan(balance: 500000, rate_type: "variable")
-    loan.account.update!(balance: 450000)
-
-    payload = loan.payoff_chart_payload
-
-    assert_not_nil payload, "variable-rate loans get a projection since #12, so they get a chart"
-    assert payload[:original_projection].any?
-    assert payload[:accelerated_projection].any?
-    assert_equal "USD", payload[:currency]
-  end
-
-  test "payoff_chart_payload includes both forward series and a green accent when ahead of schedule" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000) # extra $50k paid toward principal
-
-    payload = loan.payoff_chart_payload
-
-    assert payload.present?
-    assert_equal true, payload[:ahead]
-    assert_equal "USD", payload[:currency]
-    assert_equal Date.current.iso8601, payload[:today]
-    assert_equal 450000.0, payload[:current_balance][:balance]
-    assert payload[:original_projection].length > payload[:accelerated_projection].length
-    assert payload[:original_payoff_date].present?
-    assert payload[:accelerated_payoff_date].present?
-    assert payload[:accelerated_payoff_date] < payload[:original_payoff_date]
-  end
-
-  test "payoff_chart_payload reflects a behind-schedule balance with ahead false" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 550000) # owes more than originally contracted
-
-    payload = loan.payoff_chart_payload
-
-    assert payload.present?
-    assert_equal false, payload[:ahead]
-  end
-
-  # Regression: the solid line's data used to be keyed "history", which
-  # implies real historical balances. It's actually the original schedule's
-  # theoretical/contracted trajectory (this app doesn't track daily balance
-  # history) -- keyed and labeled accordingly so the chart can't be
-  # misread as showing real past balances.
-  test "payoff_chart_payload labels the scheduled trajectory explicitly rather than as history" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000)
-
-    payload = loan.payoff_chart_payload
-
-    assert_not payload.key?(:history)
-    assert payload.key?(:scheduled_history)
-    assert_equal "Scheduled (contracted terms)", payload[:labels][:scheduled]
-  end
-
-  test "payoff_chart_payload includes an accessible label and description with the key figures" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000)
-
-    payload = loan.payoff_chart_payload
-
-    assert_equal "Loan payoff comparison chart", payload[:aria_label]
-    assert_includes payload[:aria_description], loan.payoff_projection.current_balance.to_s
-    assert_includes payload[:aria_description], I18n.l(loan.amortization_schedule.payoff_date, format: :long)
-    assert_includes payload[:aria_description], I18n.l(loan.payoff_projection.payoff_date, format: :long)
-  end
-
-  # #21 AC#4. The accessible description must NAME the principal/interest
-  # composition -- the tooltip's shipped job -- so a locale edit that silently
-  # drops it takes this test down with it rather than regressing unseen.
-  #
-  # Pinned to the exact shipped sentence (config/locales/views/loans/en.yml,
-  # loans.tabs.schedule.chart.aria_description), compared verbatim against the
-  # rendered payload the way production reads it. The capitalized
-  # Principal/Interest are the schedule table's own names (loans.tabs.schedule.*)
-  # that the tooltip's composition row renders.
-  test "payoff_chart_payload's aria_description names the principal/interest composition of the payments" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000)
-
-    description = loan.payoff_chart_payload[:aria_description]
-
-    assert_includes description,
-      "The tooltip on each scheduled point breaks the payment down into its Principal and Interest."
-  end
-
-  # Regression: chart dates used to inherit PayoffProjection's payment-date
-  # anchoring bug (Date.current.next_month instead of the loan's real
-  # payment anchor day). Verifies the chart's forward-looking series line up
-  # with the persisted schedule's actual next payment date for a loan whose
-  # anchor day differs from today's.
-  test "payoff_chart_payload's projection series start on the loan's actual next scheduled payment date" do
-    # Pinned: if this ran on the 15th of any month, start_date's day-15
-    # anchor would coincide with Date.current.next_month, defeating the
-    # "real anchor mismatch" guard below and the point of the regression.
-    travel_to Date.new(2026, 3, 20) do
-      start_date = 2.years.ago.to_date.change(day: 15)
-      loan = build_chart_loan(balance: 500000, start_date: start_date)
-      loan.ensure_amortization_schedule_current!
-      loan.account.update!(balance: 450000)
-
-      next_scheduled_date = loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
-      assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
-
-      payload = loan.payoff_chart_payload
-
-      assert_equal next_scheduled_date.iso8601, payload[:accelerated_projection].first[:date]
-      assert_equal next_scheduled_date.iso8601, payload[:original_projection].first[:date]
-    end
+    assert_equal Date.current, loan.payoff_projection.as_of
+    # Not memoised (upstream's #payoff_projection): `as_of` makes each call a
+    # different question, and the balance it reads moves without a callback.
+    assert_equal Date.current + 1.month, loan.payoff_projection(as_of: Date.current + 1.month).as_of
   end
 
   test "payoff_projection_with_extra returns a fresh projection boosted by the given amount" do
@@ -705,115 +730,6 @@ class LoanTest < ActiveSupport::TestCase
 
     assert_not_same loan.payoff_projection, with_extra
     assert_equal loan.payoff_projection.monthly_payment + Money.new(100, "USD"), with_extra.monthly_payment
-  end
-
-  test "payoff_chart_payload accepts a caller-supplied projection and labels it from the raw what-if input" do
-    loan = build_chart_loan(balance: 500000)
-    with_extra = loan.payoff_projection_with_extra(amount: "200")
-
-    payload = loan.payoff_chart_payload(
-      projection: with_extra,
-      extra_payment_amount: "200",
-      extra_payment_frequency: "monthly"
-    )
-
-    assert payload.present?
-    assert_equal true, payload[:ahead]
-    assert_equal "Modeling an extra $200.00 per month", payload[:extra_payment_label]
-
-    baseline_payload = loan.payoff_chart_payload
-    assert_nil baseline_payload # baseline (no extra) still doesn't diverge for an untouched balance
-  end
-
-  # Regression: aria_description used to read straight from
-  # `payoff_projection`/`amortization_schedule` instead of the passed-in
-  # `projection`, so a what-if request's screen-reader description silently
-  # kept describing the baseline (no-extra) figures while the visible chart
-  # and summary cards showed the boosted ones -- sighted and screen-reader
-  # users would see contradictory numbers for the same chart.
-  test "payoff_chart_payload's aria_description reflects the caller-supplied projection, not the baseline" do
-    loan = build_chart_loan(balance: 500000)
-    baseline_payoff_date = loan.payoff_projection.payoff_date
-    with_extra = loan.payoff_projection_with_extra(amount: "200")
-    assert_not_equal baseline_payoff_date, with_extra.payoff_date, "test setup should exercise a real divergence"
-
-    payload = loan.payoff_chart_payload(projection: with_extra, extra_payment_amount: "200", extra_payment_frequency: "monthly")
-
-    assert_includes payload[:aria_description], I18n.l(with_extra.payoff_date, format: :long)
-    assert_not_includes payload[:aria_description], I18n.l(baseline_payoff_date, format: :long)
-  end
-
-  test "payoff_chart_payload defaults to the memoized baseline projection when none is given" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000)
-
-    assert_equal loan.payoff_projection.payoff_date, loan.payoff_chart_payload[:accelerated_payoff_date]&.then { Date.iso8601(_1) }
-  end
-
-  # --- #304: the Extra repayments tab draws the extra line BESIDE the baseline -
-
-  test "an extra projection adds its own series beside the baseline projection" do
-    loan = build_chart_loan(balance: 500000)
-    as_of = Date.current
-    baseline = Loan::PayoffProjection.new(loan, as_of: as_of)
-    extra = loan.payoff_projection_with_extra(amount: "200", as_of: as_of)
-
-    payload = loan.payoff_chart_payload(projection: baseline, extra_projection: extra, require_divergence: false, as_of: as_of)
-
-    assert_equal baseline.payoff_date.iso8601, payload[:accelerated_payoff_date],
-      "the baseline line stays the no-extra projection"
-    assert_equal extra.payoff_date.iso8601, payload[:extra_payoff_date]
-    assert_equal extra.payoff_date.iso8601, payload[:extra_projection].last[:date]
-    assert_operator Date.iso8601(payload[:extra_payoff_date]), :<, Date.iso8601(payload[:accelerated_payoff_date])
-    assert_equal extra.payments.length, payload[:extra_projection].length
-    assert_equal I18n.t("loans.tabs.schedule.chart.extra_payoff"), payload[:labels][:extra]
-    assert_includes payload[:aria_description], I18n.l(extra.payoff_date, format: :long)
-  end
-
-  test "the Extra repayments chart shows for a loan that is exactly on schedule" do
-    loan = build_chart_loan(balance: 500000)
-    baseline = Loan::PayoffProjection.new(loan)
-    assert_not baseline.diverges_from_schedule?, "test setup should be on schedule"
-
-    assert_nil loan.payoff_chart_payload(projection: baseline), "the Schedule tab's gate is unchanged"
-
-    payload = loan.payoff_chart_payload(projection: baseline, require_divergence: false)
-    assert payload.present?
-    assert_equal baseline.payoff_date.iso8601, payload[:accelerated_payoff_date]
-  end
-
-  test "without an extra projection the payload carries exactly the keys it always has" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 450000)
-
-    payload = loan.payoff_chart_payload
-
-    assert_equal %i[today currency scheduled_history current_balance original_projection accelerated_projection
-                    original_payoff_date accelerated_payoff_date ahead extra_payment_label labels aria_label aria_description],
-      payload.keys
-    assert_equal %i[today scheduled original accelerated principal interest], payload[:labels].keys
-  end
-
-  test "an extra projection that cannot be projected adds no series" do
-    loan = build_chart_loan(balance: 500000)
-    extra = loan.payoff_projection_with_extra(amount: "200")
-    extra.stubs(:applicable?).returns(false)
-
-    payload = loan.payoff_chart_payload(projection: Loan::PayoffProjection.new(loan), extra_projection: extra, require_divergence: false)
-
-    assert_not payload.key?(:extra_projection)
-    assert_not payload.key?(:extra_payoff_date)
-    assert_not payload[:labels].key?(:extra)
-  end
-
-  test "payoff_chart_payload is unaffected by what-if params when the extra payment doesn't cover interest" do
-    loan = build_chart_loan(balance: 500000)
-    loan.account.update!(balance: 800000) # payment (even boosted a little) still can't cover interest
-    with_extra = loan.payoff_projection_with_extra(amount: "10")
-
-    payload = loan.payoff_chart_payload(projection: with_extra)
-
-    assert_nil payload
   end
 
   # cubic, #78: a rate-type-only edit must not take the offset links with it.
@@ -991,6 +907,18 @@ class LoanTest < ActiveSupport::TestCase
     assert_nil loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
   end
 
+  # cubic, #400 (sibling of the rule's clash check): a same-day row stored under
+  # another ISO spelling is replaced, not joined by a second row for that day,
+  # which would leave the rate in force to hash order.
+  test "variable_rate_update_for replaces a same-day row under another ISO spelling" do
+    loan = Loan.new(rate_type: "variable", interest_rate: 4.5,
+                    variable_rate_schedule: { "2025-06-01" => 4.8, "20260115" => 5.0 })
+
+    update = loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
+
+    assert_equal({ "2025-06-01" => 4.8, "2026-01-15" => "5.2" }, update[:variable_rate_schedule])
+  end
+
   test "variable_rate_update_for leaves a fixed loan to its caller" do
     loan = Loan.new(rate_type: "fixed", interest_rate: 4.5)
 
@@ -998,6 +926,42 @@ class LoanTest < ActiveSupport::TestCase
   end
 
   private
+    # A loan imported part way through its life: the principal it was written
+    # for is recorded, and the only valuation the account carries is the
+    # balance on the day it was linked.
+    def build_imported_loan_account
+      account = Account.create!(
+        family: families(:dylan_family),
+        name: "Imported #{SecureRandom.hex(3)}",
+        balance: 10_000,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage", interest_rate: 5, term_months: 120, rate_type: "fixed",
+          initial_balance: 20_000, down_payment: 5_000,
+          insurance_rate: 0.36, insurance_rate_type: "level_term",
+          start_date: 5.years.ago.to_date
+        )
+      )
+      account.entries.create!(
+        name: "Starting balance", amount: 10_000, currency: "USD",
+        date: 5.years.ago.to_date, entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account
+    end
+
+    def build_loan_account(balance:, down_payment:)
+      Account.create!(
+        family: families(:dylan_family),
+        name: "Leveraged #{SecureRandom.hex(3)}",
+        balance: balance,
+        currency: "USD",
+        accountable: Loan.create!(
+          subtype: "mortgage", interest_rate: 5, term_months: 120,
+          rate_type: "fixed", down_payment: down_payment
+        )
+      )
+    end
+
     def build_chart_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
       account = Account.create! \
         family: families(:dylan_family),
@@ -1021,10 +985,9 @@ class LoanTest < ActiveSupport::TestCase
       )
 
       # Amortization rebuilds happen asynchronously (after_save enqueues
-      # LoanAmortizationRebuildJob rather than rebuilding inline), and
-      # payoff_chart_payload's projection requires Loan#schedule_current? --
-      # build the persisted schedule synchronously here so tests don't need
-      # to perform_enqueued_jobs just to exercise the chart payload.
+      # LoanAmortizationRebuildJob rather than rebuilding inline) -- build the
+      # persisted schedule synchronously here so tests read current rows
+      # without needing perform_enqueued_jobs.
       account.loan.tap(&:rebuild_amortization_schedule)
     end
 end

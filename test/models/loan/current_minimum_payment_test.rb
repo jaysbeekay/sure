@@ -22,7 +22,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     ].each do |example|
       computed = Loan::AmortizationMath.level_payment(
         balance: BigDecimal("400762.12"),
-        monthly_rate: Loan.monthly_rate(example[:rate]),
+        monthly_rate: monthly_rate(example[:rate]),
         remaining_payments: example[:months],
         currency_precision: 2
       )
@@ -32,43 +32,141 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     end
   end
 
-  test "a variable loan quotes today's balance at today's rate to the original maturity" do
-    loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
+  # #392. The lender sets the minimum on the SCHEDULED balance -- the contract
+  # re-amortised at each recorded rate change -- not on what the borrower
+  # actually owes. The figure is the schedule row in force: the payment of the
+  # first contracted period still to come.
+  #
+  # The synthetic loan from the issue: $400,000 over 360 months at 5.50%, moving
+  # to 6.43% on payment 13's date, 50 payments made, and $40,000 paid ahead.
+  test "a variable loan quotes the schedule's payment for the current period, not the actual-balance figure" do
+    loan = issue_392_loan
 
-    assert_equal 277, loan.amortization_schedule.remaining_payment_count
-    assert_equal "$2,719.33", loan.current_minimum_payment.format
+    row = loan.amortization_rows.find { |p| p[:payment_number] == 51 }
+    assert_equal ISSUE_392_AS_OF.next_month.change(day: 15), row[:payment_date], "precondition: payment 51 is next"
+
+    assert_equal Money.new(row[:payment_amount], "USD"), loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+    assert_in_delta BigDecimal("2504.44"), row[:payment_amount], BigDecimal("2.00"),
+      "the issue's figure was computed with monthly accrual; the fork accrues daily, which moves it by cents to dollars"
+    assert_operator loan.current_minimum_payment(as_of: ISSUE_392_AS_OF).amount, :>,
+      actual_balance_figure(loan) + BigDecimal("200"),
+      "main quoted ~$2,239.58 here, re-amortising the actual balance; the lender's minimum is ~$265 higher"
   end
 
-  # The defect this issue exists to fix: the contracted payment is sized from
-  # the ORIGINAL balance at the FIRST payment date, so for a loan years in it
-  # describes a loan that no longer exists. The two must not be equal, or the
-  # new method is not doing anything.
-  test "the current minimum payment differs from the contracted payment for a seasoned loan" do
-    loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
+  test "the figure is the one the schedule re-amortised at the rate change" do
+    loan = issue_392_loan
+    schedule = loan.amortization_rows
+    at_change = schedule.find { |p| p[:payment_number] == 13 }
 
-    assert_not_equal loan.amortization_schedule.monthly_payment.amount,
-      loan.current_minimum_payment.amount,
-      "a re-amortised payment that equals the contracted one is not re-amortising"
+    before_change = schedule.find { |p| p[:payment_number] == 12 }
+    annuity = Loan::AmortizationMath.level_payment(
+      balance: at_change[:beginning_balance],
+      monthly_rate: monthly_rate("6.43"),
+      remaining_payments: 348,
+      currency_precision: 2
+    )
+
+    # Payment 13 is the resize: it differs from payment 12 and is (within the
+    # engine's sizing of the straddled period, #184) the 6.43% annuity on the
+    # scheduled balance. The figure quoted is that row's, to the cent.
+    assert_not_equal before_change[:payment_amount], at_change[:payment_amount], "precondition: payment 13 is the resize"
+    assert_in_delta annuity, at_change[:payment_amount], BigDecimal("5"), "precondition: payment 13 is the 6.43% annuity"
+    assert_equal at_change[:payment_amount], loan.current_minimum_payment(as_of: ISSUE_392_AS_OF).amount
+  end
+
+  test "an offset does not change the current minimum repayment" do
+    loan = issue_392_loan
+    without = loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+
+    offset = @family.accounts.create!(name: "Offset", balance: 30_000, currency: "USD", accountable: Depository.new)
+    loan.update!(offset_account_ids: [ offset.id ])
+    loan.reload
+
+    assert_operator loan.interest_bearing_balance.amount, :<, loan.account.balance, "precondition: the offset counts"
+    assert_equal without, loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+  end
+
+  test "paying further ahead does not change the current minimum repayment" do
+    loan = issue_392_loan
+    before = loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+
+    loan.account.update!(balance: loan.account.balance - 25_000)
+    after = loan.reload.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+
+    assert_equal before, after
+  end
+
+  # The negative of the two above: if the figure ignored everything, they would
+  # pass against a constant.
+  test "a recorded rate change does change the current minimum repayment" do
+    loan = issue_392_loan
+    before = loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+
+    loan.add_variable_rate_change(Date.new(2025, 6, 15), 7.10)
+    after = loan.reload.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+
+    assert_operator after, :>, before
+  end
+
+  # Both sides of the boundary: a payment due on `as_of` has been made.
+  test "a payment due on as_of is behind it; the day before, it is the one in force" do
+    loan = issue_392_loan
+    rows = loan.amortization_rows
+    change = rows.find { |p| p[:payment_number] == 13 }
+    before_change = rows.find { |p| p[:payment_number] == 12 }
+
+    # Payments 12 and 13 differ, so payment 12's date is the boundary that
+    # discriminates: on it payment 12 has been made and 13 is in force; the day
+    # before, 12 is still to come.
+    assert_not_equal change[:payment_amount], before_change[:payment_amount], "precondition"
+    assert_equal change[:payment_amount],
+      loan.current_minimum_payment(as_of: before_change[:payment_date]).amount
+    assert_equal before_change[:payment_amount],
+      loan.current_minimum_payment(as_of: before_change[:payment_date] - 1.day).amount
+  end
+
+  test "before the first payment the figure is the first row's payment" do
+    loan = issue_392_loan
+
+    assert_equal loan.amortization_rows.first[:payment_amount],
+      loan.current_minimum_payment(as_of: ISSUE_392_START).amount
+  end
+
+  test "a stale persisted schedule does not change the figure" do
+    loan = issue_392_loan
+    loan.ensure_amortization_schedule_current!
+    before = loan.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+    assert loan.amortizations.exists?, "precondition: rows are persisted"
+
+    loan.amortizations.update_all(payment_amount: 1)
+
+    assert_equal before, loan.reload.current_minimum_payment(as_of: ISSUE_392_AS_OF)
+  end
+
+  test "a loan with no start date reads the schedule from its opening anchor" do
+    account = @family.accounts.create!(
+      name: "Anchored loan", balance: 300_000, currency: "USD",
+      accountable: Loan.new(rate_type: "variable", interest_rate: 5.0, term_months: 240, initial_balance: 300_000)
+    )
+    account.entries.create!(
+      name: "Opening", amount: 300_000, currency: "USD", date: Date.new(2024, 1, 10),
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    loan = account.loan.reload
+    assert_nil loan.start_date, "precondition"
+
+    as_of = Date.new(2025, 3, 20)
+    row = loan.amortization_rows.find { |p| p[:payment_date] > as_of }
+
+    assert_equal Date.new(2025, 4, 10), row[:payment_date]
+    assert_equal row[:payment_amount], loan.current_minimum_payment(as_of: as_of).amount
   end
 
   test "a fixed-rate loan is unaffected and still quotes the contracted payment" do
     loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
     loan.update!(rate_type: "fixed")
 
-    assert_equal loan.amortization_schedule.monthly_payment, loan.current_minimum_payment
-  end
-
-  test "an offset balance reduces the balance the repayment must clear" do
-    loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
-    offset = @family.accounts.create!(
-      name: "Offset", balance: 50_000, currency: loan.account.currency, accountable: Depository.new
-    )
-    loan.update!(offset_account_ids: [ offset.id ])
-
-    assert_equal Money.new(BigDecimal("350762.12"), loan.account.currency),
-      loan.reload.interest_bearing_balance
-    assert loan.current_minimum_payment.amount < BigDecimal("2719.33"),
-      "an offset balance must lower the repayment, not leave it unchanged"
+    assert_equal loan.amortization_schedule.periodic_payment, loan.current_minimum_payment
   end
 
   # A loan past its maturity has no payments left to spread a balance over, so
@@ -77,7 +175,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
   test "no payments remaining yields no figure rather than a divide by zero" do
     loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 12, months_elapsed: 24)
 
-    assert_equal 0, loan.amortization_schedule.remaining_payment_count
+    assert_equal 0, remaining_payments(loan, Date.current)
     assert_nil loan.current_minimum_payment
   end
 
@@ -87,7 +185,7 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     loan = variable_loan(balance: 400_762.12, rate: 6.18, term_months: 360, months_elapsed: 83)
     loan.update!(rate_type: "fixed")
 
-    assert_equal loan.reload.amortization_schedule.monthly_payment,
+    assert_equal loan.reload.amortization_schedule.periodic_payment,
       loan.current_minimum_payment
   end
 
@@ -101,14 +199,60 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
     loan.update!(rate_type: "fixed")
     loan.reload
 
-    assert_equal 0, loan.amortization_schedule.remaining_payment_count
-    assert loan.amortization_schedule.monthly_payment.amount.positive?,
+    assert_equal 0, remaining_payments(loan, Date.current)
+    assert loan.amortization_schedule.periodic_payment.amount.positive?,
       "the contracted payment must still be a positive figure, or this proves nothing"
     assert_nil loan.current_minimum_payment,
       "a matured loan has no repayment to quote, whatever its rate type"
   end
 
   private
+
+    # An annual percentage as a monthly decimal rate, the conversion
+    # Loan::Simulator makes.
+    def monthly_rate(annual_percentage)
+      (BigDecimal(annual_percentage.to_s) / BigDecimal("100")) / BigDecimal("12")
+    end
+
+    ISSUE_392_START = Date.new(2022, 1, 15)
+    # After payment 50 (2026-03-15) and before payment 51.
+    ISSUE_392_AS_OF = Date.new(2026, 3, 20)
+
+    # The loan from #392, $40,000 ahead of its schedule.
+    def issue_392_loan
+      account = @family.accounts.create!(
+        name: "Issue 392 loan", balance: 400_000, currency: "USD",
+        accountable: Loan.new(
+          rate_type: "variable", interest_rate: 5.5, term_months: 360,
+          initial_balance: 400_000, start_date: ISSUE_392_START,
+          variable_rate_schedule: { "2023-02-15" => "6.43" }
+        )
+      )
+      account.entries.create!(
+        name: "Opening", amount: 400_000, currency: "USD", date: ISSUE_392_START,
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      loan = account.loan.reload
+      scheduled = loan.amortization_rows.find { |p| p[:payment_number] == 50 }[:ending_balance]
+      account.update!(balance: scheduled - 40_000)
+      loan.reload
+    end
+
+    # What main quoted: the actual balance net of offset, at today's rate, over
+    # the payments left.
+    def actual_balance_figure(loan)
+      Loan::AmortizationMath.level_payment(
+        balance: loan.interest_bearing_balance.amount,
+        monthly_rate: monthly_rate(loan.current_variable_rate(ISSUE_392_AS_OF)),
+        remaining_payments: remaining_payments(loan, ISSUE_392_AS_OF),
+        currency_precision: 2
+      )
+    end
+
+    # Contracted payments still to come after `as_of`.
+    def remaining_payments(loan, as_of)
+      loan.amortization_schedule.payments.count { |payment| payment.date > as_of }
+    end
 
     def variable_loan(balance:, rate:, term_months:, months_elapsed:)
       account = @family.accounts.create!(

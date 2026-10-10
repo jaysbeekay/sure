@@ -13,6 +13,7 @@ class LoansController < ApplicationController
   permitted_accountable_attributes(
     :id, :subtype, :rate_type, :interest_rate, :term_months, :initial_balance,
     :day_count_convention, :start_date, :collateral_account_id,
+    :down_payment, :insurance_rate, :insurance_rate_type,
     { offset_account_ids: [] },
     { rate_changes: [ :effective_date, :rate, :_destroy ] }
   )
@@ -49,9 +50,18 @@ class LoansController < ApplicationController
       @collateral_candidates = candidates
     end
 
+    # On `new` and `create` there is no account yet, so the candidates are
+    # judged on the family and the submitted currency, as the collateral list
+    # is. Computing them before `create` runs also covers its failed-save
+    # re-render, which renders `new` without running these callbacks again.
     def set_offset_accounts
       loan = @account&.accountable || Loan.new
-      loan.offset_account_ids ||= loan.loan_offset_accounts.pluck(:account_id) if loan.persisted?
-      @offset_accounts = LoanOffsetAccount.eligible_accounts_for(loan, viewer: Current.user)
+      offset_ids_submitted = params.dig(:account, :accountable_attributes)&.key?(:offset_account_ids)
+      if loan.persisted? && !offset_ids_submitted
+        loan.offset_account_ids ||= loan.loan_offset_accounts.pluck(:account_id)
+      end
+      @offset_accounts = LoanOffsetAccount.eligible_accounts_for(
+        loan, viewer: Current.user, family: Current.family, currency: params.dig(:account, :currency).presence
+      )
     end
 end

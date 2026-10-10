@@ -50,6 +50,23 @@ class Loan::OffsetResolverTest < ActiveSupport::TestCase
     end
   end
 
+  # #184 (2026-10-01 review note 1): a projection given an explicit `as_of`
+  # must split recorded history from the held-flat total at THAT date. Reading
+  # the wall clock instead split it wherever today happened to be.
+  test "splits history from the held-flat total at the as_of it is given, not today" do
+    as_of = Date.new(2024, 1, 10)
+    @offset.update!(balance: 375)
+    @offset.balances.create!(date: Date.new(2024, 1, 5), balance: 0, cash_inflows: 100, currency: "USD")
+
+    travel_to Date.new(2024, 3, 1) do
+      points = Loan::OffsetResolver.new(@loan, as_of: as_of).change_points(Date.new(2024, 1, 1), Date.new(2024, 2, 1))
+
+      assert_equal({ date: as_of, amount: BigDecimal("375") }, points.last,
+        "the held-flat total starts on as_of, not on the wall-clock date")
+      assert_equal Date.new(2024, 1, 5), points[-2][:date]
+    end
+  end
+
   test "no linked offsets produce no change points" do
     @loan.loan_offset_accounts.delete_all
 

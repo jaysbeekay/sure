@@ -1,3 +1,11 @@
+# Which tests demonstrate each C1-C16 row of docs/loans/calculation-contract.md
+# (gate G1). `loans:verify_contract_coverage` requires the classes named here
+# to be exactly the `Loan::...Test` classes the contract row's test column
+# names, and every listed test to exist.
+#
+# A row whose contract names more than one class is a list of entries, one per
+# class (#406). Each entry is paired by position with a mutation in
+# config/loan_contract_mutations.yml.
 C1:
   file: test/models/loan/interest_accrual_test.rb
   class: Loan::InterestAccrualTest
@@ -12,37 +20,39 @@ C3:
   file: test/models/loan/simulator_test.rb
   class: Loan::SimulatorTest
   tests:
-    - daily accrual is charged once and receives offset change points
+    - the interest hook is asked once per period for that period, and charged once
 C4:
-  file: test/models/loan/simulator_test.rb
-  class: Loan::SimulatorTest
+  file: test/models/loan/payoff_projection_test.rb
+  class: Loan::PayoffProjectionTest
   tests:
-    - passes the accrual stub boundaries to the interest resolver
-    - rejects an accrual period before the date of the starting balance
-    - accepts a starting balance dated on the accrual start date
+    - the first projected period opens where the schedule's does, not on as_of
+    - a rate change between the last payment and today does not re-rate the month already running
 C5:
   file: test/models/loan/amortization_schedule_test.rb
   class: Loan::AmortizationScheduleTest
   tests:
     - payment schedule has correct number of payments
+    - an anchor on the 31st clamps into a short month and recovers after it
 C6:
-  file: test/models/loan/simulator_test.rb
-  class: Loan::SimulatorTest
+  file: test/models/loan/daily_interest_test.rb
+  class: Loan::DailyInterestTest
   tests:
-    - an extra repayment on a payment date is applied before payment
+    - an extra repayment reduces interest from its own date
+    - an extra repayment on a payment date applies to the period that opens on it
 C7:
-  file: test/models/loan/simulator_test.rb
-  class: Loan::SimulatorTest
+  file: test/models/loan/daily_interest_test.rb
+  class: Loan::DailyInterestTest
   tests:
     - daily accrual applies a mid-period rate change only from its effective date
 C8:
   file: test/models/loan/simulator_test.rb
   class: Loan::SimulatorTest
   tests:
-    - a rate change on a payment date affects the next period only
+    - interest accrues at the rate in force when the period opened, not when it closed
+    - a re-amortisation event sizes the payment from its own effective date
 C9:
-  file: test/models/loan/simulator_test.rb
-  class: Loan::SimulatorTest
+  file: test/models/loan/daily_interest_test.rb
+  class: Loan::DailyInterestTest
   tests:
     - event order is a fixed contract
     - extra repayment and offset movement on one date affect the next period
@@ -52,11 +62,14 @@ C10:
   tests:
     - a rate change on a payment date affects the next period only
 C11:
-  file: test/models/loan/simulator_test.rb
-  class: Loan::SimulatorTest
-  tests:
-    - hold strategy keeps the payment and settles the final period
-    - reamortize strategy resolves a new payment for each rate segment
+  - file: test/models/loan/simulator_test.rb
+    class: Loan::SimulatorTest
+    tests:
+      - reamortize resizes the payment when the rate moves; hold does not
+  - file: test/models/loan/amortization_schedule_test.rb
+    class: Loan::AmortizationScheduleTest
+    tests:
+      - the contracted schedule is built from the opening principal, not the live balance
 C12:
   file: test/models/loan/interest_accrual_test.rb
   class: Loan::InterestAccrualTest
@@ -73,14 +86,19 @@ C14:
   class: Loan::AmortizationScheduleTest
   tests:
     - final payment clears balance
+    - characterization golden master covers zero-interest final settlement
 C15:
   file: test/models/loan/interest_accrual_test.rb
   class: Loan::InterestAccrualTest
   tests:
     - offset at or above the balance produces no interest for that segment
 C16:
-  file: test/models/loan/interest_accrual_test.rb
-  class: Loan::InterestAccrualTest
-  tests:
-    - an offset change at the range start applies to the full range
-    - a change point at the range start applies to the full range
+  - file: test/models/loan/interest_accrual_test.rb
+    class: Loan::InterestAccrualTest
+    tests:
+      - an offset change at the range start applies to the full range
+      - a change point at the range start applies to the full range
+  - file: test/models/loan/offset_resolver_test.rb
+    class: Loan::OffsetResolverTest
+    tests:
+      - holds today's offset total flat for future ranges

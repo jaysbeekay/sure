@@ -15,10 +15,17 @@ bin/rails loans:verify_contract_mutations              # all 16 rows
 ROWS="C8 C10" bin/rails loans:verify_contract_mutations # selected rows
 ```
 
-Per row it (1) asserts the mutation's anchor matches its production file
-exactly once, (2) runs the row's named tests unmutated and requires them to
-pass, (3) applies the mutation and requires them to fail, (4) restores the file.
-A row whose tests survive its mutation fails the task. The mutations live in
+It first asserts every selected mutation's anchor matches its production file
+exactly once, and aborts before running anything if one does not. Then, per
+mutation, it (1) runs that mutation's named tests unmutated and requires them
+to pass, (2) applies the mutation and requires them to fail, (3) restores the
+file. A mutation whose tests survive fails the task.
+
+A row that specifies two behaviours (C11, C16) names a test entry for each in
+`config/loan_contract_tests.yml` and a mutation for each in
+`config/loan_contract_mutations.yml`, paired by position, so each half is
+proven by its own tests (#406). The transcript reports those as `C16#1`,
+`C16#2`. The mutations live in
 `config/loan_contract_mutations.yml`; `Loan::ContractMutationManifestTest` keeps
 the anchors honest in the ordinary suite, so a refactor that moves one fails
 next to the change rather than minutes later inside the gate.
@@ -45,6 +52,55 @@ C14  baseline=pass  mutated=failed    the last scheduled payment no longer settl
 C15  baseline=pass  mutated=failed    the offset floor is removed, so an offset above the balance produces negative interest
 C16  baseline=pass  mutated=failed    a change point effective on the first day of the range is ignored rather than applied to the whole range
 Verified 16 contract rows: every row's tests pass unmutated and fail when its behaviour is broken
+```
+
+## Rows with two behaviours (#406)
+
+C11 and C16 each specify two behaviours, and until #406 the gate could bind
+one test class and one mutation per row, so one half of each went unverified
+from its row:
+
+- **C16**'s forward-flat half (today's offset total held flat for future days)
+  had its own test, `Loan::OffsetResolverTest` "holds today's offset total flat
+  for future ranges", but no mutation. Its new mutation zeroes the held total
+  (`amount: current_total` → `amount: BigDecimal("0")` in
+  `Loan::OffsetResolver#change_points`); the test then fails with
+  `[{date: 2024-01-10, amount: 375}]` expected and `amount: 0.0` produced.
+- **C11** named "`Loan::AmortizationScheduleTest` contract regression" for its
+  second sentence ("the contracted schedule itself does not track live
+  balance"). No test in that class carries that name, and none did at the
+  commit that wrote the row, so the reference pointed at nothing. Reading every
+  class a row names, as the coverage gate now does, surfaced it. #406 adds the
+  test, "the contracted schedule is built from the opening principal, not the
+  live balance", and a mutation that sizes `Loan#original_balance` from the
+  live balance; the test fails with 200000 expected and 150000 produced.
+
+Full run on `claude/loans-406-c16-both-halves` at `70c31ea76` (Ruby 3.3.6,
+PostgreSQL 16). Every other row reports as it did before. C8's description is
+cut at "(the" because its unquoted ` #48` was read as a YAML comment; the
+same change quotes it, so later runs print "(the #48 defect)" in full. The
+line is reproduced as the task printed it.
+
+```
+C1    baseline=pass  mutated=failed    the accrual denominator stops being 365, so a full non-leap year no longer equals balance x rate
+C2    baseline=pass  mutated=failed    leap years silently switch to a 366 denominator instead of 366 elapsed days over 365
+C3    baseline=pass  mutated=failed    daily accrual stops receiving offset change points for the period
+C4    baseline=pass  mutated=failed    the boundary guard stops rejecting a starting balance dated after accrual start
+C5    baseline=pass  mutated=failed    the payment calendar is built one payment short of the loan term
+C6    baseline=pass  mutated=failed    an extra repayment landing exactly on a payment date is dropped instead of applied before the payment
+C7    baseline=pass  mutated=failed    a mid-period rate change no longer segments the accrual window, so the whole period runs at the old rate
+C8    baseline=pass  mutated=failed    the accrual clock is seeded from the payment-sizing rate, re-rating the period that ENDS on the boundary (the
+C9    baseline=pass  mutated=failed    same-day event order is reordered so payment precedes accrual
+C10   baseline=pass  mutated=failed    the accrual window stops being half-open, so a rate effective ON the window's first day is ignored instead of applied from it
+C11#1 baseline=pass  mutated=failed    every run holds the first payment, so re-amortisation stops re-sizing per rate segment
+C11#2 baseline=pass  mutated=failed    the contracted schedule is sized from the live balance instead of the opening principal
+C12   baseline=pass  mutated=failed    each segment is rounded as it accumulates instead of once at the charge point
+C13   baseline=pass  mutated=failed    change points stop splitting the range, so piecewise accrual no longer equals the daily loop
+C14   baseline=pass  mutated=failed    the last scheduled payment no longer settles the remaining balance
+C15   baseline=pass  mutated=failed    the offset floor is removed, so an offset above the balance produces negative interest
+C16#1 baseline=pass  mutated=failed    a change point effective on the first day of the range is ignored rather than applied to the whole range
+C16#2 baseline=pass  mutated=failed    a future range no longer holds today's offset total flat
+Verified 16 contract rows (18 mutations): every row's tests pass unmutated and fail when its behaviour is broken
 ```
 
 ## What the first run found
@@ -77,16 +133,14 @@ test that never exercises it.
   defect, not that the specified behaviour is the right behaviour for a lender.
   That is G2's job, and #65 shows one lender where a contract default was an
   approximation.
-- **Not exhaustive, and not whole-row.** One mutation per row: the transcript
-  shows each row's tests are sensitive to *that* defect, not that they cover
-  everything the row specifies. Where a row spans two behaviours the mutation
-  takes one of them — **C16** is the standing example. Its mutation exercises
-  the interest-bearing-balance half in `Loan::InterestAccrual`; the forward-flat
-  half is implemented and tested (`Loan::OffsetResolverTest`, "holds today's
-  offset total flat for future ranges", landed with #13) but is not verified
-  from C16, because `config/loan_contract_tests.yml` binds one test class per
-  row. Letting a row name tests in more than one class is the follow-up that
-  would close it. Surviving mutants outside this set certainly exist.
+- **Not exhaustive, and not whole-row.** One mutation per behaviour: the
+  transcript shows each row's tests are sensitive to *that* defect, not that
+  they cover everything the row specifies. Until #406 a row could carry only
+  one mutation, so where a row spans two behaviours the mutation took one of
+  them: C16's forward-flat half (`Loan::OffsetResolverTest`, landed with #13)
+  was tested but not verified from C16. Since #406 the two rows that specify two
+  behaviours, C11 and C16, carry a mutation for each half (see the #406
+  transcript below). Surviving mutants outside this set certainly exist.
 - **Not approval.** G1 also requires engineering and product sign-off on the
   contract document, and nothing in this transcript grants it. **Whether that
   sign-off has been given is recorded in `docs/loans/release-gates.md`**, not

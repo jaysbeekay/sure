@@ -32,14 +32,23 @@ en:
       day_count_convention: Interest day-count basis
       day_count_convention_actual_365: Actual/365
       day_count_convention_actual_actual: Actual/actual (366 in a leap year)
-      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
+      day_count_convention_actual_360: Actual/360
+      day_count_convention_thirty_360: 30/360 (every month counts as 30 days)
+      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year; actual/360 divides the actual days by 360; 30/360 charges a twelfth of the annual rate for each full monthly period, whatever its length, and counts a part period in 30-day months. Check a statement -- if this does not match your lender, the interest shown is an approximation.
+      down_payment: Down payment
+      insurance_rate: Insurance rate
+      insurance_rate_placeholder: '0.36'
+      insurance_rate_hint: An annual rate, charged monthly alongside the repayment. Level term is charged on the original balance; decreasing on what is still owed.
+      insurance_rate_type: Insurance type
+      insurance_rate_type_decreasing_life: Decreasing
+      insurance_rate_type_level_term: Level term
     new:
       title: Enter loan details
     tabs:
       overview:
         current_interest_rate: Current Interest Rate
         current_monthly_payment: Current Monthly Payment
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         not_applicable: N/A
         original_loan_balance: Original Loan Balance
         remaining_principal: Remaining loan balance
@@ -49,6 +58,23 @@ en:
         unknown: Unknown
         edit_loan_details: "Edit loan details"
         variable_with_offset: Variable + offset
+        insurance_rate_only: "%{rate} a year"
+        leverage: Leverage
+        leverage_band_conservative: Conservative
+        leverage_band_high: High
+        leverage_band_moderate: Moderate
+        leverage_multiple: "%{ratio}x"
+        total_cost: Total Cost
+        total_cost_with_insurance: Total Cost incl. Insurance
+        total_insurance: Insurance
+      repayment_progress:
+        instalment: Payment %{number} · %{date}
+        insurance: Insurance
+        interest: Interest
+        of_original: of %{amount}
+        principal: Principal
+        repaid: Repaid
+        total: Total
       extra_repayments:
         intro: "See how much sooner the loan is paid off, and how much interest you save, if you pay an extra amount each month on top of the current repayment."
         amount_label: Extra each month
@@ -81,27 +107,12 @@ en:
           one: "%{count} month later"
           other: "%{count} months later"
         projection_not_converged: The projected payoff does not converge within the supported term.
-        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         variable_rate_notice: "This loan has a variable interest rate. The schedule re-amortises at each recorded rate change, keeping the original payoff date and resizing the repayment; a rate change that has not been recorded yet will shift these figures."
         offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
         rate_change_marker: "rate change"
         rate_change_marker_title: "The interest rate changes during this payment's period, to %{rate}%."
         day_count_notice: "Interest accrues on an %{basis} basis. If your lender uses a different day-count basis, the interest figures here are an approximation."
-        chart:
-          today: Today
-          scheduled_history: "Scheduled (contracted terms)"
-          original_payoff: Original schedule
-          accelerated_payoff: Projected payoff
-          extra_payoff: With the extra each month
-          aria_label: "Loan payoff comparison chart"
-          aria_description: "Chart comparing the loan's original scheduled payoff against a projection based on the current balance. Current balance: %{current_balance}. Original scheduled payoff date: %{original_payoff_date}. Projected payoff date based on current balance: %{accelerated_payoff_date}. The tooltip on each scheduled point breaks the payment down into its Principal and Interest."
-          aria_description_extra: "Projected payoff date with the extra monthly payment: %{extra_payoff_date}."
-          extra_payment_applied: "Modeling an extra %{amount} %{frequency}"
-          frequency:
-            weekly: per week
-            monthly: per month
-            yearly: per year
         number: "#"
         date: Date
         payment: Payment

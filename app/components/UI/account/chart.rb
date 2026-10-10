@@ -1,10 +1,52 @@
 class UI::Account::Chart < ApplicationComponent
-  attr_reader :account
+  attr_reader :account, :loan_chart, :extra_payment_amount
 
-  def initialize(account:, period: nil, view: nil)
+  # `loan_chart` is a Loan::PayoffChart payload, built by the controller for a
+  # loan whose schedule can be drawn and nil for everything else. When present
+  # the inner chart element becomes the loan balance chart -- recorded balance,
+  # schedule, projection and, with an amount from the Extra repayments tab, the
+  # extra line, on one axis (#390) -- and the rest of this card (title, hero
+  # figure, period picker, Turbo frame) is unchanged. Every other account type
+  # takes the branch it always took.
+  #
+  # `extra_payment_amount` is the request's validated extra amount, so the
+  # period picker can carry it: without it a period change would redraw the
+  # chart without the extra line.
+  #
+  # The page's reference date travels inside the payload (`today`), so the
+  # component takes no date of its own.
+  def initialize(account:, period: nil, view: nil, loan_chart: nil, extra_payment_amount: nil)
     @account = account
     @period = period
     @view = view
+    @loan_chart = loan_chart
+    @extra_payment_amount = extra_payment_amount.presence
+  end
+
+  def loan_chart?
+    loan_chart.present?
+  end
+
+  def loan_chart_id
+    dom_id(account, :loan_chart)
+  end
+
+  # The series with a line inside the domain, in drawing order, each with the
+  # style the controller gives it. Style is carried by the legend as well as
+  # the line: solid is fact, dashed a forecast, dotted the modelled extra, and
+  # hue alone would fail in greyscale and under deuteranopia.
+  # The colour classes are the functional tokens the controller strokes each
+  # line with (`var(--color-success)` and so on), so swatch and line agree.
+  LOAN_SERIES_STYLES = {
+    "actual" => { swatch: "border-solid border-success" },
+    "scheduled" => { swatch: "border-dashed border-destructive" },
+    "projected" => { swatch: "border-dashed border-success" },
+    "extra" => { swatch: "border-dotted border-info" }
+  }.freeze
+
+  def loan_legend
+    visible = loan_chart[:visible].map(&:to_s)
+    LOAN_SERIES_STYLES.select { |key, _| visible.include?(key) }
   end
 
   def period
@@ -165,11 +207,20 @@ class UI::Account::Chart < ApplicationComponent
     series.values.last&.value || Money.new(0, account.currency)
   end
 
+  # On a loan chart the change line compares today's balance with the amount
+  # borrowed, whatever window is picked: the chart opens on the loan's whole
+  # life, so a change "vs. last month" would describe a window it is not
+  # showing (owner review of we-promise/sure#3474).
   def trend
-    series.trend
+    return series.trend unless loan_chart?
+
+    Trend.new(current: account.balance_money, previous: account.loan.original_balance,
+              favorable_direction: account.favorable_direction)
   end
 
   def comparison_label
+    return I18n.t("UI.account.chart.loan.since_start") if loan_chart?
+
     start_date = series.start_date
     return period.comparison_label if start_date.blank?
 
@@ -178,6 +229,30 @@ class UI::Account::Chart < ApplicationComponent
     else
       period.comparison_label
     end
+  end
+
+  # A loan's chart offers a subset of the shared periods
+  # (Loan::PayoffChart::WINDOW_KEYS); every other chart offers every period.
+  def period_picker_options
+    Loan::PayoffChart.window_options if loan_chart?
+  end
+
+  # A saved period the loan chart does not offer shows the whole life, so its
+  # picker reads All.
+  def period_picker_selected
+    return period unless loan_chart?
+
+    Loan::PayoffChart::WINDOW_KEYS.include?(period.key.to_s) ? period.key.to_s : "all_time"
+  end
+
+  # What every period link carries besides `period`. A trades account keeps
+  # its view; a loan with an extra amount keeps the amount and the tab it was
+  # entered on, so the extra line survives a period change (#390).
+  def period_picker_params
+    params = account.supports_trades? ? { chart_view: view } : {}
+    return params unless loan_chart? && extra_payment_amount
+
+    params.merge(tab: "extra_repayments", extra_payment: { amount: extra_payment_amount })
   end
 
   private

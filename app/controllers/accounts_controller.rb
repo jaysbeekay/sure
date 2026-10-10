@@ -85,6 +85,11 @@ class AccountsController < ApplicationController
   def show
     @chart_view = params[:chart_view] || "balance"
     @tab = params[:tab]
+    # One reference date for everything on the page that is date-sensitive:
+    # the loan chart, both projections, the Extra repayments cards and the
+    # Schedule tab. Read separately, a render crossing midnight shows a chart
+    # projecting from one date beside a table shaded against another.
+    @as_of = Date.current
     @accessible_account_ids = Current.user.accessible_accounts.pluck(:id).to_set
     @q = params.fetch(:q, {}).permit(:search, :uncategorized, status: [])
     @extra_payment_params = extra_payment_params
@@ -93,6 +98,12 @@ class AccountsController < ApplicationController
       build_statement_tab_data
       return render_statement_tab_frame if statement_tab_frame_request?
     end
+
+    # The loan's projection with and without the Extra repayments amount, built
+    # once on @as_of and read by the chart, the Schedule tab and the Extra
+    # repayments tab alike (#390). Before the tab-frame returns below, which
+    # render those tabs on their own.
+    @loan_comparison = loan_extra_repayment_comparison
 
     if schedule_tab_frame_request?
       build_schedule_tab_data
@@ -104,7 +115,17 @@ class AccountsController < ApplicationController
       return render_extra_repayments_tab_frame
     end
 
-    build_schedule_tab_data if schedule_tab_active? || extra_repayments_tab_active?
+    # Only for a response that will actually show the chart card: the payload
+    # runs the schedule and a balance query. A Turbo frame request for the
+    # activity feed's own frame renders the whole page and keeps one frame,
+    # so building it there would be work thrown away.
+    @loan_chart = loan_payoff_chart if chart_card_requested?
+
+    # Any page showing the loan's schedule -- the chart, the Schedule and Extra
+    # repayments tabs -- enqueues a rebuild of the persisted rows when they are
+    # stale (#390). The page itself reads the in-memory schedule; the rows are
+    # the API's cache (#184), kept warm by the views that make it go stale.
+    build_schedule_tab_data if @loan_chart || schedule_tab_active? || extra_repayments_tab_active?
 
     per_page = safe_per_page(stored_per_page_default)
     store_per_page!(per_page) if params[:per_page].present?
@@ -463,7 +484,8 @@ class AccountsController < ApplicationController
     end
 
     def render_schedule_tab_frame
-      render partial: "accounts/show/schedule_frame", locals: { account: @account }, layout: false
+      render partial: "accounts/show/schedule_frame",
+             locals: { account: @account, as_of: @as_of, comparison: @loan_comparison }, layout: false
     end
 
     def extra_repayments_tab_frame_request?
@@ -471,7 +493,58 @@ class AccountsController < ApplicationController
     end
 
     def render_extra_repayments_tab_frame
-      render partial: "accounts/show/extra_repayments_frame", locals: { account: @account }, layout: false
+      render partial: "accounts/show/extra_repayments_frame",
+             locals: { account: @account, comparison: @loan_comparison, period: @period }, layout: false
+    end
+
+    # nil for anything but a loan. The comparison only holds its inputs; the
+    # projections inside it run when something reads them.
+    def loan_extra_repayment_comparison
+      loan = @account.loan
+      return nil unless loan
+
+      loan.extra_repayment_comparison(amount: @extra_payment_params["amount"], as_of: @as_of)
+    end
+
+    # The loan chart payload, or nil: for anything but a loan, for a loan whose
+    # schedule cannot be drawn, and when building it raises. Built here rather
+    # than in the template: assembling a chart payload is domain work.
+    #
+    # The payload runs the schedule, the projections and a balance query from
+    # inputs this app does not fully control: `term_months` and `rate_type`
+    # arrive from providers, `start_date` and the rate schedule from the form,
+    # balances from sync. A raise in any of them costs the chart, not the page:
+    # nil is what the component already takes as "no loan chart", and the
+    # account page then renders exactly as it did before the chart existed.
+    # Reported, because a loan silently losing its chart is a bug someone has
+    # to see.
+    def loan_payoff_chart
+      return nil if @loan_comparison.nil?
+
+      comparison = @loan_comparison
+      Loan::PayoffChart.new(
+        comparison.loan,
+        as_of: @as_of,
+        period: @period,
+        projection: comparison.baseline,
+        extra_projection: comparison.extra
+      ).payload
+    rescue StandardError => e
+      Rails.logger.error("Loan payoff chart failed for account #{@account.id}: #{e.class} - #{e.message}")
+      Sentry.capture_exception(e) { |scope| scope.set_tags(record_type: "Account", record_id: @account.id) } if defined?(Sentry)
+      nil
+    end
+
+    # A plain visit, or a frame request for one of the two frames the chart
+    # card sits inside: the account's container frame and the chart card's own
+    # chart_details frame. Any other frame is rendered and then discarded.
+    def chart_card_requested?
+      return true unless turbo_frame_request?
+
+      request.headers["Turbo-Frame"].in?([
+        helpers.dom_id(@account, :container),
+        helpers.dom_id(@account, :chart_details)
+      ])
     end
 
     def statement_tab_locals
@@ -528,11 +601,11 @@ class AccountsController < ApplicationController
     MAX_EXTRA_PAYMENT_AMOUNT = BigDecimal("10000000")
 
     # Hypothetical extra-payment "what if" params for the Extra repayments
-    # tab's chart/cards (see Loan#payoff_chart_payload). One amount, paid each
-    # month (#304); a `frequency` is no longer read. Malformed input -- a
-    # non-finite, non-positive, unbounded, or non-numeric amount, or a param
-    # that isn't even hash-shaped -- degrades to {} (baseline projection, no
-    # hypothesis) rather than raising, same posture as
+    # tab's cards and the loan chart's extra line (Loan::PayoffChart). One
+    # amount, paid each month (#304); a `frequency` is no longer read.
+    # Malformed input -- a non-finite, non-positive, unbounded, or non-numeric
+    # amount, or a param that isn't even hash-shaped -- degrades to {}
+    # (baseline projection, no hypothesis) rather than raising, same posture as
     # Api::V1::LoansController#safe_page_param.
     def extra_payment_params
       extra_payment_value = params[:extra_payment]

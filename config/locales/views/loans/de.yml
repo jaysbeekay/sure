@@ -18,7 +18,9 @@ de:
       day_count_convention: Zinsberechnungsbasis
       day_count_convention_actual_365: Actual/365
       day_count_convention_actual_actual: Actual/actual (366 im Schaltjahr)
-      day_count_convention_hint: Kreditgeber rechnen unterschiedlich. Actual/365 teilt den Jahreszins immer durch 365; actual/actual verwendet im Schaltjahr 366. Prüfen Sie einen Kontoauszug -- stimmt dies nicht mit Ihrem Kreditgeber überein, sind die angezeigten Zinsen eine Näherung.
+      day_count_convention_actual_360: Actual/360
+      day_count_convention_thirty_360: 30/360 (jeder Monat zählt 30 Tage)
+      day_count_convention_hint: Kreditgeber rechnen unterschiedlich. Actual/365 teilt den Jahreszins immer durch 365; actual/actual verwendet im Schaltjahr 366; actual/360 teilt die tatsächlichen Tage durch 360; 30/360 berechnet für jede volle Monatsperiode ein Zwölftel des Jahreszinses, unabhängig von ihrer Länge, und zählt eine Teilperiode in Monaten zu 30 Tagen. Prüfen Sie einen Kontoauszug -- stimmt dies nicht mit Ihrem Kreditgeber überein, sind die angezeigten Zinsen eine Näherung.
       none: Keine
       subtype_none: Keine
       subtype_prompt: Kreditart wählen

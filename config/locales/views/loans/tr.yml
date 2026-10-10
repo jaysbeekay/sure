@@ -30,7 +30,9 @@ tr:
       day_count_convention: Interest day-count basis
       day_count_convention_actual_365: Actual/365
       day_count_convention_actual_actual: Actual/actual (366 in a leap year)
-      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
+      day_count_convention_actual_360: Actual/360
+      day_count_convention_thirty_360: 30/360 (every month counts as 30 days)
+      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year; actual/360 divides the actual days by 360; 30/360 charges a twelfth of the annual rate for each full monthly period, whatever its length, and counts a part period in 30-day months. Check a statement -- if this does not match your lender, the interest shown is an approximation.
     new:
       title: Kredi detaylarını girin
     overview:
@@ -55,7 +57,7 @@ tr:
         type: Tür
         unknown: Bilinmiyor
         original_payoff_date: Orijinal Vade Sonu Tarihi
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         variable_with_offset: Variable + offset
       schedule:
         date: Tarih
@@ -82,21 +84,8 @@ tr:
           one: "%{count} month later"
           other: "%{count} months later"
         projection_not_converged: The projected payoff does not converge within the supported term.
-        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+        minimum_payment_rate: "The scheduled repayment at the current rate of %{rate}: your lender's minimum, unchanged by paying ahead or an offset"
         offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
         rate_change_marker: "rate change"
         rate_change_marker_title: "The interest rate changes during this payment's period, to %{rate}%."
         day_count_notice: "Interest accrues on an %{basis} basis. If your lender uses a different day-count basis, the interest figures here are an approximation."
-        chart:
-          today: Today
-          scheduled_history: "Scheduled (contracted terms)"
-          original_payoff: Original schedule
-          accelerated_payoff: Projected payoff
-          aria_label: "Loan payoff comparison chart"
-          aria_description: "Chart comparing the loan's original scheduled payoff against a projection based on the current balance. Current balance: %{current_balance}. Original scheduled payoff date: %{original_payoff_date}. Projected payoff date based on current balance: %{accelerated_payoff_date}."
-          extra_payment_applied: "Modeling an extra %{amount} %{frequency}"
-          frequency:
-            weekly: per week
-            monthly: per month
-            yearly: per year

@@ -1,18 +1,33 @@
-<%# locals: (account:) %>
+<%# locals: (account:, comparison:, period: nil) %>
 
+<%# `comparison` is the page's Loan::ExtraRepaymentComparison, built by
+    AccountsController#show on the page's one `as_of`: the same two projections the
+    chart at the top of the page draws, so the cards here and the extra line
+    there can never quote figures from two different "todays" (#390). %>
 <% loan = account.loan %>
-<% extra_amount = (@extra_payment_params || {})["amount"] %>
-<%# One "today" for both projections, the cards and the chart (CLAUDE.md,
-    reference dates). The baseline stays on the chart with or without an
-    amount, so the extra line is always read against it (#304). %>
-<% comparison = loan.extra_repayment_comparison(amount: extra_amount, as_of: Date.current) %>
-<% chart_payload = comparison.chart_payload %>
+<% extra_amount = comparison.amount %>
+<%# The period the chart is showing, carried through the form and the Clear
+    link so redrawing the page keeps it. A custom range has no key and travels
+    as its dates. %>
+<% period_params = if period.nil?
+     {}
+   elsif period.key.present?
+     { period: period.key }
+   else
+     { start_date: period.start_date.iso8601, end_date: period.end_date.iso8601 }
+   end %>
 
 <div class="space-y-4">
   <p class="text-sm text-secondary"><%= t(".intro") %></p>
 
-  <%= form_with url: account_path(account, tab: "extra_repayments"), scope: :extra_payment, method: :get,
-                data: { controller: "auto-submit-form" } do |f| %>
+  <%# `_top`, not this tab's frame: the amount redraws the chart at the top of
+      the page, so the whole page re-renders with this tab open (#390). %>
+  <%= form_with url: account_path(account), scope: :extra_payment, method: :get,
+                data: { controller: "auto-submit-form", turbo_frame: "_top" } do |f| %>
+    <%= hidden_field_tag :tab, "extra_repayments", id: nil %>
+    <% period_params.each do |name, value| %>
+      <%= hidden_field_tag name, value, id: nil %>
+    <% end %>
     <div class="flex flex-wrap items-end gap-2">
       <div class="form-field">
         <%= f.label :amount, t(".amount_label"), class: "text-xs text-secondary" %>
@@ -24,8 +39,8 @@
           always-working submit control for JS-disabled clients. %>
       <%= render DS::Button.new(text: t(".apply"), type: "submit", variant: "outline", size: "sm") %>
       <% if extra_amount.present? %>
-        <%= link_to t(".clear"), account_path(account, tab: "extra_repayments"),
-              class: "text-sm text-secondary underline" %>
+        <%= link_to t(".clear"), account_path(account, tab: "extra_repayments", **period_params),
+              class: "text-sm text-secondary underline", data: { turbo_frame: "_top" } %>
       <% end %>
     </div>
     <%# The projection applies rate changes already recorded on the loan and
@@ -37,7 +52,7 @@
   <% end %>
 
   <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
-    <% if comparison.extra_applicable? %>
+    <% if comparison.extra_converged? %>
       <%= summary_card title: t(".payoff_with_extra") do %>
         <span data-testid="extra-payoff-date"><%= l comparison.extra.payoff_date, format: :long %></span>
         <% if (sooner = comparison.months_sooner) %>
@@ -52,47 +67,14 @@
       <% end %>
     <% end %>
 
-    <% if comparison.baseline.applicable? %>
+    <% if comparison.baseline.converged? %>
       <%= summary_card title: t(".payoff_without_extra") do %>
         <span data-testid="baseline-payoff-date"><%= l comparison.baseline.payoff_date, format: :long %></span>
       <% end %>
     <% end %>
   </div>
 
-  <% if chart_payload %>
-    <% if chart_payload[:extra_payment_label].present? %>
-      <p class="text-xs text-secondary"><%= chart_payload[:extra_payment_label] %></p>
-    <% end %>
-
-    <div data-controller="loan-payoff-chart"
-         data-loan-payoff-chart-data-value="<%= chart_payload.to_json %>"
-         class="h-64">
-    </div>
-    <ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
-      <% if chart_payload[:scheduled_history].any? %>
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5 bg-primary" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:scheduled] %>
-        </li>
-      <% end %>
-      <li class="flex items-center gap-1.5">
-        <span class="inline-block w-3 h-0.5 bg-secondary" style="border-top: 1px dashed currentColor; background: none;" aria-hidden="true"></span>
-        <%= chart_payload[:labels][:original] %>
-      </li>
-      <li class="flex items-center gap-1.5">
-        <span class="inline-block w-3 h-0.5" style="border-top: 2px dashed <%= chart_payload[:ahead] ? "var(--color-green-600)" : "var(--color-yellow-600)" %>;" aria-hidden="true"></span>
-        <%= chart_payload[:labels][:accelerated] %>
-      </li>
-      <% if chart_payload[:labels][:extra] %>
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5" style="border-top: 2px solid var(--color-blue-600);" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:extra] %>
-        </li>
-      <% end %>
-    </ul>
-    <%# The chart's key figures as real DOM text for screen readers. %>
-    <p class="sr-only"><%= chart_payload[:aria_description] %></p>
-  <% elsif (notice = comparison.non_convergence_notice) %>
+  <% if (notice = comparison.non_convergence_notice) %>
     <p class="text-sm text-secondary"><%= t(".projection_not_converged.#{notice}") %></p>
   <% end %>
 </div>

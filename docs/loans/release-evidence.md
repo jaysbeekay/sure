@@ -20,6 +20,19 @@ genuinely changed -- see the variance distribution below. The characterisation
 suite was deliberately re-baselined, which the contract permits only after G2,
 and the sign-off is what permitted it.
 
+**Since #184's core swap (version 5).** The fork runs upstream's engine
+(`Loan::Simulator`, `Loan::AmortizationSchedule`, `Loan::PayoffProjection`) and
+charges every loan's interest through the simulator's one interest hook,
+`Loan::DailyInterest`. `SCHEDULE_DAILY_ACCRUAL` is gone -- there is no monthly
+mode to switch to -- and the version now lives on the cache it versions,
+`LoanAmortization::ALGORITHM_VERSION`, at `5`. The bump restages every
+persisted schedule, so it needs the same prebuild as any version bump. What
+version 5 moves: a loan drawn down on the 29th-31st pays on that day again
+after a short month (upstream's `origination >> n`; it used to stay on the
+clamped day), and a cached row's `interest_rate` is the rate its period opened
+on rather than the rate its payment was sized at. Every other figure on the
+nine golden-master loans is unchanged to the cent (#184 phase 3 report).
+
 ## What the G2 gate permitted
 
 The contract says the characterisation suite "may be deliberately re-baselined
@@ -158,12 +171,17 @@ user-visible the moment the constant flipped. Both are fixed in this branch.
    borrower sitting exactly on their contract that they were a month behind.
    The bound is now the artefact itself -- the trailing payment's own interest
    -- via `Loan::PayoffProjection#diverges_from_schedule?`, which both the
-   chart and the cards now share instead of duplicating the rule.
+   chart and the cards now share instead of duplicating the rule. (Since #184's
+   core swap the projection opens where the schedule's period does, so a loan
+   exactly on contract projects the schedule itself and the artefact is gone;
+   the rule now only ignores a single trailing period worth less than one unit
+   of interest.)
 
 A third, non-user-facing casualty: `loans:amortization_variance` defaulted its
 monthly side to `SCHEDULE_DAILY_ACCRUAL`, so it would have compared daily
 against daily -- reporting every delta as zero -- exactly when it was needed to
-evidence the release. It now passes both modes explicitly.
+evidence the release. It now passes both modes explicitly (since #184: upstream's
+schedule without the interest hook, against the loan's own).
 
 ## Variance and rebuild
 

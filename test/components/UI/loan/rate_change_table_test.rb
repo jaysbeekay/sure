@@ -55,67 +55,75 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert_no_text I18n.t("UI.loan.rate_change_table.title")
   end
 
-  # Both columns must be computed on the same balance. Reading the "new"
-  # balance off the CONTRACTED schedule while the "current" figure uses today's
-  # actual balance made a rate cut appear to save several times what the rate
-  # itself accounts for -- the difference was the principal changing between
-  # the two columns, not the rate.
-  test "the current and new repayments sit on the same projected balance" do
-    @loan.add_variable_rate_change(Date.current + 2.months, 5.93)
+  # #392: a change's "new repayment" is the contracted schedule's payment at
+  # the first payment on or after its effective date, on the scheduled balance.
+  # The current column is the card's figure, which is the schedule's payment in
+  # force, so both columns sit on the schedule.
+  test "a future change's new repayment is the schedule row at that date" do
+    effective_on = Date.current + 2.months
+    @loan.add_variable_rate_change(effective_on, 5.93)
+    @loan.reload
 
     row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
+    schedule_row = @loan.amortization_rows.find { |p| p[:payment_date] >= effective_on }
 
-    assert_in_delta @loan.account.balance, row[:balance].amount, 2_000,
-      "a projected balance far from today's actual balance means the columns disagree on principal"
-    assert row[:new_payment] < row[:current_payment],
-      "a rate cut must lower the quoted repayment"
-    assert_in_delta 54, (row[:current_payment] - row[:new_payment]).amount, 15,
-      "0.25pp off ~$400k over ~277 months is a ~$54/month move; a much larger gap means the principal moved too"
+    assert_equal Money.new(schedule_row[:payment_amount], "USD"), row[:new_payment]
+    assert_equal Money.new(schedule_row[:beginning_balance], "USD"), row[:balance]
+    assert_equal @loan.current_minimum_payment, row[:current_payment],
+      "the current column is the card's figure"
+    assert row[:new_payment] < row[:current_payment], "a rate cut must lower the quoted repayment"
   end
 
-  # cubic, #79. The projection's beginning_balance is the GROSS loan balance --
-  # an offset reduces the interest charged, not the principal owed -- while
-  # current_minimum_payment quotes net of offset. Reading one from each put two
-  # bases in one row again and overstated every future repayment.
-  test "an offset loan quotes the new repayment net of offset, like the current one" do
+  # cubic, #394: two changes landing before the same payment are priced at that
+  # payment on the later rate, so the earlier one never reaches a repayment.
+  # Listing it would pair its rate with the later rate's repayment.
+  test "a change superseded before its payment is not listed" do
+    payment_date = @loan.amortization_schedule.payments
+      .find { |p| p.date >= Date.current + 2.months }.date
+    @loan.add_variable_rate_change(payment_date - 10.days, 5.93)
+    @loan.add_variable_rate_change(payment_date - 3.days, 6.4)
+    @loan.reload
+
+    row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
+    schedule_row = @loan.amortization_rows.find { |p| p[:payment_date] == payment_date }
+
+    assert_equal payment_date - 3.days, row[:effective_date]
+    assert_equal BigDecimal("6.4"), row[:new_rate]
+    assert_equal Money.new(schedule_row[:payment_amount], "USD"), row[:new_payment]
+  end
+
+  # The base moved off the actual balance: neither an offset nor paying ahead
+  # changes what the lender's letter quotes.
+  test "an offset and a lower actual balance change neither column" do
+    @loan.add_variable_rate_change(Date.current + 2.months, 5.93)
+    before = UI::Loan::RateChangeTable.new(loan: @loan.reload).rows.sole
+
     offset = @family.accounts.create!(
       name: "Table Offset", balance: 50_000, currency: "USD", accountable: Depository.new
     )
     @loan.update!(offset_account_ids: [ offset.id ])
-    @loan.reload.add_variable_rate_change(Date.current + 2.months, 5.93)
+    @loan.account.update!(balance: @loan.account.balance - 20_000)
+    after = UI::Loan::RateChangeTable.new(loan: @loan.reload).rows.sole
 
-    row = UI::Loan::RateChangeTable.new(loan: @loan.reload).rows.sole
-
-    assert_operator row[:balance].amount, :<, BigDecimal("360000"),
-      "the projected balance must be net of the offset, as the current column is"
-    assert_in_delta 47, (row[:current_payment] - row[:new_payment]).amount, 20,
-      "both columns net of offset: a 0.25pp cut is a modest move, not a step change"
+    assert_operator @loan.interest_bearing_balance.amount, :<, @loan.account.balance, "precondition: the offset counts"
+    assert_equal before, after
   end
 
-  # A change effective ON a payment date uses that payment's opening balance,
-  # so that payment must be counted among the periods it is spread over.
-  # Counting only payments strictly after the date dropped exactly one.
-  test "a change effective on a payment date is amortised over that payment too" do
-    payment_date = @loan.payoff_projection.payments.map { |p| p[:payment_date] }[3]
+  # A change effective ON a payment date resizes that payment (C8), so its row
+  # is that payment's own, not the next one.
+  test "a change effective on a payment date is quoted from that payment's row" do
+    payment_date = @loan.amortization_schedule.payments.map(&:date).find { |d| d > Date.current + 3.months }
     @loan.add_variable_rate_change(payment_date, 5.93)
+    @loan.reload
 
-    row = UI::Loan::RateChangeTable.new(loan: @loan.reload).rows.sole
-    schedule = @loan.amortization_schedule
-    inclusive = schedule.remaining_payment_count(as_of: payment_date, including_on_date: true)
-    exclusive = schedule.remaining_payment_count(as_of: payment_date)
+    row = UI::Loan::RateChangeTable.new(loan: @loan).rows.sole
+    payments = @loan.amortization_rows
+    on_date = payments.find { |p| p[:payment_date] == payment_date }
+    before = payments[payments.index(on_date) - 1]
 
-    assert_equal exclusive + 1, inclusive,
-      "the fixture must actually put a payment on the effective date, or this test proves nothing"
-
-    recomputed = Loan::AmortizationMath.level_payment(
-      balance: row[:balance].amount,
-      monthly_rate: Loan.monthly_rate(row[:new_rate]),
-      remaining_payments: inclusive,
-      currency_precision: 2
-    )
-
-    assert_equal recomputed, row[:new_payment].amount,
-      "the boundary payment supplies the balance, so it must be counted among the periods"
+    assert_not_equal before[:payment_amount], on_date[:payment_amount],
+      "precondition: the change resizes the payment on its date"
+    assert_equal on_date[:payment_amount], row[:new_payment].amount
   end
 
   test "a fixed-rate loan carrying leftover rate rows renders nothing" do
@@ -156,8 +164,8 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert component.render?
     assert row[:new_payment] > row[:current_payment],
       "a rate rise must raise the quoted repayment"
-    assert_not Loan::PayoffProjection.new(@loan).applicable?,
-      "the fixture must actually break the HELD projection, or this proves nothing"
+    assert_not holding_the_opening_repayment_clears?(@loan),
+      "the fixture must actually break the HELD repayment, or this proves nothing"
   end
 
   # The balances the table quotes off must be produced by the very repayment it
@@ -188,70 +196,54 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
 
     component = UI::Loan::RateChangeTable.new(loan: @loan.reload)
 
-    assert_not Loan::PayoffProjection.new(@loan).applicable?,
-      "the fixture must actually defeat the held projection, or this proves nothing"
+    assert_not holding_the_opening_repayment_clears?(@loan),
+      "the fixture must actually defeat the held repayment, or this proves nothing"
     assert_equal 1, component.rows.length,
       "the already-effective rise is the current rate, so only the future one is listed"
     assert component.render?
   end
 
-  # Codacy, #79. The offset is held flat at today's total by construction, so
-  # asking per row was one query per row for an answer that cannot change
-  # between them.
-  #
-  # Measured as a DELTA between a one-row and a three-row table rather than an
-  # absolute count: the payoff projection this component reads also sums the
-  # offset, and pinning an absolute number would make this test a tripwire for
-  # that unrelated code instead of for the per-row query it is about.
-  test "the offset total is summed once however many rows the table has" do
-    one_row = offset_sum_queries_building_rows(months: [ 2 ])
-    three_rows = offset_sum_queries_building_rows(months: [ 2, 4, 6 ])
-
-    assert_equal one_row, three_rows,
-      "summing the offset per row makes the query count grow with the table"
-  end
-
   private
 
-    # Returns how many "SUM(balance) over the offset accounts" queries run while
-    # the table's rows are built, for a loan with a rate change in each of the
-    # given months.
-    def offset_sum_queries_building_rows(months:)
-      loan = variable_loan
-      offset = @family.accounts.create!(
-        name: "Query Count Offset #{months.length}", balance: 50_000,
-        currency: "USD", accountable: Depository.new
-      )
-      loan.update!(offset_account_ids: [ offset.id ])
-      loan.reload
-      months.each { |n| loan.add_variable_rate_change(Date.current + n.months, 5.93) }
+    # Whether the loan's opening repayment, held from today against today's
+    # balance for twice the term, ever clears it -- what the fork's :hold
+    # projection answered before #184's core swap removed that strategy.
+    def holding_the_opening_repayment_clears?(loan)
+      schedule = loan.amortization_schedule
+      opened = schedule.payments.select { |payment| payment.date <= Date.current }.last&.date || schedule.start_date
+      resolver = Loan::RateResolver.for(loan)
 
-      component = UI::Loan::RateChangeTable.new(loan: loan.reload)
-      sums = 0
-      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
-        sql = payload[:sql].to_s
-        sums += 1 if sql.include?("loan_offset_accounts") && sql.match?(/SUM\(/i)
-      end
-
-      begin
-        assert_equal months.length, component.rows.length,
-          "the fixture must produce one row per requested month, or the delta proves nothing"
-      ensure
-        ActiveSupport::Notifications.unsubscribe(subscriber)
-      end
-
-      sums
+      Loan::Simulator.new(
+        starting_balance: loan.account.balance,
+        accrual_start_date: opened,
+        payment_schedule: (1..(2 * loan.term_months)).map { |n| opened >> n },
+        accrual_rate_for: resolver.method(:accrual_rate_for),
+        re_amortisation_events: resolver.method(:re_amortisation_events),
+        payment_strategy: :hold,
+        payment_amount: schedule.periodic_payment.amount,
+        settle_at_schedule_end: false,
+        currency_precision: 2,
+        interest_for: Loan::DailyInterest.for(loan)
+      ).run.converged?
     end
 
+    # With an opening valuation, as a real loan has, so `original_balance` --
+    # and with it the schedule -- does not move when the balance does.
     def variable_loan
-      @family.accounts.create!(
+      start_date = Date.current - 83.months
+      account = @family.accounts.create!(
         name: "Rate Change Table Loan",
         balance: 400_762.12,
         currency: "USD",
         accountable: Loan.new(
           rate_type: "variable", interest_rate: 6.18, term_months: 360,
-          initial_balance: 400_762.12, start_date: Date.current - 83.months
+          initial_balance: 400_762.12, start_date: start_date
         )
-      ).loan
+      )
+      account.entries.create!(
+        name: "Opening", amount: 400_762.12, currency: "USD", date: start_date,
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account.loan.reload
     end
 end

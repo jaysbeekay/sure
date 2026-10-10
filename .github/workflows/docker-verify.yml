@@ -1,0 +1,68 @@
+# Verification for #404, the do-not-merge loans integration branch: build the
+# repository's Dockerfile exactly as written, start the image the way
+# `docker run` would, and check every loan feature through the production
+# stack. Lives only on this branch; drop it before any of this goes to main.
+name: Docker verify (loans)
+
+on:
+  push:
+    branches:
+      - claude/ecstatic-goodall-pwj0li
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      # Docker Hub is rate-limiting anonymous pulls from runners. The same
+      # official images are mirrored on public.ecr.aws; pull them there and tag
+      # them with the names the Dockerfile and this job use, so the Dockerfile
+      # itself is built unmodified.
+      - name: Pull base and service images from the ECR mirror
+        run: |
+          RUBY_VERSION=$(sed -n 's/^ARG RUBY_VERSION=//p' Dockerfile)
+          docker pull public.ecr.aws/docker/library/ruby:${RUBY_VERSION}-slim
+          docker tag public.ecr.aws/docker/library/ruby:${RUBY_VERSION}-slim registry.docker.com/library/ruby:${RUBY_VERSION}-slim
+          docker pull public.ecr.aws/docker/library/postgres:16
+          docker pull public.ecr.aws/docker/library/redis:7
+
+      - name: Build the Dockerfile as written
+        run: |
+          git diff --exit-code HEAD -- Dockerfile bin/docker-entrypoint
+          DOCKER_BUILDKIT=0 docker build --build-arg BUILD_COMMIT_SHA=${GITHUB_SHA} -t sure-loans:verify -f Dockerfile .
+
+      - name: Show the runtime packages the apt-get steps installed
+        run: |
+          docker run --rm --entrypoint bash sure-loans:verify -c 'ruby -v; dpkg -l | awk "{print \$2}" | grep -E "^(libvips|poppler-utils|postgresql-client|libjemalloc2|procps|curl|libyaml-0-2)"'
+
+      - name: Start PostgreSQL and Redis
+        run: |
+          docker run -d --name pg --network host -e POSTGRES_USER=sure -e POSTGRES_PASSWORD=sure public.ecr.aws/docker/library/postgres:16
+          docker run -d --name redis --network host public.ecr.aws/docker/library/redis:7
+          for i in $(seq 1 30); do docker exec pg pg_isready -U sure && break; sleep 2; done
+
+      - name: Run the image the way docker run does (entrypoint db:prepare), load demo data, check loans through the forms
+        run: |
+          ENVS="-e DB_HOST=127.0.0.1 -e POSTGRES_USER=sure -e POSTGRES_PASSWORD=sure -e POSTGRES_DB=sure_production -e REDIS_URL=redis://127.0.0.1:6379/1 -e SECRET_KEY_BASE=$(openssl rand -hex 64) -e RAILS_FORCE_SSL=false -e RAILS_ASSUME_SSL=false -e SELF_HOSTED=true"
+          # The entrypoint runs db:prepare only for `rails server`; start the
+          # server through the entrypoint, wait for it to answer, then stop it.
+          docker run -d --name app --network host $ENVS sure-loans:verify ./bin/rails server -b 127.0.0.1 -p 3000
+          for i in $(seq 1 90); do curl -fsS -o /dev/null http://127.0.0.1:3000/up && break; sleep 2; done
+          docker logs app 2>&1 | tail -20
+          curl -fsS -o /dev/null -w "GET /up -> %{http_code}\n" http://127.0.0.1:3000/up
+          curl -sS -o /dev/null -w "GET /sessions/new -> %{http_code}\n" http://127.0.0.1:3000/sessions/new
+          docker stop app
+          docker run --rm --network host $ENVS sure-loans:verify ./bin/rails demo_data:default | tail -3
+          V="-v $PWD/.github/docker-verify/verify.rb:/tmp/verify.rb:ro"
+          docker run --rm --network host $ENVS $V sure-loans:verify ./bin/rails runner /tmp/verify.rb ui 2>&1 | tee ui.log | grep -E "^(PASS|FAIL)|checks passed" || true
+          docker run --rm --network host $ENVS $V sure-loans:verify ./bin/rails runner /tmp/verify.rb model 2>&1 | tee model.log | grep -E "^(PASS|FAIL)|checks passed" || true
+          ! grep -q "^FAIL" ui.log model.log
+          grep -qE "^([0-9]+)/\1 checks passed" ui.log
+          grep -qE "^([0-9]+)/\1 checks passed" model.log

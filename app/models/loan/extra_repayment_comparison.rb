@@ -2,7 +2,8 @@ class Loan
   # What the Extra repayments tab shows (#304): the loan's projection with an
   # extra amount paid each month, measured against the same projection
   # WITHOUT it. Both projections are built once, on one `as_of`, so the cards
-  # and the chart can never quote figures from two different "todays".
+  # and the loan chart at the top of the page (Loan::PayoffChart, #390) can
+  # never quote figures from two different "todays".
   #
   # Not persisted, and never writes: like every projection it is computed live
   # from the account's current balance.
@@ -28,8 +29,11 @@ class Loan
       @extra ||= loan.payoff_projection_with_extra(amount: amount, as_of: as_of)
     end
 
-    def extra_applicable?
-      extra.present? && extra.applicable?
+    # Whether the extra clears the loan. A projection can run without clearing
+    # it (Loan::PayoffProjection#applicable? is not #converged?), and one that
+    # never clears has no payoff date to show.
+    def extra_converged?
+      extra.present? && extra.converged?
     end
 
     # How many payments sooner the extra clears the loan than the baseline.
@@ -43,20 +47,6 @@ class Loan
       saved && Money.new(saved, baseline.currency)
     end
 
-    # The chart, baseline always and the extra line beside it when there is
-    # one. Not gated on divergence: an on-schedule loan is exactly where the
-    # baseline is needed to compare an extra payment against.
-    def chart_payload
-      @chart_payload ||= loan.payoff_chart_payload(
-        projection: baseline,
-        extra_projection: extra,
-        extra_payment_amount: amount,
-        extra_payment_frequency: (amount && "monthly"),
-        require_divergence: false,
-        as_of: as_of
-      )
-    end
-
     # When the current repayment never clears the loan there is no baseline
     # to chart, so the tab explains instead. Which explanation depends on the
     # amount: none entered yet, one that clears the loan, or one that still
@@ -64,12 +54,12 @@ class Loan
     def non_convergence_notice
       return nil unless baseline_does_not_converge?
       return :enter_amount if amount.nil?
-      extra_applicable? ? :cleared_by_extra : :not_cleared_by_extra
+      extra_converged? ? :cleared_by_extra : :not_cleared_by_extra
     end
 
     private
       def baseline_does_not_converge?
-        loan.amortization_schedule.amortizable? &&
+        loan.amortizable? &&
           baseline.current_balance.amount.positive? &&
           !baseline.converged?
       end

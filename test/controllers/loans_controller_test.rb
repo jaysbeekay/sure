@@ -1,11 +1,158 @@
 require "test_helper"
 
 class LoansControllerTest < ActionDispatch::IntegrationTest
+  OFFSET_SELECT = "account[accountable_attributes][offset_account_ids][]".freeze
+
   include AccountableResourceInterfaceTest
 
   setup do
     sign_in @user = users(:family_admin)
     @account = accounts(:loan)
+  end
+
+  test "saves the actual/360 day-count basis from the form (#284)" do
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, day_count_convention: "actual_360" } }
+    }
+
+    assert_redirected_to @account
+    assert_equal "actual_360", @account.accountable.reload.day_count_convention
+  end
+
+  test "the form offers the actual/360 basis (#284)" do
+    get edit_loan_path(@account)
+
+    assert_select "select[name='account[accountable_attributes][day_count_convention]'] option[value='actual_360']",
+      text: I18n.t("loans.form.day_count_convention_actual_360")
+  end
+
+  # The overview only shows what the loan actually records: a leverage figure
+  # needs a down payment, and an insurance card needs a premium. A loan with
+  # neither must not grow cards reading zero, which would say the borrower has
+  # insurance costing nothing rather than none.
+  test "the overview shows leverage and insurance once they are recorded" do
+    get account_path(@account)
+    assert_response :success
+    assert_no_match(/Leverage/, response.body, "nothing to compute a ratio from yet")
+    # The summary card's own title, not the word: the repayment breakdown below
+    # the cards has an "Insurance" row of its own, which would satisfy a match
+    # on the page body with the card deleted.
+    assert_select "h4", text: "Insurance", count: 0, message: "and no premium recorded"
+
+    @account.loan.update!(
+      down_payment: 100_000, interest_rate: 5, term_months: 120, rate_type: "fixed",
+      start_date: 2.years.ago.to_date, insurance_rate: 0.36, insurance_rate_type: "level_term"
+    )
+
+    get account_path(@account)
+    assert_response :success
+
+    assert_match(/Leverage/, response.body)
+    assert_match(/5\.0x/, response.body, "500,000 borrowed against 100,000 put in")
+    assert_match(/Moderate/, response.body, "and the band that ratio sits in")
+    assert_select "h4", text: "Insurance", count: 1, message: "the insurance summary card"
+    assert_match(/Total Cost/, response.body)
+    assert_select "[data-controller='donut-chart']", count: 1, message: "the repayment ring"
+    # The amount borrowed is money like the ratio beside it, so Privacy Mode
+    # must blur it too.
+    assert_select "[data-controller='donut-chart'] p.privacy-sensitive", text: /of \$500,000/, count: 1
+  end
+
+  # The Schedule tab's "Total Cost" is what the borrower repays: principal plus
+  # interest. Both tabs render in one request, so the Overview's card must
+  # either show that same figure or say what it adds -- a premium folded in
+  # under the same title put two different "Total Cost" amounts on one page.
+  test "the overview's total cost agrees with the schedule's and names the premium it adds" do
+    loan = @account.loan
+    loan.update!(interest_rate: 5, term_months: 120, rate_type: "fixed", start_date: 2.years.ago.to_date)
+
+    # The fork renders the Schedule tab lazily unless it is the active one, so
+    # the page that carries both cards is the one opened on that tab.
+    get account_path(@account, tab: "schedule")
+    uninsured = card_values("Total Cost")
+    assert_equal 2, uninsured.size, "precondition: the Overview and Schedule tabs each render the card"
+    assert_equal 1, uninsured.uniq.size, "with no premium the two figures are the same figure"
+
+    loan.update!(insurance_rate: 0.36, insurance_rate_type: "level_term")
+    loan = Loan.find(loan.id)
+
+    get account_path(@account, tab: "schedule")
+    assert_equal uninsured.first(1), card_values("Total Cost"),
+                 "one card still calls itself Total Cost, and it has not moved"
+    assert_equal [ format_money(loan.amortization_schedule.total_paid + loan.total_insurance) ],
+                 card_values("Total Cost incl. Insurance"),
+                 "the Overview names the premium it adds, and adds it to the Schedule's figure"
+  end
+
+  # A rate saved on a loan with no term has no schedule to project a premium
+  # against. The card must still say a policy is recorded rather than vanish,
+  # which read as though the save had been lost.
+  test "a recorded insurance rate shows even when no premium can be projected" do
+    @account.loan.update!(term_months: nil, insurance_rate: 0.36, insurance_rate_type: "level_term")
+    assert_nil Loan.find(@account.loan.id).insurance, "precondition: nothing to project against"
+
+    get account_path(@account)
+    assert_response :success
+    assert_equal [ "0.36% a year" ], card_values("Insurance")
+  end
+
+  # A negative opening valuation (imports produce them) has no leverage band,
+  # and the card built its label from the band -- a key that does not exist.
+  test "a negative opening balance shows no leverage card rather than a missing translation" do
+    @account.loan.update!(down_payment: 100_000)
+    @account.entries.create!(
+      date: Date.current - 2.years, name: "Opening balance", amount: -500_000, currency: @account.currency,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    assert @account.loan.original_balance.negative?, "precondition: the opening balance is negative"
+
+    get account_path(@account)
+    assert_response :success
+    assert_no_match(/translation missing: en\.loans/, response.body)
+    assert_select "h4", text: "Leverage", count: 0
+  end
+
+  # The form renders these fields, so a save must keep them. Measured against
+  # the loan's own state before the request: all three start blank.
+  test "updates the down payment and insurance terms from the form" do
+    loan = @account.loan
+    assert_nil loan.down_payment
+    assert_nil loan.insurance_rate
+    assert_nil loan.insurance_rate_type
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_type: "Loan",
+        accountable_attributes: {
+          id: @account.accountable_id,
+          down_payment: "100000", insurance_rate: "0.36", insurance_rate_type: "level_term"
+        }
+      }
+    }
+
+    assert_redirected_to @account
+    loan.reload
+    assert_equal BigDecimal("100000"), loan.down_payment
+    assert_equal BigDecimal("0.36"), loan.insurance_rate
+    assert_equal "level_term", loan.insurance_rate_type
+  end
+
+  # The type select's blank option is the form's "None": no type recorded, read
+  # as decreasing. It submits an empty string, which must clear the type rather
+  # than fail validation (and the column's check constraint, which admits NULL
+  # but not '').
+  test "the insurance type's blank option clears a recorded type" do
+    @account.loan.update!(insurance_rate: 0.36, insurance_rate_type: "level_term")
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_type: "Loan",
+        accountable_attributes: { id: @account.accountable_id, insurance_rate_type: "" }
+      }
+    }
+
+    assert_redirected_to @account
+    assert_nil @account.loan.reload.insurance_rate_type
   end
 
   test "updates the day-count basis" do
@@ -420,6 +567,104 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "the edit form lists and pre-selects an existing eligible offset" do
+    offset = @account.family.accounts.create!(
+      name: "Existing offset", balance: 12_500, currency: @account.currency, accountable: Depository.new
+    )
+    offset.auto_share_with_family!
+    @account.loan.update!(rate_type: "variable", offset_account_ids: [ offset.id ])
+
+    get edit_loan_path(@account)
+
+    assert_select "select[name=?] option[value=?][selected]",
+      "account[accountable_attributes][offset_account_ids][]", offset.id
+  end
+
+  test "the edit form emits an explicit empty offset selection" do
+    @account.loan.update!(rate_type: "variable")
+
+    get edit_loan_path(@account)
+
+    assert_select "input[type=hidden][name=?][value='']",
+      "account[accountable_attributes][offset_account_ids][]"
+  end
+
+  test "an explicit empty offset selection removes every offset" do
+    offset = @account.family.accounts.create!(
+      name: "Removable offset", balance: 12_500, currency: @account.currency, accountable: Depository.new
+    )
+    offset.auto_share_with_family!
+    loan = @account.loan
+    loan.update!(rate_type: "adjustable", offset_account_ids: [ offset.id ])
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: loan.id,
+          rate_type: "variable",
+          offset_account_ids: [ "" ]
+        }
+      }
+    }
+
+    assert_redirected_to @account
+    assert_empty loan.reload.offset_accounts
+  end
+
+  test "resubmitting the form keeps existing offset join rows" do
+    offset = @account.family.accounts.create!(
+      name: "Retained offset", balance: 12_500, currency: @account.currency, accountable: Depository.new
+    )
+    offset.auto_share_with_family!
+    loan = @account.loan
+    loan.update!(rate_type: "adjustable", offset_account_ids: [ offset.id ])
+    join_id = loan.loan_offset_accounts.pick(:id)
+
+    get edit_loan_path(@account)
+    assert_select "option[value=?][selected]", offset.id
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: loan.id,
+          rate_type: "variable",
+          offset_account_ids: [ "", offset.id ]
+        }
+      }
+    }
+
+    assert_redirected_to @account
+    assert_equal [ join_id ], loan.reload.loan_offset_accounts.pluck(:id)
+  end
+
+  test "adding an offset through the form keeps the existing association" do
+    existing = @account.family.accounts.create!(
+      name: "Existing offset", balance: 12_500, currency: @account.currency, accountable: Depository.new
+    )
+    added = @account.family.accounts.create!(
+      name: "Added offset", balance: 8_000, currency: @account.currency, accountable: Depository.new
+    )
+    existing.auto_share_with_family!
+    added.auto_share_with_family!
+    loan = @account.loan
+    loan.update!(rate_type: "adjustable", offset_account_ids: [ existing.id ])
+    existing_join_id = loan.loan_offset_accounts.pick(:id)
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: loan.id,
+          rate_type: "variable",
+          offset_account_ids: [ "", existing.id, added.id ]
+        }
+      }
+    }
+
+    assert_redirected_to @account
+    assert_equal [ existing.id, added.id ].sort, loan.reload.offset_accounts.order(:id).pluck(:id)
+    assert LoanOffsetAccount.exists?(id: existing_join_id)
+  end
+
   # Open the form, change nothing, save: the link must survive even though the
   # asset would no longer be accepted fresh.
   test "an existing link stays selectable when the asset would no longer qualify" do
@@ -597,6 +842,39 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_match "must use the same currency as the loan", response.body
   end
 
+  test "saving a loan removes its stale offset link when the offset is unlisted" do
+    loan = @account.accountable
+    offset = shared_offset
+    loan.update!(rate_type: "variable", offset_account_ids: [ offset.id ])
+    assert_equal [ offset.id ], loan.reload.offset_accounts.pluck(:id), "precondition"
+
+    # Simulate a legacy link left behind by a currency change before #340's
+    # cleanup callback existed. It no longer appears among eligible options.
+    offset.update_columns(currency: "EUR")
+
+    get edit_loan_path(@account)
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]",
+      "account[accountable_attributes][offset_account_ids][]", offset.id, count: 0
+    assert_select "input[type=hidden][name=?][value='']",
+      "account[accountable_attributes][offset_account_ids][]"
+
+    assert_difference -> { loan.loan_offset_accounts.count }, -1 do
+      patch loan_path(@account), params: {
+        account: {
+          name: "Renamed mortgage",
+          accountable_attributes: { id: loan.id, rate_type: loan.rate_type, offset_account_ids: [ "" ] }
+        }
+      }
+    end
+
+    assert_response :found
+    assert_redirected_to @account
+    assert_equal "Renamed mortgage", @account.reload.name
+    assert_empty loan.reload.offset_accounts
+  end
+
   # The controller pre-fills the loan's existing ids when the request carries no
   # offset key, so with the fix this edit validates and re-syncs the links. It
   # must keep the same join row, not drop or recreate it.
@@ -614,29 +892,88 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal link_ids, loan.reload.loan_offset_accounts.pluck(:id)
   end
 
-  # Known limitation, tracked in #329 and kept out of #319's scope by the owner:
-  # the form's multiple select has `include_hidden: false`, so deselecting every
-  # offset submits no offset key, and the controller pre-fills the existing ids.
-  # The last offset therefore cannot be removed from the form. This pins today's
-  # behaviour so #329's form change has to update it deliberately.
-  test "deselecting every offset in the edit form keeps the links (#329)" do
+  # #329: the form's hidden blank represents deselecting every offset, and the
+  # request must remove the links rather than preserve them.
+  test "deselecting every offset in the edit form removes the links (#329)" do
     loan = @account.accountable
     offset = shared_offset
     loan.update!(rate_type: "variable", offset_account_ids: [ offset.id ])
-    link_ids = loan.loan_offset_accounts.pluck(:id)
 
     get edit_loan_path(@account)
     assert_response :success
     assert_select "select[name=?][multiple]", "account[accountable_attributes][offset_account_ids][]"
-    assert_select "input[type=hidden][name=?]", "account[accountable_attributes][offset_account_ids][]", count: 0,
-      message: "with no hidden blank, a deselect-all submits no offset key"
+    assert_select "input[type=hidden][name=?][value='']",
+      "account[accountable_attributes][offset_account_ids][]"
 
     patch loan_path(@account), params: {
-      account: { accountable_attributes: { id: loan.id, rate_type: loan.rate_type } }
+      account: { accountable_attributes: { id: loan.id, rate_type: loan.rate_type, offset_account_ids: [ "" ] } }
     }
 
     assert_redirected_to @account
-    assert_equal link_ids, loan.reload.loan_offset_accounts.pluck(:id)
+    assert_empty loan.reload.offset_accounts
+  end
+
+  # #327: because offset_account_ids is virtual, this must still save when it
+  # is the only changed loan attribute. A rate_type change would hide a broken
+  # changed_for_autosave? implementation by making the loan dirty anyway.
+  test "deselecting every offset without changing another loan field removes the links" do
+    loan = @account.accountable
+    offset = shared_offset
+    loan.update!(rate_type: "variable", offset_account_ids: [ offset.id ])
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: loan.id, offset_account_ids: [ "" ] } }
+    }
+
+    assert_redirected_to @account
+    assert_empty loan.reload.offset_accounts
+  end
+
+  test "saving a loan keeps a valid offset and removes a stale offset link" do
+    loan = @account.accountable
+    valid = shared_offset
+    stale = shared_offset
+    loan.update!(rate_type: "variable", offset_account_ids: [ valid.id, stale.id ])
+    stale.update_columns(currency: "EUR")
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: loan.id, offset_account_ids: [ valid.id ] } }
+    }
+
+    assert_redirected_to @account
+    assert_equal [ valid.id ], loan.reload.offset_accounts.pluck(:id)
+  end
+
+  test "deselecting every offset removes valid and stale offset links" do
+    loan = @account.accountable
+    valid = shared_offset
+    stale = shared_offset
+    loan.update!(rate_type: "variable", offset_account_ids: [ valid.id, stale.id ])
+    stale.update_columns(currency: "EUR")
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: loan.id, offset_account_ids: [ "" ] } }
+    }
+
+    assert_redirected_to @account
+    assert_empty loan.reload.offset_accounts
+  end
+
+  test "an invalid offset edit still renders the explicit empty selection" do
+    loan = @account.accountable
+    offset = shared_offset
+    loan.update!(rate_type: "variable", offset_account_ids: [ offset.id ])
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_attributes: { id: loan.id, offset_account_ids: [ "" ], interest_rate: -1 }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_select "input[type=hidden][name=?][value='']",
+      "account[accountable_attributes][offset_account_ids][]"
+    assert_equal [ offset.id ], loan.reload.offset_accounts.pluck(:id)
   end
 
   # Completes #290's boundary case, which #317 could only test with another loan
@@ -697,6 +1034,128 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_not_includes response.body, "linked offset balance"
   end
 
+  # --- #325: the new-loan form offers offsets ---------------------------------
+
+  test "the new-loan form lists a same-currency asset shared with the family" do
+    offset = shared_offset
+
+    get new_loan_path
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offset.id
+  end
+
+  test "the new-loan form leaves out what the save would refuse" do
+    assert @account.family.share_all_by_default?, "precondition"
+    private_offset = @account.family.accounts.create!(
+      name: "Private offset", balance: 100, currency: @account.currency, owner: @user, accountable: Depository.new
+    )
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+    other_family = families(:empty).accounts.create!(
+      name: "Other family offset", balance: 100, currency: @account.currency, accountable: Depository.new
+    )
+
+    get new_loan_path
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, private_offset.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, accounts(:credit_card).id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, other_family.id, count: 0
+  end
+
+  test "the new-loan form lists the owner's private asset when the family does not share by default" do
+    @account.family.update!(default_account_sharing: "private")
+    private_offset = @account.family.accounts.create!(
+      name: "Private offset", balance: 100, currency: @account.currency, owner: @user, accountable: Depository.new
+    )
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, private_offset.id
+  end
+
+  test "the new-loan form lists offsets in the submitted currency" do
+    usd = shared_offset
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+
+    get new_loan_path, params: { account: { currency: "EUR" } }
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id, count: 0
+  end
+
+  test "a failed create re-renders with the offsets listed" do
+    offset = shared_offset
+    params = variable_loan_params(currency: @account.currency, offset_ids: [ offset.id ])
+    params[:accountable_attributes][:interest_rate] = -1
+
+    assert_no_difference -> { Account.where(accountable_type: "Loan").count } do
+      post loans_path, params: { account: params }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offset.id
+  end
+
+  test "every account the new-loan form offers is one the save accepts" do
+    offered = shared_offset
+
+    get new_loan_path
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offered.id
+
+    post loans_path, params: { account: variable_loan_params(currency: @account.currency, offset_ids: [ offered.id ]) }
+
+    created = Account.where(accountable_type: "Loan").order(:created_at).last.accountable
+    assert_equal [ offered.id ], created.offset_accounts.pluck(:id)
+  end
+
+  test "the edit form lists the same offsets as before" do
+    offset = shared_offset
+    expected = LoanOffsetAccount.eligible_accounts_for(@account.loan, viewer: @user).map(&:id)
+    assert_includes expected, offset.id, "precondition"
+
+    get edit_loan_path(@account)
+
+    expected.each { |id| assert_select "select[name=?] option[value=?]", OFFSET_SELECT, id }
+    assert_select "select[name='#{OFFSET_SELECT}'] option", count: expected.size
+  end
+
+  # Gatekeeper light review on #393: the collateral list narrows to `visible`
+  # accounts and this one did not, so an account being deleted, or one the user
+  # disabled, was offered as a new offset. The control differs from them only in
+  # its status.
+  test "the new-loan form leaves out an account that is pending deletion or disabled" do
+    control = shared_offset
+    deleting = shared_offset.tap { |account| account.update_columns(status: "pending_deletion") }
+    disabled = shared_offset.tap { |account| account.update_columns(status: "disabled") }
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, control.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, deleting.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, disabled.id, count: 0
+  end
+
+  # The select submits only what it lists (`include_hidden: false`), so a linked
+  # offset left off it is unlinked the next time the form is saved with any
+  # selection. Narrowing to `visible` must not do that to a link the loan
+  # already has, as `set_collateral_candidates` keeps the current collateral.
+  test "the edit form keeps listing an offset the loan already has once it is disabled" do
+    offset = shared_offset
+    @account.loan.update!(rate_type: "variable") unless @account.loan.variable_rate_type?
+    LoanOffsetAccount.create!(loan: @account.loan, account: offset)
+    offset.update_columns(status: "disabled")
+
+    get edit_loan_path(@account)
+
+    assert_select "select[name=?] option[value=?][selected]", OFFSET_SELECT, offset.id
+  end
+
   private
     def shared_offset(balance: 0)
       @account.family.accounts.create!(
@@ -708,6 +1167,15 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     # id and its unchanged rate type, and no other loan field.
     def offset_only_params(loan, offset_ids)
       { account: { accountable_attributes: { id: loan.id, rate_type: loan.rate_type, offset_account_ids: offset_ids } } }
+    end
+
+    # The figure under every summary card titled exactly `title`, in page order.
+    def card_values(title)
+      css_select("h4").select { |h4| h4.text.strip == title }.map { |h4| h4.next_element.text.strip }
+    end
+
+    def format_money(money)
+      ApplicationController.helpers.format_money(money)
     end
 
     def variable_loan_params(currency:, offset_ids:)
