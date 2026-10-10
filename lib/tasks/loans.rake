@@ -42,11 +42,20 @@ namespace :loans do
 
     contract_path = Rails.root.join("docs/loans/calculation-contract.md")
     manifest_path = Rails.root.join("config/loan_contract_tests.yml")
+    # Every `Loan::...Test` class the row's test column names. The column used
+    # to be read as its first backticked name only, so C16 named two classes
+    # -- one per half of the row -- while the manifest bound one, and this gate
+    # passed (#406).
     parsed_rows = File.readlines(contract_path).filter_map do |line|
-      match = line.match(/^\| C(\d+) \|.*?\| `([^`]+)`/)
-      next unless match
+      next unless line.match?(/^\| C\d+ \|/)
 
-      [ "C#{match[1]}", match[2] ]
+      # "| C16 | behaviour | tests | reconciliation |" splits into six parts,
+      # the first and last empty. A stray pipe in a cell would shift the test
+      # column, so refuse the row rather than read the wrong cell.
+      cells = line.split("|").map(&:strip)
+      abort "#{cells[1]}: expected 4 columns, found #{cells.length - 2}" unless cells.length == 6
+
+      [ cells[1], cells[3].scan(/`(Loan::\w+Test)`/).flatten.uniq.sort ]
     end
     # Reject duplicates BEFORE collapsing. `to_h` keeps the last occurrence, so
     # a contract carrying C7 twice would silently discard one -- and if the
@@ -71,24 +80,32 @@ namespace :loans do
     # names parsed out of the contract were collected into `rows` and then used
     # only to confirm the row IDs ran C1..C16. They were never compared to
     # anything. G1 requires each row to name a test that exists.
-    rows.each do |id, documented_class|
-      manifest_class = manifest.fetch(id).fetch("class")
-      next if documented_class == manifest_class
+    #
+    # A manifest row is one entry or, where the contract names several
+    # classes, a list of them; the two sets of classes must be equal.
+    rows.each do |id, documented_classes|
+      abort "#{id}: the contract row names no Loan::...Test class" if documented_classes.empty?
 
-      abort "#{id}: contract names #{documented_class}, manifest names #{manifest_class}"
+      manifest_classes = Array.wrap(manifest.fetch(id)).map { |entry| entry.fetch("class") }.uniq.sort
+      missing = documented_classes - manifest_classes
+      extra = manifest_classes - documented_classes
+      abort "#{id}: contract names #{missing.join(', ')}, which the manifest does not bind" if missing.any?
+      abort "#{id}: manifest binds #{extra.join(', ')}, which the contract row does not name" if extra.any?
     end
 
-    manifest.each do |id, entry|
-      file_path = Rails.root.join(entry.fetch("file"))
-      abort "#{id}: missing #{file_path}" unless file_path.file?
+    manifest.each do |id, value|
+      Array.wrap(value).each do |entry|
+        file_path = Rails.root.join(entry.fetch("file"))
+        abort "#{id}: missing #{file_path}" unless file_path.file?
 
-      source = File.read(file_path)
-      class_name = entry.fetch("class")
-      abort "#{id}: #{class_name} is not declared in #{file_path}" unless source.include?("class #{class_name} <")
-      entry.fetch("tests").each do |test_name|
-        next if source.include?(%(test "#{test_name}"))
+        source = File.read(file_path)
+        class_name = entry.fetch("class")
+        abort "#{id}: #{class_name} is not declared in #{file_path}" unless source.include?("class #{class_name} <")
+        entry.fetch("tests").each do |test_name|
+          next if source.include?(%(test "#{test_name}"))
 
-        abort "#{id}: missing test #{test_name.inspect} in #{file_path}"
+          abort "#{id}: missing test #{test_name.inspect} in #{file_path}"
+        end
       end
     end
 
@@ -126,9 +143,39 @@ namespace :loans do
     abort "unknown rows: #{unknown.join(', ')}" if unknown.any?
     ids = requested.presence || expected_ids
 
+    # One job per mutation. A row that specifies two behaviours lists one
+    # mutation per test entry, paired by position, and each mutation must be
+    # caught by its own entry's tests (#406). Single-mutation rows keep their
+    # plain label; a list's mutations are reported as C16#1, C16#2.
+    jobs = ids.flat_map do |id|
+      entries = Array.wrap(manifest.fetch(id))
+      row_mutations = Array.wrap(mutations.fetch(id))
+      unless entries.any? && entries.length == row_mutations.length
+        abort "#{id}: #{entries.length} test #{'entry'.pluralize(entries.length)} but " \
+              "#{row_mutations.length} #{'mutation'.pluralize(row_mutations.length)}; " \
+              "each entry's tests need a mutation of their own"
+      end
+
+      row_mutations.zip(entries).map.with_index(1) do |(mutation, entry), position|
+        { label: row_mutations.one? ? id : "#{id}##{position}", entry: entry, mutation: mutation }
+      end
+    end
+
+    # Every anchor is checked before anything runs. A stale anchor mutates
+    # nothing, so the tests would pass and the row would look like a survivor
+    # for the wrong reason; and found inside the loop, it surfaced only after
+    # the rows before it had spent minutes running.
+    jobs.each do |job|
+      mutation = job.fetch(:mutation)
+      occurrences = Rails.root.join(mutation.fetch("file")).read.scan(mutation.fetch("find")).length
+      next if occurrences == 1
+
+      abort "#{job.fetch(:label)}: anchor matches #{occurrences} times in #{mutation.fetch('file')} (expected exactly 1)"
+    end
+
     # Mutating a file that already carries uncommitted edits would restore it
     # to the wrong content on the way out. Refuse rather than risk it.
-    targets = ids.map { |id| mutations.fetch(id).fetch("file") }.uniq
+    targets = jobs.map { |job| job.fetch(:mutation).fetch("file") }.uniq
     dirty = targets.select { |path| `git status --porcelain -- #{path}`.present? }
     abort "refusing to mutate files with uncommitted changes: #{dirty.join(', ')}" if dirty.any?
 
@@ -141,20 +188,15 @@ namespace :loans do
 
     survivors = []
     unprovable = []
-    results = ids.map do |id|
-      entry = manifest.fetch(id)
-      mutation = mutations.fetch(id)
+    results = jobs.map do |job|
+      label, entry, mutation = job.values_at(:label, :entry, :mutation)
       path = Rails.root.join(mutation.fetch("file"))
       original = File.read(path)
-      occurrences = original.scan(mutation.fetch("find")).length
-      # A stale anchor mutates nothing, so the tests would pass and the row
-      # would look like a survivor for the wrong reason. Fail loudly instead.
-      abort "#{id}: anchor matches #{occurrences} times in #{mutation.fetch('file')} (expected exactly 1)" unless occurrences == 1
 
       baseline_passed, baseline_output = run_tests.call(entry)
       unless baseline_passed
-        unprovable << id
-        next { id: id, baseline: "FAIL", mutated: "-", output: baseline_output }
+        unprovable << label
+        next { label: label, baseline: "FAIL", mutated: "-", defect: mutation.fetch("defect"), output: baseline_output }
       end
 
       begin
@@ -164,21 +206,24 @@ namespace :loans do
         File.write(path, original)
       end
 
-      survivors << id if mutated_passed
-      { id: id, baseline: "pass", mutated: mutated_passed ? "SURVIVED" : "failed", output: mutated_output }
+      survivors << label if mutated_passed
+      {
+        label: label, baseline: "pass", mutated: mutated_passed ? "SURVIVED" : "failed",
+        defect: mutation.fetch("defect"), output: mutated_output
+      }
     end
 
     results.each do |result|
       puts format(
-        "%-4s baseline=%-5s mutated=%-9s %s",
-        result[:id], result[:baseline], result[:mutated], mutations.fetch(result[:id]).fetch("defect")
+        "%-5s baseline=%-5s mutated=%-9s %s",
+        result[:label], result[:baseline], result[:mutated], result[:defect]
       )
     end
 
     abort "rows whose tests do not run clean before mutation: #{unprovable.join(', ')}" if unprovable.any?
     abort "rows whose tests survived their mutation: #{survivors.join(', ')}" if survivors.any?
 
-    puts "Verified #{ids.length} contract rows: every row's tests pass unmutated and fail when its behaviour is broken"
+    puts "Verified #{ids.length} contract rows (#{jobs.length} #{'mutation'.pluralize(jobs.length)}): every row's tests pass unmutated and fail when its behaviour is broken"
   end
 
   desc "Benchmark production-shaped daily accrual and report p95/p99 latency"

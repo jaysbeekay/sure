@@ -320,6 +320,42 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
     assert_equal [ BigDecimal("3.5"), BigDecimal("3.5"), BigDecimal("4.5") ], rows.first(3).map { |row| row[:interest_rate] }
   end
 
+  # C11: "The contracted schedule itself does not track live balance." The
+  # account balance moves as repayments land; the schedule must keep sizing
+  # from the opening principal, or every repayment would re-shape the contract
+  # it is measured against. Measured as a delta: the same schedule before and
+  # after the live balance moves, with the move itself asserted so the
+  # comparison cannot pass on a balance that never changed.
+  test "the contracted schedule is built from the opening principal, not the live balance" do
+    account = Account.create! \
+      family: families(:dylan_family),
+      name: "Contracted Schedule Loan",
+      balance: 200000,
+      currency: "USD",
+      accountable: Loan.create!(
+        rate_type: "fixed",
+        interest_rate: 6,
+        term_months: 120,
+        start_date: Date.new(2024, 1, 1)
+      )
+    account.entries.create!(
+      name: "Starting balance",
+      amount: 200000,
+      currency: "USD",
+      date: Date.new(2024, 1, 1),
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    before = Loan.find(account.loan.id).amortization_schedule.payments
+
+    account.update_columns(balance: 150000)
+    loan = Loan.find(account.loan.id)
+    assert_equal 150000, loan.account.balance.to_i, "test setup must move the live balance"
+
+    schedule = loan.amortization_schedule
+    assert_equal 200000, schedule.principal.to_i
+    assert_equal before, schedule.payments
+  end
+
   # C5: start_date is the origination/anchor date, not the first payment date.
   test "the first payment date is one calendar month after start_date, regardless of its day-of-month" do
     assert_equal Date.new(2024, 2, 1),

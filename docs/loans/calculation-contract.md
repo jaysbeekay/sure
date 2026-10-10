@@ -26,12 +26,12 @@ never become negative, and a converged schedule ends at exactly zero.
 | C8 | A rate change changes the minimum repayment from the next contractual payment date, not from the accrual effective date; a period is charged at the rate in force when it opened. | `Loan::SimulatorTest` opening-rate and sizing-rate tests | Required against a lender mid-cycle rate-change case |
 | C9 | Same-day events use this fixed order: accrue through the day; apply end-of-day extra repayment; apply end-of-day offset movement; at the payment point charge interest, make the scheduled payment, then apply any re-amortisation for the next payment period. | `Loan::DailyInterestTest` pairwise same-day event-order tests | Required where the statement exposes event timing |
 | C10 | The clocks use half-open accrual windows. An accrual rate effective on date `D` applies to `[D, next boundary)`, never retroactively to the window ending on `D`; a repayment-rate change effective on `D` sizes the first contractual payment on or after `D`. | `Loan::SimulatorTest` effective-date inclusivity tests | Required against a lender rate-change case |
-| C11 | `:hold` keeps the contracted payment and shortens/extends the payoff; `:reamortize` recalculates the payment over the remaining original maturity; `:scheduled` pays a caller's figure every period (the projection pays the schedule's own repayment). The contracted schedule itself does not track live balance. | `Loan::SimulatorTest` strategy tests | No |
+| C11 | `:hold` keeps the contracted payment and shortens/extends the payoff; `:reamortize` recalculates the payment over the remaining original maturity; `:scheduled` pays a caller's figure every period (the projection pays the schedule's own repayment). The contracted schedule itself does not track live balance. | `Loan::SimulatorTest` strategy tests (the strategy half) and `Loan::AmortizationScheduleTest` "the contracted schedule is built from the opening principal, not the live balance" (the contracted-schedule half). Each half has its own mutation (#406). | No |
 | C12 | Interest, principal, and ending balances are rounded to the account currency precision at their defined output/payment boundary; intermediate daily accrual remains unrounded. | `Loan::InterestAccrualTest` rounding test | Required against statement tolerance |
 | C13 | Daily interest segments are summed unrounded, then rounded once when monthly interest is charged. | `Loan::InterestAccrualTest` segment-equivalence and charge-point-rounding tests | Required against a lender statement |
 | C14 | The final payment uses the remaining balance as principal plus that period's interest and settles the ending balance exactly to zero. | `Loan::AmortizationScheduleTest` zero-interest 33/33/34 and final-row tests | Required against statement final-payment treatment |
 | C15 | Interest-bearing balance is `max(0, loan balance - offset)`. Offset cannot create negative interest or a negative balance. | `Loan::InterestAccrualTest` offset equal-to/greater-than-balance tests | Required against a lender offset case |
-| C16 | Forward offset is today's linked offset total held flat for future days. No averaging or smoothing is used; the assumption is disclosed in UI and methodology copy. | `Loan::InterestAccrualTest` range-start offset tests — the interest-bearing-balance half, and the half this row's mutation exercises. **The forward-flat half is now implemented and tested** (`Loan::OffsetResolverTest`, "holds today's offset total flat for future ranges", landed with #13), but it is not gate-verified from this row: `config/loan_contract_tests.yml` binds one test class per row, so naming both requires a manifest change. Until then the forward-flat half is covered by its own test but not by C16's evidence. | Required against a lender offset case |
+| C16 | Forward offset is today's linked offset total held flat for future days. No averaging or smoothing is used; the assumption is disclosed in UI and methodology copy. | `Loan::InterestAccrualTest` range-start offset tests (the interest-bearing-balance half) and `Loan::OffsetResolverTest` "holds today's offset total flat for future ranges" (the forward-flat half, landed with #13). Each half has its own mutation, and both are gate-verified from this row since #406. | Required against a lender offset case |
 
 ## Offset visibility policy
 
@@ -121,8 +121,8 @@ What that establishes is bounded, and the bound matters as much as the result:
 it proves each row's named tests are sensitive to **one selected production
 mutation**, not that they cover the whole of the row's behaviour, and not that
 the specified behaviour is right for any lender — which is G2's job. Where a
-row spans two behaviours, the mutation exercises one of them; C16 is the
-standing example (see its row above).
+row spans two behaviours (C11, C16), each behaviour has its own named tests and
+its own mutation (#406).
 
 G1 is approved by the repository owner. **G2a is signed — the non-offset scope
 only; G2b, offset reconciliation, is open.** See `docs/loans/methodology.md`,
