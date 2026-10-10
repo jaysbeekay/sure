@@ -28,7 +28,7 @@ class SimplefinItem::BalancesOnlyJob < ApplicationJob
       card_html = ApplicationController.render(
         partial: "simplefin_items/simplefin_item",
         formats: [ :html ],
-        locals: { simplefin_item: item }
+        locals: { simplefin_item: item, visible_accounts: item.accounts }
       )
       target_id = ActionView::RecordIdentifier.dom_id(item)
       Turbo::StreamsChannel.broadcast_replace_to(item.family, target: target_id, html: card_html)

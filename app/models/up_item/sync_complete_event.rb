@@ -14,7 +14,7 @@ class UpItem::SyncCompleteEvent
       up_item.family,
       target: "up_item_#{up_item.id}",
       partial: "up_items/up_item",
-      locals: { up_item: up_item }
+      locals: { up_item: up_item, visible_accounts: up_item.accounts }
     )
 
     up_item.family.broadcast_sync_complete

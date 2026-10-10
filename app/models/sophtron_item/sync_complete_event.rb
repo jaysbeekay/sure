@@ -16,7 +16,7 @@ class SophtronItem::SyncCompleteEvent
       sophtron_item.family,
       target: "sophtron_item_#{sophtron_item.id}",
       partial: "sophtron_items/sophtron_item",
-      locals: { sophtron_item: sophtron_item }
+      locals: { sophtron_item: sophtron_item, visible_accounts: sophtron_item.accounts }
     )
 
     # Let family handle sync notifications

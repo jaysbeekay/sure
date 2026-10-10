@@ -120,7 +120,8 @@ class <%= class_name %>ActivitiesFetchJob < ApplicationJob
       @<%= file_name %>_account.<%= file_name %>_item&.broadcast_replace_to(
         @<%= file_name %>_account.<%= file_name %>_item.family,
         target: "<%= file_name %>_item_#{@<%= file_name %>_account.<%= file_name %>_item.id}",
-        partial: "<%= file_name %>_items/<%= file_name %>_item"
+        partial: "<%= file_name %>_items/<%= file_name %>_item",
+        locals: { <%= file_name %>_item: @<%= file_name %>_account.<%= file_name %>_item, visible_accounts: @<%= file_name %>_account.<%= file_name %>_item.accounts }
       )
     rescue => e
       Rails.logger.warn("<%= class_name %>ActivitiesFetchJob - Broadcast failed: #{e.message}")

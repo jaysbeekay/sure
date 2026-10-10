@@ -20,7 +20,7 @@ class CoinstatsItem::SyncCompleteEvent
       coinstats_item.family,
       target: "coinstats_item_#{coinstats_item.id}",
       partial: "coinstats_items/coinstats_item",
-      locals: { coinstats_item: coinstats_item }
+      locals: { coinstats_item: coinstats_item, visible_accounts: coinstats_item.accounts }
     )
 
     # Let family handle sync notifications

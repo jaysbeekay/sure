@@ -16,7 +16,7 @@ class RedbarkItem::SyncCompleteEvent
       redbark_item.family,
       target: "redbark_item_#{redbark_item.id}",
       partial: "redbark_items/redbark_item",
-      locals: { redbark_item: redbark_item }
+      locals: { redbark_item: redbark_item, visible_accounts: redbark_item.accounts }
     )
 
     # Let family handle sync notifications

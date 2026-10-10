@@ -16,7 +16,7 @@ class SimplefinItem::SyncCompleteEvent
       simplefin_item.family,
       target: "simplefin_item_#{simplefin_item.id}",
       partial: "simplefin_items/simplefin_item",
-      locals: { simplefin_item: simplefin_item }
+      locals: { simplefin_item: simplefin_item, visible_accounts: simplefin_item.accounts }
     )
 
     # Let family handle sync notifications

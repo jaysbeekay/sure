@@ -15,7 +15,7 @@ class FioItem::SyncCompleteEvent
       fio_item.family,
       target: "fio_item_#{fio_item.id}",
       partial: "fio_items/fio_item",
-      locals: { fio_item: fio_item }
+      locals: { fio_item: fio_item, visible_accounts: fio_item.accounts }
     )
 
     fio_item.family.broadcast_sync_complete

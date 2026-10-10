@@ -14,7 +14,7 @@ class MonobankItem::SyncCompleteEvent
       monobank_item.family,
       target: "monobank_item_#{monobank_item.id}",
       partial: "monobank_items/monobank_item",
-      locals: { monobank_item: monobank_item }
+      locals: { monobank_item: monobank_item, visible_accounts: monobank_item.accounts }
     )
 
     monobank_item.family.broadcast_sync_complete

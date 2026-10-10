@@ -14,7 +14,7 @@ class TradeRepublicItem::SyncCompleteEvent
       trade_republic_item.family,
       target: "trade_republic_item_#{trade_republic_item.id}",
       partial: "trade_republic_items/trade_republic_item",
-      locals: { trade_republic_item: trade_republic_item }
+      locals: { trade_republic_item: trade_republic_item, visible_accounts: trade_republic_item.accounts }
     )
 
     trade_republic_item.family.broadcast_sync_complete

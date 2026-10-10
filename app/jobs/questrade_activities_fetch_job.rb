@@ -123,7 +123,8 @@ class QuestradeActivitiesFetchJob < ApplicationJob
       @questrade_account.questrade_item&.broadcast_replace_to(
         @questrade_account.questrade_item.family,
         target: "questrade_item_#{@questrade_account.questrade_item.id}",
-        partial: "questrade_items/questrade_item"
+        partial: "questrade_items/questrade_item",
+        locals: { questrade_item: @questrade_account.questrade_item, visible_accounts: @questrade_account.questrade_item.accounts }
       )
     rescue => e
       Rails.logger.warn("QuestradeActivitiesFetchJob - Broadcast failed: #{e.message}")

@@ -16,7 +16,7 @@ class WiseItem::SyncCompleteEvent
       wise_item.family,
       target: dom_id(wise_item),
       partial: "wise_items/wise_item",
-      locals: { wise_item: wise_item }
+      locals: { wise_item: wise_item, visible_accounts: wise_item.accounts }
     )
 
     wise_item.family.broadcast_sync_complete

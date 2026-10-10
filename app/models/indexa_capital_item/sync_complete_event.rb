@@ -14,7 +14,7 @@ class IndexaCapitalItem::SyncCompleteEvent
       indexa_capital_item.family,
       target: "indexa_capital_item_#{indexa_capital_item.id}",
       partial: "indexa_capital_items/indexa_capital_item",
-      locals: { indexa_capital_item: indexa_capital_item }
+      locals: { indexa_capital_item: indexa_capital_item, visible_accounts: indexa_capital_item.accounts }
     )
 
     indexa_capital_item.family.broadcast_sync_complete

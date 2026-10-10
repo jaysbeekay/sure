@@ -18,7 +18,7 @@ class CoinspotItem::SyncCompleteEvent
       @coinspot_item.family,
       target: ActionView::RecordIdentifier.dom_id(@coinspot_item),
       partial: "coinspot_items/coinspot_item",
-      locals: { coinspot_item: @coinspot_item }
+      locals: { coinspot_item: @coinspot_item, visible_accounts: @coinspot_item.accounts }
     )
   rescue StandardError => e
     Rails.logger.warn("CoinspotItem::SyncCompleteEvent failed for #{@coinspot_item.id}: #{e.class}")

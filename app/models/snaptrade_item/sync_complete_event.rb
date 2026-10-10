@@ -16,7 +16,7 @@ class SnaptradeItem::SyncCompleteEvent
       snaptrade_item.family,
       target: "snaptrade_item_#{snaptrade_item.id}",
       partial: "snaptrade_items/snaptrade_item",
-      locals: { snaptrade_item: snaptrade_item }
+      locals: { snaptrade_item: snaptrade_item, visible_accounts: snaptrade_item.accounts }
     )
 
     # Let family handle sync notifications

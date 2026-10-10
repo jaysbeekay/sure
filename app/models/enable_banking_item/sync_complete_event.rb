@@ -21,7 +21,7 @@ class EnableBankingItem::SyncCompleteEvent
       family,
       target: "enable_banking_item_#{enable_banking_item.id}",
       partial: "enable_banking_items/enable_banking_item",
-      locals: { enable_banking_item: enable_banking_item }
+      locals: { enable_banking_item: enable_banking_item, visible_accounts: enable_banking_item.accounts }
     )
 
     # Update the Settings > Providers panel
