@@ -775,6 +775,19 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_nothing_raised { Loan::PayoffProjection.new(loan, payment_strategy: :reamortize) }
   end
 
+  # Gatekeeper light review on #401: the two classes each kept their own list,
+  # so a strategy added to one would validate here and raise in the simulator,
+  # or the reverse. Sharing the object is what rules that out; equal contents
+  # today would not.
+  test "the projection accepts exactly the strategies the simulator runs" do
+    assert_same Loan::Simulator::PAYMENT_STRATEGIES, Loan::PayoffProjection::PAYMENT_STRATEGIES
+
+    loan = reamortize_loan
+    Loan::Simulator::PAYMENT_STRATEGIES.each do |strategy|
+      assert_nothing_raised { Loan::PayoffProjection.new(loan, payment_strategy: strategy) }
+    end
+  end
+
   # CodeRabbit, #79. The THIRD occurrence of two bases in one row on this PR.
   #
   # Simulator tracks the GROSS balance -- an offset reduces the interest

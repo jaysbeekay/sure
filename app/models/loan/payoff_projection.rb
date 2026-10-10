@@ -19,7 +19,9 @@ class Loan
   # balance that includes escrow will understate interest/time saved.
   class PayoffProjection
     MAX_ITERATIONS_MULTIPLIER = 2
-    PAYMENT_STRATEGIES = %i[scheduled hold reamortize].freeze
+    # One list, the simulator's, so a strategy added there is accepted here and
+    # one never validates in a class that cannot run it.
+    PAYMENT_STRATEGIES = Loan::Simulator::PAYMENT_STRATEGIES
     EXTRA_PAYMENT_FREQUENCIES = %w[weekly monthly yearly].freeze
 
     attr_reader :loan, :extra_payment, :as_of
