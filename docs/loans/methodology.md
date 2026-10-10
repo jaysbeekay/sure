@@ -30,9 +30,9 @@ offset-enabled loans that does not exist.
 | --- | --- | --- |
 | State | **Signed** | **Open** |
 | Scope | gross monthly interest, one lender, one loan, 43/43 under actual/actual | daily offset-aware accrual against a real statement |
-| Evidence | #65, summarised below | none |
-| Blocked on | — | linked-account daily balance history, which loan statements do not carry |
-| Owner | repository owner | unassigned |
+| Evidence | #65, summarised below | none from a lender; method, task and synthetic oracle in place (#409) |
+| Blocked on | — | the owner's statement and linked-account daily balance history, which loan statements do not carry |
+| Owner | repository owner | repository owner (holds the data) |
 
 **For release reporting:** contract rows **C15 and C16 are specified and
 unit-tested but not lender-reconciled.** Any statement that G2 is met must name
@@ -154,6 +154,86 @@ findings come back:
 4. Where a residual is explained by an offset balance, say so and mark it
    unproven rather than tolerated — an offset saving quoted by the lender is
    the lender's own figure, not an independent check of ours.
+
+## Running the offset reconciliation (G2b, #409)
+
+G2b needs two things only the borrower holds: a lender statement covering at
+least six interest charges on one offset-linked loan, and the **end-of-day
+balance of every linked offset account** over the same period (the offset
+accounts' own statements carry these; the loan statement does not). Nothing
+from either enters the repository.
+
+1. **Normalise, outside the working tree,** into one CSV in date order:
+
+   ```
+   date,category,amount,balance,annual_rate,offset
+   ```
+
+   `balance` is the loan's running balance after the row, negative while owed;
+   `annual_rate` the rate in force after it; `offset` the linked accounts'
+   combined end-of-day total in force after it. Categories: `loan_disbursal`
+   (first row), `repayment` and `fee` (signed as the statement signs them),
+   `interest` (closes a charge window; `amount` is the charge), `rate_change`
+   (`amount` is the new rate) and `offset_balance` (`amount` is the new offset
+   total, one row per day the total changes). Every change is effective from
+   its own date: a day's interest is charged on that day's end-of-day balance
+   less that day's end-of-day offset.
+2. **Run** it with the loan's basis, which the statement should confirm rather
+   than assume:
+
+   ```
+   bin/rails 'loans:reconcile_statement[/path/outside/the/repository.csv,actual_365]'
+   ```
+
+   The task refuses a path inside the repository. It first checks the
+   statement's own arithmetic (every movement sums to the running balance;
+   every rate and offset move is declared by its row) and reconciles nothing if
+   that fails, listing row numbers only. It then charges every window through
+   `Loan::InterestAccrual` and prints counts: exact, within one cent, the
+   largest deviation and the basis. `VERBOSE=1` adds each charge's date and
+   figures for investigating a residual locally; that output **is** the
+   statement and goes nowhere.
+3. **Record here and in the G2b row of `release-gates.md`** only what the
+   summary carries: n/m charges matched, the largest deviation, the basis, the
+   number of lenders, loans and linked accounts, and what was excluded, with a
+   stated reason for every residual. No amounts, dates, balances or rates.
+4. **If charges disagree,** the fix belongs in `Loan::InterestAccrual`,
+   `Loan::OffsetResolver` or, after #405, `Loan::DailyInterest`, under its own
+   bug issue. G2b is not signed against a known disagreement.
+
+**Which path this reconciles.** `Loan::StatementReconciliation` hands each
+window's balance, rate and offset change points to `Loan::InterestAccrual`, the
+call every offset-reduced charge ends in: on `main` through
+`Loan::PayoffProjection` and the simulator's daily accrual, and after #405
+through `Loan::DailyInterest`, which assembles the same change points and makes
+the same call. The offsets themselves reach production through
+`Loan::OffsetResolver`, from stored daily balances; the synthetic oracle below
+reconciles that path too. It does **not** cover the forward-flat projection
+(C16's second half), which no statement can show.
+
+**The synthetic oracle.** `test/fixtures/loan_offset_reconciliation.csv` has
+G2b's shape and is synthetic, for the reason the G2a fixture is: drawdown,
+repayments, a fee, a mid-window rate change, three charges, and daily offset
+totals including a day the offset exceeds the balance (C15) and changes on two
+windows' first days (C16), plus an offset move on the same day as a repayment.
+Its charges were computed by a day-by-day loop over the formula below,
+independently of the engine, and rounded once.
+`test/models/loan/offset_reconciliation_test.rb` reconciles every charge
+through `Loan::StatementReconciliation`, and again with the offsets read from
+stored balances through `Loan::OffsetResolver`. It also checks the fixture's own
+arithmetic and a de-identification allowlist (ISO dates, six category tokens,
+two-decimal numerics). Observed failing under deliberate mutations, each
+restored afterwards:
+
+| mutation | charges expected | produced |
+| --- | --- | --- |
+| C15: offset floor removed, so an offset above the balance accrues negative interest | 237.90, 93.68, 246.70 | 237.90, **89.55**, 246.70 |
+| C16: a change on a window's first day ignored | 237.90, 93.68, 246.70 | **263.97, 232.28, 284.20** |
+| `Loan::OffsetResolver` keeps a day's first stored balance, not its end-of-day one | — | the stored-balance test fails |
+| the reconciler drops the offset a window opens on, or stops merging same-day changes | — | the oracle test fails |
+
+This is repository evidence, not lender evidence. It shows the method and the
+engine agree on a statement of this shape; it does not sign G2b.
 
 ## Independent reference
 
