@@ -2,6 +2,7 @@ class Rule::Action < ApplicationRecord
   belongs_to :rule, touch: true
 
   validates :action_type, presence: true
+  validate :value_has_no_null_byte
 
   # Pre-seed (watermark): when a send_email_notification action is created — on a
   # new rule OR added to an existing one — record all currently-matching
@@ -67,6 +68,12 @@ class Rule::Action < ApplicationRecord
   end
 
   private
+    # Postgres text cannot hold a NUL; the pg driver raises on the INSERT.
+    # Runs after value=, so a multi-select array is already joined.
+    def value_has_no_null_byte
+      errors.add(:value, :invalid) if value.is_a?(String) && value.include?("\x00")
+    end
+
     def execution_value
       executor.type == "multi_select" ? value.to_s.split(",") : value
     end

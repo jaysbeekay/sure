@@ -1883,6 +1883,30 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal category.id, action.value
   end
 
+  # to_json writes the NUL as the escape \u0000, which JSON.parse turns back
+  # into a NUL. The model rejects it before the pg driver sees it.
+  test "a null byte in a rule name raises a validation error, not the driver's" do
+    ndjson = build_ndjson([
+      {
+        type: "Rule",
+        version: 1,
+        data: {
+          id: "rule-null-byte",
+          name: "Cof\x00fee",
+          resource_type: "transaction",
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: "coffee" } ],
+          actions: [ { action_type: "set_transaction_name", value: "Coffee" } ]
+        }
+      }
+    ])
+
+    error = assert_raises(ActiveRecord::RecordInvalid) do
+      Family::DataImporter.new(@family, ndjson).import!
+    end
+    assert_includes error.record.errors.details[:name], { error: :invalid }
+    assert_equal 0, @family.rules.count
+  end
+
   test "imports transaction_tag rule condition by remapping the tag name to an id" do
     ndjson = build_ndjson([
       {

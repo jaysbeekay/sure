@@ -136,6 +136,43 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to rules_url
   end
 
+  test "create with a null byte in a condition value renders 422 and saves nothing" do
+    assert_no_difference -> { Rule.count } do
+      assert_no_difference -> { Rule::Condition.count } do
+        post rules_url, params: {
+          rule: {
+            resource_type: "transaction",
+            conditions_attributes: {
+              "0" => { condition_type: "transaction_name", operator: "like", value: "cof\x00fee" }
+            },
+            actions_attributes: {
+              "0" => { action_type: "set_transaction_name", value: "x" }
+            }
+          }
+        }
+      end
+    end
+
+    assert_response :unprocessable_entity
+  end
+
+  test "update with a null byte in a condition value renders 422 and keeps the stored value" do
+    rule = rules(:one)
+    condition = rule.conditions.first
+    stored_value = condition.value
+
+    patch rule_url(rule), params: {
+      rule: {
+        conditions_attributes: {
+          "0" => { id: condition.id, value: "cof\x00fee" }
+        }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal stored_value, Rule::Condition.where(id: condition.id).pick(:value)
+  end
+
   test "can destroy conditions and actions while editing" do
     rule = rules(:one)
 

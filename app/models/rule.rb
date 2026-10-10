@@ -13,6 +13,7 @@ class Rule < ApplicationRecord
 
   validates :resource_type, presence: true
   validates :name, length: { minimum: 1 }, allow_nil: true
+  validate :name_has_no_null_byte
   validate :no_nested_compound_conditions
 
   # Every rule must have at least 1 action
@@ -178,5 +179,10 @@ class Rule < ApplicationRecord
 
     def normalize_name
       self.name = nil if name.is_a?(String) && name.strip.empty?
+    end
+
+    # Postgres text cannot hold a NUL; the pg driver raises on the INSERT.
+    def name_has_no_null_byte
+      errors.add(:name, :invalid) if name.is_a?(String) && name.include?("\x00")
     end
 end
