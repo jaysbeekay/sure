@@ -30,7 +30,7 @@ offset-enabled loans that does not exist.
 | --- | --- | --- |
 | State | **Signed** | **Open** |
 | Scope | gross monthly interest, one lender, one loan, 43/43 under actual/actual | daily offset-aware accrual against a real statement |
-| Evidence | #65, summarised below | none from a lender; method, task and synthetic oracle in place (#409) |
+| Evidence | #65, summarised below | none (the #409 method, task and synthetic oracle are tooling, not evidence) |
 | Blocked on | — | the owner's statement and linked-account daily balance history, which loan statements do not carry |
 | Owner | repository owner | repository owner (holds the data) |
 
