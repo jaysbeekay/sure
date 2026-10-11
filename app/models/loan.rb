@@ -624,15 +624,35 @@ class Loan < ApplicationRecord
   # is true of a fixed loan as much as a variable one (CodeRabbit, #79). A
   # fixed loan quotes its level repayment for every day of its term.
   def current_minimum_payment(as_of: Date.current)
-    schedule = amortization_schedule
-    return nil if schedule.nil?
-
-    in_force = schedule.payments.find { |payment| payment.date > as_of }
+    in_force = scheduled_payment_in_force(as_of: as_of)
     return nil if in_force.nil?
 
-    return schedule.periodic_payment unless variable_rate_type?
+    return amortization_schedule.periodic_payment unless variable_rate_type?
 
     in_force.payment if in_force.payment.positive?
+  end
+
+  # The schedule's payment `current_minimum_payment` quotes: the first one
+  # due after `as_of`, or nil when there is no schedule or nothing is left to
+  # pay. One reader, so the figure, the rate it is sized at and the rate-change
+  # table's "already resized" cut cannot disagree on which payment that is.
+  def scheduled_payment_in_force(as_of: Date.current)
+    amortization_schedule&.payments&.find { |payment| payment.date > as_of }
+  end
+
+  # The rate the repayment `current_minimum_payment` quotes is sized at (#392,
+  # option A). Usually today's rate, but a change effective on or before the
+  # next payment has already resized it (the payment clock, C8), so from the
+  # payment before the change until the change takes effect this is the new
+  # rate while `current_variable_rate` is still the old one.
+  #
+  # The simulator sizes a payment at the rate in force on its own date
+  # (Loan::Simulator#rate_on, from the same recorded changes), so this reads
+  # the rate on the in-force payment's date. A fixed loan has one rate on
+  # every date; with nothing left to pay this reads the rate on `as_of`.
+  def minimum_payment_rate(as_of: Date.current)
+    in_force = scheduled_payment_in_force(as_of: as_of)
+    current_variable_rate(in_force ? in_force.date : as_of)
   end
 
   # FR-205: which scheduled payments close an accrual period carrying a new

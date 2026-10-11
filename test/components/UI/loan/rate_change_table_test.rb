@@ -38,9 +38,11 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     effective_on = Date.current + 2.months
     @loan.add_variable_rate_change(effective_on, 5.93)
 
-    day_before = UI::Loan::RateChangeTable.new(loan: @loan, as_of: effective_on - 1.day)
-    assert_equal 1, day_before.rows.length,
-      "a change effective tomorrow is still forthcoming"
+    # Before the payment ahead of the change, the change is still news: the
+    # payment in force is sized at the old rate.
+    weeks_before = UI::Loan::RateChangeTable.new(loan: @loan, as_of: effective_on - 40.days)
+    assert_equal 1, weeks_before.rows.length,
+      "a change that has not yet resized the payment in force is still forthcoming"
 
     on_the_day = UI::Loan::RateChangeTable.new(loan: @loan.reload, as_of: effective_on)
     assert_empty on_the_day.rows,
@@ -53,6 +55,17 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     render_inline UI::Loan::RateChangeTable.new(loan: @loan)
 
     assert_no_text I18n.t("UI.loan.rate_change_table.title")
+  end
+
+  # A change dated after the last payment resizes no payment, so there is no
+  # schedule row to price it from; it is left out rather than listed blank.
+  test "a rate change after the loan's last payment is not listed" do
+    @loan.add_variable_rate_change(Date.current + 300.months, 5.93)
+
+    component = UI::Loan::RateChangeTable.new(loan: @loan)
+
+    assert_empty component.rows
+    assert_not component.render?
   end
 
   # #392: a change's "new repayment" is the contracted schedule's payment at
@@ -111,6 +124,21 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
 
   # A change effective ON a payment date resizes that payment (C8), so its row
   # is that payment's own, not the next one.
+  # #392 option A: once the payment ahead of a change is made, the next payment
+  # in force is the one the change resizes (the payment clock, C8). The card
+  # already quotes it at the new rate, so the table would list the same
+  # repayment in both columns. The change is in the card's figure, not news.
+  test "a change that has already resized the payment in force is not listed" do
+    effective_on = Date.current + 2.months
+    @loan.add_variable_rate_change(effective_on, 5.93)
+
+    component = UI::Loan::RateChangeTable.new(loan: @loan.reload, as_of: effective_on - 1.day)
+
+    assert_empty component.rows
+    assert_equal BigDecimal("5.93"), component.current_rate,
+      "the current column's rate is the one the payment in force is sized at"
+  end
+
   test "a change effective on a payment date is quoted from that payment's row" do
     payment_date = @loan.amortization_schedule.payments.map(&:date).find { |d| d > Date.current + 3.months }
     @loan.add_variable_rate_change(payment_date, 5.93)
