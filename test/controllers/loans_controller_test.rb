@@ -1089,6 +1089,32 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id, count: 0
   end
 
+  # The form always submits one currency. A crafted request can send a list,
+  # which `where(currency:)` reads as IN. A list names no currency, so both
+  # lists render exactly as they do on a first render.
+  test "the new-loan form reads a currency submitted as a list as no currency" do
+    usd = shared_offset
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+
+    get new_loan_path
+    first_render = css_select("option").map { |option| option["value"] }
+
+    get new_loan_path, params: { account: { currency: [ "USD", "EUR" ] } }
+
+    assert_response :success
+    assert_equal first_render, css_select("option").map { |option| option["value"] }
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id, count: 0
+  end
+
+  test "the new-loan form renders when the account param is not a hash" do
+    get new_loan_path, params: { account: "USD" }
+
+    assert_response :success
+  end
+
   test "a failed create re-renders with the offsets listed" do
     offset = shared_offset
     params = variable_loan_params(currency: @account.currency, offset_ids: [ offset.id ])
@@ -1123,6 +1149,37 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     expected.each { |id| assert_select "select[name=?] option[value=?]", OFFSET_SELECT, id }
     assert_select "select[name='#{OFFSET_SELECT}'] option", count: expected.size
+  end
+
+  # Gatekeeper light review on #393: the collateral list narrows to `visible`
+  # accounts and this one did not, so an account being deleted, or one the user
+  # disabled, was offered as a new offset. The control differs from them only in
+  # its status.
+  test "the new-loan form leaves out an account that is pending deletion or disabled" do
+    control = shared_offset
+    deleting = shared_offset.tap { |account| account.update_columns(status: "pending_deletion") }
+    disabled = shared_offset.tap { |account| account.update_columns(status: "disabled") }
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, control.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, deleting.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, disabled.id, count: 0
+  end
+
+  # The select submits only what it lists (`include_hidden: false`), so a linked
+  # offset left off it is unlinked the next time the form is saved with any
+  # selection. Narrowing to `visible` must not do that to a link the loan
+  # already has, as `set_collateral_candidates` keeps the current collateral.
+  test "the edit form keeps listing an offset the loan already has once it is disabled" do
+    offset = shared_offset
+    @account.loan.update!(rate_type: "variable") unless @account.loan.variable_rate_type?
+    LoanOffsetAccount.create!(loan: @account.loan, account: offset)
+    offset.update_columns(status: "disabled")
+
+    get edit_loan_path(@account)
+
+    assert_select "select[name=?] option[value=?][selected]", OFFSET_SELECT, offset.id
   end
 
   private

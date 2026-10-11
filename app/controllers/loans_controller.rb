@@ -40,7 +40,7 @@ class LoansController < ApplicationController
     def set_collateral_candidates
       loan = @account&.accountable || Loan.new
       candidates = Loan.collateral_candidates_for(
-        loan, viewer: Current.user, family: Current.family, currency: params.dig(:account, :currency).presence
+        loan, viewer: Current.user, family: Current.family, currency: submitted_currency
       )
       current = loan.collateral_account
       if current && candidates.none? { |candidate| candidate.id == current.id } &&
@@ -48,6 +48,16 @@ class LoansController < ApplicationController
         candidates = [ current, *candidates ]
       end
       @collateral_candidates = candidates
+    end
+
+    # The currency a new loan's form named, which both lists filter on. The form
+    # sends one string; anything else (a list, or an `account` that is not a
+    # hash) names no currency, so the lists fall back to the family's rather
+    # than reading a list as IN or raising on `dig`.
+    def submitted_currency
+      account = params[:account]
+      currency = account[:currency] if account.is_a?(ActionController::Parameters)
+      currency.presence if currency.is_a?(String)
     end
 
     # On `new` and `create` there is no account yet, so the candidates are
@@ -61,7 +71,7 @@ class LoansController < ApplicationController
         loan.offset_account_ids ||= loan.loan_offset_accounts.pluck(:account_id)
       end
       @offset_accounts = LoanOffsetAccount.eligible_accounts_for(
-        loan, viewer: Current.user, family: Current.family, currency: params.dig(:account, :currency).presence
+        loan, viewer: Current.user, family: Current.family, currency: submitted_currency
       )
     end
 end
