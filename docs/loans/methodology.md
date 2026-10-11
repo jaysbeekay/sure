@@ -172,7 +172,7 @@ from either enters the repository.
    `balance` is the loan's running balance after the row, negative while owed;
    `annual_rate` the rate in force after it; `offset` the linked accounts'
    combined end-of-day total in force after it. Categories: `loan_disbursal`
-   (first row), `repayment` and `fee` (signed as the statement signs them),
+   (the first row; a later one is a further drawdown), `repayment` and `fee` (signed as the statement signs them),
    `interest` (closes a charge window; `amount` is the charge), `rate_change`
    (`amount` is the new rate) and `offset_balance` (`amount` is the new offset
    total, one row per day the total changes). Every change is effective from
@@ -186,9 +186,12 @@ from either enters the repository.
    ```
 
    The task refuses a path inside the repository. It first checks the
-   statement's own arithmetic (every movement sums to the running balance;
-   every rate and offset move is declared by its row) and reconciles nothing if
-   that fails, listing row numbers only. It then charges every window through
+   statement's own arithmetic (rows in date order; every movement sums to the
+   running balance; every rate and offset move is declared by its row; no
+   negative rate or offset; every interest row adds to what is owed) and
+   reconciles nothing if that fails, listing row numbers only. A statement with
+   no interest charge fails too, since it reconciles nothing. It then charges
+   every window through
    `Loan::InterestAccrual` and prints counts: exact, within one cent, the
    largest deviation and the basis. `VERBOSE=1` adds each charge's date and
    figures for investigating a residual locally; that output **is** the
