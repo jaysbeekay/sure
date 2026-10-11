@@ -55,7 +55,7 @@
             close that wrapper early -- which drops the rate out of Privacy
             Mode's blur as well as being invalid markup. %>
         <span class="block text-xs text-subdued mt-1">
-          <%= t(".minimum_payment_rate", rate: number_to_percentage(account.loan.current_variable_rate(as_of), precision: 3, strip_insignificant_zeros: true)) %>
+          <%= t(".minimum_payment_rate", rate: number_to_percentage(account.loan.minimum_payment_rate(as_of: as_of), precision: 3, strip_insignificant_zeros: true)) %>
         </span>
       <% end %>
     <% else %>

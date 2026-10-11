@@ -54,7 +54,7 @@ de:
           enter_amount: Mit der aktuellen Rate wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt. Geben Sie einen zusätzlichen Betrag ein, um zu sehen, ob eine höhere Zahlung ihn tilgt.
           cleared_by_extra: Mit der aktuellen Rate wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt, daher gibt es keinen Tilgungsplan zum Vergleich. Mit diesem zusätzlichen Betrag wird er abbezahlt, wie oben gezeigt.
           not_cleared_by_extra: Auch mit diesem zusätzlichen Betrag wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt. Versuchen Sie einen höheren Betrag.
-        variable_rate_notice: "Der Zinssatz dieses Kredits kann sich ändern. Die Projektion berücksichtigt bereits erfasste Zinsänderungen und behält die aktuelle Rate bei; noch nicht erfasste Zinsänderungen können die Ergebnisse verändern."
+        variable_rate_notice: "Der Zinssatz dieses Kredits kann sich ändern. Die Projektion zahlt die Rate laut Tilgungsplan, die sich mit jeder bereits erfassten Zinsänderung ändert; noch nicht erfasste Zinsänderungen können die Ergebnisse verändern."
       schedule:
         current_monthly_payment: Monatsrate
         total_interest: Zinsen gesamt

@@ -43,9 +43,9 @@
               class: "text-sm text-secondary underline", data: { turbo_frame: "_top" } %>
       <% end %>
     </div>
-    <%# The projection applies rate changes already recorded on the loan and
-        holds the repayment; what it cannot know is a change nobody has
-        recorded yet (#54). %>
+    <%# The projection pays the schedule's repayment, which resizes at rate
+        changes already recorded on the loan; what it cannot know is a change
+        nobody has recorded yet (#54, #100). %>
     <% if loan.variable_rate_type? %>
       <p class="text-xs text-subdued mt-1"><%= t(".variable_rate_notice") %></p>
     <% end %>

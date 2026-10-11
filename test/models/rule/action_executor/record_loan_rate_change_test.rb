@@ -140,6 +140,18 @@ class Rule::ActionExecutor::RecordLoanRateChangeTest < ActiveSupport::TestCase
     assert_empty schedule, "a schedule the user edited was written by a rule"
   end
 
+  # The same with a schedule that already holds a row, so "was anything
+  # written?" compares a real pre-write value rather than an empty one
+  # (Gatekeeper light review on #400).
+  test "a locked schedule that already holds a row is not added to, and nothing counts as applied" do
+    @loan.update!(variable_rate_schedule: { "2026-06-01" => "6.24" })
+    @loan.lock_attr!(:variable_rate_schedule)
+    loan_transaction "NEW RATE 6.10% P.A."
+
+    assert_equal 0, @rule.apply, "a skipped write was counted as a modification"
+    assert_equal({ "2026-06-01" => BigDecimal("6.24") }, rates)
+  end
+
   # "Apply rule" in the UI runs with ignore_attribute_locks: true. That flag is
   # about the TRANSACTION attributes a rule owns; it does not hand the rule the
   # user's hand-edited loan schedule.
