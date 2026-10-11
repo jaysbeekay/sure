@@ -156,6 +156,26 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_response :unprocessable_entity
   end
 
+  test "create with a null byte in a condition operator renders 422 and saves nothing" do
+    assert_no_difference -> { Rule.count } do
+      assert_no_difference -> { Rule::Condition.count } do
+        post rules_url, params: {
+          rule: {
+            resource_type: "transaction",
+            conditions_attributes: {
+              "0" => { condition_type: "transaction_name", operator: "lik\x00e", value: "coffee" }
+            },
+            actions_attributes: {
+              "0" => { action_type: "set_transaction_name", value: "x" }
+            }
+          }
+        }
+      end
+    end
+
+    assert_response :unprocessable_entity
+  end
+
   test "update with a null byte in a condition value renders 422 and keeps the stored value" do
     rule = rules(:one)
     condition = rule.conditions.first

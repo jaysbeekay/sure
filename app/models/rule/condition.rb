@@ -15,7 +15,7 @@ class Rule::Condition < ApplicationRecord
   validates :condition_type, presence: true, inclusion: { in: SUPPORTED_CONDITION_TYPES, allow_blank: true }
   validates :operator, presence: true
   validates :value, presence: true, unless: -> { compound? || Rule::ConditionFilter::VALUELESS_OPERATORS.include?(operator) }
-  validate :value_has_no_null_byte
+  validate :text_has_no_null_byte
 
   accepts_nested_attributes_for :sub_conditions, allow_destroy: true
 
@@ -72,8 +72,13 @@ class Rule::Condition < ApplicationRecord
 
   private
     # Postgres text cannot hold a NUL; the pg driver raises on the INSERT.
-    def value_has_no_null_byte
-      errors.add(:value, :invalid) if value.is_a?(String) && value.include?("\x00")
+    # `operator` is free text too (only `condition_type` is checked against a
+    # list), so it needs the same guard as `value`.
+    def text_has_no_null_byte
+      %i[operator value].each do |attribute|
+        text = public_send(attribute)
+        errors.add(attribute, :invalid) if text.is_a?(String) && text.include?("\x00")
+      end
     end
 
     def normalize_legacy_condition_type

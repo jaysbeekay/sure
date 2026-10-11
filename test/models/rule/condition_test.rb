@@ -835,6 +835,20 @@ class Rule::ConditionTest < ActiveSupport::TestCase
     assert condition.valid?, "the same condition without the null byte must be valid"
   end
 
+  # `operator` is submitted as free text too: only `condition_type` is checked
+  # against a list, so a NUL in the operator reached the driver the same way.
+  test "a condition operator containing a null byte is invalid" do
+    condition = Rule::Condition.new(
+      rule: @transaction_rule, condition_type: "transaction_name", operator: "lik\x00e", value: "coffee"
+    )
+
+    assert_not condition.valid?
+    assert_includes condition.errors.details[:operator], { error: :invalid }
+
+    condition.operator = "like"
+    assert condition.valid?, "the same condition without the null byte must be valid"
+  end
+
   test "a condition value with a tab, a newline or a non-ASCII character stays valid" do
     [ "cof\tfee", "cof\nfee", "Café" ].each do |value|
       condition = Rule::Condition.new(
