@@ -12,7 +12,8 @@ class Loan
   # money is owed), `annual_rate` the rate in force after it, and `offset` the
   # linked offset accounts' end-of-day total in force after it. Categories:
   #
-  #   loan_disbursal   opens the first charge window
+  #   loan_disbursal   the first opens the first charge window; a later one
+  #                    is a further drawdown inside its window
   #   repayment, fee   move the balance; `amount` is signed as the statement
   #                    signs it (a repayment positive, a fee negative)
   #   interest         closes a charge window; `amount` is the charge
@@ -70,6 +71,7 @@ class Loan
       problems << "row 1: the first row must be a loan_disbursal" unless @rows.first&.category == "loan_disbursal"
 
       @rows.each_cons(2).with_index(2) do |(previous, row), number|
+        problems << "row #{number}: dated before the row above it" if row.date < previous.date
         expected_balance = BALANCE_MOVEMENTS.include?(row.category) ? previous.balance + row.amount : previous.balance
         problems << "row #{number}: breaks the running balance" unless row.balance == expected_balance
         if row.annual_rate != previous.annual_rate && row.category != "rate_change"
@@ -81,6 +83,9 @@ class Loan
       end
 
       @rows.each.with_index(1) do |row, number|
+        problems << "row #{number}: a negative rate" if row.annual_rate.negative?
+        problems << "row #{number}: a negative offset" if row.offset.negative?
+        problems << "row #{number}: an interest row must add to what is owed" if row.category == "interest" && row.amount.positive?
         problems << "row #{number}: a rate_change's amount must be its new rate" if row.category == "rate_change" && row.amount != row.annual_rate
         problems << "row #{number}: an offset_balance's amount must be its new offset" if row.category == "offset_balance" && row.amount != row.offset
       end
@@ -99,21 +104,16 @@ class Loan
         @rows.each do |row|
           case row.category
           when "loan_disbursal"
-            window = open_window(row)
+            # The first opens the loan; a later one is a further drawdown,
+            # which moves the balance inside the window it falls in.
+            window ? add_point(window, row) : window = open_window(row)
           when "interest"
             raise ArgumentError, "an interest row comes before the loan_disbursal" unless window
 
             windows << window.merge(to_date: row.date, expected: row.amount.abs)
             window = open_window(row)
           else
-            next unless window
-
-            point = window[:points][row.date] ||= { date: row.date }
-            case row.category
-            when "rate_change" then point[:rate] = row.annual_rate
-            when "offset_balance" then point[:offset] = row.offset
-            else point[:balance] = owed(row)
-            end
+            add_point(window, row) if window
           end
         end
 
@@ -160,6 +160,15 @@ class Loan
           opening_rate: row.annual_rate,
           points: { row.date => { date: row.date, offset: row.offset } }
         }
+      end
+
+      def add_point(window, row)
+        point = window[:points][row.date] ||= { date: row.date }
+        case row.category
+        when "rate_change" then point[:rate] = row.annual_rate
+        when "offset_balance" then point[:offset] = row.offset
+        else point[:balance] = owed(row)
+        end
       end
 
       def change_points(window)

@@ -18,13 +18,16 @@ namespace :loans do
 
     statement = Pathname(path).expand_path
     abort "no statement at the given path" unless statement.file?
-    if statement.realpath.to_s.start_with?("#{Rails.root.realpath}/")
+    if statement.realpath.ascend.include?(Rails.root.realpath)
       abort "refusing to read a statement inside the repository; keep it outside the working tree (docs/loans/methodology.md)"
     end
 
+    # The statement's own arithmetic is checked before the engine sees it, so
+    # a broken statement is reported by row rather than by whatever the engine
+    # makes of it.
     reconciliation = begin
-      Loan::StatementReconciliation.from_csv(statement.read, day_count_convention: convention).tap(&:charges)
-    rescue ArgumentError => error
+      Loan::StatementReconciliation.from_csv(statement.read, day_count_convention: convention)
+    rescue ArgumentError, CSV::MalformedCSVError => error
       abort "statement not reconciled: #{error.message}"
     end
 
@@ -34,7 +37,13 @@ namespace :loans do
       abort "statement not reconciled: #{problems.length} #{'row'.pluralize(problems.length)} break its own arithmetic"
     end
 
-    summary = reconciliation.summary
+    summary = begin
+      reconciliation.summary
+    rescue ArgumentError => error
+      abort "statement not reconciled: #{error.message}"
+    end
+    abort "statement not reconciled: it holds no interest charge to compare" if summary[:compared].zero?
+
     if ENV["VERBOSE"].present?
       reconciliation.charges.each do |charge|
         puts format("%s expected=%s engine=%s deviation=%s", charge.date, charge.expected.to_s("F"), charge.actual.to_s("F"), charge.deviation.to_s("F"))

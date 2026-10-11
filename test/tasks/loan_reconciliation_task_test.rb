@@ -55,6 +55,31 @@ class LoanReconciliationTaskTest < ActiveSupport::TestCase
     assert_includes err, "break its own arithmetic"
   end
 
+  test "reports a statement's own problems before the engine sees it" do
+    out_of_order = FIXTURE.read.sub("2025-02-06,interest,-237.90", "2025-01-05,interest,-237.90")
+
+    output, exit_error, err = run_task(statement(out_of_order))
+
+    assert_failed_exit exit_error
+    assert_includes output, "row 5: dated before the row above it"
+    assert_includes err, "break its own arithmetic"
+  end
+
+  test "refuses a statement that is not readable CSV" do
+    _output, exit_error, err = run_task(statement("#{FIXTURE.read}2025-04-07,\"repayment,1.00,-56092.28,5.85,0.00\n"))
+
+    assert_failed_exit exit_error
+    assert_includes err, "statement not reconciled"
+  end
+
+  test "a statement with no interest charge reconciles nothing and fails" do
+    output, exit_error, err = run_task(statement(FIXTURE.read.lines.first(5).join))
+
+    assert_failed_exit exit_error
+    assert_not_includes output, "exact:"
+    assert_includes err, "no interest charge to compare"
+  end
+
   test "honours the day-count basis it is given" do
     output, exit_error, = run_task(statement(FIXTURE.read), "actual_actual")
 
@@ -71,6 +96,15 @@ class LoanReconciliationTaskTest < ActiveSupport::TestCase
 
   test "refuses a statement inside the repository" do
     _output, exit_error, err = run_task(FIXTURE.to_s)
+
+    assert_failed_exit exit_error
+    assert_includes err, "refusing to read a statement inside the repository"
+  end
+
+  test "refuses every statement when the repository is the filesystem root" do
+    Rails.stubs(:root).returns(Pathname("/"))
+
+    _output, exit_error, err = run_task(statement(FIXTURE.read))
 
     assert_failed_exit exit_error
     assert_includes err, "refusing to read a statement inside the repository"

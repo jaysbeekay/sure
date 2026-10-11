@@ -130,6 +130,51 @@ class Loan::OffsetReconciliationTest < ActiveSupport::TestCase
     assert_includes problems, "row 4: moves the offset without an offset_balance row"
   end
 
+  # The engine sorts change points, but a row dated before the one above it
+  # would land outside its window's range and be dropped without a word, or
+  # close a window before it opened.
+  test "a row dated before the row above it is reported" do
+    reordered = rows.map(&:dup)
+    reordered[3]["date"] = "2025-01-18"
+
+    assert_equal [ "row 4: dated before the row above it" ], Loan::StatementReconciliation.new(reordered).problems
+  end
+
+  test "negative rates and offsets, and an interest row that reduces what is owed, are reported" do
+    signed = rows.map(&:dup)
+    signed[0]["annual_rate"] = signed[1]["annual_rate"] = signed[2]["annual_rate"] = signed[3]["annual_rate"] = "-6.10"
+    signed[1]["amount"] = signed[1]["offset"] = "-12000.00"
+    signed[2]["offset"] = signed[3]["offset"] = signed[4]["offset"] = "15250.40"
+    signed[4]["amount"] = "237.90"
+    signed[4]["balance"] = "-58762.10"
+    signed[4]["annual_rate"] = "-6.10"
+
+    problems = Loan::StatementReconciliation.new(signed.first(5)).problems
+
+    assert_includes problems, "row 1: a negative rate"
+    assert_includes problems, "row 2: a negative offset"
+    assert_includes problems, "row 5: an interest row must add to what is owed"
+    assert_not_includes problems, "row 3: a negative offset"
+    assert_empty Loan::StatementReconciliation.new(rows).problems, "the fixture's signs must pass, or the reports above prove nothing"
+  end
+
+  # A further drawdown moves the balance inside the window it falls in. Opening
+  # a new window on it would drop the days before it from the next charge.
+  test "a later loan_disbursal is a drawdown inside its window, not a new window" do
+    drawdown = rows.map(&:dup)
+    drawdown.insert(3, { "date" => "2025-01-25", "category" => "loan_disbursal", "amount" => "-1000.00",
+                         "balance" => "-61000.00", "annual_rate" => "6.10", "offset" => "15250.40" })
+    drawdown.drop(4).each { |row| row["balance"] = format("%.2f", BigDecimal(row["balance"]) - 1000) }
+
+    reconciliation = Loan::StatementReconciliation.new(drawdown)
+    first = reconciliation.windows.first
+
+    assert_empty reconciliation.problems
+    assert_equal 3, reconciliation.windows.length
+    assert_equal Date.new(2025, 1, 6), first[:from_date]
+    assert_equal BigDecimal("61000"), first[:points].fetch(Date.new(2025, 1, 25))[:balance]
+  end
+
   test "a charge that disagrees is counted and its deviation reported" do
     off_by_two_cents = rows.map(&:dup)
     second_charge = off_by_two_cents.index { |row| row["category"] == "interest" && row["date"] == "2025-03-06" }
