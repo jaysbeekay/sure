@@ -15,7 +15,9 @@ contract rows C15 and C16 are specified and unit-tested but **not
 lender-reconciled**.
 
 `Loan::AmortizationSchedule::SCHEDULE_DAILY_ACCRUAL` is `true` and
-`ALGORITHM_VERSION` is `3`. The persisted schedule accrues daily and the figures
+`ALGORITHM_VERSION` is `4`: it was `3` when G2a was signed, and #184's
+straddled-resize fix moved it to `4`, which needs the same prebuild (see
+"Deployment ordering (required)" below). The persisted schedule accrues daily and the figures
 genuinely changed -- see the variance distribution below. The characterisation
 suite was deliberately re-baselined, which the contract permits only after G2,
 and the sign-off is what permitted it.
