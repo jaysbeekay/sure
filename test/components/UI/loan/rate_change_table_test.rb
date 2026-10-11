@@ -55,6 +55,17 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert_no_text I18n.t("UI.loan.rate_change_table.title")
   end
 
+  # A change dated after the last payment resizes no payment, so there is no
+  # schedule row to price it from; it is left out rather than listed blank.
+  test "a rate change after the loan's last payment is not listed" do
+    @loan.add_variable_rate_change(Date.current + 300.months, 5.93)
+
+    component = UI::Loan::RateChangeTable.new(loan: @loan)
+
+    assert_empty component.rows
+    assert_not component.render?
+  end
+
   # #392: a change's "new repayment" is the contracted schedule's payment at
   # the first payment on or after its effective date, on the scheduled balance.
   # The current column is the card's figure, which is the schedule's payment in
