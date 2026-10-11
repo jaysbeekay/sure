@@ -126,6 +126,29 @@ class Loan::CurrentMinimumPaymentTest < ActiveSupport::TestCase
       loan.current_minimum_payment(as_of: before_change[:payment_date] - 1.day).amount
   end
 
+  # #392 option A. Payment 13 is sized at 6.43% (the change is effective on its
+  # date), so from payment 12's date the minimum quoted is already payment 13's,
+  # while the rate in force is still 5.5% until 2023-02-15. The caption names
+  # the rate the quoted repayment is sized at, not today's.
+  test "the minimum payment's rate is the rate of the row in force" do
+    loan = issue_392_loan
+
+    between = Date.new(2023, 1, 20)
+    assert_equal BigDecimal("5.5"), BigDecimal(loan.current_variable_rate(between).to_s), "precondition: 5.5% still in force"
+    assert_equal BigDecimal("6.43"), loan.minimum_payment_rate(as_of: between)
+
+    before_payment_12 = Date.new(2023, 1, 10)
+    assert_equal BigDecimal("5.5"), loan.minimum_payment_rate(as_of: before_payment_12),
+      "before payment 12 the payment in force is sized at the old rate"
+  end
+
+  test "a fixed loan's minimum payment rate is its rate" do
+    loan = variable_loan(balance: 100_000, rate: 6, term_months: 120, months_elapsed: 5)
+    loan.update!(rate_type: "fixed")
+
+    assert_equal BigDecimal("6"), BigDecimal(loan.minimum_payment_rate.to_s)
+  end
+
   test "before the first payment the figure is the first row's payment" do
     loan = issue_392_loan
 

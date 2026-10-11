@@ -632,6 +632,18 @@ class Loan < ApplicationRecord
   # is true of a fixed loan as much as a variable one (CodeRabbit, #79). A
   # fixed loan quotes `amortization_schedule.monthly_payment` for every day of
   # its term.
+  # The rate the repayment `current_minimum_payment` quotes is sized at: the
+  # rate of the schedule row in force. Usually today's rate, but a change
+  # effective on or before the next payment has already resized it (the
+  # payment clock, C8), so from the payment before the change until the
+  # change takes effect this is the new rate while `current_variable_rate` is
+  # still the old one (#392). A fixed loan, or one with nothing left to pay,
+  # reads the rate in force.
+  def minimum_payment_rate(as_of: Date.current)
+    row = amortization_schedule.payment_row_in_force(as_of: as_of) if variable_rate_type? && amortizable?
+    row ? BigDecimal(row[:interest_rate].to_s) : current_variable_rate(as_of)
+  end
+
   def current_minimum_payment(as_of: Date.current)
     return nil unless amortizable?
 

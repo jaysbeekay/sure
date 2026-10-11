@@ -1688,6 +1688,26 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       "the Overview card must show the current minimum repayment, not a placeholder"
   end
 
+  # #392 option A, at both caption sites. Payments fall on today's day of the
+  # month, so the next payment is a month out; a change effective on it has
+  # already resized it, while 6.18% is still the rate in force today. Both
+  # captions must name the rate the quoted repayment is sized at.
+  test "the minimum payment caption names the rate the next repayment is sized at" do
+    loan_account = accounts(:loan)
+    loan_account.loan.update!(rate_type: "variable", interest_rate: 6.18, term_months: 360,
+      start_date: Date.current - 83.months)
+    loan_account.loan.add_variable_rate_change(Date.current + 1.month, 5.93)
+    loan_account.update!(balance: 400_762.12)
+
+    %w[overview schedule].each do |tab|
+      get account_path(loan_account, tab: tab)
+
+      assert_response :success
+      assert_includes response.body, "sized at 5.93%", "the #{tab} caption must name the rate the next repayment is sized at"
+      assert_not_includes response.body, "sized at 6.18%", "the #{tab} caption must not name today's rate"
+    end
+  end
+
   # cubic, #79. Past maturity there are no payments left to spread the balance
   # over, so there is no repayment to quote. Overview says "Unknown"; the
   # Schedule tab used to reach for the contracted payment instead, which is the
