@@ -5,11 +5,13 @@ class Loan
   # saved, instead of the static original-terms schedule from
   # AmortizationSchedule.
   #
-  # Deliberately keeps the ORIGINAL schedule's monthly payment amount fixed
-  # and simulates forward from today's balance, rather than re-amortizing
-  # the remaining term at the current balance. Re-amortizing would *lower*
-  # the payment to fit the remaining term; what we want is "same payment,
-  # paid off sooner" -- the real-world effect of an extra/lump-sum payment.
+  # By default (:scheduled, #100 decision 1) it pays the contracted
+  # schedule's repayment in force each period and simulates forward from
+  # today's balance, rather than re-amortizing the remaining term at the
+  # current balance. Re-amortizing would *lower* the payment to fit the
+  # remaining term; what we want is "the contract's payment, paid off
+  # sooner" -- the real-world effect of an extra/lump-sum payment. A recorded
+  # rate change resizes that repayment where the schedule resizes it.
   #
   # Not persisted: computed live from loan.account.balance on every call, so
   # it's automatically current after every sync or manual balance update.
@@ -158,9 +160,10 @@ class Loan
     # borrower is arguably the one who most wants to, because their contracted
     # payment moves under them (#54).
     #
-    # The what-if holds the payment flat while simulating forward. For a
-    # variable loan that compounds two hypotheticals, so the UI discloses the
-    # assumption rather than the control being withheld.
+    # The what-if pays the schedule's repayment while simulating forward, and
+    # cannot know a rate change nobody has recorded. For a variable loan that
+    # compounds two hypotheticals, so the UI discloses the assumption rather
+    # than the control being withheld.
     def self.eligible_for_extra_payment?(loan)
       loan.amortization_schedule.amortizable? &&
         loan.account.present? &&
@@ -193,8 +196,8 @@ class Loan
         original_schedule_rows.any? &&
         monthly_payment.present? && monthly_payment.amount.positive? &&
         current_balance.amount.positive? &&
-        # Only :hold can be defeated by an insufficient repayment, because only
-        # :hold is stuck with the contracted one. :reamortize computes a
+        # Only :hold and :scheduled can be defeated by an insufficient
+        # repayment, because only they pay a repayment the contract set. :reamortize computes a
         # repayment that covers the interest by construction, so asking whether
         # the CONTRACTED payment covers it is asking about a number this
         # projection never uses -- and answering "no" blanked the rate-change
@@ -244,8 +247,8 @@ class Loan
       schedule.present? && schedule.last[:ending_balance].zero?
     end
 
-    # When the loan clears under this projection. Under :hold this is the
-    # answer being DISCOVERED -- extra payments move it earlier, an
+    # When the loan clears under this projection. Under :hold and :scheduled
+    # this is the answer being DISCOVERED -- extra payments move it earlier, an
     # under-serviced loan later. Under :reamortize it is fixed at the original
     # maturity by construction.
     def payoff_date
