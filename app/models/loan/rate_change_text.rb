@@ -21,7 +21,8 @@
 #   guessed at: a wrong rate silently re-prices every period after it.
 # - A percentage after "by", "increase of", "cut of" and the like, straight
 #   after a bare verb ("decreased", "rose", "cut", "down"), or carrying a sign
-#   ("-0.25%"), is how far the rate MOVED, never what it is. Read as a rate, a
+#   ("-0.25%"), or followed by a comparative ("0.25% higher"), is how far
+#   the rate MOVED, never what it is. Read as a rate, a
 #   quarter-point cut would put the loan at 0.25%.
 # - The rate is rounded to three places, which is what the loan stores
 #   (Loan#quantize_variable_rate_schedule), and must then be above 0 and below
@@ -51,6 +52,11 @@ class Loan::RateChangeText
   # noun with "of" ("a cut of"), or a bare verb ("decreased 0.25%", cubic on
   # #400). The nouns need "of" because "rate change 6.24%" is not a movement.
   CHANGE_MARKER = /(?:\bby|\b(?:increase|increased|decrease|decreased|rise|cut|reduction|change)\s+of|\b(?:increased|decreased|rose|fell|cut|raised|lowered|reduced|up|down))\s*:?\s*\z/i
+
+  # What, immediately AFTER a percentage, makes it a change amount: a
+  # comparative ("now 0.25% higher"), optionally after "p.a.". Without it the
+  # "now" before the number would make 0.25 the loan's rate.
+  COMPARATIVE_AFTER = /\A\s*(?:p\.?\s*a\.?\s*)?(?:higher|lower|above|below|more|less)\b/i
 
   def self.read(text)
     new(text).reading
@@ -91,10 +97,11 @@ class Loan::RateChangeText
       @percentages ||= text.to_enum(:scan, PERCENTAGE).map do
         match = Regexp.last_match
         before = text[0...match.begin(0)]
+        after = text[match.end(0)..]
 
         {
           value: BigDecimal(match[:number]).round(PRECISION),
-          change: match[:sign].present? || before.match?(CHANGE_MARKER),
+          change: match[:sign].present? || before.match?(CHANGE_MARKER) || after.match?(COMPARATIVE_AFTER),
           marked: before.match?(NEW_RATE_MARKER)
         }
       end
