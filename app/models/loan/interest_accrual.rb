@@ -73,8 +73,8 @@ class Loan
       # length. That keeps a 30/360 schedule equal row for row to upstream's
       # flat-twelfth engine.
       #
-      # Any other range (the payoff projection's first stub from `as_of`)
-      # counts 30E/360 days. A change part-way through splits the period's
+      # Any other range (one that is not a single calendar-month step) counts
+      # 30E/360 days. A change part-way through splits the period's
       # months by elapsed actual days, since 30/360 does not say where inside
       # a month a day falls.
       #

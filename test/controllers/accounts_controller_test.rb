@@ -1493,6 +1493,33 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Ported from upstream's loans_controller_test (we-promise/sure#3474). The
+  # payload runs the schedule, the projection and a balance query from
+  # provider-written and user-written inputs; a raise in any of them must cost
+  # the chart, not the page.
+  test "a chart payload that raises degrades to the time-series chart instead of a 500" do
+    loan_account = variable_rate_loan_account
+    Loan::PayoffChart.any_instance.stubs(:payload).raises(ArgumentError, "boom")
+
+    get account_url(loan_account, tab: "schedule")
+
+    assert_response :success
+    assert_select "[data-controller='time-series-chart']", count: 1
+    assert_select "[data-controller='loan-payoff-chart']", count: 0
+  end
+
+  # Ported from upstream too: the activity feed paginates through its own
+  # `entries` frame, which renders the whole page and keeps one frame, so
+  # building the payload for it ran a full simulation per page turn for nothing.
+  test "a frame request outside the chart card does not build the chart payload" do
+    loan_account = variable_rate_loan_account
+    Loan::PayoffChart.any_instance.expects(:payload).never
+
+    get account_url(loan_account, page: 2), headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, "entries") }
+
+    assert_response :success
+  end
+
   # Test 4. The extra line is the difference an amount makes, measured against
   # the same request without one, and it ends on the date the tab's card says.
   test "an extra amount adds the extra series to the top chart, ending on the card's payoff date" do
@@ -1688,6 +1715,26 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     # assertion that cannot fail is not a regression test (cubic, #79).
     assert_includes response.body, loan_account.loan.current_minimum_payment.format,
       "the Overview card must show the current minimum repayment, not a placeholder"
+  end
+
+  # #392 option A, at both caption sites. Payments fall on today's day of the
+  # month, so the next payment is a month out; a change effective on it has
+  # already resized it, while 6.18% is still the rate in force today. Both
+  # captions must name the rate the quoted repayment is sized at.
+  test "the minimum payment caption names the rate the next repayment is sized at" do
+    loan_account = accounts(:loan)
+    loan_account.loan.update!(rate_type: "variable", interest_rate: 6.18, term_months: 360,
+      start_date: Date.current - 83.months)
+    loan_account.loan.add_variable_rate_change(Date.current + 1.month, 5.93)
+    loan_account.update!(balance: 400_762.12)
+
+    %w[overview schedule].each do |tab|
+      get account_path(loan_account, tab: tab)
+
+      assert_response :success
+      assert_includes response.body, "sized at 5.93%", "the #{tab} caption must name the rate the next repayment is sized at"
+      assert_not_includes response.body, "sized at 6.18%", "the #{tab} caption must not name today's rate"
+    end
   end
 
   # cubic, #79. Past maturity there are no payments left to spread the balance

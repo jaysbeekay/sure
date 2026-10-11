@@ -1089,6 +1089,38 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id, count: 0
   end
 
+  # The form always submits one currency. A crafted request can send a list,
+  # which `where(currency:)` reads as IN. A list names no currency, so both
+  # lists render exactly as they do on a first render.
+  test "the new-loan form reads a currency submitted as a list as no currency" do
+    usd = shared_offset
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+
+    get new_loan_path
+    first_render = css_select("option").map { |option| option["value"] }
+
+    get new_loan_path, params: { account: { currency: [ "USD", "EUR" ] } }
+
+    assert_response :success
+    assert_equal first_render, css_select("option").map { |option| option["value"] }
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id, count: 0
+  end
+
+  test "the new-loan form renders when the account param is not a hash" do
+    get new_loan_path, params: { account: "USD" }
+
+    assert_response :success
+  end
+
+  test "the new-loan form renders when the loan attributes are not a hash" do
+    get new_loan_path, params: { account: { currency: "USD", accountable_attributes: "offsets" } }
+
+    assert_response :success
+  end
+
   test "a failed create re-renders with the offsets listed" do
     offset = shared_offset
     params = variable_loan_params(currency: @account.currency, offset_ids: [ offset.id ])

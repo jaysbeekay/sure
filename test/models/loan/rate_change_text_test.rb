@@ -125,6 +125,24 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
     end
   end
 
+  # A comparative straight AFTER the percentage names a movement too. The
+  # marker before it ("now") would otherwise make 0.25 the loan's rate.
+  test "a percentage followed by a comparative is a change amount" do
+    [ "Your variable rate is now 0.25% higher", "Rate now 0.25% lower", "Rate is 0.5% above the old rate",
+      "Your rate is now 0.25% p.a. less", "Rate now 0.1 per cent more" ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, text
+      assert_equal :change_amount_only, reading.problem, text
+    end
+  end
+
+  test "a comparative that does not follow the percentage leaves the rate alone" do
+    assert_rate "6.24", "Rate now 6.24%, higher than last year"
+    assert_rate "6.24", "Your new rate is 6.24%, 0.25% higher than before"
+    assert_rate "6.24", "Rate now 6.24% p.a."
+  end
+
   test "a bare change verb beside the new rate gives the new rate" do
     assert_rate "6.24", "Rate decreased 0.25% to 6.24% p.a."
     assert_rate "6.24", "Rate cut to 6.24%"
