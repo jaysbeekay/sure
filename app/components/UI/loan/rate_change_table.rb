@@ -73,10 +73,11 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     end
   end
 
-  # Today's rate, as a BigDecimal so it can be compared with a row's new rate
-  # without float drift.
+  # The rate the current repayment is sized at (Loan#minimum_payment_rate), as
+  # a BigDecimal so it can be compared with a row's new rate without float
+  # drift. It is the card's caption rate, so the two cannot disagree.
   def current_rate
-    @current_rate ||= BigDecimal(loan.current_variable_rate(as_of).to_s)
+    @current_rate ||= BigDecimal(loan.minimum_payment_rate(as_of: as_of).to_s)
   end
 
   # The same figure the Overview and Schedule cards show. Read from the model
@@ -104,11 +105,16 @@ class UI::Loan::RateChangeTable < ApplicationComponent
 
     # Each forthcoming change with the schedule row it resizes, keeping only
     # the last change before any one payment. A change past maturity has no
-    # row and is dropped.
+    # row and is dropped, and so is one whose row is the payment in force: that
+    # repayment is already the card's figure, sized at the new rate (#392).
     def priced_changes
+      in_force = loan.amortization_schedule.payment_row_in_force(as_of: as_of)
       priced = future_rate_changes.filter_map do |effective_date, new_rate|
         row = schedule_row_at(effective_date)
-        [ effective_date, new_rate, row ] if row
+        next unless row
+        next if in_force && row[:payment_date] <= in_force[:payment_date]
+
+        [ effective_date, new_rate, row ]
       end
       priced.reverse.uniq { |_, _, row| row[:payment_date] }.reverse
     end
