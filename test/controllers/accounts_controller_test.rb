@@ -1491,6 +1491,33 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Ported from upstream's loans_controller_test (we-promise/sure#3474). The
+  # payload runs the schedule, the projection and a balance query from
+  # provider-written and user-written inputs; a raise in any of them must cost
+  # the chart, not the page.
+  test "a chart payload that raises degrades to the time-series chart instead of a 500" do
+    loan_account = variable_rate_loan_account
+    Loan::PayoffChart.any_instance.stubs(:payload).raises(ArgumentError, "boom")
+
+    get account_url(loan_account, tab: "schedule")
+
+    assert_response :success
+    assert_select "[data-controller='time-series-chart']", count: 1
+    assert_select "[data-controller='loan-payoff-chart']", count: 0
+  end
+
+  # Ported from upstream too: the activity feed paginates through its own
+  # `entries` frame, which renders the whole page and keeps one frame, so
+  # building the payload for it ran a full simulation per page turn for nothing.
+  test "a frame request outside the chart card does not build the chart payload" do
+    loan_account = variable_rate_loan_account
+    Loan::PayoffChart.any_instance.expects(:payload).never
+
+    get account_url(loan_account, page: 2), headers: { "Turbo-Frame" => ActionView::RecordIdentifier.dom_id(loan_account, "entries") }
+
+    assert_response :success
+  end
+
   # Test 4. The extra line is the difference an amount makes, measured against
   # the same request without one, and it ends on the date the tab's card says.
   test "an extra amount adds the extra series to the top chart, ending on the card's payoff date" do

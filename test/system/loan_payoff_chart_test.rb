@@ -97,6 +97,27 @@ class LoanPayoffChartTest < ApplicationSystemTestCase
     end
   end
 
+  # The payload carries I18n.locale, and Intl throws a RangeError for a tag it
+  # does not accept. The app loads one such locale (zh-YUE, reachable with
+  # ?locale=), and the throw left an empty chart. The chart falls back to the
+  # browser's locale instead.
+  test "a locale Intl rejects still paints the chart" do
+    travel_to TODAY do
+      account = on_contract_loan_account
+
+      visit account_path(account, period: "all_time", locale: "zh-YUE")
+      svg = find("[data-controller='loan-payoff-chart'] svg")
+
+      assert_series_painted
+
+      # The tooltip builds its own formatters when it opens, so it is a second
+      # place the tag reaches Intl.
+      svg.send_keys(:arrow_right)
+      tooltip = find("[data-controller='loan-payoff-chart'] div[aria-live='polite']", visible: :all)
+      assert_match(/\d/, tooltip.text(:all), "the tooltip must open with its figures")
+    end
+  end
+
   # The SVG names the balance and every payoff date in its label, the
   # same text is real DOM, and it points at no table that is not there.
   test "the SVG carries its description and no data table" do

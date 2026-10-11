@@ -6,6 +6,17 @@ import {
   createChartTooltip,
 } from "utils/chart_tooltip";
 
+// The payload's locale as Intl accepts it. Intl throws a RangeError for a tag
+// it rejects -- the app loads one, zh-YUE -- and every formatter built from it
+// would take the chart with it; such a tag falls back to the browser's locale.
+const intlLocale = (tag) => {
+  try {
+    return Intl.getCanonicalLocales(tag || [])[0];
+  } catch {
+    return undefined;
+  }
+};
+
 // The loan balance chart at the top of a loan's account page (#390): up to
 // four series on one axis, from Loan::PayoffChart.
 //
@@ -247,7 +258,7 @@ export default class extends Controller {
     // English month names, so the x-axis formats its own: the same choice of
     // unit as d3's (a year on 1 January, a month on the 1st, a day otherwise),
     // in that locale.
-    const locale = data.locale || undefined;
+    const locale = intlLocale(data.locale);
     const tickYear = new Intl.DateTimeFormat(locale, { year: "numeric" });
     const tickMonth = new Intl.DateTimeFormat(locale, { month: "short" });
     const tickDay = new Intl.DateTimeFormat(locale, {
@@ -392,7 +403,7 @@ export default class extends Controller {
     // The request's locale travels in the payload: the layout hard-codes
     // lang="en", so the document cannot say. Both the date and the money in
     // the tooltip follow it.
-    const locale = data.locale || undefined;
+    const locale = intlLocale(data.locale);
     const monthYear = new Intl.DateTimeFormat(locale, {
       month: "short",
       year: "numeric",
