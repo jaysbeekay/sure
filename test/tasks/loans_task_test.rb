@@ -89,6 +89,27 @@ class LoansTaskTest < ActiveSupport::TestCase
     assert_includes err, "Loan::SimulatorTest"
   end
 
+  # A cell may hold a pipe only escaped as "\|", which is how GitHub-flavoured
+  # Markdown keeps it inside the cell. The row parser must not split there; an
+  # unescaped pipe still shifts the columns and must still be refused.
+  test "contract coverage task reads a row whose cell holds an escaped pipe" do
+    contract = Rails.root.join("docs/loans/calculation-contract.md")
+    lines = File.readlines(contract)
+    row = lines.index { |line| line.start_with?("| C15 |") }
+
+    escaped = lines.dup.tap { |copy| copy[row] = copy[row].sub("| C15 | ", "| C15 | floor \\| clamp: ") }
+    File.stubs(:readlines).with { |path, *| path.to_s == contract.to_s }.returns(escaped)
+    _out, exit_error, err = capture_output_and_exit { Rake::Task["loans:verify_contract_coverage"].invoke }
+    assert_nil exit_error, "an escaped pipe is cell content, not a column break: #{err}"
+
+    unescaped = lines.dup.tap { |copy| copy[row] = copy[row].sub("| C15 | ", "| C15 | floor | clamp: ") }
+    File.stubs(:readlines).with { |path, *| path.to_s == contract.to_s }.returns(unescaped)
+    RakeTaskTestHelper.prepare("loans:verify_contract_coverage")
+    _out, exit_error, err = capture_output_and_exit { Rake::Task["loans:verify_contract_coverage"].invoke }
+    assert_failed_exit exit_error, "an unescaped pipe must still be refused"
+    assert_includes err, "C15: expected 4 columns, found 5"
+  end
+
   test "contract coverage task checks the tests of every entry in a row" do
     manifest = contract_tests_manifest
     entries = Array.wrap(manifest.fetch("C16")).map(&:deep_dup)
