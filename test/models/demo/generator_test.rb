@@ -299,7 +299,49 @@ class Demo::GeneratorTest < ActiveSupport::TestCase
     end
   end
 
+  # Fork (#408): paying the mortgage from its schedule dropped the housing
+  # step's 2,800 a month from checking, so the demo's primary balance rose
+  # past the 200,000 target and "Long-term portfolio", the matrix's only
+  # on-track goal, read as reached. The balances and pace here are the
+  # highest and lowest a full demo run gave across seeds 1, 7, 42 and 2024
+  # (goal balance 165,872 to 212,392; 90-day pace 7,056 to 14,722 a month).
+  test "the long-term portfolio goal reads on track at the demo's highest checking balance" do
+    goal = seed_long_term_portfolio(goal_balance: 212_392, monthly_inflow: 7_000)
+
+    assert_equal 212_392, goal.current_balance.to_d, "precondition: the goal holds the high balance"
+    assert_equal :on_track, goal.status
+  end
+
+  test "the long-term portfolio goal reads on track at the demo's lowest checking balance" do
+    goal = seed_long_term_portfolio(goal_balance: 165_872, monthly_inflow: 7_000)
+
+    assert_equal 165_872, goal.current_balance.to_d, "precondition: the goal holds the low balance"
+    assert_equal :on_track, goal.status
+  end
+
   private
+    # Seeds the goal matrix with three monthly inflows of `monthly_inflow` in
+    # the pace window, then sets the primary account so "Long-term portfolio"
+    # itself holds `goal_balance`: the goal reads primary less the other
+    # goals' earmarks on it, so that offset is measured, not restated.
+    def seed_long_term_portfolio(goal_balance:, monthly_inflow:)
+      @family.update!(currency: "USD")
+      primary = @family.accounts.create!(accountable: Depository.new, name: "Primary Checking",
+                                         currency: @family.currency, balance: goal_balance)
+      @family.accounts.create!(accountable: Depository.new, name: "Secondary Savings",
+                               currency: @family.currency, balance: 10_000)
+      [ 10, 40, 70 ].each do |days_ago|
+        primary.entries.create!(name: "Salary", date: days_ago.days.ago.to_date, amount: -monthly_inflow,
+                                currency: @family.currency, entryable: Transaction.new)
+      end
+
+      Demo::Generator.new.send(:generate_goals!, @family)
+      earmarked = primary.balance - @family.goals.find_by!(name: "Long-term portfolio").current_balance.to_d
+      primary.update!(balance: goal_balance + earmarked)
+
+      @family.goals.find_by!(name: "Long-term portfolio")
+    end
+
     # Keep the actual loan terms, opening valuations and payment generation in
     # the public orchestration. Unrelated history and provider syncs are omitted
     # so this regression tests the transaction boundary without external calls.
