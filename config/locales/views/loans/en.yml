@@ -91,7 +91,7 @@ en:
           enter_amount: The loan does not pay off within the supported term at the current repayment. Enter an extra amount to see whether paying more clears it.
           cleared_by_extra: The loan does not pay off within the supported term at the current repayment, so there is no schedule to chart against. With this extra amount it does, as shown above.
           not_cleared_by_extra: Even with this extra amount, the loan does not pay off within the supported term. Try a larger amount.
-        variable_rate_notice: "This loan's rate can change. The projection applies the rate changes already recorded on this loan and keeps the current repayment, so a rate change that hasn't been recorded yet will shift these figures."
+        variable_rate_notice: "This loan's rate can change. The projection pays the schedule's repayment, which changes with each rate change already recorded on this loan, so a rate change that hasn't been recorded yet will shift these figures."
       schedule:
         current_monthly_payment: Current Monthly Payment
         total_interest: Total Interest
