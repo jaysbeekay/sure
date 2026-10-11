@@ -37,6 +37,18 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
                  "the detected rate was not recorded against the injected sync date")
   end
 
+  # #188: Redbark reports no day-count basis, so a basis the user chose survives
+  # a sync, as it does for Plaid.
+  test "processing Redbark's loan details leaves the day-count basis alone" do
+    @loan.update!(day_count_convention: "actual_actual")
+    detail lendingRate: "0.0675"
+
+    process
+
+    assert_equal({ "2026-09-21" => BigDecimal("6.75") }, rates, "the processor must have run")
+    assert_equal "actual_actual", @loan.reload.day_count_convention
+  end
+
   # Row 13: the date is the caller's, not the clock's. Travelling the clock
   # away from `as_of` is the only way to tell the two apart.
   test "the row is keyed by the injected date, never by today" do
