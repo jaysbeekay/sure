@@ -35,4 +35,17 @@ class AccountSimplefinCreationTest < ActiveSupport::TestCase
 
     assert_equal "Loan", account.accountable_type
   end
+
+  # #188: no provider transmits a day-count basis, so a synced loan takes the
+  # column default for new loans, as a hand-made one does.
+  test "a loan created from SimpleFIN starts on thirty_360" do
+    sfa = SimplefinAccount.create!(
+      simplefin_item: @item, name: "Synced Loan", account_id: "acct_dc", currency: "USD",
+      account_type: "loan", current_balance: -5000
+    )
+
+    account = Account.create_from_simplefin_account(sfa, "Loan")
+
+    assert_equal "thirty_360", account.loan.reload.day_count_convention
+  end
 end

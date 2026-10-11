@@ -32,6 +32,20 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
     assert_equal 4.25, loan.interest_rate
   end
 
+  # #188: Plaid sends no day-count basis, so a basis the user chose survives a
+  # sync. A processor that wrote the column would put every synced loan back on
+  # one basis.
+  test "processing Plaid's mortgage data leaves the day-count basis alone" do
+    loan = @plaid_account.current_account.loan
+    loan.update!(day_count_convention: "actual_actual")
+    @plaid_account.update!(raw_liabilities_payload: { mortgage: { interest_rate: { type: "fixed", percentage: 4.25 } } })
+
+    PlaidAccount::Liabilities::MortgageProcessor.new(@plaid_account).process
+
+    assert_equal 4.25, loan.reload.interest_rate, "the processor must have run"
+    assert_equal "actual_actual", loan.day_count_convention
+  end
+
   test "does nothing when mortgage data absent" do
     @plaid_account.update!(raw_liabilities_payload: {})
 
