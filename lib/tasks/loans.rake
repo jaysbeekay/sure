@@ -50,9 +50,11 @@ namespace :loans do
       next unless line.match?(/^\| C\d+ \|/)
 
       # "| C16 | behaviour | tests | reconciliation |" splits into six parts,
-      # the first and last empty. A stray pipe in a cell would shift the test
-      # column, so refuse the row rather than read the wrong cell.
-      cells = line.split("|").map(&:strip)
+      # the first and last empty. A pipe inside a cell is escaped as "\|", as
+      # GitHub-flavoured Markdown requires, and is not a column break. A stray
+      # unescaped pipe would shift the test column, so refuse the row rather
+      # than read the wrong cell.
+      cells = line.split(/(?<!\\)\|/).map(&:strip)
       abort "#{cells[1]}: expected 4 columns, found #{cells.length - 2}" unless cells.length == 6
 
       [ cells[1], cells[3].scan(/`(Loan::\w+Test)`/).flatten.uniq.sort ]
