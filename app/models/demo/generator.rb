@@ -1364,7 +1364,7 @@ class Demo::Generator
       secondary = (eligible - [ primary ]).first || primary
 
       # Demo coverage matrix. The demo seeds a heavy primary checking
-      # balance (~$150k) plus a smaller secondary account (~$10k). To
+      # balance (~$165k-$215k) plus a smaller secondary account (~$10k). To
       # surface every goal state we deliberately route goals to different
       # account pools so progress lands above or below the target:
       #
@@ -1414,10 +1414,11 @@ class Demo::Generator
         },
         # active · on_track — the one goal left holding all of `primary`, so
         # its balance stays close enough to the target for a 60-month pace to
-        # read as on track
+        # read as on track. Fork (#408): 300k, not 200k, because paying the
+        # mortgage from its schedule left primary above 200k on some seeds
         {
           name: "Long-term portfolio",
-          target: 200_000,
+          target: 300_000,
           target_date: 60.months.from_now.to_date,
           accounts: [ primary ]
         },
