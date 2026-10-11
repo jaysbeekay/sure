@@ -1115,6 +1115,12 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  test "the new-loan form renders when the loan attributes are not a hash" do
+    get new_loan_path, params: { account: { currency: "USD", accountable_attributes: "offsets" } }
+
+    assert_response :success
+  end
+
   test "a failed create re-renders with the offsets listed" do
     offset = shared_offset
     params = variable_loan_params(currency: @account.currency, offset_ids: [ offset.id ])
