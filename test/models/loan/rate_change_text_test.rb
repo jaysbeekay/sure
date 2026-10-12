@@ -17,8 +17,8 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
     assert_rate "6.24", "Your variable rate has changed from 6.49% to 6.24%"
   end
 
-  test "a single percentage with no marker is the rate" do
-    assert_rate "6.24", "Rate change 6.24%"
+  test "a single percentage with no marker and no change wording is the rate" do
+    assert_rate "6.24", "Variable rate 6.24% p.a."
   end
 
   test "a now-marker picks the rate after it" do
@@ -40,7 +40,7 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
   # --- Spelling of the percentage --------------------------------------------
 
   test "a space before the percent sign is accepted" do
-    assert_rate "6.25", "Rate change 6.25 %"
+    assert_rate "6.25", "New rate 6.25 %"
   end
 
   test "per cent spelled as two words is accepted" do
@@ -48,19 +48,19 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
   end
 
   test "percent spelled as one word is accepted" do
-    assert_rate "6.25", "Interest rate change 6.25 percent"
+    assert_rate "6.25", "New interest rate 6.25 percent"
   end
 
   test "a whole-number rate is accepted" do
-    assert_rate "6", "Rate change 6%"
+    assert_rate "6", "New rate 6%"
   end
 
   test "a rate is rounded to the three places the loan stores" do
-    assert_rate "6.245", "Rate change 6.2449%"
+    assert_rate "6.245", "New rate 6.2449%"
   end
 
   test "digits that are not followed by a percentage are not a rate" do
-    assert_rate "6.24", "LOAN ACCT 123456789 RATE CHANGE 6.24%"
+    assert_rate "6.24", "LOAN ACCT 123456789 NEW RATE 6.24%"
   end
 
   # --- Nothing to read: silent ------------------------------------------------
@@ -143,6 +143,32 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
     assert_rate "6.24", "Rate now 6.24% p.a."
   end
 
+  # Nightly review on #400: "Rate change 0.25%" reads as a new rate of 0.25%,
+  # but a bank can mean a 0.25-point movement by it. With change wording and
+  # no marker naming the new rate, the text cannot say which, so it is refused.
+  test "change wording without a new-rate marker is refused" do
+    [
+      "Rate change 0.25%",
+      "Rate change 6.24%",
+      "RATE CHANGE 6.24%",
+      "Interest rate changed 0.25%",
+      "Your rate changes 0.25% from 1 November",
+      "Rate adjustment 0.25%",
+      "Variable rate adjusted 0.25% p.a."
+    ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, "#{text.inspect} gave a rate"
+      assert_equal :change_wording, reading.problem, text
+    end
+  end
+
+  test "change wording with a new-rate marker gives the marked rate" do
+    assert_rate "6.24", "INTEREST RATE CHANGE - NEW RATE 6.24% P.A."
+    assert_rate "6.24", "Rate change: now 6.24%"
+    assert_rate "6.24", "Rate adjusted to 6.24% p.a."
+  end
+
   test "a bare change verb beside the new rate gives the new rate" do
     assert_rate "6.24", "Rate decreased 0.25% to 6.24% p.a."
     assert_rate "6.24", "Rate cut to 6.24%"
@@ -155,27 +181,27 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
   # --- Range: both sides of each boundary ------------------------------------
 
   test "zero is out of range" do
-    assert_out_of_range "Rate change 0%"
+    assert_out_of_range "New rate 0%"
   end
 
   test "a value that rounds to zero at three places is out of range" do
-    assert_out_of_range "Rate change 0.0004%"
+    assert_out_of_range "New rate 0.0004%"
   end
 
   test "the smallest value the loan stores is in range" do
-    assert_rate "0.001", "Rate change 0.001%"
+    assert_rate "0.001", "New rate 0.001%"
   end
 
   test "just under one hundred is in range" do
-    assert_rate "99.999", "Rate change 99.999%"
+    assert_rate "99.999", "New rate 99.999%"
   end
 
   test "a value that rounds to one hundred at three places is out of range" do
-    assert_out_of_range "Rate change 99.9996%"
+    assert_out_of_range "New rate 99.9996%"
   end
 
   test "one hundred is out of range" do
-    assert_out_of_range "Rate change 100%"
+    assert_out_of_range "New rate 100%"
   end
 
   test "far above one hundred is out of range" do
@@ -185,7 +211,8 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
   # --- The convenience reader -------------------------------------------------
 
   test "parse returns the rate or nil" do
-    assert_equal BigDecimal("6.24"), Loan::RateChangeText.parse("Rate change 6.24%")
+    assert_equal BigDecimal("6.24"), Loan::RateChangeText.parse("New rate 6.24%")
+    assert_nil Loan::RateChangeText.parse("Rate change 0.25%")
     assert_nil Loan::RateChangeText.parse("Rate 6.25% comparison rate 6.40%")
     assert_nil Loan::RateChangeText.parse("LOAN REPAYMENT")
   end

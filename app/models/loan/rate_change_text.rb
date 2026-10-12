@@ -19,6 +19,10 @@
 # - Without a marker, the text must hold exactly ONE distinct percentage.
 #   "Rate 6.25% comparison rate 6.40%" is refused as ambiguous rather than
 #   guessed at: a wrong rate silently re-prices every period after it.
+# - Without a marker, text that speaks of a change ("change", "changed",
+#   "adjustment", ...) is refused too. "Rate change 0.25%" can mean the rate
+#   is now 0.25% or that it moved by 0.25 points, and only a marker says
+#   which; read as a rate, the movement would put a 6% loan at 0.25%.
 # - A percentage after "by", "increase of", "cut of" and the like, straight
 #   after a bare verb ("decreased", "rose", "cut", "down"), or carrying a sign
 #   ("-0.25%"), or followed by a comparative ("0.25% higher"), is how far
@@ -33,7 +37,7 @@ class Loan::RateChangeText
   # `problem` is nil when the text simply holds no percentage -- the ordinary
   # case for a description that is not a rate notice, and nothing to report.
   # Otherwise it names why a percentage that IS there was not used:
-  # `:ambiguous`, `:out_of_range` or `:change_amount_only`.
+  # `:ambiguous`, `:change_wording`, `:out_of_range` or `:change_amount_only`.
   Reading = Data.define(:rate, :problem, :candidates)
 
   NONE = Reading.new(rate: nil, problem: nil, candidates: []).freeze
@@ -50,8 +54,13 @@ class Loan::RateChangeText
 
   # What, immediately before a percentage, makes it a change amount: "by", a
   # noun with "of" ("a cut of"), or a bare verb ("decreased 0.25%", cubic on
-  # #400). The nouns need "of" because "rate change 6.24%" is not a movement.
+  # #400). The nouns need "of": "rate change 6.24%" is not certainly a
+  # movement, and CHANGE_WORDING refuses it unless a marker names the rate.
   CHANGE_MARKER = /(?:\bby|\b(?:increase|increased|decrease|decreased|rise|cut|reduction|change)\s+of|\b(?:increased|decreased|rose|fell|cut|raised|lowered|reduced|up|down))\s*:?\s*\z/i
+
+  # Anywhere in the text: wording that says the rate changed without saying
+  # whether the percentage is the new rate or the movement.
+  CHANGE_WORDING = /\b(?:chang(?:e|ed|es|ing)|adjust(?:ed|s|ing|ment|ments)?)\b/i
 
   # What, immediately AFTER a percentage, makes it a change amount: a
   # comparative ("now 0.25% higher"), optionally after "p.a.". Without it the
@@ -77,6 +86,8 @@ class Loan::RateChangeText
     return refuse(:change_amount_only, percentages) if rates.empty?
 
     marked = rates.select { |p| p[:marked] }
+    return refuse(:change_wording, rates) if marked.empty? && text.match?(CHANGE_WORDING)
+
     chosen = (marked.presence || rates).map { |p| p[:value] }.uniq
     return refuse(:ambiguous, rates) if chosen.size > 1
 
