@@ -55,4 +55,25 @@ class Loan::OffsetResolverTest < ActiveSupport::TestCase
 
     assert_empty Loan::OffsetResolver.new(@loan).change_points(Date.current, Date.current.next_month)
   end
+
+  # The payoff projection asks one resolver once per period. Each future
+  # period re-ran the offsets' existence check and today's total: on a
+  # 360-month loan with two offsets, the one-chart loan page (#390) took 1.18 s
+  # against 0.48 s without the projection, the queries themselves answered
+  # from the query cache. Within one projection both are fixed, so they are
+  # read once.
+  test "resolving many future periods reads the offsets and today's total once" do
+    @offset.update!(balance: 375)
+    resolver = Loan::OffsetResolver.new(@loan)
+    ranges = (0...60).map { |n| [ Date.current >> n, Date.current >> (n + 1) ] }
+
+    queries = 0
+    counter = ->(*, payload) { queries += 1 unless payload[:name] == "SCHEMA" }
+    points = ActiveSupport::Notifications.subscribed(counter, "sql.active_record") do
+      ranges.map { |from, to| resolver.change_points(from, to) }
+    end
+
+    assert_equal ranges.map { |from, _| [ { date: from, amount: BigDecimal("375") } ] }, points
+    assert_operator queries, :<=, 3, "60 future periods ran #{queries} queries"
+  end
 end

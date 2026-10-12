@@ -7,8 +7,10 @@ class Loan
       @loan = loan
     end
 
+    # A resolver answers for one projection, which asks once per period, so
+    # the linked accounts and today's total are read once and kept.
     def change_points(from_date, to_date)
-      return [] unless @loan.countable_offset_accounts.exists?
+      return [] if offset_accounts.empty?
       return [] if from_date >= to_date
 
       today = Date.current
@@ -29,7 +31,7 @@ class Loan
       end
 
       def current_total
-        Account.where(id: offset_accounts.map(&:id)).sum(:balance).to_d
+        @current_total ||= Account.where(id: offset_accounts.map(&:id)).sum(:balance).to_d
       end
 
       def historical_points(from_date, to_date)
