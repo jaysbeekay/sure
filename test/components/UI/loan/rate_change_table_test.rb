@@ -49,6 +49,22 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
       "once the effective date arrives the change IS the current rate, not news"
   end
 
+  # Nightly review on #394: the Current repayment column is
+  # current_minimum_payment, a schedule row no lender statement has been
+  # compared with. The caption under the table must say it is estimated from
+  # the loan's terms, not that it is how lenders set the minimum or matches
+  # the lender's figure to within rounding.
+  test "the assumptions caption calls the figures estimates, not the lender's" do
+    @loan.add_variable_rate_change(Date.current + 2.months, 5.93)
+
+    render_inline UI::Loan::RateChangeTable.new(loan: @loan)
+
+    caption = page.find("p.text-secondary").text
+    assert_includes caption, "Estimated from your loan's terms"
+    assert_not_includes caption, "how lenders set the minimum"
+    assert_not_includes caption, "differ slightly through rounding"
+  end
+
   test "a variable loan with no scheduled changes renders nothing at all" do
     assert_not UI::Loan::RateChangeTable.new(loan: @loan).render?
 

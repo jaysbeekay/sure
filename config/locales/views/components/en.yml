@@ -11,7 +11,7 @@ en:
         current_payment: Current repayment
         new_payment: New repayment
         unknown: Unknown
-        assumptions: "Read from the contracted schedule: at each recorded rate change the scheduled balance is re-amortised over the payments remaining to the original payoff date, which is how lenders set the minimum repayment. Paying ahead or holding an offset lowers your interest, not this repayment. Your lender's figure may differ slightly through rounding."
+        assumptions: "Estimated from your loan's terms: at each recorded rate change the scheduled balance is re-amortised over the payments remaining to the original payoff date. Paying ahead or holding an offset lowers your interest, not this repayment. Your lender's figures may differ."
     net_worth_pace:
       velocity: Velocity
       momentum: Momentum
