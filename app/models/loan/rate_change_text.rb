@@ -19,10 +19,13 @@
 # - Without a marker, the text must hold exactly ONE distinct percentage.
 #   "Rate 6.25% comparison rate 6.40%" is refused as ambiguous rather than
 #   guessed at: a wrong rate silently re-prices every period after it.
-# - Without a marker, text that speaks of a change ("change", "changed",
-#   "adjustment", ...) is refused too. "Rate change 0.25%" can mean the rate
-#   is now 0.25% or that it moved by 0.25 points, and only a marker says
-#   which; read as a rate, the movement would put a 6% loan at 0.25%.
+# - Without a marker, text that speaks of a change ("change", "adjustment",
+#   "increase", "rise", "reduction", "hike", "drop", ...) is refused too.
+#   "Rate change 0.25%" or "Rate increase 0.25%" can mean the rate is now
+#   0.25% or that it moved by 0.25 points, and only a marker says which; read
+#   as a rate, the movement would put a 6% loan at 0.25%. The cost is that a
+#   notice such as "RATE INCREASE 6.74% P.A." is refused and logged rather
+#   than read: a refusal is visible, a wrong rate re-prices the loan silently.
 # - A percentage after "by", "increase of", "cut of" and the like, straight
 #   after a bare verb ("decreased", "rose", "cut", "down"), or carrying a sign
 #   ("-0.25%"), or followed by a comparative ("0.25% higher"), is how far
@@ -59,8 +62,23 @@ class Loan::RateChangeText
   CHANGE_MARKER = /(?:\bby|\b(?:increase|increased|decrease|decreased|rise|cut|reduction|change)\s+of|\b(?:increased|decreased|rose|fell|cut|raised|lowered|reduced|up|down))\s*:?\s*\z/i
 
   # Anywhere in the text: wording that says the rate changed without saying
-  # whether the percentage is the new rate or the movement.
-  CHANGE_WORDING = /\b(?:chang(?:e|ed|es|ing)|adjust(?:ed|s|ing|ment|ments)?)\b/i
+  # whether the percentage is the new rate or the movement. Every verb
+  # CHANGE_MARKER knows is here in each of its forms, with the nouns banks use
+  # for a movement ("increase", "rise", "reduction", "hike", "drop"). Left
+  # out: bare "lower"/"higher", which as comparatives qualify a rate stated
+  # plainly ("6.24%, lower than last year"), and "up"/"down", too common to
+  # mean a movement anywhere in the text; CHANGE_MARKER still catches either
+  # straight before a percentage.
+  CHANGE_WORDING = /
+    \b(?:
+      chang(?:e|ed|es|ing) | adjust(?:ed|s|ing|ment|ments)? |
+      increas(?:e|ed|es|ing) | decreas(?:e|ed|es|ing) |
+      ris(?:e|es|ing) | rose | rais(?:e|ed|es|ing) |
+      reduc(?:e|ed|es|ing|tion|tions) | lower(?:ed|s|ing) |
+      cuts? | cutting | hike[sd]? | hiking |
+      f[ae]ll(?:s|ing)? | drop(?:s|ped|ping)?
+    )\b
+  /ix
 
   # What, immediately AFTER a percentage, makes it a change amount: a
   # comparative ("now 0.25% higher"), optionally after "p.a.". Without it the

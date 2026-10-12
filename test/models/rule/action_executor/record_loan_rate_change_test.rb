@@ -290,6 +290,21 @@ class Rule::ActionExecutor::RecordLoanRateChangeTest < ActiveSupport::TestCase
     assert_equal "change_wording", DebugLogEntry.where(category: "loan_rate").last.metadata["problem"]
   end
 
+  # Nightly review on #400 (comment 6120552186): the same defect through any
+  # other movement word. Read as a rate, this re-prices the loan at 0.25%.
+  test "a rate-increase notice that names only a percentage records nothing and is logged" do
+    loan_transaction "Rate increase 0.25%"
+    before = rates
+
+    assert_difference -> { DebugLogEntry.where(category: "loan_rate").count }, 1 do
+      assert_equal 0, @rule.apply
+    end
+
+    assert_equal before, rates, "a movement was recorded as the loan's new rate"
+    assert_equal BigDecimal("6.49"), BigDecimal(@loan.reload.interest_rate.to_s)
+    assert_equal "change_wording", DebugLogEntry.where(category: "loan_rate").last.metadata["problem"]
+  end
+
   test "a rate the loan cannot hold records nothing and is logged" do
     loan_transaction "NEW RATE 150% P.A."
 

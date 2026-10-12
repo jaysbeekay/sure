@@ -163,6 +163,33 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
     end
   end
 
+  # Nightly review on #400 (comment 6120552186): CHANGE_WORDING covered only
+  # change/adjust forms, so every other way of saying the rate moved still
+  # read the bare percentage as the new rate -- a 6% loan put at 0.25%.
+  test "movement wording without a new-rate marker is refused" do
+    [
+      "Rate increase 0.25%",
+      "Rate increase: 0.25%",
+      "Rate rise 0.25%",
+      "Rate decrease 0.25%",
+      "Rate reduction 0.25%",
+      "Rate hike 0.25%",
+      "Rate raise 0.25%",
+      "Rate 0.25% increase"
+    ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, "#{text.inspect} gave a rate"
+      assert_equal :change_wording, reading.problem, text
+    end
+  end
+
+  test "movement wording with a new-rate marker gives the marked rate" do
+    assert_rate "6.5", "Rate increase: new rate 6.50%"
+    assert_rate "6.5", "Rate increased to 6.5%"
+    assert_rate "6.24", "Rate reduction - now 6.24% p.a."
+  end
+
   test "change wording with a new-rate marker gives the marked rate" do
     assert_rate "6.24", "INTEREST RATE CHANGE - NEW RATE 6.24% P.A."
     assert_rate "6.24", "Rate change: now 6.24%"
