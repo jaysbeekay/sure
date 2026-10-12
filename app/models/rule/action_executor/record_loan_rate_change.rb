@@ -13,8 +13,9 @@
 #   structured word for it, and a free-text description is not that.
 # - WHAT IT READS. The transaction's name, then its notes, through
 #   Loan::RateChangeText; the first that yields a rate wins. A percentage that
-#   is there but cannot be used -- ambiguous, a change amount, out of range --
-#   records nothing and is logged. Text with no percentage is silent.
+#   is there but cannot be used -- ambiguous, change wording with no marker
+#   naming the new rate, a change amount, out of range -- records nothing and
+#   is logged. Text with no percentage is silent.
 # - WHEN. The change is dated at the transaction's own date (`entry.date`), and
 #   nothing here reads the clock.
 # - HOW IT WRITES. Through the provider path: Loan#variable_rate_update_for
