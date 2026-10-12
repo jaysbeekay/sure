@@ -1571,6 +1571,24 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Nightly review on #394: the figure is the schedule's row, not a figure the
+  # lender has confirmed, so the caption says where it comes from rather than
+  # calling it the lender's minimum.
+  test "the minimum payment caption says the schedule sets the figure, not the lender" do
+    loan_account = accounts(:loan)
+    loan_account.loan.update!(rate_type: "variable", interest_rate: 6.18, term_months: 360,
+      start_date: Date.current - 83.months)
+
+    %w[overview schedule].each do |tab|
+      get account_path(loan_account, tab: tab)
+
+      assert_response :success
+      body = CGI.unescapeHTML(response.body)
+      assert_includes body, "your loan's schedule sets", "the #{tab} caption must say the schedule sets the figure"
+      assert_not_includes body, "lender's minimum", "the #{tab} caption must not present the figure as the lender's"
+    end
+  end
+
   # cubic, #79. Past maturity there are no payments left to spread the balance
   # over, so there is no repayment to quote. Overview says "Unknown"; the
   # Schedule tab used to reach for the contracted payment instead, which is the
