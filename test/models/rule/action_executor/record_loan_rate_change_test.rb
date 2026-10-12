@@ -63,6 +63,17 @@ class Rule::ActionExecutor::RecordLoanRateChangeTest < ActiveSupport::TestCase
     assert_equal({ "2026-09-14" => BigDecimal("6.24") }, rates)
   end
 
+  # Owner decision on #400: "rate is" names the new rate.
+  test "a your-rate-is notice records the rate" do
+    loan_transaction "Following the RBA cut your rate is 6.24%"
+
+    assert_empty rates, "the schedule held a row before the rule ran"
+
+    @rule.apply
+
+    assert_equal({ "2026-09-14" => BigDecimal("6.24") }, rates)
+  end
+
   test "the name is read before the notes" do
     loan_transaction "NEW RATE 6.24% P.A.", notes: "New rate 6.10%"
 

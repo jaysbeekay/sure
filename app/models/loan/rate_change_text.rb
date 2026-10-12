@@ -16,6 +16,10 @@
 # - A percentage straight after a marker -- "to", "now", "new rate", "new
 #   interest rate", optionally followed by "is"/"of" and a colon -- is the new
 #   rate. "changed from 6.49% to 6.24%" gives 6.24.
+# - So is a percentage straight after "rate is" ("your rate is 6.24%"), an
+#   owner decision on #400, unless a movement noun governs that rate ("the
+#   change in your rate is 0.25%", which names the movement) or a qualifier
+#   names another rate ("comparison rate is 6.40%", "previous rate is").
 # - Without a marker, the text must hold exactly ONE distinct percentage.
 #   "Rate 6.25% comparison rate 6.40%" is refused as ambiguous rather than
 #   guessed at: a wrong rate silently re-prices every period after it.
@@ -54,6 +58,26 @@ class Loan::RateChangeText
 
   # What, immediately before a percentage, makes it the new rate.
   NEW_RATE_MARKER = /(?:\bto|\bnow|\bnew\s+(?:interest\s+)?rate(?:\s+(?:is|of))?)\s*:?\s*\z/i
+
+  # "rate is", immediately before a percentage, makes it the new rate too
+  # (owner decision on #400) -- but only when the words before "rate" leave it
+  # naming the loan's rate. See RATE_IS_MOVEMENT and RATE_IS_OTHER_RATE.
+  RATE_IS_MARKER = /\brate\s+is\s*:?\s*\z/i
+
+  # The determiners and qualifiers that may sit between a governing word and
+  # "rate": "your", "the", "variable", "home loan" and the like.
+  RATE_QUALIFIERS = /(?:\s+(?:your|the|this|our|my|its|variable|interest|home|loan|mortgage))*/i
+
+  # Before "rate is": a movement noun governing the rate through a preposition
+  # ("the change in your rate is", "increase to the variable rate is"). The
+  # percentage after it is how far the rate moved.
+  RATE_IS_MOVEMENT = /
+    \b(?:change|increase|decrease|rise|reduction|cut|hike|drop|fall|adjustment|movement|difference)s?
+    \s+(?:in|to|of|on)#{RATE_QUALIFIERS.source}\s+\z
+  /ix
+
+  # Before "rate is": a qualifier naming a rate other than the new one.
+  RATE_IS_OTHER_RATE = /\b(?:comparison|previous|old|former|prior)#{RATE_QUALIFIERS.source}\s+\z/i
 
   # What, immediately before a percentage, makes it a change amount: "by", a
   # noun with "of" ("a cut of"), or a bare verb ("decreased 0.25%", cubic on
@@ -122,6 +146,13 @@ class Loan::RateChangeText
       Reading.new(rate: nil, problem: problem, candidates: found.map { |p| p[:value] }.uniq)
     end
 
+    def rate_is_marker?(before)
+      marker = before.match(RATE_IS_MARKER) or return false
+      governing = before[0...marker.begin(0)]
+
+      !governing.match?(RATE_IS_MOVEMENT) && !governing.match?(RATE_IS_OTHER_RATE)
+    end
+
     def percentages
       @percentages ||= text.to_enum(:scan, PERCENTAGE).map do
         match = Regexp.last_match
@@ -131,7 +162,7 @@ class Loan::RateChangeText
         {
           value: BigDecimal(match[:number]).round(PRECISION),
           change: match[:sign].present? || before.match?(CHANGE_MARKER) || after.match?(COMPARATIVE_AFTER),
-          marked: before.match?(NEW_RATE_MARKER)
+          marked: before.match?(NEW_RATE_MARKER) || rate_is_marker?(before)
         }
       end
     end
