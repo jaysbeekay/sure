@@ -64,7 +64,7 @@ class Rule::ActionExecutor::RecordLoanRateChangeTest < ActiveSupport::TestCase
   end
 
   test "the name is read before the notes" do
-    loan_transaction "NEW RATE 6.24% P.A.", notes: "Rate change 6.10%"
+    loan_transaction "NEW RATE 6.24% P.A.", notes: "New rate 6.10%"
 
     @rule.apply
 
@@ -276,6 +276,18 @@ class Rule::ActionExecutor::RecordLoanRateChangeTest < ActiveSupport::TestCase
     assert_equal "ambiguous", entry.metadata["problem"]
     assert_equal @family, entry.family
     assert_equal @loan_account, entry.account
+  end
+
+  # Nightly review on #400: read as a rate, this would put a 6% loan at 0.25%.
+  test "a rate-change notice that names only a percentage records nothing and is logged" do
+    loan_transaction "Rate change 0.25%"
+
+    assert_difference -> { DebugLogEntry.where(category: "loan_rate").count }, 1 do
+      @rule.apply
+    end
+
+    assert_empty schedule
+    assert_equal "change_wording", DebugLogEntry.where(category: "loan_rate").last.metadata["problem"]
   end
 
   test "a rate the loan cannot hold records nothing and is logged" do
