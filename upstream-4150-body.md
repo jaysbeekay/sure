@@ -13,6 +13,8 @@ Editing the rule to match more brought older transactions into range: a broader 
   - A value moving between `nil` and `""` is not a change: the edit form sends a valueless condition's hidden value back as `""` where an import stored `nil`.
 - **`Rule`** records and acts on the change in two callbacks:
   - `before_update :note_match_criteria_change` records whether `effective_date` or any condition is changing. It runs before the save because autosave removes destroyed conditions from the association.
+  - When a condition reports a change, it is confirmed against the stored criteria, with one query. The importers replace every condition, so each one reads as changing even when the criteria are the same. The rule compares a signature of the conditions as stored with the same rows after the save's pending changes: in-memory copies replace their rows, new conditions join, and those marked for destruction drop out.
+  - A signature is each condition's type, operator, value and its sub-conditions' signatures, sorted at each level, with `nil` and `""` equal. Order does not count: top-level conditions all apply, and a group's and/or reads its members either way.
   - `after_update :seed_notification_baseline, if: :match_criteria_changed?` then re-seeds through `NotificationDelivery.record_for(rule_id:, transaction_ids: matching_transaction_ids)`, for a rule with a `send_email_notification` action, active or not.
 - **`after_update`, not `after_update_commit`.** It runs inside the save's transaction, after the nested autosave, so it reads the conditions as saved. The new baseline commits with the edit, and if writing it fails, the edit rolls back.
 - **Both importers mark a rule's old conditions for destruction** instead of `destroy_all`-ing them before the save (`Family::DataImporter#import_rules`, `RuleImport`). The save then removes them through autosave, inside the same transaction, and the rule sees its conditions change.
@@ -21,19 +23,19 @@ Editing the rule to match more brought older transactions into range: a broader 
 
 **The cost, stated:** a transaction that arrived since the rule's last run, and matched the old conditions, is absorbed into the new baseline and not emailed. The existing code already prefers that direction ("we would rather miss a digest than spam", `send_email_notification.rb`).
 
-Narrowing edits also re-seed, since a widening can't be told from a narrowing without running both queries. A narrowing edit cannot email history, so its only effect is that same cost.
+Narrowing edits also re-seed, since a widening can't be told from a narrowing without running both queries. A narrowing edit cannot email history, so its only effect is that same cost. A re-import that leaves the criteria as they were, in any order, does not re-seed.
 
 **Interaction with #4089**, which adds `Rule#seed_notification_baseline` as an `after_update` with `if: :switched_on?`: the method name and body here match it, so whichever lands second merges the two into `if: -> { switched_on? || match_criteria_changed? }`.
 
 ```
  app/models/family/data_importer.rb                 |   4 +-
- app/models/rule.rb                                 |  36 +++
+ app/models/rule.rb                                 |  85 +++++++
  app/models/rule/condition.rb                       |  18 ++
  app/models/rule_import.rb                          |   6 +-
  test/controllers/rules_controller_test.rb          |  86 +++++++
- .../rule/notification_baseline_on_edit_test.rb     | 248 +++++++++++++++++++++
- test/models/rule_import_test.rb                    |  66 ++++++
- 7 files changed, 461 insertions(+), 3 deletions(-)
+ .../rule/notification_baseline_on_edit_test.rb     | 275 +++++++++++++++++++++
+ test/models/rule_import_test.rb                    | 156 ++++++++++++
+ 7 files changed, 627 insertions(+), 3 deletions(-)
 ```
 
 ## Tests
@@ -61,7 +63,8 @@ Measured as `NotificationDelivery` rows and enqueued `RuleEmailNotificationJob` 
 - resubmitting a valueless condition's blank value does not re-seed;
 - editing a rule without an email action writes no deliveries;
 - **saving the form with unchanged conditions does not re-seed**, so a match pending since the last run is still emailed;
-- the existing Sure re-import test ("session rule reimport only replaces current family conditions and actions") still passes, so the marked conditions are removed and the other family's rule is untouched.
+- the existing Sure re-import test ("session rule reimport only replaces current family conditions and actions") still passes, so the marked conditions are removed and the other family's rule is untouched;
+- **a re-import with the same criteria does not re-seed**, so a match pending since the last run is still emailed: RuleImport with identical conditions, with the conditions in a different order, and with a valueless condition's value as `""` where `nil` was stored; and a Sure import of a compound rule with its sub-conditions reordered. These pass on `main`, and each failed at `55ce46826`, this PR's previous head, by recording "Coffee bar" as delivered (CodeRabbit's finding).
 
 The controller tests load the real edit page and submit every field it holds, as a browser does.
 
@@ -75,12 +78,13 @@ The controller tests load the real edit page and submit every field it holds, as
 - no email-action check;
 - `after_update_commit` instead of `after_update`;
 - the new/destroyed arm removed, or the operator/type arm removed;
-- either importer put back to `conditions.destroy_all` (fails that importer's empty-conditions test).
+- either importer put back to `conditions.destroy_all` (fails that importer's empty-conditions test);
+- the stored-criteria comparison removed, so every re-import re-seeds; the signature compared in order; sub-conditions left out of it; `nil` vs `""` counted as a change in it; conditions marked for destruction kept in it; in-memory edits ignored in it.
 
 ## Validation
 
-- Rule, rule import, rules controller and data importer tests: 240 runs, 0 failures.
-- `bin/rails test` on `f2c50fc42`, the same patches on the previous `main` `d55eac220`: 11,561 runs, 2 failures, both outside this change: `Provider::OpenaiTest#test_extra_headers_stringifies_nested_values_Ruby-style`, a Ruby 3.3 vs 3.4 string difference of the local runner, and the SnapTrade option test that #4145 has since fixed on `main`. Rebased onto `main` `2b18df230` as `b6e7e7348` and `55ce46826` (unchanged patches): rule, rule import, rules controller, data importer and SnapTrade tests, 314 runs, 0 failures.
+- Rule, rule import, rules controller and data importer tests at `e073e3f6e`: 244 runs, 0 failures.
+- `bin/rails test` on `f2c50fc42`, the same patches on the previous `main` `d55eac220`: 11,561 runs, 2 failures, both outside this change: `Provider::OpenaiTest#test_extra_headers_stringifies_nested_values_Ruby-style`, a Ruby 3.3 vs 3.4 string difference of the local runner, and the SnapTrade option test that #4145 has since fixed on `main`. Rebased onto `main` `2b18df230` as `b6e7e7348` and `55ce46826` (unchanged patches): rule, rule import, rules controller, data importer and SnapTrade tests, 314 runs, 0 failures. With the CodeRabbit fix, `e073e3f6e`: `bin/rails test`, 11,565 runs, 0 failures, 0 errors.
 - `bin/rubocop` on the changed files: no offenses. `bin/brakeman`: 0 warnings. No ERB or JavaScript changed.
 
 ## Not in this change
@@ -88,3 +92,4 @@ The controller tests load the real edit page and submit every field it holds, as
 - The create-time baseline that `Rule::Action` declares but never runs, so a new email rule's first run emails its history. That is a separate, older defect with its own fix.
 - Whether Apply all should run inactive rules at all.
 - Any change to the email's content or to `NotificationDelivery`.
+

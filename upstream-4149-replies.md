@@ -34,13 +34,27 @@ New test: "a calculated row for a security the latest provider snapshot dropped 
 
 ---
 
-## 3. CodeRabbit's "Docstring coverage" pre-merge check (33% against 80%)
+## 3. Reply to CodeRabbit's finding on a provider row at zero quantity (fixed in 47a614f93)
+
+This session could not read the upstream threads, so the thread's title and line are not quoted here. It is the CodeRabbit finding that `47a614f93` answers: the membership check matched a provider row at zero quantity. If a reply is already there, skip this one.
+
+Thanks. Confirmed, and fixed in 47a614f93.
+
+The membership check matched any provider row for the security on the snapshot date, including one at zero quantity. `Account#current_holdings` skips those rows. So a calculated row dated after the snapshot could still add a gain that the Holdings tab does not show. The reverse calculator writes such rows when a snapshot dated before a sale already reports the position closed: it reads the snapshot as today's position and undoes the sale.
+
+The `EXISTS` now also requires `qty <> 0`, as `current_holdings` does. `provider_dates` still reads every provider row, because it only finds snapshot dates, and `Account#latest_provider_holdings_snapshot_date` has no quantity condition either.
+
+New tests: "a security the provider snapshot holds at zero quantity is not counted from later rows" (1,340 instead of 1,240 on each day after the snapshot, through the real `:reverse` materializer) and "a provider row's quantity decides whether the security's later rows count". Both fail without the guard.
+
+---
+
+## 4. CodeRabbit's "Docstring coverage" pre-merge check (33% against 80%)
 
 No reply needed. The PR adds no methods, and the changed method, `gains_query`, already carries a comment block, which this PR updates. If a maintainer asks, the answer is: "No new methods; the comment on `gains_query` is updated to describe the new rule."
 
 ---
 
-## 4. Note for #4033: no longer needed
+## 5. Note for #4033: no longer needed
 
 #4145 has merged (`2b18df230`), so there is nothing left to point at. Kept below for the record only.
 
