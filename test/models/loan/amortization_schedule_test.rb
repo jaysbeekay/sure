@@ -327,6 +327,42 @@ class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
     assert_equal 4.5, payments[1][:interest_rate].to_f
   end
 
+  # C11: "The contracted schedule itself does not track live balance." The
+  # account balance moves as repayments land; the schedule must keep sizing
+  # from the opening principal, or every repayment would re-shape the contract
+  # it is measured against. Measured as a delta: the same schedule before and
+  # after the live balance moves, with the move itself asserted so the
+  # comparison cannot pass on a balance that never changed.
+  test "the contracted schedule is built from the opening principal, not the live balance" do
+    account = Account.create! \
+      family: @family,
+      name: "Contracted Schedule Loan",
+      balance: 200000,
+      currency: "USD",
+      accountable: Loan.create!(
+        rate_type: "fixed",
+        interest_rate: 6,
+        term_months: 120,
+        start_date: Date.new(2024, 1, 1)
+      )
+    account.entries.create!(
+      name: "Starting balance",
+      amount: 200000,
+      currency: "USD",
+      date: Date.new(2024, 1, 1),
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    before = Loan.find(account.loan.id).amortization_schedule.payments
+
+    account.update_columns(balance: 150000)
+    loan = Loan.find(account.loan.id)
+    assert_equal 150000, loan.account.balance.to_i, "test setup must move the live balance"
+
+    after = loan.amortization_schedule.payments
+    assert_equal 200000, after.first[:beginning_balance].to_i
+    assert_equal before, after
+  end
+
   # Regression/contract test: start_date is the loan's origination/anchor
   # date, not the first payment date -- the first payment falls one
   # calendar month after it. See the doc comment on

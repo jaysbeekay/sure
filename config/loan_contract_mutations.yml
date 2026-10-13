@@ -14,6 +14,11 @@
 # `find` must match the target file exactly once; the task aborts otherwise,
 # so a refactor that moves the anchor fails loudly instead of silently
 # mutating nothing and reporting a survivor.
+#
+# A row that specifies two behaviours (C11, C16) is a list: one mutation per
+# entry in that row's list in `config/loan_contract_tests.yml`, paired by
+# position, so each half is proven by its own tests failing (#406). The task
+# reports them as C16#1, C16#2.
 C1:
   file: app/models/loan/interest_accrual.rb
   defect: the accrual denominator stops being 365, so a full non-leap year no longer equals balance x rate
@@ -51,7 +56,7 @@ C7:
   replace: 'dates = ([ from_date ] + extras.keys + offsets.keys + [ to_date ]).uniq.sort'
 C8:
   file: app/models/loan/simulator.rb
-  defect: the accrual clock is seeded from the payment-sizing rate, re-rating the period that ENDS on the boundary (the #48 defect)
+  defect: 'the accrual clock is seeded from the payment-sizing rate, re-rating the period that ENDS on the boundary (the #48 defect)'
   find: 'accrual_rate ||= decimal(@accrual_rate_for.call(accrual_start_date))'
   replace: 'accrual_rate = decimal(segment[:rate])'
 C9:
@@ -65,10 +70,14 @@ C10:
   find: 'next unless date >= from_date && date < to_date'
   replace: 'next unless date > from_date && date < to_date'
 C11:
-  file: app/models/loan/simulator.rb
-  defect: every run holds the first payment, so re-amortisation stops re-sizing per rate segment
-  find: 'payment = if payment_strategy == :hold'
-  replace: 'payment = if true'
+  - file: app/models/loan/simulator.rb
+    defect: every run holds the first payment, so re-amortisation stops re-sizing per rate segment
+    find: 'payment = if payment_strategy == :hold'
+    replace: 'payment = if true'
+  - file: app/models/loan.rb
+    defect: the contracted schedule is sized from the live balance instead of the opening principal
+    find: 'Money.new(account.first_valuation_amount, account.currency)'
+    replace: 'Money.new(account.balance, account.currency)'
 C12:
   file: app/models/loan/interest_accrual.rb
   defect: each segment is rounded as it accumulates instead of once at the charge point
@@ -94,7 +103,11 @@ C15:
   find: 'interest_bearing_balance = [ current_balance - current_offset, BigDecimal("0") ].max'
   replace: 'interest_bearing_balance = current_balance - current_offset'
 C16:
-  file: app/models/loan/interest_accrual.rb
-  defect: a change point effective on the first day of the range is ignored rather than applied to the whole range
-  find: 'next unless point.fetch(:date) >= from_date && point.fetch(:date) < to_date'
-  replace: 'next unless point.fetch(:date) > from_date && point.fetch(:date) < to_date'
+  - file: app/models/loan/interest_accrual.rb
+    defect: a change point effective on the first day of the range is ignored rather than applied to the whole range
+    find: 'next unless point.fetch(:date) >= from_date && point.fetch(:date) < to_date'
+    replace: 'next unless point.fetch(:date) > from_date && point.fetch(:date) < to_date'
+  - file: app/models/loan/offset_resolver.rb
+    defect: a future range no longer holds today's offset total flat
+    find: 'return [ { date: from_date, amount: current_total } ] if from_date >= today'
+    replace: 'return [ { date: from_date, amount: BigDecimal("0") } ] if from_date >= today'
