@@ -417,6 +417,27 @@ class McpControllerTest < ActionDispatch::IntegrationTest
 
   # -- tools/call --
 
+  # #131, 12.1: the portfolio tools reach MCP through the same registry, so an
+  # opted-in user can call one and anyone else is refused it by name.
+  test "tools/call runs a portfolio tool for an opted-in user and refuses it otherwise" do
+    with_mcp_env do
+      @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+      post "/mcp", params: jsonrpc_request("tools/call", { name: "get_portfolio_allocation", arguments: { by: "account" } }, id: 7).to_json,
+           headers: mcp_headers(@token)
+
+      assert_response :ok
+      result = JSON.parse(response.body)["result"]
+      assert_not result["isError"], "the tool call failed: #{result.inspect}"
+      assert_equal "account", JSON.parse(result["content"].first["text"])["by"]
+
+      @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => false))
+      post "/mcp", params: jsonrpc_request("tools/call", { name: "get_portfolio_allocation", arguments: { by: "account" } }, id: 8).to_json,
+           headers: mcp_headers(@token)
+
+      assert_equal(-32602, JSON.parse(response.body)["error"]["code"])
+    end
+  end
+
   test "tools/call rejects a preview tool for a user without preview features" do
     @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => false))
 

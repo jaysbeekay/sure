@@ -1,4 +1,13 @@
-class AddVariableRateTrackingToLoans < ActiveRecord::Migration[7.2]
+# Renamed from AddVariableRateTrackingToLoans (#184, phase 1). Upstream's
+# 20260908145118 declares that class name too, so with both files present
+# `db:migrate` refused to run (ActiveRecord::DuplicateMigrationNameError) and
+# every weekly sync had to delete upstream's copy. Rails records migrations by
+# version, not class name, so a database that already ran this one under the
+# old name does not run it again.
+#
+# This one also creates `loan_amortizations`, the fork's persisted schedule,
+# which upstream's version does not.
+class CreateLoanAmortizationsWithVariableRateTracking < ActiveRecord::Migration[7.2]
   def change
     add_column :loans, :variable_rate_schedule, :jsonb, default: {}, null: false
     add_column :loans, :start_date, :date

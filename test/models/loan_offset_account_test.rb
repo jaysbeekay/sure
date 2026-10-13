@@ -18,6 +18,39 @@ class LoanOffsetAccountTest < ActiveSupport::TestCase
       "must be an asset account"
   end
 
+  test "eligible accounts include valid existing links but exclude invalid ones" do
+    family = @loan.account.family
+    viewer = users(:family_admin)
+    wrong_currency = family.accounts.create!(
+      name: "Wrong currency offset", balance: 100, currency: "EUR", accountable: Depository.new
+    )
+    liability = family.accounts.create!(
+      name: "Liability offset", balance: 100, currency: "USD", accountable: CreditCard.new
+    )
+    private_offset = family.accounts.create!(
+      name: "Private offset", balance: 100, currency: "USD", owner: viewer, accountable: Depository.new
+    )
+    @loan.account.share_with!(users(:family_member), permission: "read_only")
+    @offset.auto_share_with_family!
+    @loan.update!(rate_type: "variable", offset_account_ids: [ @offset.id ])
+
+    LoanOffsetAccount.insert_all!([
+      { id: SecureRandom.uuid, loan_id: @loan.id, account_id: wrong_currency.id,
+        created_at: Time.current, updated_at: Time.current },
+      { id: SecureRandom.uuid, loan_id: @loan.id, account_id: liability.id,
+        created_at: Time.current, updated_at: Time.current },
+      { id: SecureRandom.uuid, loan_id: @loan.id, account_id: private_offset.id,
+        created_at: Time.current, updated_at: Time.current }
+    ])
+
+    eligible_ids = LoanOffsetAccount.eligible_accounts_for(@loan, viewer:).map(&:id)
+
+    assert_includes eligible_ids, @offset.id
+    assert_not_includes eligible_ids, wrong_currency.id
+    assert_not_includes eligible_ids, liability.id
+    assert_not_includes eligible_ids, private_offset.id
+  end
+
   test "rejects the loan account and a different currency" do
     self_link = LoanOffsetAccount.new(loan: @loan, account: @loan.account)
     assert_not self_link.valid?

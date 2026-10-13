@@ -259,8 +259,15 @@ module Security::Provided
     # sector or industry to give never fills those columns, so the gate never
     # closes and the security is re-asked on every sync for ever -- nine of the
     # ten security providers are in that position (#212).
+    #
+    # And `classification_fetched_at`, for the answer that holds nothing: a bond
+    # or an ETF with an empty sector fills none of the columns above, so without
+    # a record of the ask it was asked again on every sync -- each one of EODHD's
+    # 20 daily requests, shared with prices (#348). Stamped like
+    # `constituents_fetched_at`, on any successful answer; a reset clears it.
     wants_classification = include_classification && price_data_provider.supplies_classification? &&
-      !classification_locked? && classification_source.blank? && sector.blank? && industry.blank?
+      !classification_locked? && classification_source.blank? && sector.blank? && industry.blank? &&
+      classification_fetched_at.nil?
 
     # Keyed on the TIMESTAMP, not on whether constituents are present. Most
     # securities are not funds, so the provider returns nothing for them -- and a
@@ -301,6 +308,7 @@ module Security::Provided
         attrs.merge!(classification_attributes_from(response.data))
         update(attrs) if attrs.any?
         store_constituents(response.data.constituents) if wants_constituents
+        update_column(:classification_fetched_at, Time.current) if wants_classification
       else
         Rails.logger.warn("Failed to fetch security info for #{ticker} from #{price_data_provider.class.name}: #{response.error.message}")
         DebugLogEntry.capture(

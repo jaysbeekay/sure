@@ -1,14 +1,15 @@
 name: Upstream sync reminder
 
-# mirror-upstream.yml keeps mirror/upstream-main level every day, but nothing
-# says when fork main has fallen behind upstream: bin/upstream-sync runs only
-# when someone remembers it (#263). This counts the commits fork main lacks
-# and keeps one open reminder issue saying so. It never merges; a sync needs
-# conflicts resolved by hand. See docs/llm-guides/upstream-delivery.md.
+# mirror-upstream.yml keeps mirror/upstream-main level every few hours, but
+# nothing says when fork main has fallen behind upstream: bin/upstream-sync
+# runs only when someone remembers it (#263). This counts the commits fork
+# main lacks and keeps one open reminder issue saying so. It never merges; a
+# sync needs conflicts resolved by hand.
+# See docs/llm-guides/upstream-delivery.md.
 
 on:
   schedule:
-    # Mondays, after the 04:23 mirror run.
+    # Mondays. It reads upstream main directly, not the mirror.
     - cron: '7 5 * * 1'
   workflow_dispatch:
 

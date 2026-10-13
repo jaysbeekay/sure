@@ -94,8 +94,8 @@ class HoldingsController < ApplicationController
   # still leave the user's answer standing for ever.
   def reset_classification
     @holding.security.update!(
-      asset_class: nil, asset_sub_class: nil, sector: nil, region: nil,
-      classification_source: nil, classification_locked: false
+      asset_class: nil, asset_sub_class: nil, sector: nil, industry: nil, region: nil,
+      classification_source: nil, classification_locked: false, classification_fetched_at: nil
     )
     flash[:notice] = t("securities.classification.reset_done")
 

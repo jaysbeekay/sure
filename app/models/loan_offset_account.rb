@@ -15,10 +15,14 @@ class LoanOffsetAccount < ApplicationRecord
     def eligible_accounts_for(loan, viewer:)
       return Account.none unless loan.account && viewer
 
+      existing_links = loan.loan_offset_accounts.index_by(&:account_id)
+
       Account.accessible_by(viewer)
         .where(family_id: loan.account.family_id, classification: "asset", currency: loan.account.currency)
         .where.not(id: loan.account.id)
-        .select { |account| new(loan: loan, account: account).valid? }
+        .select do |account|
+          (existing_links[account.id] || new(loan: loan, account: account)).valid?
+        end
     end
 
     def invalidate_for_sharing_change!(account)

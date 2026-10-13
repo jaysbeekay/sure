@@ -78,6 +78,30 @@ class HoldingsClassificationTest < ActionDispatch::IntegrationTest
     assert_equal "provider", @security.classification_source
   end
 
+  # #348. The gate asks only while sector AND industry are blank, so a reset
+  # that left the industry in place never let the provider answer again. A
+  # reset also forgets that the provider was already asked.
+  test "a reset clears the industry and the record of an earlier answer, so the provider is asked again" do
+    @security.update!(industry: "Consumer Electronics", name: "Apple", logo_url: "https://example.com/aapl.png")
+    @security.update_column(:classification_fetched_at, 1.day.ago)
+    patch classification_holding_path(@holding), params: { security: { asset_class: "equity" } }
+
+    post reset_classification_holding_path(@holding)
+
+    @security.reload
+    assert_nil @security.industry, "the reset kept the industry"
+    assert_nil @security.classification_fetched_at, "the reset kept the record of an earlier answer"
+
+    provider = stub_provider(info(sector: "Technology", industry: "Consumer Electronics"))
+    provider.expects(:fetch_security_info).once.returns(
+      provider_success_response(info(sector: "Technology", industry: "Consumer Electronics"))
+    )
+    @security.stubs(:price_data_provider).returns(provider)
+    @security.import_provider_details(include_classification: true)
+
+    assert_equal "Technology", @security.reload.sector
+  end
+
   # --------------------------------------------------------- what is refused
 
   # `chk_securities_asset_class` is a database check constraint. A value outside

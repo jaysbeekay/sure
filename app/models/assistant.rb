@@ -36,6 +36,11 @@ module Assistant
     # Writes PROPOSALS, never classifications -- see the class comment. Preview
     # because the portfolio classification surfaces it feeds are preview-gated.
     Function::SuggestSecurityClassification,
+    # Read-only views of the portfolio pages' figures, preview because those
+    # pages are (#131, 12.1).
+    Function::GetPortfolioPerformance,
+    Function::GetPortfolioAllocation,
+    Function::GetIncomeSummary,
     # Prepares a trade CSV as the manual import does and leaves it pending;
     # preview while the assistant-driven import is built out (#131, 12.2).
     Function::PrepareTradeImport
