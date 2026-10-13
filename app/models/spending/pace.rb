@@ -34,7 +34,7 @@ class Spending::Pace
   # includes anything dated after `on`, and a pace is spend measured against the
   # days that have actually elapsed.
   def self.for(budget, on:, spent:)
-    return nil unless budget && budget.budgeted_spending.to_d.positive?
+    return nil unless measurable?(budget)
 
     new(
       spent: spent.to_d,
@@ -43,6 +43,12 @@ class Spending::Pace
       end_date: budget.end_date,
       on: on
     )
+  end
+
+  # Whether `budget` can be paced at all. Exposed so a caller can skip working
+  # out the spend when it cannot.
+  def self.measurable?(budget)
+    budget.present? && budget.budgeted_spending.to_d.positive?
   end
 
   # `on` outside the period is clamped to it: after the period every day has
