@@ -925,6 +925,46 @@ class LoanTest < ActiveSupport::TestCase
     assert_nil loan.variable_rate_update_for(5.2, as_of: Date.new(2026, 1, 15))
   end
 
+  # code master review on #400: the writer shared by Plaid, Redbark and the
+  # rate-change rule had no test of its own, so a regression would surface in
+  # three callers' files at once rather than here.
+  test "enrich_reporting_refusal writes an accepted update and returns nil" do
+    loan = enrichment_loan
+
+    assert_nil loan.enrich_reporting_refusal({ variable_rate_schedule: { "2026-01-15" => "5.2" } }, source: "rule")
+
+    assert_equal({ "2026-01-15" => 5.2 }, loan.reload.variable_rate_schedule)
+  end
+
+  test "enrich_reporting_refusal returns nil and writes nothing for a blank update" do
+    loan = enrichment_loan
+
+    assert_no_difference -> { DataEnrichment.count } do
+      assert_nil loan.enrich_reporting_refusal({}, source: "rule")
+    end
+  end
+
+  test "enrich_reporting_refusal returns the refusal and leaves the loan as it was" do
+    loan = enrichment_loan
+    before = loan.variable_rate_schedule
+
+    messages = loan.enrich_reporting_refusal({ variable_rate_schedule: { "2026-01-15" => "250" } }, source: "rule")
+
+    assert_equal [ "Variable rate schedule contains a rate outside the supported 0-100 range" ], messages
+    assert_equal before, loan.variable_rate_schedule, "the refused value must be rolled back in memory"
+    assert_empty loan.errors, "a refusal must not leave errors on a loan the caller keeps using"
+    assert_equal before, loan.reload.variable_rate_schedule
+  end
+
+  test "enrich_reporting_refusal skips a locked attribute without reporting it" do
+    loan = enrichment_loan
+    loan.lock_attr!(:variable_rate_schedule)
+
+    assert_nil loan.enrich_reporting_refusal({ variable_rate_schedule: { "2026-01-15" => "5.2" } }, source: "rule")
+
+    assert_equal({ "2025-06-01" => 4.8 }, loan.reload.variable_rate_schedule)
+  end
+
   private
     # A loan imported part way through its life: the principal it was written
     # for is recorded, and the only valuation the account carries is the
@@ -960,6 +1000,14 @@ class LoanTest < ActiveSupport::TestCase
           rate_type: "fixed", down_payment: down_payment
         )
       )
+    end
+
+    def enrichment_loan
+      families(:dylan_family).accounts.create!(
+        name: "Enrichment Loan", balance: 250_000, currency: "USD",
+        accountable: Loan.new(rate_type: "variable", interest_rate: 4.5, term_months: 240,
+                              variable_rate_schedule: { "2025-06-01" => 4.8 })
+      ).loan
     end
 
     def build_chart_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
