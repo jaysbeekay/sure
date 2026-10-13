@@ -216,6 +216,22 @@ class InsightsHelperTest < ActionView::TestCase
     end
   end
 
+  # A type whose title varies by status or direction has its titles one level
+  # down, so the namespace check above passes with a variant missing. These are
+  # the variants each generator can emit.
+  test "every title variant a generator emits exists" do
+    {
+      "spending_pace" => %w[approaching over],
+      "spending_anomaly" => %w[above below],
+      "savings_rate_change" => %w[up down],
+      "cash_flow_warning" => %w[low negative]
+    }.each do |type, variants|
+      variants.each do |variant|
+        assert I18n.exists?("insights.titles.#{type}.#{variant}", :en), "insights.titles.#{type}.#{variant} is missing"
+      end
+    end
+  end
+
   test "spending pace leads with the projection when approaching and the overshoot when over" do
     approaching = build_insight("spending_pace", metadata: { "status" => "approaching" }, facts: { "projected_spend" => "$1,107.14", "over_by" => "$0.00" })
     over = build_insight("spending_pace", metadata: { "status" => "over" }, facts: { "projected_spend" => "$2,767.86", "over_by" => "$250.00" })
