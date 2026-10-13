@@ -69,10 +69,12 @@ class Insight::Generators::TopMoversGenerator < Insight::Generator
           days: narrative.previous_period.days
         },
         # The movers shift every night as spend accrues, so the material signal
-        # is coarse: who is listed, which way, and a 25-point bucket of the
-        # lead's change. The exact amounts live in `facts` only.
+        # is coarse: who is listed, which leads (the title names it), which way,
+        # and a 25-point bucket of the lead's change. The exact amounts live in
+        # `facts` only.
         metadata: {
           direction: direction,
+          lead_id: lead.key,
           category_ids: listed.map(&:key).sort,
           change_bucket: change_bucket(lead)
         },

@@ -203,6 +203,23 @@ class Insight::Generators::TopMoversGeneratorTest < ActiveSupport::TestCase
     assert_not_equal baseline, generate.first.metadata
   end
 
+  # The title names the lead, so a new lead is a new card even when the same
+  # categories are listed, the same way, in the same bucket.
+  test "metadata moves when another listed category takes the lead" do
+    seed_baseline
+    spend(@dining, 300, CURRENT_DAY)       # new: +300, leads
+    spend(@travel, 200, CURRENT_DAY)       # new: +200
+    before = generate.first
+
+    spend(@travel, 200, CURRENT_DAY)       # new: +400, now leads
+    after = generate.first
+
+    assert_equal before.metadata[:category_ids], after.metadata[:category_ids]
+    assert_equal before.metadata[:change_bucket], after.metadata[:change_bucket]
+    assert_not_equal before.title, after.title
+    assert_not_equal before.metadata, after.metadata
+  end
+
   test "another family's spending never shows up" do
     other = families(:empty)
     account = Account.create!(family: other, name: "Other", balance: 0, currency: "USD", accountable: Depository.new)
