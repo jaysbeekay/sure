@@ -28,6 +28,7 @@ class Insight < ApplicationRecord
     budget_on_track
     maintained_goal_depleted
     spending_pace
+    top_movers
   ].freeze
 
   # How many the dashboard widget shows. Shared so PagesController (first render)

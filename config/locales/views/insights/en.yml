@@ -35,6 +35,7 @@ en:
       budget_on_track: Budget
       maintained_goal_depleted: Reserve
       spending_pace: Spending pace
+      top_movers: Biggest changes
     meta:
       next_n_days:
         one: Next day
@@ -50,6 +51,7 @@ en:
       of_budget: of budget
       need_attention: need attention
       over_budget: over budget
+      vs_prior_period: vs prior period
       days_overdue:
         one: "%{count} day overdue"
         other: "%{count} days overdue"
@@ -86,6 +88,9 @@ en:
       spending_pace:
         approaching: Your spending is ahead of your budget pace
         over: You're over budget this month
+      top_movers:
+        up: "%{category} rose the most in your spending"
+        down: "%{category} fell the most in your spending"
     templates:
       spending_anomaly:
         above: You're on pace to spend %{projected_spend} on %{category} this month, about %{deviation_pct}% more than your recent monthly average of %{baseline_spend}.
@@ -108,3 +113,6 @@ en:
       spending_pace:
         approaching: You've spent %{spent_pct}% of your %{budgeted} budget with %{elapsed_pct}% of the month gone. At this pace you'd spend about %{projected_spend}.
         over: You've spent %{spent} against a budget of %{budgeted}, which is %{over_by} over it.
+      top_movers:
+        up: Spending rose most in %{categories} compared with the previous %{days} days, with the biggest increase at %{top_change}.
+        down: Spending fell most in %{categories} compared with the previous %{days} days, with the biggest decrease at %{top_change}.

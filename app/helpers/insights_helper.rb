@@ -11,7 +11,8 @@ module InsightsHelper
     # Same shield the reserve panel uses on the goal page, so the two read as
     # the same object seen from two places.
     "maintained_goal_depleted" => "shield-alert",
-    "spending_pace" => "gauge"
+    "spending_pace" => "gauge",
+    "top_movers" => "arrow-up-down"
   }.freeze
 
   def insight_icon_key(insight)
@@ -89,6 +90,9 @@ module InsightsHelper
       else
         facts["projected_spend"] && [ facts["projected_spend"], t("insights.figures.on_pace") ]
       end
+    when "top_movers"
+      sign = insight.metadata&.dig("direction") == "down" ? "−" : "+"
+      facts["top_change"] && [ "#{sign}#{facts["top_change"]}", t("insights.figures.vs_prior_period") ]
     end
   end
 
@@ -164,6 +168,8 @@ module InsightsHelper
       metadata["current_rate"].to_f >= metadata["previous_rate"].to_f ? :positive : :warning
     when "spending_anomaly"
       metadata["direction"] == "below" ? :positive : :warning
+    when "top_movers"
+      metadata["direction"] == "down" ? :positive : :warning
     when "cash_flow_warning"
       metadata["negative"] ? :negative : :warning
     when "budget_at_risk", "maintained_goal_depleted", "spending_pace"
