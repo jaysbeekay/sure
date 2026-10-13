@@ -163,6 +163,33 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
     end
   end
 
+  # Nightly review on #400 (comment 6120552186): CHANGE_WORDING covered only
+  # change/adjust forms, so every other way of saying the rate moved still
+  # read the bare percentage as the new rate -- a 6% loan put at 0.25%.
+  test "movement wording without a new-rate marker is refused" do
+    [
+      "Rate increase 0.25%",
+      "Rate increase: 0.25%",
+      "Rate rise 0.25%",
+      "Rate decrease 0.25%",
+      "Rate reduction 0.25%",
+      "Rate hike 0.25%",
+      "Rate raise 0.25%",
+      "Rate 0.25% increase"
+    ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, "#{text.inspect} gave a rate"
+      assert_equal :change_wording, reading.problem, text
+    end
+  end
+
+  test "movement wording with a new-rate marker gives the marked rate" do
+    assert_rate "6.5", "Rate increase: new rate 6.50%"
+    assert_rate "6.5", "Rate increased to 6.5%"
+    assert_rate "6.24", "Rate reduction - now 6.24% p.a."
+  end
+
   test "change wording with a new-rate marker gives the marked rate" do
     assert_rate "6.24", "INTEREST RATE CHANGE - NEW RATE 6.24% P.A."
     assert_rate "6.24", "Rate change: now 6.24%"
@@ -176,6 +203,49 @@ class Loan::RateChangeTextTest < ActiveSupport::TestCase
 
   test "a change amount beside the new rate gives the new rate" do
     assert_rate "6.24", "Rate decreased by 0.25% to 6.24% p.a."
+  end
+
+  # Owner decision on #400: "rate is" names the new rate, so a notice that
+  # says only "your rate is 6.24%" beside movement wording is read, not refused.
+  test "a rate-is marker gives the rate after it" do
+    assert_rate "6.24", "Following the RBA cut your rate is 6.24%"
+    assert_rate "6.74", "Interest rate rise: your new rate is 6.74% p.a."
+    assert_rate "6.74", "RATE INCREASE - YOUR RATE IS 6.74% P.A."
+  end
+
+  # "rate is" governed by a movement noun names the movement, not the rate.
+  # Read as the rate, "the change in your rate is 0.25%" would put a 6% loan
+  # at 0.25%.
+  test "rate-is after a movement noun is not a new-rate marker" do
+    [
+      "The change in your rate is 0.25%",
+      "The increase to your variable rate is 0.25%",
+      "Reduction in the interest rate is 0.15% p.a.",
+      "RATE CHANGE - CHANGE TO YOUR HOME LOAN RATE IS 0.25%"
+    ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, "#{text.inspect} gave a rate"
+      assert_equal :change_wording, reading.problem, text
+    end
+  end
+
+  test "a rate-is marker does not lift the refusal of a bare movement" do
+    reading = Loan::RateChangeText.read("Rate increase 0.25%")
+
+    assert_nil reading.rate
+    assert_equal :change_wording, reading.problem
+  end
+
+  # A qualifier naming another rate keeps "rate is" from picking it: these
+  # stay ambiguous, as they were before "rate is" counted.
+  test "rate-is after a qualifier naming another rate is not a new-rate marker" do
+    [ "Rate 6.25% comparison rate is 6.40%", "Rate 6.24%, previous rate is 6.49%" ].each do |text|
+      reading = Loan::RateChangeText.read(text)
+
+      assert_nil reading.rate, "#{text.inspect} gave a rate"
+      assert_equal :ambiguous, reading.problem, text
+    end
   end
 
   # --- Range: both sides of each boundary ------------------------------------

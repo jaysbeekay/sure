@@ -111,4 +111,16 @@ class LoanInsuranceTest < ActiveSupport::TestCase
     loan.term_months = 6
     assert_equal 6, loan.insurance.premiums.size, "and the schedule it is charged against"
   end
+
+  # code master review on #402: the level-term premium is charged on the
+  # principal, which is `initial_balance` when one is recorded. Editing it in
+  # memory must reprice the premium rather than answer from the old principal.
+  test "recording a different principal drops the memoised premium" do
+    loan = build_loan(insurance_rate: 1.2, insurance_rate_type: "level_term")
+    assert_equal BigDecimal(144), loan.total_insurance.amount, "precondition: 12,000 * 0.1% * 12"
+
+    loan.initial_balance = 24_000
+
+    assert_equal BigDecimal(288), loan.total_insurance.amount
+  end
 end
