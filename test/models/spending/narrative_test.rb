@@ -61,6 +61,17 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
     assert_equal [], result.top_movers
   end
 
+  # The nightly generator asks every family for a pace, and most have no
+  # usable budget. Spend is an income-statement aggregation, so it must not run
+  # for a pace that cannot exist.
+  test "pace reads no spend when there is no budget, or a zero one" do
+    IncomeStatement.any_instance.expects(:net_category_totals).never
+
+    assert_nil narrative(on: Date.new(2023, 1, 10)).pace
+    create_budget(budgeted: 0)
+    assert_nil narrative.pace
+  end
+
   test "pace is computed against the injected date" do
     create_budget(budgeted: 1000)
     create_transaction(amount: 600, date: Date.new(2024, 3, 3), name: "Narrative spend")

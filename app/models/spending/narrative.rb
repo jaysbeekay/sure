@@ -63,8 +63,12 @@ class Spending::Narrative
     @budget
   end
 
+  # nil when the budget cannot be paced. That is checked first, so no spend is
+  # aggregated for a pace that cannot exist.
   def pace
-    @pace ||= Spending::Pace.for(budget, on: on, spent: spent)
+    return @pace if defined?(@pace)
+
+    @pace = Spending::Pace.measurable?(budget) ? Spending::Pace.for(budget, on: on, spent: spent) : nil
   end
 
   # Net spend from the start of the month through `on`.
