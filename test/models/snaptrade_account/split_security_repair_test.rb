@@ -88,6 +88,25 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal 1, result.holdings_dropped
   end
 
+  # A calculated row is rebuilt from the trades by the re-materialization; a
+  # SnapTrade snapshot is the only record of that day's provider cost basis.
+  test "a calculated target row gives way to the SnapTrade snapshot on a same-day collision" do
+    seed_observed_split
+    yesterday = 1.day.ago.to_date
+    calculated = @account.holdings.create!(security: @row_b, date: yesterday, qty: 20, price: 300, amount: 6000, currency: "USD")
+    snapshot = snaptrade_holding(@row_a, date: yesterday, qty: 20)
+    snapshot.update!(cost_basis: 123, cost_basis_source: "provider")
+
+    result = repair!.sole
+
+    kept = @account.holdings.find_by!(security_id: @row_b.id, date: yesterday, currency: "USD")
+    assert_equal snapshot.id, kept.id
+    assert_equal @provider_id, kept.account_provider_id
+    assert_equal 123, kept.cost_basis.to_i
+    assert_not Holding.exists?(calculated.id)
+    assert_equal [ 1, 1 ], [ result.holdings_moved, result.holdings_replaced ]
+  end
+
   test "dry run changes nothing" do
     holding = seed_observed_split
     before = account_state
@@ -165,8 +184,9 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     price_a = Security::Price.create!(security: @row_a, date: 12.days.ago.to_date, price: 190, currency: "USD")
     price_b = Security::Price.create!(security: @row_b, date: 11.days.ago.to_date, price: 195, currency: "USD")
 
+    # Row A's price is a gap on B; allowed here, since the point is what moves.
     assert_no_difference -> { Security.count } do
-      repair!
+      repair!(allow_price_gaps: true)
     end
 
     assert Security.exists?(@row_a.id)
@@ -187,6 +207,18 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal 1, result.holdings_moved
   end
 
+  test "a live repair that would leave price gaps is refused and writes nothing" do
+    holding = seed_observed_split
+    Security::Price.create!(security: @row_a, date: 15.days.ago.to_date, price: 180, currency: "USD")
+    before = account_state
+
+    error = assert_raises(SnaptradeAccount::SplitSecurityRepair::PriceGapsRefused) { repair! }
+
+    assert_match(/SPLT: 1 date/, error.message)
+    assert_equal before, account_state
+    assert_nil holding.reload.avg_cost
+  end
+
   # The observed split has the held row carrying the prices. Here the held
   # row has none and the other row has them all, so the moved history can
   # only be priced once market data fills the held row; the repair says so.
@@ -201,7 +233,7 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     Security::Price.create!(security: @row_a, date: 40.days.ago.to_date, price: 150, currency: "USD")
     prices_before = Security::Price.where(security_id: [ @row_a.id, @row_b.id ]).order(:id).pluck(:id, :security_id)
 
-    result = repair!.sole
+    result = repair!(allow_price_gaps: true).sole
 
     holding.reload
     assert_equal [ 20, 6000 ], [ holding.qty.to_i, holding.amount.to_i ]
@@ -227,10 +259,29 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal Money.new(150, "USD"), holding.reload.avg_cost
   end
 
+  test "the rake task refuses a live repair with price gaps unless ALLOW_PRICE_GAPS names one account" do
+    holding = seed_observed_split
+    Security::Price.create!(security: @row_a, date: 15.days.ago.to_date, price: 180, currency: "USD")
+    task = Rake::Task["snaptrade:repair_split_securities"]
+
+    output, = with_env("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => nil) { capture_io { task.invoke(@account.id) } }
+    assert_match(/refused, nothing written/, output)
+    assert_nil holding.reload.avg_cost
+
+    task.reenable
+    output, = with_env("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => "true") { capture_io { task.invoke } }
+    assert_match(/needs an account id/, output)
+    assert_nil holding.reload.avg_cost
+
+    task.reenable
+    with_env("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => "true") { capture_io { task.invoke(@account.id) } }
+    assert_equal Money.new(150, "USD"), holding.reload.avg_cost
+  end
+
   private
 
-    def repair!
-      SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false).run
+    def repair!(allow_price_gaps: false)
+      SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false, allow_price_gaps: allow_price_gaps).run
     end
 
     # The we-promise/sure#3988 state: buys on A, the current provider holding

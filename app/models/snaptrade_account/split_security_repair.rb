@@ -14,22 +14,27 @@
 # The target is the row held_security_for returns -- the one the next sync
 # resolves to -- so the repaired position stays put.
 #
-# A dry run (the default) reports what it would do and writes nothing.
+# A dry run (the default) reports what it would do and writes nothing. A live
+# run refuses, writing nothing, when the moved history would have dates priced
+# on a source row but not on the target, unless allow_price_gaps is set.
 class SnaptradeAccount::SplitSecurityRepair
   include SnaptradeAccount::DataHelpers
 
+  class PriceGapsRefused < StandardError; end
+
   Result = Data.define(
     :account, :ticker, :target_id, :target_source, :source_ids,
-    :trades_moved, :holdings_moved, :holdings_dropped, :price_gap_dates
+    :trades_moved, :holdings_moved, :holdings_dropped, :holdings_replaced, :price_gap_dates
   )
 
   def self.accounts
     Account.where(id: AccountProvider.where(provider_type: "SnaptradeAccount").select(:account_id))
   end
 
-  def initialize(account, dry_run: true)
+  def initialize(account, dry_run: true, allow_price_gaps: false)
     @account = account
     @dry_run = dry_run
+    @allow_price_gaps = allow_price_gaps
   end
 
   def dry_run?
@@ -43,6 +48,8 @@ class SnaptradeAccount::SplitSecurityRepair
     return [] if plans.empty?
 
     return plans.map { |plan| plan[:result] } if dry_run?
+
+    refuse_price_gaps!(plans) unless @allow_price_gaps
 
     ActiveRecord::Base.transaction do
       plans.each { |plan| apply(plan) }
@@ -85,12 +92,12 @@ class SnaptradeAccount::SplitSecurityRepair
       return nil if source_ids.empty?
 
       trades = account.trades.where(security_id: source_ids)
-      moves, drops = holding_moves(target_id, source_ids)
+      moves, drops, replaced = holding_moves(target_id, source_ids)
 
       {
         trades: trades,
         moves: moves,
-        drops: drops,
+        drops: drops + replaced,
         result: Result.new(
           account: account,
           ticker: ticker,
@@ -100,6 +107,7 @@ class SnaptradeAccount::SplitSecurityRepair
           trades_moved: trades.count,
           holdings_moved: moves.size,
           holdings_dropped: drops.size,
+          holdings_replaced: replaced.size,
           price_gap_dates: price_gap_dates(target_id, source_ids)
         )
       }
@@ -115,20 +123,31 @@ class SnaptradeAccount::SplitSecurityRepair
       [ security_ids.max_by { |id| [ counts.fetch(id, 0), -security_ids.index(id) ] }, :most_trades ]
     end
 
-    # Holdings are derived rows; the target keeps whatever it already has on a
-    # date and currency, and the other row's holding there is dropped rather
-    # than summed into it. Provider rows go first, so where two non-target rows
+    # One holding per date and currency survives, never a sum. The target
+    # keeps what it already has, except that a calculated target row gives way
+    # to a SnapTrade snapshot: the re-materialization rebuilds calculated rows
+    # from the trades, but the snapshot is the only record of that day's
+    # provider cost basis. Provider rows go first, so where two non-target rows
     # share a date the provider's snapshot is the one kept.
+    #
+    # Returns [moves, drops, replaced]: source holdings to move, source
+    # holdings to delete, and calculated target holdings a snapshot replaces.
     def holding_moves(target_id, source_ids)
+      calculated_on_target = account.holdings.where(security_id: target_id, account_provider_id: nil)
+        .pluck(:date, :currency, :id).to_h { |date, currency, id| [ [ date, currency ], id ] }
       taken = account.holdings.where(security_id: target_id).pluck(:date, :currency).to_set
       moves = []
       drops = []
+      replaced = []
 
       repairable_holdings.where(security_id: source_ids)
         .order(:date, Arel.sql("account_provider_id IS NULL"), :id)
         .each do |holding|
           key = [ holding.date, holding.currency ]
-          if taken.include?(key)
+          if holding.account_provider_id == snaptrade_provider_id && calculated_on_target.key?(key)
+            replaced << calculated_on_target.delete(key)
+            moves << holding.id
+          elsif taken.include?(key)
             drops << holding.id
           else
             taken << key
@@ -136,7 +155,7 @@ class SnaptradeAccount::SplitSecurityRepair
           end
         end
 
-      [ moves, drops ]
+      [ moves, drops, replaced ]
     end
 
     # Dates in the account's history with a price on another row and none on
@@ -147,6 +166,15 @@ class SnaptradeAccount::SplitSecurityRepair
       target_dates = Security::Price.where(security_id: target_id, date: dates).distinct.pluck(:date)
 
       (Security::Price.where(security_id: source_ids, date: dates).distinct.pluck(:date) - target_dates).sort
+    end
+
+    def refuse_price_gaps!(plans)
+      gapped = plans.map { |plan| plan[:result] }.select { |result| result.price_gap_dates.any? }
+      return if gapped.empty?
+
+      summary = gapped.map { |result| "#{result.ticker}: #{result.price_gap_dates.size} date(s)" }.join(", ")
+      raise PriceGapsRefused,
+        "price gaps on the target row (#{summary}); backfill its prices or allow price gaps for this account"
     end
 
     def apply(plan)
