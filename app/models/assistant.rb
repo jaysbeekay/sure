@@ -40,7 +40,10 @@ module Assistant
     # pages are (#131, 12.1).
     Function::GetPortfolioPerformance,
     Function::GetPortfolioAllocation,
-    Function::GetIncomeSummary
+    Function::GetIncomeSummary,
+    # Prepares a trade CSV as the manual import does and leaves it pending;
+    # preview while the assistant-driven import is built out (#131, 12.2).
+    Function::PrepareTradeImport
   ].freeze
 
   class << self
