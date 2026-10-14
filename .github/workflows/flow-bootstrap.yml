@@ -1,0 +1,47 @@
+name: Flow bootstrap
+
+# Creates, or checks, everything the delivery flow needs: the flow:v2 label,
+# the "Sure delivery" project linked to this repository, and its fields.
+# Safe to re-run: it creates what is missing and reports what differs, and
+# never deletes a field or rewrites options. See docs/flow/README.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Project title (ignored once FLOW_PROJECT_NUMBER is set)'
+        default: 'Sure delivery'
+      public:
+        description: 'Make the project public, so contributors can see it'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Report only, create nothing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  bootstrap:
+    if: github.repository == 'jaysbeekay/sure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the flow scripts
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/flow
+
+      - name: Bootstrap
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          FLOW_PROJECT_NUMBER: ${{ vars.FLOW_PROJECT_NUMBER }}
+          FLOW_PROJECT_TITLE: ${{ inputs.title }}
+          FLOW_PROJECT_PUBLIC: ${{ inputs.public }}
+          FLOW_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: node .github/flow/bootstrap.mjs

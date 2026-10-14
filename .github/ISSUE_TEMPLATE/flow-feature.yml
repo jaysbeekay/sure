@@ -1,0 +1,63 @@
+name: Feature request (delivery flow)
+description: An enhancement, tracked on the Sure delivery project from triage to upstream.
+labels: ["enhancement", "flow:v2"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is tracked on the **Sure delivery** project (docs/flow/README.md). It moves through
+        triage plan → Gatekeeper issue review → draft PR → ready → upstream PR.
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream issue
+      description: The we-promise/sure issue this answers, as a link (https://github.com/we-promise/sure/issues/1234), or `none` for fork-only work.
+      placeholder: https://github.com/we-promise/sure/issues/1234
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What a user cannot do today, as observed behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed Behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: A concrete case, with figures where the feature computes any.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Related fork and upstream issues and PRs, and the epic this belongs to.
+  - type: textarea
+    id: plan
+    attributes:
+      label: Triage Plan
+      description: Required before the Gatekeeper review (CLAUDE.md, step 1).
+      placeholder: |
+        **What the issue actually is.** The requirement in terms of observed behaviour.
+
+        **What the PR will touch.** Files, classes and methods. Who else hits these lines, and what do they pass? What else reads what is being changed?
+
+        **What the change looks like**, and what it deliberately leaves out.
+
+        **How it will be tested.** The named positive and negative tests, and the assertion that fails without the change.
+
+        **The evidence required.** Fail-first output, mutations, neighbouring suites, and a full-suite run.
+    validations:
+      required: true

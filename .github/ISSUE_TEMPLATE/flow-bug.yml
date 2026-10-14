@@ -1,0 +1,80 @@
+name: Bug (delivery flow)
+description: A defect, tracked on the Sure delivery project from triage to upstream.
+labels: ["bug", "flow:v2"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is tracked on the **Sure delivery** project (docs/flow/README.md). It moves through
+        triage plan → Gatekeeper issue review → draft PR → ready → upstream PR.
+        Remove personal and financial data from anything you paste.
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream issue
+      description: The we-promise/sure issue this answers, as a link (https://github.com/we-promise/sure/issues/1234), or `none` for a fork-only defect.
+      placeholder: https://github.com/we-promise/sure/issues/1234
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: The defect as observed behaviour, not a restatement of the title.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, with the commit they were run on.
+      placeholder: |
+        1. On fork `main` at `abc1234`, ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens instead
+    validations:
+      required: true
+  - type: textarea
+    id: financial
+    attributes:
+      label: Financial Context
+      description: Account type, transaction type, currencies, provider, and anything else the figures depend on.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Errors
+      description: Errors, failing test output, or the probe that reproduces it.
+      render: text
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Related fork and upstream issues and PRs, and anything already ruled out.
+  - type: textarea
+    id: plan
+    attributes:
+      label: Triage Plan
+      description: Required before the Gatekeeper review (CLAUDE.md, step 1).
+      placeholder: |
+        **What the issue actually is.** The defect in terms of observed behaviour.
+
+        **What the PR will touch.** Files, classes and methods. Who else hits these lines, and what do they pass? What else reads what is being changed?
+
+        **What the fix looks like**, and what it deliberately leaves out.
+
+        **How it will be tested.** The named positive and negative tests, and the assertion that fails without the fix.
+
+        **The evidence required.** Fail-first output, mutations, neighbouring suites, and a full-suite run.
+    validations:
+      required: true

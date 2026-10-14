@@ -1,0 +1,31 @@
+name: Flow tests
+
+# Unit tests for the delivery flow scripts. They run on Node's built-in test
+# runner against real comment text, with no network and no dependencies.
+
+on:
+  pull_request:
+    paths:
+      - '.github/flow/**'
+      - '.github/workflows/flow-*.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/flow/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/flow
+
+      # Unquoted: the shell expands the glob, which Node 20 does not.
+      - name: Test
+        run: node --test .github/flow/test/*.test.mjs

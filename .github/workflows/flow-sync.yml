@@ -1,0 +1,80 @@
+name: Flow sync
+
+# Mirrors the delivery flow onto the "Sure delivery" project and a "Flow gate"
+# check, for issues labelled flow:v2 and the pull requests that name them.
+#
+# It reads comments, checks and upstream PRs. It writes project fields
+# (PROJECT_TOKEN) and the Flow gate check run (the Actions token), and nothing
+# else: no comments, labels or pushes. So it cannot set off Gatekeeper
+# (main.yml, which reacts to the owner's @codebot comments) or any other
+# workflow. Until secrets.PROJECT_TOKEN and vars.FLOW_PROJECT_NUMBER are both
+# set it computes and logs only.
+#
+# It never checks out pull request code: every trigger, pull_request_target
+# included, runs the scripts from the default branch.
+# See docs/flow/README.md.
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_target:
+    types: [opened, edited, synchronize, ready_for_review, converted_to_draft, closed, reopened, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+  # Resolving a review thread is not a workflow trigger. The next event on the
+  # PR, or the hourly run, picks it up.
+  # CI finishing is what moves a PR from "waiting on CI" to the author. Checks
+  # from other apps (Codacy, cubic) do not trigger workflows; the hourly run
+  # picks those up.
+  workflow_run:
+    workflows: ["Pull Request", "CodeQL Advanced"]
+    types: [completed]
+  schedule:
+    # Hourly: upstream PR states, and anything an event did not reach.
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      number:
+        description: 'Issue or PR number (blank: every item labelled flow:v2)'
+        required: false
+      dry_run:
+        description: 'Compute and log only'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: write
+  actions: read
+
+concurrency:
+  group: flow-sync-${{ github.event.issue.number || github.event.pull_request.number || github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    if: >
+      github.repository == 'jaysbeekay/sure' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the flow scripts from the default branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          persist-credentials: false
+          sparse-checkout: .github/flow
+
+      - name: Sync
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          FLOW_PROJECT_NUMBER: ${{ vars.FLOW_PROJECT_NUMBER }}
+          FLOW_NUMBER: ${{ inputs.number }}
+          FLOW_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: node .github/flow/sync.mjs
