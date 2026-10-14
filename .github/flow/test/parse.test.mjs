@@ -269,6 +269,16 @@ describe("parseLinks", () => {
     assert.equal(parseLinks(FORM_BODY, REPO, CONFIG.upstreamRepo).upstreamIssue, 4221);
   });
 
+  test("a linked upstream issue is not a 'none' declaration", () => {
+    assert.equal(parseLinks(FORM_BODY, REPO, CONFIG.upstreamRepo).upstreamDeclaredNone, false);
+  });
+
+  test("'none' under another heading, or later in the section, is not a declaration", () => {
+    assert.equal(parseLinks("### Summary\n\nnone", REPO, CONFIG.upstreamRepo).upstreamDeclaredNone, false);
+    assert.equal(parseLinks("### Upstream issue\n\nsee below\nnone", REPO, CONFIG.upstreamRepo).upstreamDeclaredNone, false);
+    assert.equal(parseLinks("### Upstream issue\r\n\r\n  N/A  \r\n", REPO, CONFIG.upstreamRepo).upstreamDeclaredNone, true);
+  });
+
   test("the form's 'none' declares a fork-only issue", () => {
     const links = parseLinks(FORM_BODY_NO_UPSTREAM, REPO, CONFIG.upstreamRepo);
     assert.equal(links.upstreamIssue, null);

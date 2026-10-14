@@ -6,17 +6,14 @@
 // A review is recognised by its first line, so a reply that quotes a heading
 // further down is never mistaken for one. The patterns cover every format
 // Gatekeeper and the nightly job have used on items #300-#455.
-// An emoji before the title, as a character or, as Hermes sometimes posts it,
-// as escape text ("\u2705", #451). Words are not allowed, so a reply headed
-// "## Re QA Review" is never read as a review.
-const EMOJI = String.raw`(?:[^\w\s#*]|\\u[0-9a-fA-F]{4,6})+\s+`;
-const headingRe = (title) => new RegExp(String.raw`^#{1,3}\s*(?:${EMOJI})?${title}`, "iu");
-
+// An emoji may precede the title, as a character or, as Hermes sometimes posts
+// it, as escape text ("\u2705", #451). Words are not allowed there, so a
+// reply headed "## Re QA Review" is never read as a review.
 const REVIEW_HEADINGS = [
-  ["issue", headingRe(String.raw`QA Review\b`)],
+  ["issue", /^#{1,3}\s*(?:(?:[^\w\s#*]|\\u[0-9a-fA-F]{4,6})+\s+)?QA Review\b/iu],
   ["issue", /^\*\*QA (?:re-?)?review\b/iu],
-  ["light", headingRe(String.raw`PR Review\s*[-–—:]\s*Light\b`)],
-  ["full", headingRe(String.raw`PR Review\s*[-–—:]\s*Full\b`)],
+  ["light", /^#{1,3}\s*(?:(?:[^\w\s#*]|\\u[0-9a-fA-F]{4,6})+\s+)?PR Review\s*[-–—:]\s*Light\b/iu],
+  ["full", /^#{1,3}\s*(?:(?:[^\w\s#*]|\\u[0-9a-fA-F]{4,6})+\s+)?PR Review\s*[-–—:]\s*Full\b/iu],
   ["nightly", /^#{1,3}\s*NIGHTLY REVIEW\b/iu],
   ["sweep", /^#{1,3}\s*(?:PR DAILY SWEEP|DAILY PR SWEEP)\b/iu],
 ];
@@ -174,9 +171,13 @@ export function parseLinks(body, repo, upstreamRepo) {
   const upstreamPrLabelled = new RegExp(String.raw`upstream (?:draft )?(?:PR|pull request)\W{0,12}?(?:https://github\.com/${U}/pull/|${U}#)(\d+)`, "i");
   const upstreamPr = Number(text.match(upstreamPrLabelled)?.[1] ?? NaN) || null;
 
-  // No two quantifiers here can match the same characters: overlapping ones
-  // (as in \s*\n+\s*) backtrack polynomially on a run of blank lines.
-  const upstreamDeclaredNone = /^#{2,3}[ \t]*Upstream issue[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*(?:none|n\/a|no|-)[ \t]*\r?$/im.test(text);
+  // Line by line rather than one pattern across lines: a pattern such as
+  // \s*\n+\s* backtracks polynomially on a run of blank lines, and bodies are
+  // written by anyone.
+  const lines = text.split(/\r?\n/);
+  const field = lines.findIndex((line) => /^#{2,3}[ \t]*Upstream issue[ \t]*$/i.test(line));
+  const answer = field === -1 ? "" : (lines.slice(field + 1).find((line) => line.trim() !== "") ?? "");
+  const upstreamDeclaredNone = /^(?:none|n\/a|no|-)$/i.test(answer.trim());
 
   return { forkIssues, upstreamIssue, upstreamDeclaredNone, upstreamPr };
 }
@@ -198,7 +199,7 @@ export function triagePlanPresent(body) {
 
   const level = heading[1].length;
   const rest = text.slice(heading.index + heading[0].length);
-  const end = rest.search(new RegExp(String.raw`^#{1,${level}}\s`, "m"));
+  const end = rest.search(level === 2 ? /^#{1,2}\s/m : /^#{1,3}\s/m);
   const section = (end === -1 ? rest : rest.slice(0, end)).replace(/_No response_/g, "").replace(/\s+/g, " ").trim();
   return section.length >= 40;
 }
