@@ -60,11 +60,11 @@ module SnaptradeAccount::DataHelpers
     # lookup must be deterministic or a holding flips between rows from one
     # sync to the next (#333). Order: the row the account already holds, the
     # row on SnapTrade's reported exchange, then a fixed preference order.
-    def resolve_security(symbol, symbol_data, account: nil)
+    def resolve_security(symbol, symbol_data, account: nil, account_provider_id: nil)
       ticker = symbol.to_s.upcase.strip
       return nil if ticker.blank?
 
-      security = existing_security_for(ticker, symbol_data, account)
+      security = existing_security_for(ticker, symbol_data, account, account_provider_id)
 
       # If security exists but has a bad name (looks like a hash), update it
       if security && security.name&.start_with?("{")
@@ -89,23 +89,29 @@ module SnaptradeAccount::DataHelpers
     rescue ActiveRecord::RecordInvalid, ActiveRecord::RecordNotUnique => e
       # Handle race condition - another process may have created it
       Rails.logger.error "Failed to create security #{ticker}: #{e.message}"
-      existing_security_for(ticker, symbol_data, account) # Retry find in case of race condition
+      existing_security_for(ticker, symbol_data, account, account_provider_id) # Retry find in case of race condition
     end
 
-    def existing_security_for(ticker, symbol_data, account)
-      held_security_for(account, ticker) ||
+    def existing_security_for(ticker, symbol_data, account, account_provider_id)
+      held_security_for(account, ticker, account_provider_id) ||
         reported_exchange_security_for(ticker, symbol_data) ||
-        preferred_security_for(ticker)
+        preferred_security_for(ticker, symbol_data, account, account_provider_id)
     end
 
     # The row the position currently sits on, so it never moves. That includes
     # a same-ticker remap: SnapTrade sends no external_id, so the import
     # adapter's provider_security fallbacks never run for it. Latest date
     # wins, provider holdings first.
-    def held_security_for(account, ticker)
+    #
+    # Only SnapTrade's own holdings and those with no provider (materialized
+    # from the account's trades). Without an external_id the adapter matches
+    # on security, date and currency alone, so following another provider's
+    # holding onto its row would overwrite that provider's quantity.
+    def held_security_for(account, ticker, account_provider_id)
       return nil unless account
 
       security_id = account.holdings
+        .where(account_provider_id: [ account_provider_id, nil ].uniq)
         .joins(:security)
         .where("UPPER(securities.ticker) = ?", ticker)
         .order(date: :desc)
@@ -125,10 +131,41 @@ module SnaptradeAccount::DataHelpers
         Security.where("UPPER(ticker) = ?", ticker).where(exchange_mic: exchange).order(:created_at, :id).first
     end
 
-    def preferred_security_for(ticker)
-      Security.where("UPPER(ticker) = ?", ticker)
+    # Not an identity match: the rows differ by exchange, and this order says
+    # nothing about which market SnapTrade trades. Once picked, the held
+    # position keeps the pick, so a wrong one never corrects itself; record
+    # each ambiguous pick so support can find the affected accounts.
+    def preferred_security_for(ticker, symbol_data, account, account_provider_id)
+      candidates = Security.where("UPPER(ticker) = ?", ticker)
         .order(:offline, Arel.sql("price_provider IS NULL"), :created_at, :id)
-        .first
+        .to_a
+
+      if candidates.size > 1
+        capture_ambiguous_security(ticker, candidates, symbol_data, account, account_provider_id)
+      end
+
+      candidates.first
+    end
+
+    def capture_ambiguous_security(ticker, candidates, symbol_data, account, account_provider_id)
+      DebugLogEntry.capture(
+        category: "provider_sync",
+        level: "warn",
+        message: "Resolved #{ticker} to one of #{candidates.size} securities by fallback order; " \
+                 "no held position and no row on the reported exchange",
+        source: self.class.name,
+        provider_key: "snaptrade",
+        account: account,
+        account_provider_id: account_provider_id,
+        metadata: {
+          ticker: ticker,
+          reported_exchange: extract_exchange(symbol_data),
+          chosen_security_id: candidates.first.id,
+          candidates: candidates.map do |security|
+            security.slice(:id, :exchange_operating_mic, :exchange_mic, :offline, :price_provider)
+          end
+        }
+      )
     end
 
     def extract_security_name(symbol_data, fallback_ticker)
