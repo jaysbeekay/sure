@@ -6,11 +6,17 @@
 // A review is recognised by its first line, so a reply that quotes a heading
 // further down is never mistaken for one. The patterns cover every format
 // Gatekeeper and the nightly job have used on items #300-#455.
+// An emoji before the title, as a character or, as Hermes sometimes posts it,
+// as escape text ("\u2705", #451). Words are not allowed, so a reply headed
+// "## Re QA Review" is never read as a review.
+const EMOJI = String.raw`(?:[^\w\s#*]|\\u[0-9a-fA-F]{4,6})+\s+`;
+const headingRe = (title) => new RegExp(String.raw`^#{1,3}\s*(?:${EMOJI})?${title}`, "iu");
+
 const REVIEW_HEADINGS = [
-  ["issue", /^#{1,3}\s*(?:[^\w\s#*]+\s+)?QA Review\b/iu],
+  ["issue", headingRe(String.raw`QA Review\b`)],
   ["issue", /^\*\*QA (?:re-?)?review\b/iu],
-  ["light", /^#{1,3}\s*(?:[^\w\s#*]+\s+)?PR Review\s*[-–—:]\s*Light\b/iu],
-  ["full", /^#{1,3}\s*(?:[^\w\s#*]+\s+)?PR Review\s*[-–—:]\s*Full\b/iu],
+  ["light", headingRe(String.raw`PR Review\s*[-–—:]\s*Light\b`)],
+  ["full", headingRe(String.raw`PR Review\s*[-–—:]\s*Full\b`)],
   ["nightly", /^#{1,3}\s*NIGHTLY REVIEW\b/iu],
   ["sweep", /^#{1,3}\s*(?:PR DAILY SWEEP|DAILY PR SWEEP)\b/iu],
 ];
@@ -66,7 +72,7 @@ export function classifyReview(body) {
   // older "**QA review — #424 — READY**" first line. Upper case only, so prose
   // such as "the verdict: the plan is sound" is never read as one.
   let verdict =
-    text.match(/(?:^|[^\w])(?:[Dd]ecision|[Vv]erdict)\*{0,2}\s*:\s*\*{0,2}\s*`?([A-Z][A-Z_]{2,})\b/)?.[1] ??
+    text.match(/(?:^|[^\w])(?:[Dd]ecision|[Vv]erdict)\*{0,2}[ \t]*:[ \t]*(?:\*{1,2}[ \t]*)?`?([A-Z][A-Z_]{2,})\b/)?.[1] ??
     firstLine.match(/—\s*\*{0,2}([A-Z][A-Z_]{2,})\*{0,2}\s*(?:\(|$)/)?.[1] ??
     null;
   if (kind === "nightly") {
@@ -168,7 +174,9 @@ export function parseLinks(body, repo, upstreamRepo) {
   const upstreamPrLabelled = new RegExp(String.raw`upstream (?:draft )?(?:PR|pull request)\W{0,12}?(?:https://github\.com/${U}/pull/|${U}#)(\d+)`, "i");
   const upstreamPr = Number(text.match(upstreamPrLabelled)?.[1] ?? NaN) || null;
 
-  const upstreamDeclaredNone = /^#{2,3}\s*Upstream issue\s*\n+\s*(?:none|n\/a|no|-)\s*$/im.test(text);
+  // No two quantifiers here can match the same characters: overlapping ones
+  // (as in \s*\n+\s*) backtrack polynomially on a run of blank lines.
+  const upstreamDeclaredNone = /^#{2,3}[ \t]*Upstream issue[ \t]*\r?\n(?:[ \t]*\r?\n)*[ \t]*(?:none|n\/a|no|-)[ \t]*\r?$/im.test(text);
 
   return { forkIssues, upstreamIssue, upstreamDeclaredNone, upstreamPr };
 }

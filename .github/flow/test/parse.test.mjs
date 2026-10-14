@@ -94,6 +94,11 @@ describe("classifyReview", () => {
     }
   });
 
+  test("an emoji posted as its escape text still reads (#451)", () => {
+    const body = "## \\u2705 PR Review - Full\n\n**Verdict:** APPROVE  \\u00b7  **Risk:** HIGH  \\u00b7  **Confidence:** MEDIUM";
+    assert.deepEqual(classifyReview(body), { kind: "full", verdict: "APPROVE", risk: "HIGH", head: null });
+  });
+
   test("a reply written as a heading is not a review", () => {
     assert.equal(classifyReview("## Re QA Review 6167015210\n\nNothing to change."), null);
     assert.equal(classifyReview("## Reply PR Review - Full\n\nNothing to change."), null);
@@ -383,3 +388,31 @@ describe("prKind", () => {
     assert.equal(prKind({ base: { ref: "up/retirement-plan-model" } }, CONFIG), "Stacked PR");
   });
 });
+
+// Bodies on a public repository are written by anyone, and GitHub allows
+// 65,536 characters. No pattern may backtrack its way to a stalled run.
+describe("crafted bodies parse in linear time", () => {
+  const within = (ms, fn) => {
+    const start = performance.now();
+    fn();
+    return performance.now() - start < ms;
+  };
+  const huge = (filler) => filler.repeat(60000);
+
+  test("an 'Upstream issue' heading followed by a run of blank lines", () => {
+    assert.ok(within(500, () => parseLinks(`## Upstream issue${huge("\n")}x`, REPO, CONFIG.upstreamRepo)));
+    assert.ok(within(500, () => parseLinks(`## Upstream issue${huge(" \n")}x`, REPO, CONFIG.upstreamRepo)));
+  });
+
+  test("a verdict label followed by a run of spaces", () => {
+    assert.ok(within(500, () => classifyReview(`## QA Review\n\n**Verdict:${huge(" ")}x`)));
+  });
+
+  test("links, triage plan and back-links over a long body", () => {
+    const body = huge("upstream issue we-promise/sure Closes # ");
+    assert.ok(within(500, () => parseLinks(body, REPO, CONFIG.upstreamRepo)));
+    assert.ok(within(500, () => triagePlanPresent(`## Triage Plan\n${body}`)));
+    assert.ok(within(500, () => citedIds(body)));
+  });
+});
+
