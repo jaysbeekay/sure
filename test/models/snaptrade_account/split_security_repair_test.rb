@@ -47,7 +47,7 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
   test "repair resolves to the row resolve_security keeps picking" do
     seed_observed_split
     resolver = SnaptradeAccount::HoldingsProcessor.new(@snaptrade_account)
-    assert_equal @row_b, resolver.send(:resolve_security, "SPLT", {}, account: @account),
+    assert_equal @row_b, resolver.send(:resolve_security, "SPLT", {}, account: @account, account_provider_id: @provider_id),
       "precondition: sync resolves the ticker to the held row, not the older one"
 
     result = repair!.sole
@@ -57,7 +57,7 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal 2, @account.trades.where(security_id: @row_b.id).count
     assert_equal 0, @account.trades.where(security_id: @row_a.id).count
     assert_equal 0, @account.holdings.where(security_id: @row_a.id).count
-    assert_equal @row_b, resolver.send(:resolve_security, "SPLT", {}, account: @account.reload)
+    assert_equal @row_b, resolver.send(:resolve_security, "SPLT", {}, account: @account.reload, account_provider_id: @provider_id)
   end
 
   test "repair handles a duplicate row that has trades but no holding" do

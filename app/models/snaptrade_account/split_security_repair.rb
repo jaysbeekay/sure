@@ -116,7 +116,7 @@ class SnaptradeAccount::SplitSecurityRepair
     # The row the next sync resolves to, or, with no holding to name one, the
     # row with the most trades.
     def target_for(ticker, security_ids)
-      held = held_security_for(account, ticker)
+      held = held_security_for(account, ticker, snaptrade_provider_id)
       return [ held.id, :held ] if held
 
       counts = account.trades.where(security_id: security_ids).group(:security_id).count
