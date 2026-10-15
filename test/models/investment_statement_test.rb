@@ -1200,7 +1200,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "Totals splits income into dividends and interest by literal label; a new income label needs its own bucket there"
   end
 
-  test "totals cache key carries the v4 aggregation version" do
+  test "totals cache key carries the v5 aggregation version" do
     create_investment_account(balance: 500)
     seen_keys = []
     Rails.cache.stubs(:fetch).with { |*args| seen_keys << Array(args.first); true }.returns(
@@ -1210,7 +1210,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     @statement.totals(period: Period.current_month)
 
     assert_equal 1, seen_keys.size
-    assert_includes seen_keys.first, "totals_query/v4"
+    assert_includes seen_keys.first, "totals_query/v5"
   end
 
   test "series cache key changes when a share is revoked" do
