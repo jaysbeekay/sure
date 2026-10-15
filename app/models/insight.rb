@@ -79,9 +79,13 @@ class Insight < ApplicationRecord
   # so it is generated only while every member can see the account. When a
   # share is removed that stops being true at once, not at the next nightly
   # run, so the card is expired here.
+  #
+  # By status, not `visible`: `visible` now also hides a card whose account is
+  # no longer shared with every member (we-promise/sure#4061), which is exactly
+  # the card this has to find, and hiding is not expiring -- a hidden card
+  # comes back if the share is restored.
   def self.expire_stale_valuation_for!(account)
-    where(family_id: account.family_id, insight_type: "stale_valuation")
-      .visible
+    where(family_id: account.family_id, insight_type: "stale_valuation", status: [ :active, :read ])
       .where("metadata->>'account_id' = ?", account.id.to_s)
       .update_all(status: "expired", updated_at: Time.current)
   end
