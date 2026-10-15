@@ -249,10 +249,10 @@ class Financekit::InboxTest < ActiveSupport::TestCase
     assert Financekit::Processor.new(@item).apply_next!.present?
 
     rule_jobs_before = enqueued_jobs.count { |job| job[:job] == RuleJob }
-    ordered_before = enqueued_jobs.count { |job| job[:job] == ApplyAllRulesJob }
+    ordered_before = enqueued_jobs.count { |job| job[:job] == ApplyRulesJob }
     Financekit::Downstream.new(@item, FinancekitBatch.where(id: batch.id)).perform!
 
-    assert_equal 1, enqueued_jobs.count { |job| job[:job] == ApplyAllRulesJob } - ordered_before
+    assert_equal 1, enqueued_jobs.count { |job| job[:job] == ApplyRulesJob } - ordered_before
     assert_equal rule_jobs_before, enqueued_jobs.count { |job| job[:job] == RuleJob }
   end
 
