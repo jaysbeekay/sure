@@ -867,8 +867,10 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     totals = @statement.totals(period: period)
 
     assert_equal Money.new(0, "USD"), totals.contributions
-    assert_equal Money.new(120, "USD"), totals.dividends
-    assert_equal Money.new(120, "USD"), totals.total_income
+    # Income is signed (Portfolio::FlowClassifier): the 120 left the account,
+    # so the relabeled row nets against income rather than adding to it.
+    assert_equal Money.new(-120, "USD"), totals.dividends
+    assert_equal Money.new(-120, "USD"), totals.total_income
   end
 
   test "a sell relabeled to Interest is counted as income only, not also as a withdrawal" do
@@ -929,6 +931,40 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     assert_equal 40, @statement.total_dividends
     assert_equal 5, @statement.total_interest
+  end
+
+  test "income nets by sign, so a charge or reversal labelled as income reduces it" do
+    # Portfolio::FlowClassifier decides income by label, not sign, and says to
+    # sum signed amounts: a margin-interest charge labelled "Interest" is money
+    # out and must lower interest, not add to it.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 100, date: period.start_date)
+    create_income_trade(account: account, label: "Interest", amount: 50, date: period.start_date)
+    reversal = create_income_trade(account: account, label: "Dividend", amount: 30, date: period.start_date)
+    reversal.update_columns(amount: 30)
+    create_labelled_transaction(account: account, label: "Interest", amount: 10, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(70, "USD"), totals.dividends
+    assert_equal Money.new(40, "USD"), totals.interest
+    assert_equal Money.new(110, "USD"), totals.total_income
+  end
+
+  test "trades_count counts trades, not the income transactions read beside them" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_trade(account: account, qty: 2, amount: 120, date: period.start_date)
+    create_income_transaction(account: account, label: "Dividend", amount: 10, date: period.start_date)
+    create_income_transaction(account: account, label: "Interest", amount: 3, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(13, "USD"), totals.total_income
+    assert_equal 1, totals.trades_count
   end
 
   test "current_holdings memoizes so repeated dashboard-style calls issue a single query" do

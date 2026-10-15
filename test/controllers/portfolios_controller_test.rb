@@ -338,8 +338,8 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path
 
     assert_response :success
-    assert_select "[data-controller~=reports-sortable][data-reports-sortable-url-value=?][data-reports-sortable-preference-key-value=?]",
-                  update_preferences_portfolio_path, "portfolio"
+    assert_select "[data-controller~=sortable-list][data-sortable-list-url-value=?][data-sortable-list-param-value=?]",
+                  update_preferences_portfolio_path, "preferences.portfolio_section_order"
     assert_select "[data-section-key=kpis][data-reports-section-url-value=?][data-reports-section-preference-key-value=?]",
                   update_preferences_portfolio_path, "portfolio"
   end

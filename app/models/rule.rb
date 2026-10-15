@@ -1,7 +1,8 @@
 class Rule < ApplicationRecord
-  UnsupportedResourceTypeError = Class.new(StandardError)
+  # Namespace for the per-family advisory lock around position assignment.
+  POSITION_LOCK_NAMESPACE = 4013
 
-  MOVE_DIRECTIONS = %i[up down].freeze
+  UnsupportedResourceTypeError = Class.new(StandardError)
 
   belongs_to :family
   has_many :conditions, dependent: :destroy
@@ -12,75 +13,20 @@ class Rule < ApplicationRecord
   accepts_nested_attributes_for :actions, allow_destroy: true
 
   before_validation :normalize_name
-  before_create :assign_priority
+  before_create :assign_next_position
 
-  # The order every runner applies rules in. Priority alone is not unique (rules
-  # imported or edited by hand can share one), so created_at and id make it a
-  # total order: the same rules always run in the same sequence.
-  scope :prioritised, -> { order(:priority, :created_at, :id) }
+  # Rules run top to bottom. created_at breaks ties, e.g. for rules created at
+  # the same moment before anyone reordered them.
+  scope :ordered, -> { order(:position, :created_at, :id) }
 
-  validates :resource_type, presence: true
-  validates :name, length: { minimum: 1 }, allow_nil: true
+  validates :resource_type, presence: true, if: -> { resource_type.to_s.valid_encoding? }
+  validates :name, length: { minimum: 1 }, allow_nil: true, if: -> { name.to_s.valid_encoding? }
+  validates_with DatabaseTextValidator, attributes: %i[name resource_type]
   validate :no_nested_compound_conditions
 
   # Every rule must have at least 1 action
   validate :min_actions
   validate :no_duplicate_actions
-
-  # Applies a family's rules one after another in priority order.
-  #
-  # Order only means something if the rules run one at a time: rule actions do not
-  # lock what they write, so the later rule overwrites the earlier one. A rule that
-  # fails has already recorded a failed RuleRun, so the rest still run. A pattern
-  # that timed out is final (running it again would time out again). Any other
-  # failure is retried for that rule alone, as its own job: retrying the whole pass
-  # would re-run every rule that succeeded, and with them any paid asynchronous
-  # action (AI categorisation, merchant detection) they had already enqueued.
-  #
-  # Actions that run asynchronously (AI categorisation, merchant detection) are
-  # enqueued in order but finish on their own; they are not serialised here.
-  #
-  # @param rules [ActiveRecord::Relation] rules of one family
-  # @param ignore_attribute_locks [Boolean]
-  # @param execution_type [String] a RuleRun execution type
-  def self.apply_in_priority_order(rules, ignore_attribute_locks:, execution_type:)
-    rules.prioritised.each do |rule|
-      RuleJob.perform_now(rule, ignore_attribute_locks: ignore_attribute_locks, execution_type: execution_type)
-    rescue Rule::SafeRegex::TimeoutError => e
-      Rails.logger.error("Rule #{rule.id} timed out during an ordered run: #{e.message}")
-    rescue => e
-      Rails.logger.error("Rule #{rule.id} failed during an ordered run, retrying it alone: #{e.class}: #{e.message}")
-      RuleJob.perform_later(rule, ignore_attribute_locks: ignore_attribute_locks, execution_type: execution_type)
-    end
-  end
-
-  # Swaps this rule with its neighbour in the family's order.
-  #
-  # Positions are rewritten densely (1, 2, 3...) rather than swapped, which also
-  # repairs rules that share a priority. Rules at the edge stay where they are.
-  #
-  # @param direction [Symbol] :up (runs earlier) or :down (runs later)
-  def move(direction)
-    direction = direction.to_sym
-    raise ArgumentError, "Unknown direction: #{direction}" unless MOVE_DIRECTIONS.include?(direction)
-
-    self.class.transaction do
-      family.lock!
-      ordered = family.rules.prioritised.to_a
-      index = ordered.index { |rule| rule.id == id }
-      neighbour = direction == :up ? index - 1 : index + 1
-
-      if neighbour >= 0 && neighbour < ordered.size
-        ordered[index], ordered[neighbour] = ordered[neighbour], ordered[index]
-      end
-
-      ordered.each.with_index(1) do |rule, position|
-        rule.update_column(:priority, position) unless rule.priority == position
-      end
-    end
-
-    reload
-  end
 
   def action_executors
     registry.action_executors
@@ -100,19 +46,73 @@ class Rule < ApplicationRecord
   end
 
   # Display-only: a pattern that times out reads as zero here, and the failure
-  # surfaces where the rule actually runs (#apply).
+  # surfaces where the rule actually runs (Rule::Runner).
   def affected_resource_count
-    matching_resources_scope.count
+    matching_scope.count
   rescue Rule::SafeRegex::TimeoutError
     0
   end
 
-  # Public wrapper around the private matching scope so callers can read the
-  # currently-matching transaction ids WITHOUT running executors (e.g. the
-  # notification baseline pre-seed). Mirrors total_affected_resource_count,
-  # which also reaches matching_resources_scope.
+  # Reads the currently-matching transaction ids WITHOUT running executors
+  # (e.g. the notification baseline pre-seed).
   def matching_transaction_ids
-    matching_resources_scope.pluck(:id)
+    matching_scope.pluck(:id)
+  end
+
+  # Sets the run order of all rules of a family. ordered_ids must list every
+  # rule of the family exactly once, so a stale page (a rule added or deleted
+  # meanwhile) cannot leave rules with clashing or missing positions.
+  def self.update_positions!(family, ordered_ids)
+    ordered_ids = Array(ordered_ids).map(&:to_s)
+    family_rule_ids = family.rules.pluck(:id)
+
+    unless ordered_ids.size == family_rule_ids.size && ordered_ids.sort == family_rule_ids.sort
+      raise ArgumentError, "ordered_ids must list every rule of the family exactly once"
+    end
+
+    return if ordered_ids.empty?
+
+    encoder = PG::TextEncoder::Array.new
+    sql = sanitize_sql_array([ <<~SQL.squish, encoder.encode(ordered_ids), encoder.encode((1..ordered_ids.size).to_a), family.id ])
+      UPDATE rules SET position = new_positions.position
+      FROM unnest(?::uuid[], ?::integer[]) AS new_positions(id, position)
+      WHERE rules.id = new_positions.id AND rules.family_id = ?
+    SQL
+    with_connection { |connection| connection.update(sql, "Rule Update Positions") }
+  end
+
+  # Excludes transaction ids with one array parameter. where.not(id: ids) sends
+  # one bind per id, which breaks beyond PostgreSQL's 65,535 bind limit when a
+  # broad rule claims or stops many transactions.
+  def self.excluding_transaction_ids(scope, ids)
+    return scope if ids.empty?
+
+    scope.where.not("transactions.id = ANY(?::uuid[])", PG::TextEncoder::Array.new.encode(ids.to_a))
+  end
+
+  # Active rules that run before this one. "Apply rule" runs them first, so
+  # the result matches the full run.
+  def active_rules_above
+    ordered_ids = family.rules.ordered.pluck(:id)
+    above_ids = ordered_ids.take_while { |id| id != self.id }
+    family.rules.where(id: above_ids, active: true).ordered
+  end
+
+  # The given transactions without re-checking the conditions, so they stay
+  # the same set while the actions change the fields the conditions read.
+  def scope_for_transaction_ids(ids)
+    registry.resource_scope.where("transactions.id = ANY(?::uuid[])", PG::TextEncoder::Array.new.encode(ids.to_a))
+  end
+
+  # Whether this rule's conditions currently match the given transaction.
+  def matches_transaction?(transaction)
+    matching_scope.where(id: transaction.id).exists?
+  end
+
+  # The transactions this rule currently matches, as a relation (e.g. for the
+  # assistant's rule preview, which counts and samples them).
+  def matching_resources
+    matching_scope
   end
 
   # Creates a categorization rule for the Quick Categorize Wizard.
@@ -136,7 +136,7 @@ class Rule < ApplicationRecord
     # Collect all unique transaction IDs matched by any rule
     transaction_ids = Set.new
     rules.each do |rule|
-      transaction_ids.merge(rule.send(:matching_resources_scope).pluck(:id))
+      transaction_ids.merge(rule.matching_scope.pluck(:id))
     rescue Rule::SafeRegex::TimeoutError
       next
     end
@@ -144,17 +144,19 @@ class Rule < ApplicationRecord
     transaction_ids.size
   end
 
-  def apply(ignore_attribute_locks: false, rule_run: nil)
+  # scope: the transactions to act on. Rule::Runner passes the matches minus
+  # transactions a rule higher up stopped. claimed_ids maps an attribute to the
+  # transaction ids a rule higher up already set it for; an action leaves those
+  # transactions alone ("top rule wins").
+  def apply(ignore_attribute_locks: false, rule_run: nil, scope: matching_scope, claimed_ids: {})
     total_modified = 0
     total_async_jobs = 0
     has_async = false
 
-    # Every action reads the matches again, so the one expensive part (a regex scan
-    # under a statement timeout) is resolved once for the whole apply.
-    @regex_matches = {}
-
     actions.each do |action|
-      result = action.apply(matching_resources_scope, ignore_attribute_locks: ignore_attribute_locks, rule_run: rule_run)
+      excluded_ids = action.claimed_attributes.flat_map { |attribute| claimed_ids.fetch(attribute, []).to_a }.uniq
+      action_scope = Rule.excluding_transaction_ids(scope, excluded_ids)
+      result = action.apply(action_scope, ignore_attribute_locks: ignore_attribute_locks, rule_run: rule_run)
 
       if result.is_a?(Hash) && result[:async]
         has_async = true
@@ -173,8 +175,6 @@ class Rule < ApplicationRecord
     else
       total_modified
     end
-  ensure
-    @regex_matches = nil
   end
 
   def apply_later(ignore_attribute_locks: false)
@@ -202,27 +202,40 @@ class Rule < ApplicationRecord
     end
   end
 
+  def matching_scope
+    scope = registry.resource_scope
+
+    # 1. Prepare the query with joins required by conditions
+    conditions.each do |condition|
+      scope = condition.prepare(scope)
+    end
+
+    # 2. Apply the conditions to the query
+    conditions.each do |condition|
+      scope = condition.apply(scope)
+    end
+
+    # A pattern is the one condition whose cost the database cannot bound by
+    # itself, so its matches are resolved under a statement timeout and the
+    # caller gets those ids. Raises Rule::SafeRegex::TimeoutError on timeout.
+    return scope unless conditions.any?(&:uses_regex?)
+
+    scope_for_transaction_ids(Rule::SafeRegex.with_timeout { scope.pluck(:id) })
+  end
+
   private
-    def matching_resources_scope
-      scope = registry.resource_scope
+    # Serialized per family with a transaction-scoped advisory lock: without
+    # it, two rules created at the same time both read the same MAX(position)
+    # and share a position, so their run order would silently fall back to
+    # the created_at/id tie-break. before_create runs inside the save
+    # transaction, so the lock is held until the new row is committed.
+    def assign_next_position
+      return if position.to_i.positive?
 
-      # 1. Prepare the query with joins required by conditions
-      conditions.each do |condition|
-        scope = condition.prepare(scope)
-      end
-
-      # 2. Apply the conditions to the query
-      conditions.each do |condition|
-        scope = condition.apply(scope)
-      end
-
-      # A pattern is the one condition whose cost the database cannot bound by
-      # itself, so its matches are resolved under a statement timeout and the
-      # actions then run on those ids.
-      return scope unless conditions.any?(&:uses_regex?)
-
-      ids = regex_matching_ids(scope)
-      registry.resource_scope.where(id: ids)
+      self.class.connection.execute(
+        self.class.sanitize_sql_array([ "SELECT pg_advisory_xact_lock(?, hashtext(?))", POSITION_LOCK_NAMESPACE, family_id.to_s ])
+      )
+      self.position = family.rules.maximum(:position).to_i + 1
     end
 
     def min_actions
@@ -252,25 +265,11 @@ class Rule < ApplicationRecord
       end
     end
 
-    # The ids a regex rule matches, resolved under a statement timeout. During #apply
-    # the result is kept, so a rule with several actions scans once.
-    def regex_matching_ids(scope)
-      return Rule::SafeRegex.with_timeout { scope.pluck(:id) } if @regex_matches.nil?
-
-      @regex_matches.fetch(:ids) { @regex_matches[:ids] = Rule::SafeRegex.with_timeout { scope.pluck(:id) } }
-    end
-
-    # Runs inside the save's transaction and takes the family row first, so two rules
-    # created at once for one family read the maximum one after the other and cannot
-    # end up with the same priority.
-    def assign_priority
-      return if priority.to_i.positive?
-
-      Family.lock.find(family_id)
-      self.priority = (Rule.where(family_id: family_id).maximum(:priority) || 0) + 1
-    end
-
     def normalize_name
-      self.name = nil if name.is_a?(String) && name.strip.empty?
+      return unless name.is_a?(String)
+      return unless name.valid_encoding?
+      return if name.include?("\0")
+
+      self.name = nil if name.strip.empty?
     end
 end

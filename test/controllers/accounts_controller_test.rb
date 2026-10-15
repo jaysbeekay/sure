@@ -112,7 +112,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     unregister_fake_chain!
   end
 
-  # #235. A provider card is admitted for a member as soon as ONE of its
+  # #3630. A provider card is admitted for a member as soon as ONE of its
   # accounts is shared with them, so the card must list only the accounts this
   # viewer may see. The unshared account is renamed to something no other part
   # of the page can print, so its absence proves the card filtered it.
@@ -277,7 +277,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "Hidden Bank 235"
   end
 
-  # CodeRabbit on #244: the SnapTrade card's brokerage line is built from every
+  # The SnapTrade card's brokerage line is built from every
   # account on the connection. With one brokerage it prints that brokerage's
   # name, so a member shared only the nameless account would read the other's.
   test "a partially shared member does not see a SnapTrade connection's brokerage" do
@@ -334,6 +334,47 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "##{dom_id(item)}"
     assert_select "turbo-frame##{dom_id(shared)}", count: 1
     assert_select "turbo-frame##{dom_id(unshared)}", count: 0
+  end
+
+  test "a partially shared member does not see stale-rate warnings for an unshared Kraken account" do
+    item = kraken_items(:one)
+    shared, unshared = link_two_accounts_to(item) do |k_item, index|
+      k_item.kraken_accounts.create!(
+        name: "Kraken #{index}", account_id: "kraken_stale_#{index}", account_type: "combined",
+        currency: "USD", current_balance: 1,
+        extra: index.zero? ? {} : { "kraken" => { "stale_rate" => "true", "rate_target_date" => "2001-02-03" } }
+      )
+    end
+
+    sign_in users(:family_member)
+    get accounts_url
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_not_includes response.body, "2001-02-03"
+
+    sign_in users(:family_admin)
+    get accounts_url
+    assert_includes response.body, "2001-02-03"
+  end
+
+  test "a partially shared member does not see a Trade Republic connection's data-quality totals" do
+    item = trade_republic_items(:configured_item)
+    # The fixture item already has one portfolio and one cash account, and
+    # the database allows one of each kind per connection.
+    link_two_accounts_to(item) do |_item, index|
+      trade_republic_accounts(index.zero? ? :main_account : :cash_account)
+    end
+    title = I18n.t("trade_republic_items.trade_republic_item.data_quality.title")
+
+    sign_in users(:family_member)
+    get accounts_url
+    assert_response :success
+    assert_select "##{dom_id(item)}"
+    assert_not_includes response.body, title
+
+    sign_in users(:family_admin)
+    get accounts_url
+    assert_includes response.body, title
   end
 
   test "index renders trading212 items" do
@@ -1735,7 +1776,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
   end
 
   private
-    # #235. Links a shared and an unshared account to +item+ through two fresh
+    # #3630. Links a shared and an unshared account to +item+ through two fresh
     # provider rows built by the block, and returns them in that order. Shares
     # are reset first so the member's access is exactly the one granted here.
     def link_two_accounts_to(item)

@@ -4,7 +4,7 @@ require "turbo/broadcastable/test_helper"
 class PlaidItem::SyncCompleteEventTest < ActiveSupport::TestCase
   include Turbo::Broadcastable::TestHelper
 
-  # #235. The card partial renders every account on the connection, and a sync
+  # #3630. The card partial renders every account on the connection, and a sync
   # broadcast has no viewer to filter for. Replacing the card on the family
   # stream would swap a member's filtered card for the full one, so the card
   # is left to the family's sync toast, which re-fetches the page per viewer.

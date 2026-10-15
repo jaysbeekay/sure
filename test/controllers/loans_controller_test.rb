@@ -887,6 +887,52 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_not_includes response.body, "linked offset balance"
   end
 
+  # CodeRabbit on we-promise/sure#3473: `create_and_sync` can raise RecordInvalid
+  # from the opening valuation's `entries.create!` or from `lock_saved_attributes!`,
+  # and then `e.record` is an Entry or the accountable, not the account the form
+  # renders.
+  test "a create that fails on the opening valuation still re-renders the form" do
+    invalid_entry = Entry.new.tap(&:validate)
+    Account::OpeningBalanceManager.any_instance.stubs(:set_opening_balance)
+      .raises(ActiveRecord::RecordInvalid.new(invalid_entry))
+
+    assert_no_difference "Account.count" do
+      post loans_path, params: { account: {
+        name: "Loan With Bad Anchor", balance: 50_000, currency: "USD", accountable_type: "Loan",
+        accountable_attributes: { rate_type: "fixed", interest_rate: 6, term_months: 12, initial_balance: 50_000 }
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "form[action='#{loans_path}']", count: 1
+    # Rebuilt from the submission, not a blank account: what was typed comes
+    # back for correction.
+    assert_select "input[name='account[name]'][value='Loan With Bad Anchor']", count: 1
+    assert_select "input[name='account[accountable_attributes][interest_rate]'][value='6']", count: 1
+  end
+
+  # The submission that trips this rescue need not carry nested attributes at
+  # all. `accountable_type=` writes only the type column, so rebuilding from
+  # such a submission left `accountable` nil and the 422 form came back
+  # without a single one of the loan's own fields -- nothing for the borrower
+  # to correct, on a form whose whole purpose here is correction.
+  test "a late create failure renders the loan's fields even when the form sent none" do
+    invalid_entry = Entry.new.tap(&:validate)
+    Account::OpeningBalanceManager.any_instance.stubs(:set_opening_balance)
+      .raises(ActiveRecord::RecordInvalid.new(invalid_entry))
+
+    assert_no_difference "Account.count" do
+      post loans_path, params: { account: {
+        name: "Loan Without Nested Attributes", balance: 50_000, currency: "USD", accountable_type: "Loan"
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "form[action='#{loans_path}']", count: 1
+    assert_select "input[name='account[name]'][value='Loan Without Nested Attributes']", count: 1
+    assert_select "input[name='account[accountable_attributes][interest_rate]']", minimum: 1
+  end
+
   private
     def shared_offset(balance: 0)
       @account.family.accounts.create!(

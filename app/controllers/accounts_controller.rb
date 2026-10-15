@@ -121,7 +121,8 @@ class AccountsController < ApplicationController
       records: txn_entryables,
       associations: {
         transfer_as_outflow: { inflow_transaction: { entry: :account } },
-        transfer_as_inflow: { outflow_transaction: { entry: :account } }
+        # :category for the read-only category an inflow leg shows (Transaction#category_set_on_transfer_outflow?)
+        transfer_as_inflow: { outflow_transaction: [ :category, { entry: :account } ] }
       }
     ).call
 
@@ -368,7 +369,7 @@ class AccountsController < ApplicationController
 
     # The accounts a provider card on this page may list. A card is admitted
     # by visible_provider_items as soon as ONE of its accounts is accessible,
-    # so it must not then render the rest (#235). Admins see every account.
+    # so it must not then render the rest (#3630). Admins see every account.
     def visible_card_accounts(item)
       return item.accounts if Current.user.admin?
 
