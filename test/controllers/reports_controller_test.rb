@@ -96,7 +96,9 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     )
     sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
     set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
-    set_rate from: "GBP", to: "USD", date: date, rate: 0
+    # `exchange_rates` can no longer store a 0 (we-promise/sure#3790), so the
+    # statement leg is handed the rate the guard exists for directly.
+    Portfolio::RealizedGains.any_instance.stubs(:rates_by_date).returns({ date => { "GBP" => 0 } })
 
     get reports_path
     assert_response :ok

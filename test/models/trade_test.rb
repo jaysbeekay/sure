@@ -252,26 +252,21 @@ class TradeTest < ActiveSupport::TestCase
     assert_equal :missing_exchange_rate, sell.realized_gain_loss_unavailable_reason
   end
 
-  # `ExchangeRate` validates presence only -- no positivity at the model, and
-  # `rate` is a plain `decimal, null: false` at the column -- so a provider or
-  # an import can leave a 0 or a negative behind. Multiplying by one is not a
-  # conversion: at 0 the 300 EUR of proceeds become nothing and the disposal
-  # reports a 200 USD total loss the user never took, and at -1.5 the proceeds
-  # go negative and the loss is 650. Neither is distinguishable on the page
-  # from a real one, and both are tax-relevant.
-  #
-  # A rate that cannot convert is the missing-rate case, whatever is stored in
-  # the row, so it takes the same exit.
-  test "a disposal whose stored rate cannot convert has no figure" do
-    [ 0, -1.5 ].each do |stored|
+  # `exchange_rates` can no longer store a 0 or a negative
+  # (we-promise/sure#3790), but the conversion still guards against being
+  # handed one, and the test above pins that. This pins the fork's half: when
+  # it happens, the reason names the rate, not the basis, so a caller sends the
+  # user to fix the right thing.
+  test "a disposal whose rate cannot convert says the rate is what is missing" do
+    [ 0, -1.5 ].each do |rate|
       account = create_portfolio_account(family: families(:empty))
       date = Date.new(2026, 3, 10)
 
       holding_snapshot account: account, date: date, qty: 5, price: 150, cost_basis: 100
       sell = sell_trade(account: account, date: date, qty: 2, price: 150, currency: "EUR").entryable
-      set_rate from: "EUR", to: "USD", date: date, rate: stored
+      sell.preloaded_exchange_rates = { [ "EUR", "USD", date ] => rate }
 
-      assert_nil sell.realized_gain_loss, "a rate of #{stored} converts nothing"
+      assert_nil sell.realized_gain_loss, "a rate of #{rate} converts nothing"
       assert_equal :missing_exchange_rate, sell.realized_gain_loss_unavailable_reason,
                    "and it is the rate that is missing, not the basis"
     end
