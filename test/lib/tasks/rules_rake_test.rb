@@ -4,8 +4,8 @@ class RulesRakeTest < ActiveJob::TestCase
   include EntriesTestHelper
 
   setup do
-    Rails.application.load_tasks unless Rake::Task.task_defined?("rules:apply_all")
-    Rake::Task["rules:apply_all"].reenable
+    RakeTaskTestHelper.load_task("rules:apply_all", "rules")
+    RakeTaskTestHelper.prepare("rules:apply_all")
 
     @family = families(:empty)
     @account = @family.accounts.create!(name: "Test Account", balance: 1000, currency: "USD", accountable: Depository.new)
