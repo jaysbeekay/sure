@@ -11,9 +11,9 @@ class Portfolio::IncomeTest < ActiveSupport::TestCase
     @last_day = Date.new(2026, 4, 2)
   end
 
-  # The issue's first exit criterion, and the reason the series is built on
+  # The reason the series is built on
   # the daily rows rather than on either storage shape: a Trade-shaped dividend
-  # (qty 0, since we-promise/sure#1311) and a Transaction-shaped one (Trading212,
+  # (qty 0, since #1311) and a Transaction-shaped one (Trading212,
   # SimpleFIN) in the SAME month have to land in the same bucket.
   test "a trade-shaped and a transaction-shaped dividend both reach the month's total" do
     income_trade account: @account, date: @mar, amount: 30
@@ -61,8 +61,7 @@ class Portfolio::IncomeTest < ActiveSupport::TestCase
     assert drivers.reconciles?, "regrouping the rows must not change what they add up to"
   end
 
-  # Plan test 3. `Portfolio::RealizedGains` draws the same line: an empty bar
-  # and a break-even month are different facts.
+  # An empty bar and a break-even month are different facts.
   test "a month with no income is absent rather than zero" do
     income_trade account: @account, date: @feb, amount: 10
     income_trade account: @account, date: Date.new(2026, 4, 1), amount: 20
@@ -126,9 +125,10 @@ class Portfolio::IncomeTest < ActiveSupport::TestCase
     assert_equal BigDecimal(4), income.fees
   end
 
-  # Plan test 4. Today's value is deliberately different and much larger: a
-  # ratio taken over the closing balance reads 10 / 3_000, one taken over the
-  # opening balance 10 / 1_000, and only the average of the period is 10 / 2_000.
+  # Today's value is deliberately different and much larger: a ratio taken
+  # over the closing balance reads 10 / 3_010, one taken over the opening
+  # balance 10 / 1_000, and the average of the period's closes,
+  # (1_000 + 990 + 3_010) / 3 = 5_000 / 3, gives 10 / 1_666.67, about 0.006.
   test "the fee ratio divides by the period's value, not by where it ended" do
     fee_entry account: @account, date: @feb + 1, amount: 10
     lay_balance account: @account, date: @feb, opening: 1_000, closing: 1_000
@@ -156,7 +156,7 @@ class Portfolio::IncomeTest < ActiveSupport::TestCase
   end
 
   # Income converts the way every other flow in the daily rows does: at the
-  # PREVIOUS day's rate (R11, see Portfolio::DailyReturns), so the local
+  # PREVIOUS day's rate (see Portfolio::DailyReturns), so the local
   # components and the currency effect add up exactly. The rate on the payment
   # day and every later day is deliberately different, so a conversion at either
   # reads 20 rather than 15.
@@ -177,6 +177,26 @@ class Portfolio::IncomeTest < ActiveSupport::TestCase
     )
 
     assert_equal BigDecimal(15), income.total
+  end
+
+  # Performance caches this hash, and a cache store with a JSON serializer
+  # turns a Date into a string on the way out and hands the string back. The
+  # month is therefore an ISO 8601 string from the start, so what a caller reads
+  # is the same whichever serializer the store uses, and it parses back to the
+  # month it names.
+  test "the cached payload's months survive a JSON round trip unchanged" do
+    income_trade account: @account, date: @mar, amount: 30
+    lay_flat_balances cash_by_date: { @mar => 30 }
+
+    payload = income_for.to_h
+    round_tripped = JSON.parse(payload.to_json)
+
+    assert_equal [ "2026-03-01" ], payload[:buckets].map { |bucket| bucket[:month] }
+    assert_equal payload[:buckets].map { |bucket| bucket[:month] },
+                 round_tripped["buckets"].map { |bucket| bucket["month"] },
+                 "a JSON store must hand back what was cached"
+    assert_equal Date.new(2026, 3, 1), Date.iso8601(round_tripped["buckets"].first["month"])
+    assert_equal BigDecimal(30), BigDecimal(round_tripped["buckets"].first["amount"])
   end
 
   private
