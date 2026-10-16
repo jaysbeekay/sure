@@ -78,31 +78,16 @@ module PlaidAccount::Liabilities::LoanTermWriter
       report_refusal(*refusal) if refusal
     end
 
-    # Writes through Enrichable and returns nil, or `[attributes, messages]`
-    # when the model refused them.
+    # Writes through Loan#enrich_reporting_refusal and returns nil, or
+    # `[attributes, messages]` when the model refused them. That method also
+    # puts a refused loan back the way it was found and clears its errors, so
+    # nothing later in the same sync reads a figure the model would not store
+    # or reports a refusal that never happened (cubic, #222). It is shared with
+    # RedbarkAccount::LoanDetailsProcessor and the record-loan-rate-change rule
+    # action, which is where this fix used to have to be carried by hand.
     def enrich(loan, present)
-      return nil if present.blank?
-
-      loan.enrich_attributes(present, source: "plaid")
-      return nil if loan.errors.empty?
-
-      messages = loan.errors.full_messages
-
-      # Put the loan back the way it was found. `enrich_attributes` assigns and
-      # then calls `save`; a refusal leaves the REJECTED VALUES on the in-memory
-      # loan with its errors populated, so anything reading it later in the same
-      # sync sees a figure the model would not store. Clearing the errors
-      # matters separately: `enrich_attributes` returns early without saving
-      # when every attribute is locked or unchanged, so a later write in the
-      # same pass would find these errors sitting there and report a refusal
-      # that never happened.
-      #
-      # The same fix `RedbarkAccount::LoanDetailsProcessor#write` carries -- it
-      # was raised there first and should have been carried across with the
-      # pattern rather than waiting to be raised again here (cubic, #222).
-      loan.restore_attributes(present.keys.map(&:to_s))
-      loan.errors.clear
-      [ present, messages ]
+      messages = loan.enrich_reporting_refusal(present, source: "plaid")
+      messages && [ present, messages ]
     end
 
     # `enrich_attributes` calls `save`, not `save!`, so an invalid value

@@ -1,127 +1,321 @@
 require "test_helper"
 
 class Loan::PayoffProjectionTest < ActiveSupport::TestCase
-  # CodeRabbit, #89: the projection used to read `Date.current` directly for its
-  # simulation start, its accrual start and the cutoff for which contracted rows
-  # still count as remaining. A caller that had pinned a date for everything
-  # else -- the rate-change table does -- still got a projection anchored to
-  # whatever "now" was when it ran, so a render crossing midnight could quote a
-  # balance from one date beside a classification made on another.
+  setup do
+    @family = families(:dylan_family)
+    @today = Date.new(2027, 1, 15)
+  end
+
+  test "a loan exactly on contract projects the schedule it is already on" do
+    loan = build_loan(term_months: 24)
+    on_contract = scheduled_balance_at(loan, @today)
+    loan.account.update!(balance: on_contract)
+
+    projection = loan.payoff_projection(as_of: @today)
+
+    assert projection.applicable?
+    assert projection.converged?
+    assert_equal loan.amortization_schedule.payoff_date, projection.payoff_date
+    assert_equal 0, projection.months_saved
+  end
+
+  # Extra payments already made need no input of their own: they are why the
+  # recorded balance sits below the scheduled one, and the projection starts
+  # from that balance (#100, decision 10).
+  test "an overpaid loan finishes early and pays less interest, with no extra-payment input" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 50_000)
+
+    projection = loan.payoff_projection(as_of: @today)
+
+    assert projection.converged?
+    assert_operator projection.months_saved, :>, 0
+    assert_operator projection.interest_saved.amount, :>, 0
+    assert_operator projection.payoff_date, :<, loan.amortization_schedule.payoff_date
+  end
+
+  # Decision 1 on #100. A variable loan that is ahead keeps paying what the
+  # contract currently asks and therefore finishes early. Re-amortising the
+  # smaller balance would shrink the repayment and land it back on the
+  # original maturity, which is what this test exists to refuse.
+  test "a variable loan ahead of schedule pays the contract's repayment and finishes early" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    loan.update!(variable_rate_schedule: { Date.new(2026, 7, 1).iso8601 => "12.0" })
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 30_000)
+    loan.reload
+
+    projection = loan.payoff_projection(as_of: @today)
+    schedule_by_date = loan.amortization_schedule.payments.index_by(&:date)
+
+    projection.payments[0..-2].each do |payment|
+      assert_equal schedule_by_date.fetch(payment[:payment_date]).payment.amount, payment[:payment_amount],
+        "on #{payment[:payment_date]} the projection must pay what the contract asks, not a re-sized figure"
+    end
+    assert_operator projection.payoff_date, :<, loan.amortization_schedule.payoff_date
+    assert_operator projection.months_saved, :>, 0
+  end
+
+  # A variable loan's CONTRACT resizes the repayment at each rate change, and
+  # the projection follows the schedule's own resized figure -- not one
+  # re-derived from the balance in front of it.
+  test "a future recorded rate change moves the projected repayment by the schedule's amount" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    change_date = @today >> 3
+    loan.update!(variable_rate_schedule: { change_date.iso8601 => "18.0" })
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 20_000)
+    loan.reload
+
+    projection = loan.payoff_projection(as_of: @today)
+    schedule_by_date = loan.amortization_schedule.payments.index_by(&:date)
+    first_resized = projection.payments.find { |p| p[:payment_date] >= change_date }
+
+    assert_operator first_resized[:payment_amount], :>, projection.payments.first[:payment_amount],
+      "the repayment must resize when the recorded rate rises"
+    assert_equal schedule_by_date.fetch(first_resized[:payment_date]).payment.amount, first_resized[:payment_amount],
+      "and it resizes to the schedule's figure, not to one sized from the smaller balance"
+  end
+
+  # On a fixed loan every scheduled row carries the same repayment, so paying
+  # the schedule's rows is the held contracted payment. Byte-identical to a
+  # :hold run seeded with that payment, which pins that decision 1 changed
+  # nothing for fixed loans.
   #
-  # Asserts the injected date is load-bearing rather than decorative: a year of
-  # difference must move the count of remaining contracted payments.
+  # Fork: the held run is given what the projection is given -- its first
+  # period opening where the schedule's does, and the loan's interest
+  # calculation -- since under daily accrual a period's length is part of its
+  # charge, where upstream's monthly charge is the same from any opening day.
+  test "a fixed loan's projection is identical to holding the contracted payment" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) - 10_000)
+    loan.reload
+    projection = loan.payoff_projection(as_of: @today)
+    schedule = loan.amortization_schedule
+    remaining = schedule.payments.select { |p| p.date > @today }
+    resolver = Loan::RateResolver.for(loan)
+
+    held = Loan::Simulator.new(
+      starting_balance: loan.account.balance,
+      accrual_start_date: schedule.payments.select { |p| p.date <= @today }.last.date,
+      payment_schedule: remaining.map(&:date),
+      accrual_rate_for: resolver.method(:accrual_rate_for),
+      re_amortisation_events: resolver.method(:re_amortisation_events),
+      payment_amount: remaining.first.payment.amount,
+      payment_strategy: :hold,
+      currency_precision: 2,
+      settle_at_schedule_end: false,
+      interest_for: Loan::DailyInterest.for(loan)
+    ).run
+
+    assert_equal held.payments, projection.payments
+  end
+
+  # The case that was unreachable in #103, and the reason convergence came back
+  # with this change. A borrower far enough behind is not paying the loan off on
+  # the contracted repayment -- and must not be shown a payoff date implying
+  # otherwise.
+  #
+  # Fork (#401): a loan behind schedule is followed past maturity on its last
+  # level repayment, so upstream's 400,000 clears a year late here. What never
+  # clears is a balance the repayment cannot keep pace with: 22,160.28 a month
+  # against 6% on 5,000,000 is less than the interest.
+  test "a loan too far behind to clear reports a balloon and no payoff date" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: 5_000_000)
+
+    projection = loan.payoff_projection(as_of: @today)
+
+    assert projection.applicable?
+    assert_not projection.converged?
+    assert_nil projection.payoff_date
+    assert_operator projection.balloon_amount.amount, :>, 0
+    assert_equal 0, projection.months_saved, "no months are saved by a loan that never finishes"
+  end
+
+  # CodeRabbit on #3474: `accounts.balance` is nullable and Money.new(nil)
+  # raises, and the Schedule tab reads the projection outside the chart's
+  # rescue. A loan with no balance yet has nothing to project.
+  test "a loan with no balance yet is not applicable rather than raising" do
+    loan = build_loan(term_months: 24)
+    loan.account.update_columns(balance: nil)
+
+    projection = loan.payoff_projection(as_of: @today)
+
+    assert_not projection.applicable?
+    assert_nil projection.payoff_date
+    assert_equal 0, projection.current_balance.amount
+  end
+
+  # Fork divergence (#401). Upstream stops at maturity, so a loan even
+  # slightly behind never converges there and a converged projection never
+  # adds interest. The fork follows it past maturity on the last level
+  # repayment: it finishes late, and the Schedule tab's "interest added" card
+  # says what that costs.
+  test "a loan slightly behind finishes after maturity on the last level repayment" do
+    loan = build_loan(term_months: 24)
+    loan.account.update!(balance: scheduled_balance_at(loan, @today) + 500)
+
+    projection = loan.payoff_projection(as_of: @today)
+
+    assert projection.applicable?
+    assert projection.converged?
+    assert_operator projection.payoff_date, :>, loan.amortization_schedule.payoff_date
+    assert_operator projection.months_saved, :<, 0
+    assert_operator projection.interest_saved.amount, :<, 0
+  end
+
+  test "is not applicable to a loan with no schedule or nothing left to owe" do
+    unamortizable = build_loan(term_months: 24, rate_type: "")
+    assert_not unamortizable.payoff_projection(as_of: @today).applicable?
+
+    cleared = build_loan(term_months: 24)
+    cleared.account.update!(balance: 0)
+    assert_not cleared.payoff_projection(as_of: @today).applicable?
+
+    # Fork (#401): a matured loan still owing is followed on its last level
+    # repayment rather than dropped, so maturity alone does not end the
+    # projection; nothing left to owe does.
+    matured = build_loan(term_months: 24)
+    matured.account.update!(balance: 0)
+    assert_not matured.payoff_projection(as_of: Date.new(2040, 1, 1)).applicable?
+  end
+
+
+  # A variable loan's CONTRACT resizes the repayment at each rate change.
+  # Holding one figure to maturity projects a repayment the lender will never
+  # ask for, and the further out the change, the more wrong the payoff date.
+  test "a variable projection re-amortises at a recorded rate change" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    loan.update!(variable_rate_schedule: { (@today >> 3).iso8601 => "18.0" })
+    loan.account.update!(balance: scheduled_balance_at(loan, @today))
+    projection = loan.reload.payoff_projection(as_of: @today)
+
+    before = projection.payments.first[:payment_amount]
+    after = projection.payments.find { |p| p[:payment_date] >= (@today >> 3) }[:payment_amount]
+
+    assert_operator after, :>, before,
+      "the repayment must resize when the recorded rate rises"
+  end
+
+  # The comparison the cards quote: a balance recorded on a scheduled date,
+  # equal to the schedule's balance for that date, saves nothing. The
+  # projection's first period then charges exactly what the schedule's next
+  # row charges, so `interest_saved` is zero, not merely small.
+  test "a loan exactly on contract saves no interest" do
+    loan = build_loan(term_months: 24)
+    on_date = loan.amortization_schedule.payments.find { |p| p.date > @today }.date
+    loan.account.update!(balance: loan.amortization_schedule.payments.find { |p| p.date == on_date }.ending_balance.amount)
+
+    projection = loan.reload.payoff_projection(as_of: on_date)
+
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount
+  end
+
+  # Under monthly accrual a period is charged at the rate in force when it
+  # OPENED (Loan::Simulator's class comment), so a change recorded between the
+  # last payment and today belongs to the next period. Opening the projection's
+  # first period at `as_of` instead re-rated the month already running, and a
+  # variable borrower exactly on contract was quoted interest the schedule
+  # never charges.
+  test "a rate change between the last payment and today does not re-rate the month already running" do
+    loan = build_loan(term_months: 24, rate_type: "variable")
+    last_paid = loan.amortization_schedule.payments.select { |p| p.date <= @today }.last.date
+    change_date = last_paid + 5
+    assert_operator change_date, :<, @today, "the change must fall inside the period already running"
+
+    loan.update!(variable_rate_schedule: { change_date.iso8601 => "12.0" })
+    # Fresh records: the schedule read above is memoised without the change.
+    loan.account.update!(balance: scheduled_balance_at(Loan.find(loan.id), @today))
+    projection = Loan.find(loan.id).payoff_projection(as_of: @today)
+
+    assert projection.converged?
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount,
+      "on contract, the projection must charge the running month what the schedule charges it"
+  end
+
+  # ---------------------------------------------------------------------------
+  # Fork: the projection's daily interest, offsets, the past-maturity window
+  # (#401), the Extra repayments what-if (#304) and the injected date (#89,
+  # #184). Everything above is upstream's projection suite; the three tests
+  # whose premise is upstream's stop-at-maturity say how the fork differs.
+  # ---------------------------------------------------------------------------
+
+  # CodeRabbit, #89: the projection used to read `Date.current` for its start
+  # and its cutoff. A year of difference in the injected date must move the
+  # count of contracted payments still ahead of it.
   test "the injected as_of anchors the projection" do
-    account = families(:dylan_family).accounts.create!(
-      name: "As-Of Anchor Loan", balance: 400_762.12, currency: "USD",
-      accountable: Loan.new(
-        rate_type: "fixed", interest_rate: 6.18, term_months: 360,
-        initial_balance: 400_762.12, start_date: Date.current - 83.months
-      )
-    )
-    loan = account.loan
+    loan = fork_loan(balance: 400_762.12, interest_rate: 6.18, start_date: Date.current - 83.months)
 
     today = Loan::PayoffProjection.new(loan, as_of: Date.current)
     next_year = Loan::PayoffProjection.new(loan.reload, as_of: Date.current + 1.year)
 
-    assert_operator next_year.send(:original_remaining_payment_count), :<,
-      today.send(:original_remaining_payment_count),
+    assert_operator next_year.send(:remaining_payment_dates).length, :<, today.send(:remaining_payment_dates).length,
       "a later as_of must leave fewer contracted payments ahead of it"
-
     assert_equal Date.current, today.as_of
     assert_equal Date.current + 1.year, next_year.as_of
   end
-  setup do
-    @family = families(:dylan_family)
+
+  # #184 (2026-10-01, note 1): the projection's offsets split recorded history
+  # from today's total held flat at the projection's own date, not the wall
+  # clock's.
+  test "the injected as_of reaches the offset balances" do
+    loan = fork_loan(balance: 500_000, rate_type: "variable")
+    offset = @family.accounts.create!(name: "Dated offset", balance: 50_000, currency: "USD", accountable: Depository.new)
+    loan.loan_offset_accounts.create!(account: offset)
+    as_of = Date.current - 40.days
+
+    Loan::OffsetResolver.expects(:new).with(loan, as_of: as_of).returns(stub(change_points: []))
+
+    Loan::PayoffProjection.new(loan, as_of: as_of).payments
   end
 
-  # Builds a fixed-rate loan whose original balance is pinned via an explicit
-  # opening_anchor valuation (so `Loan#original_balance` stays fixed even
-  # after we later mutate `account.balance` to simulate the "current, actual"
-  # position). start_date defaults to today so every persisted amortization
-  # row is naturally in the future relative to `Date.current`.
-  def build_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
-    account = Account.create! \
-      family: @family,
-      name: "Test Loan #{SecureRandom.hex(4)}",
-      balance: balance,
-      currency: "USD",
-      accountable: Loan.create!(
-        subtype: "mortgage",
-        interest_rate: interest_rate,
-        term_months: term_months,
-        rate_type: rate_type,
-        start_date: start_date
-      )
-
-    account.entries.create!(
-      name: "Starting balance",
-      amount: balance,
-      currency: "USD",
-      date: start_date,
-      entryable: Valuation.new(kind: "opening_anchor")
-    )
-
-    account.loan.tap(&:ensure_amortization_schedule_current!)
-  end
-
-  # Regression for the #35 x #39 interaction.
-  #
-  # `applicable?` used to require `loan.amortizations.exists?` and compared
-  # against rows read straight from that association. That worked only because
-  # the Schedule tab rebuilt the schedule inside the request. Once the read path
-  # stopped writing (#39), a loan with no persisted rows silently lost its
-  # projection card -- no error, just a missing feature.
-  #
-  # The projection now reads AmortizationSchedule#display_rows, the same source
-  # as the table and the summary cards.
-  test "hands the loan's day-count convention to the simulator" do
-    loan = build_loan(balance: 400_000)
+  test "charges through the loan's daily interest on the loan's day-count basis" do
+    loan = fork_loan(balance: 400_000)
     loan.update!(day_count_convention: "actual_actual")
 
     Loan::Simulator.expects(:new).with do |kwargs|
-      kwargs[:day_count_convention] == "actual_actual"
-    end.at_least_once.returns(stub(run: stub(payments: [])))
+      kwargs[:interest_for].is_a?(Loan::DailyInterest) && kwargs[:interest_for].day_count_convention == "actual_actual"
+    end.returns(stub(run: Loan::SimulationResult.new(payments: [], currency_precision: 2)))
 
-    Loan::PayoffProjection.new(loan).send(:raw_schedule)
+    Loan::PayoffProjection.new(loan).payments
   end
 
-  test "projects without persisted rows, and agrees with the persisted result once they exist" do
-    loan = build_loan(balance: 500_000)
-    loan.account.update!(balance: 450_000)
+  # C4: the first period opens where the schedule's period containing as_of
+  # opened, charged on today's balance -- not a stub from as_of, which left the
+  # days since the last payment uncharged and read an on-contract borrower as
+  # ahead. On contract mid-period, the projection is the schedule's own tail.
+  test "the first projected period opens where the schedule's does, not on as_of" do
+    loan = fork_loan(balance: 500_000, start_date: Date.new(2025, 1, 15))
+    loan.update!(day_count_convention: "actual_365")
+    loan = Loan.find(loan.id)
+    as_of = Date.new(2026, 3, 27)
+    rows = loan.amortization_rows
+    on_contract = rows.select { |row| row[:payment_date] <= as_of }.last
+    loan.account.update!(balance: on_contract[:ending_balance])
 
-    with_rows = loan.payoff_projection
-    assert with_rows.applicable?, "test setup must produce an applicable projection"
-    expected_date = with_rows.payoff_date
-    expected_saved = with_rows.interest_saved
+    projection = Loan.find(loan.id).payoff_projection(as_of: as_of)
+    following = rows.find { |row| row[:payment_date] > as_of }
 
-    loan.amortizations.delete_all
-    loan.reload
-
-    assert_empty loan.amortizations, "the persisted rows must be gone for this to prove anything"
-
-    without_rows = loan.payoff_projection
-    assert without_rows.applicable?,
-      "a projection is a display calculation and must not depend on a write having happened (#39)"
-    assert_equal expected_date, without_rows.payoff_date
-    assert_equal expected_saved, without_rows.interest_saved
+    assert_equal following[:interest_payment], projection.payments.first[:interest_payment],
+      "the period running on as_of is charged in full, from the last payment date"
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount
   end
 
-  test "projecting does not persist amortization rows" do
-    loan = build_loan(balance: 500_000)
+  test "projecting neither needs persisted rows nor writes them" do
+    loan = fork_loan(balance: 500_000)
     loan.account.update!(balance: 450_000)
     loan.amortizations.delete_all
-    loan.reload
 
     assert_no_difference -> { LoanAmortization.count } do
-      loan.payoff_projection.payoff_date
+      assert Loan.find(loan.id).payoff_projection.converged?
     end
   end
 
   test "a linked offset reduces projected interest without reducing the loan balance" do
-    offset = @family.accounts.create!(
-      name: "Projection offset", balance: 50_000, currency: "USD", accountable: Depository.new
-    )
-    loan = build_loan(balance: 500_000, interest_rate: 3.5)
+    offset = @family.accounts.create!(name: "Projection offset", balance: 50_000, currency: "USD", accountable: Depository.new)
+    loan = fork_loan(balance: 500_000)
     loan.loan_offset_accounts.create!(account: offset)
     loan.account.update!(balance: 450_000)
 
@@ -137,11 +331,9 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
   end
 
   test "an empty linked offset preserves the no-offset projection" do
-    loan = build_loan(balance: 500_000, interest_rate: 3.5)
+    loan = fork_loan(balance: 500_000)
     baseline = loan.payoff_projection
-    offset = @family.accounts.create!(
-      name: "Empty offset", balance: 0, currency: "USD", accountable: Depository.new
-    )
+    offset = @family.accounts.create!(name: "Empty offset", balance: 0, currency: "USD", accountable: Depository.new)
     loan.loan_offset_accounts.create!(account: offset)
 
     with_empty_offset = loan.reload.payoff_projection
@@ -150,165 +342,111 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_equal baseline.total_interest.amount, with_empty_offset.total_interest.amount
   end
 
-  # The date is pinned rather than taken from `Date.current`: built on the 29th
-  # or 30th of a month this used to fail, because the projection and the
-  # schedule generated different calendars from a month-end anchor (#257).
-  test "matches the original schedule (within a rounding-driven cleanup payment) when the current balance equals the original balance" do
+  # On contract at drawdown, the projection IS the schedule: the fork's old
+  # stub-from-as_of projection trailed by a rounding "cleanup" payment here,
+  # which upstream's period-start opening removed.
+  test "an untouched loan projects its own schedule" do
     drawdown = Date.new(2026, 6, 15)
-    loan = build_loan(balance: 500000, start_date: drawdown)
+    loan = fork_loan(balance: 500_000, start_date: drawdown)
 
     projection = Loan::PayoffProjection.new(loan, as_of: drawdown)
 
-    # The original schedule forces its (known-in-advance) final payment to
-    # exactly clear the balance, adjusting that payment's amount. This
-    # projection doesn't know its final period in advance -- it keeps paying
-    # the constant level payment and only adjusts once a period's payment
-    # would otherwise overshoot -- so an unchanged balance can still trail by
-    # one small "cleanup" payment after 360 periods of accumulated rounding.
-    # That's a real, tiny artifact of two independently-terminated
-    # simulations, not a meaningful difference.
-    #
-    # The bound asserted is the artefact itself -- the trailing payment's own
-    # interest -- rather than the flat $1 this used to assert. That $1 was the
-    # monthly-accrual residue measured and then hardcoded; under daily accrual
-    # the same untouched loan trails by $1.10, so the flat bound would have
-    # reported a loan sitting exactly on its contract as behind schedule.
-    assert projection.applicable?
-    assert projection.months_saved.between?(-1, 0)
-    assert projection.cleanup_payment_artefact?
+    assert projection.converged?
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount
     assert_not projection.diverges_from_schedule?
   end
 
-  # #257. The schedule steps its dates from the previous one, so a clamped
-  # month-end never recovers: 29 Sep -> ... -> 28 Feb -> 28 Mar. The projection
-  # offset each date from the first instead, so it went back to the 29th in
-  # March. From the first February onwards the two calendars disagreed on 334
-  # of 360 payments, and because accrual is daily every shifted boundary moved
-  # interest -- $127 on a 29th start, $249 on a 30th.
-  test "the projected calendar is the contracted calendar, for a month-end start" do
+  # #257: the projected calendar is the contracted calendar, including for a
+  # month-end start, and from any point in the loan.
+  test "the projected calendar is the contracted calendar, for a month-end start and mid-loan" do
     drawdown = Date.new(2026, 9, 29)
-    loan = build_loan(balance: 500_000, start_date: drawdown)
-    projection = Loan::PayoffProjection.new(loan, as_of: drawdown)
+    loan = fork_loan(balance: 500_000, start_date: drawdown)
+    contracted = loan.amortization_schedule.payments.map(&:date)
 
-    contracted = loan.amortization_schedule.display_rows.map(&:payment_date).select { |date| date > drawdown }
+    [ drawdown, drawdown + 2.months, drawdown + 40.months ].each do |as_of|
+      ahead = contracted.select { |date| date > as_of }
+      projected = Loan::PayoffProjection.new(loan, as_of: as_of).send(:projected_payment_dates)
 
-    assert_equal contracted, projection.send(:projected_payment_dates).first(contracted.length)
+      assert_equal ahead, projected.first(ahead.length), "the calendars must agree from #{as_of}"
+    end
   end
 
   test "an on-contract month-end loan does not read as diverging" do
     [ Date.new(2026, 9, 29), Date.new(2026, 9, 30), Date.new(2026, 3, 31) ].each do |drawdown|
-      loan = build_loan(balance: 500_000, start_date: drawdown)
+      loan = fork_loan(balance: 500_000, start_date: drawdown)
       projection = Loan::PayoffProjection.new(loan, as_of: drawdown)
 
       assert_not projection.diverges_from_schedule?, "a loan drawn down on #{drawdown} sits on its own contract"
-      assert_operator projection.interest_saved.abs, :<, 5,
-        "#{drawdown}: only the cleanup-payment artefact should separate the two"
+      assert_equal BigDecimal("0"), projection.interest_saved.amount
     end
   end
 
-  # The calendars agree from any starting point, not just origination. Two are
-  # checked: one before the first February, where the remaining rows still fall
-  # on the 29th and the clamp is still ahead, and one long after it, where the
-  # step starts from a row already clamped to the 28th and must stay there.
-  test "the calendars still agree when the projection starts mid-loan" do
-    drawdown = Date.new(2026, 9, 29)
-    loan = build_loan(balance: 500_000, start_date: drawdown)
-
-    [ drawdown + 2.months, drawdown + 40.months ].each do |as_of|
-      projection = Loan::PayoffProjection.new(loan, as_of: as_of)
-      contracted = loan.amortization_schedule.display_rows.map(&:payment_date).select { |date| date > as_of }
-
-      assert_equal contracted, projection.send(:projected_payment_dates).first(contracted.length),
-        "the calendars must agree from #{as_of}"
-    end
-  end
-
-  # Regression: the projection built its simulator without
-  # `accrual_rate_changes`, so the simulator fell back to "this period has no
-  # rate changes". On the daily branch that is what segments an accrual window
-  # (C7/C10), so a rate effective BETWEEN two payment dates moved the persisted
-  # schedule's interest and not the projection's -- reporting an untouched loan
-  # as diverging from its own contract.
-  #
-  # Invisible before #10: the projection ran daily only for offset loans, so the
-  # missing input only mattered for a variable-rate loan that also had an offset.
-  # Enabling daily accrual for every loan made it reachable for all of them.
+  # #189 reaching the projection: a rate change between two payment dates is
+  # charged from its own date in the projection as in the schedule.
   test "a rate change between payment dates moves the projection's interest, not just the schedule's" do
-    loan = build_loan(balance: 500_000, rate_type: "variable")
-    payment_dates = loan.amortizations.where("payment_date > ?", Date.current).ordered.pluck(:payment_date)
+    loan = fork_loan(balance: 500_000, rate_type: "variable")
+    payment_dates = loan.amortization_schedule.payments.map(&:date).select { |date| date > Date.current }
     mid_period = payment_dates.first + ((payment_dates.second - payment_dates.first) / 2)
     assert mid_period > payment_dates.first && mid_period < payment_dates.second,
       "test setup must place the rate change strictly inside a payment period"
 
     baseline_interest = loan.payoff_projection.total_interest.amount
-
-    # 3.5% -> 4.5%, deliberately modest. A large jump (9%) pushes the monthly
-    # interest above the contracted payment, so the projection stops being
-    # `applicable?` and reports zero interest -- which would make the assertions
-    # below pass for a reason that has nothing to do with rate segmentation.
     loan.update!(variable_rate_schedule: { mid_period.iso8601 => 4.5 })
-    loan.ensure_amortization_schedule_current!
+    changed = Loan.find(loan.id).payoff_projection
 
-    changed = loan.reload.payoff_projection
-    assert changed.applicable?,
-      "test setup must keep the loan amortizable, or the comparison below is vacuous"
-
-    changed_interest = changed.total_interest.amount
-
-    assert_not_equal baseline_interest, changed_interest,
-      "a mid-period accrual-rate change must reach the projection; equal totals mean " \
-      "accrual_rate_changes never got to the simulator and the window was not segmented"
-    assert changed_interest > baseline_interest,
-      "raising the accrual rate must raise projected interest"
+    assert changed.converged?, "test setup must keep the loan clearing, or the comparison below is vacuous"
+    assert_operator changed.total_interest.amount, :>, baseline_interest,
+      "raising the rate part-way through a period must raise projected interest"
   end
 
-  # The cleanup artefact is tolerated because it is bounded by the trailing
-  # payment. A divergence larger than that trailing payment is real and must
-  # still be reported, even when it is only one payment long.
-  test "a divergence larger than the trailing cleanup payment is still reported" do
-    loan = build_loan(balance: 500000)
-    projection = loan.payoff_projection
+  # A loan a cent behind settles in one tiny payment past maturity: rounding,
+  # not a divergence worth a card. A loan a few dollars behind pays real
+  # interest for it, and that is shown.
+  test "a cent behind is not a divergence, but a real shortfall is" do
+    as_of = Date.new(2026, 6, 15)
+    cent = fork_loan(balance: 500_000, start_date: as_of)
+    cent.account.update!(balance: 500_000.01)
+    trailing = Loan.find(cent.id).payoff_projection(as_of: as_of)
 
-    # Assert the precondition rather than assume it: `cleanup_payment_artefact?`
-    # short-circuits to false unless months_saved is exactly -1, so without this
-    # both assertions below could pass without the interest bound being reached
-    # at all.
-    assert_equal(-1, projection.months_saved,
-      "this test only exercises the interest bound when the projection trails by exactly one payment")
+    assert_equal(-1, trailing.months_saved, "precondition: the loan trails by exactly one payment")
+    assert_not trailing.diverges_from_schedule?
 
-    trailing_interest = projection.payments.last[:interest_payment]
-    projection.stubs(:interest_saved).returns(-(trailing_interest + 1))
+    dollars = fork_loan(balance: 500_000, start_date: as_of)
+    dollars.account.update!(balance: 500_005)
+    behind = Loan.find(dollars.id).payoff_projection(as_of: as_of)
 
-    assert_not projection.cleanup_payment_artefact?
-    assert projection.diverges_from_schedule?
+    assert_equal(-1, behind.months_saved)
+    assert_operator behind.interest_saved.amount, :<=, -1
+    assert behind.diverges_from_schedule?
   end
 
   test "projects a sooner payoff and positive interest saved when ahead of schedule" do
-    loan = build_loan(balance: 500000)
-    loan.account.update!(balance: 450000) # extra $50k paid toward principal
+    loan = fork_loan(balance: 500_000)
+    loan.account.update!(balance: 450_000)
 
     projection = loan.payoff_projection
 
-    assert projection.applicable?
-    assert projection.months_saved > 0
-    assert projection.interest_saved > 0
-    assert projection.payoff_date < loan.amortization_schedule.payoff_date
-    assert_equal loan.amortization_schedule.monthly_payment, projection.monthly_payment
+    assert projection.converged?
+    assert_operator projection.months_saved, :>, 0
+    assert projection.interest_saved.positive?
+    assert_operator projection.payoff_date, :<, loan.amortization_schedule.payoff_date
+    assert_equal loan.amortization_schedule.periodic_payment, projection.monthly_payment
   end
 
   test "projects a later payoff and negative interest saved when behind schedule" do
-    loan = build_loan(balance: 500000)
-    loan.account.update!(balance: 550000) # owes more than originally contracted
+    loan = fork_loan(balance: 500_000)
+    loan.account.update!(balance: 550_000)
 
     projection = loan.payoff_projection
 
-    assert projection.applicable?
-    assert projection.months_saved < 0
-    assert projection.interest_saved < 0
+    assert projection.converged?
+    assert_operator projection.months_saved, :<, 0
+    assert projection.interest_saved.negative?
   end
 
-  test "not applicable when the current balance is fully paid off" do
-    loan = build_loan(balance: 500000)
+  test "nothing is projected when the current balance is fully paid off" do
+    loan = fork_loan(balance: 500_000)
     loan.account.update!(balance: 0)
 
     projection = loan.payoff_projection
@@ -316,170 +454,137 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     assert_not projection.applicable?
     assert_not projection.converged?
     assert_nil projection.payoff_date
-    assert_nil projection.months_saved
-    assert_nil projection.interest_saved
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount
     assert_equal [], projection.payments
   end
 
+  # Changes on two exact payment dates: each is charged from the period that
+  # opens on it (interest_rate) and sizes the payment it lands on
+  # (sizing_rate).
   test "projects a variable rate loan using rates effective in each payment period" do
-    loan = build_loan(balance: 500000, rate_type: "variable")
-    loan.ensure_amortization_schedule_current!
-    payment_dates = loan.amortizations.where("payment_date > ?", Date.current).ordered.pluck(:payment_date)
-    loan.update!(variable_rate_schedule: {
-      payment_dates[1].iso8601 => 4.5,
-      payment_dates[3].iso8601 => 5.5
-    })
-    loan.account.update!(balance: 450000)
+    loan = fork_loan(balance: 500_000, rate_type: "variable")
+    payment_dates = loan.amortization_schedule.payments.map(&:date).select { |date| date > Date.current }
+    loan.update!(variable_rate_schedule: { payment_dates[1].iso8601 => 4.5, payment_dates[3].iso8601 => 5.5 })
+    loan.account.update!(balance: 450_000)
 
-    projection = loan.payoff_projection
+    projection = Loan.find(loan.id).payoff_projection
 
-    assert projection.applicable?
-    assert_equal [ BigDecimal("3.5"), BigDecimal("4.5"), BigDecimal("4.5"), BigDecimal("5.5"), BigDecimal("5.5") ],
+    assert projection.converged?
+    assert_equal %w[3.5 3.5 4.5 4.5 5.5].map { |rate| BigDecimal(rate) },
       projection.payments.first(5).map { |payment| payment[:interest_rate] }
-    assert projection.payoff_date
+    assert_equal %w[3.5 4.5 4.5 5.5 5.5].map { |rate| BigDecimal(rate) },
+      projection.payments.first(5).map { |payment| payment[:sizing_rate] }
   end
 
-  test "extra-payment projection applies recorded variable rates while holding the repayment" do
-    loan = build_loan(balance: 500000, rate_type: "variable")
-    payment_dates = loan.amortizations.where("payment_date > ?", Date.current).ordered.pluck(:payment_date)
-    loan.update!(variable_rate_schedule: {
-      payment_dates[1].iso8601 => 4.5,
-      payment_dates[3].iso8601 => 5.5
-    })
-    loan.account.update!(balance: 450000)
-    extra_payment = Loan::PayoffProjection.monthly_equivalent(
-      amount: 200,
-      frequency: "monthly",
-      currency: "USD"
-    )
+  # #100, decision 1: the extra rides on top of the contract's repayment for
+  # each period, so a recorded change resizes the what-if where it resizes
+  # the schedule.
+  test "extra-payment projection applies recorded variable rates to the scheduled repayment" do
+    loan = fork_loan(balance: 500_000, rate_type: "variable")
+    payment_dates = loan.amortization_schedule.payments.map(&:date).select { |date| date > Date.current }
+    loan.update!(variable_rate_schedule: { payment_dates[1].iso8601 => 4.5, payment_dates[3].iso8601 => 5.5 })
+    loan.account.update!(balance: 450_000)
+    loan = Loan.find(loan.id)
+    extra_payment = Loan::PayoffProjection.monthly_equivalent(amount: 200, frequency: "monthly", currency: "USD")
 
     projection = Loan::PayoffProjection.new(loan, extra_payment: extra_payment)
 
-    assert projection.applicable?
-    assert_equal [ BigDecimal("3.5"), BigDecimal("4.5"), BigDecimal("4.5"), BigDecimal("5.5"), BigDecimal("5.5") ],
-      projection.payments.first(5).map { |payment| payment[:interest_rate] }
-    expected_payment = loan.amortization_schedule.monthly_payment.amount + extra_payment.amount
-    assert projection.payments.first(5).all? { |payment| payment[:payment_amount] == expected_payment },
-      "recorded rate changes must not replace the held repayment in the what-if projection"
-  end
-
-  test "not applicable when the fixed payment no longer covers interest at the current balance" do
-    loan = build_loan(balance: 500000)
-    # Monthly payment (~$2245.22) no longer covers interest once the balance
-    # is high enough: 2245.22 / (3.5% / 12) ~= 769,790.
-    loan.account.update!(balance: 800000)
-
-    assert_not loan.payoff_projection.applicable?
-  end
-
-  test "all persisted original payments are in the future for a loan starting today" do
-    loan = build_loan(balance: 500000)
-    loan.payoff_projection # triggers ensure_amortization_schedule_current!
-
-    assert_equal 360, loan.amortizations.where("payment_date > ?", Date.current).count
-  end
-
-  test "zero interest rate projects a straight-line payoff" do
-    loan = build_loan(balance: 120000, interest_rate: 0, term_months: 120)
-    loan.account.update!(balance: 100000)
-
-    projection = loan.payoff_projection
-
-    assert projection.applicable?
-    assert projection.months_saved > 0
-    assert_equal BigDecimal("0"), projection.total_interest.amount
-  end
-
-  # Regression: the simulation used to start at Date.current.next_month,
-  # which uses *today's* day-of-month rather than the loan's actual payment
-  # anchor day. A loan whose payments fall on the 15th, viewed on any other
-  # day, would get every projected date wrong.
-  test "anchors the first projected payment on the loan's actual next scheduled payment date, not today's day-of-month" do
-    # Pinned: if this ran on the 15th of any month, start_date's day-15
-    # anchor would coincide with Date.current.next_month, defeating the
-    # "real anchor mismatch" guard below and the point of the regression.
-    travel_to Date.new(2026, 3, 20) do
-      start_date = 2.years.ago.to_date.change(day: 15)
-      loan = build_loan(balance: 500000, start_date: start_date)
-      loan.ensure_amortization_schedule_current!
-      loan.account.update!(balance: 450000)
-
-      next_scheduled_date = loan.amortizations.where("payment_date > ?", Date.current).ordered.first.payment_date
-      assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
-
-      projection = loan.payoff_projection
-
-      assert_equal next_scheduled_date, projection.payments.first[:payment_date]
+    assert projection.converged?
+    schedule = loan.amortization_schedule.payments.index_by(&:date)
+    projection.payments.first(5).each do |payment|
+      assert_equal schedule.fetch(payment[:payment_date]).payment.amount + extra_payment.amount, payment[:payment_amount]
     end
   end
 
-  # Regression: a payment that technically covers first-period interest but
-  # only barely (a real, if unusual, input -- e.g. a much larger balance
-  # than originally contracted) can take far longer than the iteration cap
-  # to actually reach zero. The old code let the loop exit early and still
-  # reported the last simulated date as a "payoff" -- a fabricated result.
-  test "is not applicable when the simulation does not converge within the iteration cap" do
-    loan = build_loan(balance: 100000, interest_rate: 5.0, term_months: 12)
-    payment = loan.amortization_schedule.monthly_payment.amount
-    monthly_rate = BigDecimal("5.0") / 100 / 12
-    threshold_balance = payment / monthly_rate # balance at which payment == first-period interest
-
-    non_converging_balance = (threshold_balance * BigDecimal("0.995")).round(2)
-    loan.account.update!(balance: non_converging_balance)
-
-    # Payment still exceeds first-period interest -- not "unamortizable" by
-    # that cheaper check -- but the payoff genuinely takes more than
-    # MAX_ITERATIONS_MULTIPLIER * term_months periods to reach zero.
-    first_interest = non_converging_balance * monthly_rate
-    assert payment > first_interest, "test setup should not trip the simpler unamortizable_payment? check"
+  test "a repayment that no longer covers the interest never clears the loan" do
+    loan = fork_loan(balance: 500_000)
+    # 2,245.22 a month no longer covers 3.5% once the balance passes ~769,790.
+    loan.account.update!(balance: 800_000)
 
     projection = loan.payoff_projection
 
-    assert_not projection.applicable?
+    assert projection.applicable?
+    assert_not projection.converged?
     assert_nil projection.payoff_date
-    assert_nil projection.months_saved
-    assert_nil projection.interest_saved
-    assert_equal [], projection.payments
   end
 
-  # Regression: Loan#payoff_projection is memoized; without invalidation, a
-  # long-lived Loan instance kept returning a projection computed against
-  # whatever balance was current the first time it was accessed.
-  test "Loan#payoff_projection recomputes when the account balance changes within the object's lifetime" do
-    loan = build_loan(balance: 500000)
+  test "zero interest rate projects a straight-line payoff" do
+    loan = fork_loan(balance: 120_000, interest_rate: 0, term_months: 120)
+    loan.account.update!(balance: 100_000)
+
+    projection = loan.payoff_projection
+
+    assert projection.converged?
+    assert_operator projection.months_saved, :>, 0
+    assert_equal BigDecimal("0"), projection.total_interest.amount
+  end
+
+  # The first projected payment falls on the loan's own next payment date, not
+  # on today's day-of-month.
+  test "anchors the first projected payment on the loan's actual next scheduled payment date" do
+    travel_to Date.new(2026, 3, 20) do
+      loan = fork_loan(balance: 500_000, start_date: 2.years.ago.to_date.change(day: 15))
+      loan.account.update!(balance: 450_000)
+
+      next_scheduled_date = loan.amortization_schedule.payments.find { |payment| payment.date > Date.current }.date
+      assert_not_equal Date.current.next_month, next_scheduled_date, "test setup should exercise a real anchor mismatch"
+
+      assert_equal next_scheduled_date, loan.payoff_projection.payments.first[:payment_date]
+    end
+  end
+
+  # A repayment that only barely covers the first period's interest can take
+  # far longer than the window to clear. The window ends without a payoff date
+  # rather than reporting the last date walked as one.
+  test "a run that does not clear within the window reports no payoff" do
+    loan = fork_loan(balance: 100_000, interest_rate: 5.0, term_months: 12)
+    payment = loan.amortization_schedule.periodic_payment.amount
+    threshold_balance = payment / (BigDecimal("5.0") / 100 / 12)
+    loan.account.update!(balance: (threshold_balance * BigDecimal("0.995")).round(2))
+
+    projection = loan.payoff_projection
+
+    assert projection.applicable?
+    assert_not projection.converged?
+    assert_nil projection.payoff_date
+    assert_equal 0, projection.months_saved
+    assert_equal BigDecimal("0"), projection.interest_saved.amount
+    assert_equal 2 * 12, projection.payment_count, "the window is twice the term, and it was walked to its end"
+  end
+
+  test "Loan#payoff_projection reads the balance afresh on every call" do
+    loan = fork_loan(balance: 500_000)
 
     first = loan.payoff_projection
-    assert_equal Money.new(500000, "USD"), first.current_balance
+    assert_equal Money.new(500_000, "USD"), first.current_balance
 
-    loan.account.update!(balance: 450000)
+    loan.account.update!(balance: 450_000)
     second = loan.payoff_projection
 
     assert_not_same first, second
-    assert_equal Money.new(450000, "USD"), second.current_balance
+    assert_equal Money.new(450_000, "USD"), second.current_balance
   end
 
   test "an extra payment shortens the payoff and increases interest saved beyond the baseline" do
-    loan = build_loan(balance: 500000)
+    loan = fork_loan(balance: 500_000)
     baseline = loan.payoff_projection
 
     boosted = Loan::PayoffProjection.new(
-      loan,
-      extra_payment: Loan::PayoffProjection.monthly_equivalent(amount: 200, frequency: "monthly", currency: "USD")
+      loan, extra_payment: Loan::PayoffProjection.monthly_equivalent(amount: 200, frequency: "monthly", currency: "USD")
     )
 
-    assert boosted.applicable?
-    assert boosted.months_saved > baseline.months_saved
-    assert boosted.interest_saved > baseline.interest_saved
+    assert boosted.converged?
+    assert_operator boosted.months_saved, :>, baseline.months_saved
+    assert_operator boosted.interest_saved.amount, :>, baseline.interest_saved.amount
     assert_equal baseline.monthly_payment + Money.new(200, "USD"), boosted.monthly_payment
   end
 
-  # #304: the Extra repayments tab compares paying extra against NOT paying
-  # extra. The contract-based interest_saved answers a different question, and
-  # on a loan already ahead of schedule the two disagree -- which is the case
-  # that proves the new comparison is measuring the delta the extra buys.
+  # #304: what paying extra saves against NOT paying it, not the distance from
+  # the contract. On a loan already ahead the two differ.
   test "interest saved versus a baseline is what the extra buys, not the distance from the contract" do
-    loan = build_loan(balance: 500000)
-    loan.account.update!(balance: 450000) # already ahead of schedule
+    loan = fork_loan(balance: 500_000)
+    loan.account.update!(balance: 450_000)
     as_of = Date.current
 
     baseline = Loan::PayoffProjection.new(loan, as_of: as_of)
@@ -488,7 +593,7 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     expected = baseline.total_interest.amount - extra.total_interest.amount
     assert_operator expected, :>, 0
     assert_equal expected, extra.interest_saved_versus(baseline)
-    assert_not_equal extra.interest_saved, extra.interest_saved_versus(baseline),
+    assert_not_equal extra.interest_saved.amount, extra.interest_saved_versus(baseline),
       "against the contract the figure also counts the $50k already paid ahead"
 
     assert_equal baseline.payment_count - extra.payment_count, extra.months_sooner_than(baseline)
@@ -497,48 +602,44 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
   end
 
   test "a comparison against itself saves nothing" do
-    loan = build_loan(balance: 500000)
-    baseline = Loan::PayoffProjection.new(loan)
+    baseline = Loan::PayoffProjection.new(fork_loan(balance: 500_000))
 
     assert_equal 0, baseline.interest_saved_versus(baseline)
     assert_equal 0, baseline.months_sooner_than(baseline)
   end
 
-  test "the comparison is nil when either side cannot be projected" do
+  test "the comparison is nil when either side never clears the loan" do
     loan = loan_whose_contracted_payment_no_longer_covers_interest
     baseline = Loan::PayoffProjection.new(loan)
-    assert_not baseline.applicable?
+    assert_not baseline.converged?
 
     extra = loan.payoff_projection_with_extra(amount: "100000")
-    assert extra.applicable?, "a large enough extra makes the loan amortise"
+    assert extra.converged?, "a large enough extra makes the loan amortise"
 
     assert_nil extra.interest_saved_versus(baseline)
     assert_nil extra.months_sooner_than(baseline)
   end
 
   test "payoff_projection_with_extra models a monthly amount on the injected date" do
-    loan = build_loan(balance: 500000)
+    loan = fork_loan(balance: 500_000)
     as_of = Date.current + 1.month
 
     extra = loan.payoff_projection_with_extra(amount: "200", as_of: as_of)
 
     assert_equal as_of, extra.as_of
-    assert_equal loan.amortization_schedule.monthly_payment + Money.new(200, "USD"), extra.monthly_payment
+    assert_equal loan.amortization_schedule.periodic_payment + Money.new(200, "USD"), extra.monthly_payment
   end
 
   test "an extra larger than the remaining balance pays the loan off at the next payment" do
-    loan = build_loan(balance: 500000)
+    extra = fork_loan(balance: 500_000).payoff_projection_with_extra(amount: "600000")
 
-    extra = loan.payoff_projection_with_extra(amount: "600000")
-
-    assert extra.applicable?
+    assert extra.converged?
     assert_equal 1, extra.payment_count
     assert_equal 0, extra.payments.last[:ending_balance]
-    assert extra.payments.all? { |p| p[:ending_balance] >= 0 }
   end
 
   test "a blank or zero extra payment behaves identically to no extra payment" do
-    loan = build_loan(balance: 500000)
+    loan = fork_loan(balance: 500_000)
     baseline = loan.payoff_projection
 
     blank = Loan::PayoffProjection.new(loan, extra_payment: nil)
@@ -559,11 +660,11 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
       Loan::PayoffProjection.monthly_equivalent(amount: 1200, frequency: "yearly", currency: "USD")
   end
 
-  test "monthly_equivalent returns nil for a blank, zero, or non-numeric amount" do
-    assert_nil Loan::PayoffProjection.monthly_equivalent(amount: nil, frequency: "monthly", currency: "USD")
-    assert_nil Loan::PayoffProjection.monthly_equivalent(amount: "", frequency: "monthly", currency: "USD")
-    assert_nil Loan::PayoffProjection.monthly_equivalent(amount: 0, frequency: "monthly", currency: "USD")
-    assert_nil Loan::PayoffProjection.monthly_equivalent(amount: "not-a-number", frequency: "monthly", currency: "USD")
+  test "monthly_equivalent returns nil for a blank, zero, non-numeric or non-finite amount" do
+    [ nil, "", 0, "not-a-number", "NaN", "Infinity", "-Infinity" ].each do |raw|
+      assert_nil Loan::PayoffProjection.monthly_equivalent(amount: raw, frequency: "monthly", currency: "USD"),
+        "#{raw.inspect} must not become a Money amount that can reach the simulator"
+    end
   end
 
   test "monthly_equivalent raises on an unsupported frequency" do
@@ -572,270 +673,112 @@ class Loan::PayoffProjectionTest < ActiveSupport::TestCase
     end
   end
 
-  # Regression: eligible_for_extra_payment? is the coarser check used to
-  # decide whether to show the what-if form -- it must stay true even when
-  # the baseline (no-extra) #applicable? is false, since "the current
-  # payment doesn't cover interest" is exactly when a user wants to model
-  # paying more.
-  test "eligible_for_extra_payment? is true even when the baseline payment doesn't cover interest" do
-    loan = build_loan(balance: 500000)
-    loan.account.update!(balance: 800000)
+  test "monthly_equivalent still accepts ordinary amounts" do
+    money = Loan::PayoffProjection.monthly_equivalent(amount: "50", frequency: "weekly", currency: "USD")
 
-    assert_not loan.payoff_projection.applicable?
+    assert_predicate money.amount, :finite?
+    assert_in_delta 216.67, money.amount.to_f, 0.01, "50/week is 50 * 52 / 12 monthly-equivalent"
+  end
+
+  # The what-if is offered where the baseline repayment never clears the loan:
+  # that is when someone most wants to model paying more.
+  test "eligible_for_extra_payment? is true even when the baseline repayment never clears the loan" do
+    loan = fork_loan(balance: 500_000)
+    loan.account.update!(balance: 800_000)
+
+    assert_not loan.payoff_projection.converged?
     assert Loan::PayoffProjection.eligible_for_extra_payment?(loan)
   end
 
-  # INVERTED for #54. This asserted the fixed_rate? gate, which made
-  # eligible_for_extra_payment? disagree with #applicable? after #12 removed the
-  # same gate there -- a variable-rate loan got a projection and a chart but no
-  # way to model paying extra, which is the loan where it matters most.
-  test "eligible_for_extra_payment? is true for a variable rate loan" do
-    loan = build_loan(balance: 500000, rate_type: "variable")
-
-    assert Loan::PayoffProjection.eligible_for_extra_payment?(loan)
-  end
-
-  # The two must agree about rate type. They disagreed for two tranches.
   test "eligibility and applicability agree about rate type" do
     %w[fixed variable].each do |rate_type|
-      loan = build_loan(balance: 500000, rate_type: rate_type)
-      loan.account.update!(balance: 450000)
+      loan = fork_loan(balance: 500_000, rate_type: rate_type)
+      loan.account.update!(balance: 450_000)
 
-      assert_equal loan.payoff_projection.applicable?,
-        Loan::PayoffProjection.eligible_for_extra_payment?(loan),
+      assert_equal loan.payoff_projection.applicable?, Loan::PayoffProjection.eligible_for_extra_payment?(loan),
         "#{rate_type}: neither may gate on rate type without the other (#54)"
     end
   end
 
   test "eligible_for_extra_payment? is false when the balance is already zero" do
-    loan = build_loan(balance: 500000)
+    loan = fork_loan(balance: 500_000)
     loan.account.update!(balance: 0)
 
     assert_not Loan::PayoffProjection.eligible_for_extra_payment?(loan)
   end
 
-  # BigDecimal parses these without raising, and both slip past a `<= 0` guard:
-  # every comparison with NaN is false, and Infinity is genuinely positive.
-  # Money.new accepts either, so the value would reach Loan::Simulator.
-  test "monthly_equivalent rejects non-finite amounts" do
-    %w[NaN Infinity -Infinity].each do |raw|
-      assert_nil Loan::PayoffProjection.monthly_equivalent(amount: raw, frequency: "monthly", currency: "USD"),
-        "#{raw} must not become a Money amount that can reach the simulator"
-    end
-  end
-
-  test "monthly_equivalent still accepts ordinary amounts" do
-    money = Loan::PayoffProjection.monthly_equivalent(amount: "50", frequency: "weekly", currency: "USD")
-
-    assert_not_nil money
-    assert_predicate money.amount, :finite?
-    assert_in_delta 216.67, money.amount.to_f, 0.01, "50/week is 50 * 52 / 12 monthly-equivalent"
-  end
-  # CodeRabbit, #79. :reamortize exists for UI::Loan::RateChangeTable, which
-  # quotes the re-amortised repayment and so needs the balance trajectory that
-  # repayment produces.
-  #
-  # The term basis is the trap. The simulator sizes each segment's repayment
-  # over the payments left IN ITS SCHEDULE, and the :hold window is deliberately
-  # twice the term so a moving payoff date has room. Re-amortising over that
-  # doubled window spreads the balance over ~720 periods instead of ~277: a
-  # repayment far too small to cover the interest, and a balance that climbs.
-  #
-  # Pinning the first projected payment to `current_minimum_payment` is what
-  # catches that, because that method re-amortises over the term to the ORIGINAL
-  # maturity. Assertions on the balance trajectory alone do NOT catch it -- the
-  # under-sized repayment leaves the balance roughly flat rather than obviously
-  # wrong, which is exactly what makes it dangerous.
-  test "a re-amortising projection pays the current minimum payment from the start" do
-    loan = reamortize_loan
-
-    projection = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
-
-    assert projection.applicable?
-    assert_equal loan.current_minimum_payment.amount,
-      projection.payments.first[:payment_amount],
-      "the projection must be driven by the very repayment the table quotes"
-  end
-
-  # A re-amortising loan clears at its ORIGINAL maturity by construction: the
-  # repayment moves, the date does not.
-  test "a re-amortising projection clears at the original maturity" do
-    loan = reamortize_loan
-
-    projection = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
-
-    assert_equal loan.amortization_schedule.payoff_date, projection.payoff_date
-    assert_equal 0, projection.payments.last[:ending_balance]
-  end
-
-  # Every existing caller wants :hold, and nothing about adding the option may
-  # move their numbers.
-  test "the default projection is unchanged by the new option" do
-    loan = reamortize_loan
-
-    default = Loan::PayoffProjection.new(loan)
-    explicit = Loan::PayoffProjection.new(loan, payment_strategy: :hold)
-
-    assert_equal explicit.payments, default.payments
-    assert_equal loan.amortization_schedule.monthly_payment.amount,
-      default.payments.first[:payment_amount],
-      ":hold carries the contracted repayment, not a re-amortised one"
-  end
-
-  # CodeRabbit, #79. `unamortizable_payment?` asks whether the CONTRACTED
-  # repayment covers the first period's interest. That is the right question for
-  # :hold, which is stuck with it, and the wrong one for :reamortize, which
-  # computes a repayment that covers the interest by construction.
-  #
-  # Left in place it blanked the rate-change table for a loan whose rate has
-  # ALREADY risen past what its old repayment services -- the loan most in need
-  # of the table.
-  test "a re-amortising projection is not blocked by an insufficient contracted payment" do
-    loan = loan_whose_contracted_payment_no_longer_covers_interest
-
-    held = Loan::PayoffProjection.new(loan)
-    reamortized = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
-
-    assert reamortized.send(:unamortizable_payment?),
-      "the fixture must actually trip the guard, or this test proves nothing"
-    assert_not held.applicable?, ":hold genuinely cannot amortise this loan"
-    assert reamortized.applicable?,
-      ":reamortize sizes its own repayment, so the contracted one cannot disqualify it"
-    assert_equal loan.current_minimum_payment.amount,
-      reamortized.payments.first[:payment_amount]
-  end
-
-  # CodeRabbit, #79. :reamortize spreads the balance over the payments left to
-  # the ORIGINAL maturity. Past maturity there are none, so there is nothing to
-  # spread it over. Falling back to the doubled :hold window INVENTED a horizon
-  # and reported a payoff years after the date the loan was meant to end.
-  #
-  # :hold legitimately finds a date past maturity -- an underpaid loan really
-  # does run long -- which is why this guard is strategy-specific.
-  test "a re-amortising projection invents no horizon for a matured loan" do
+  # #401: a matured loan still owing is followed on its last level repayment
+  # rather than dropped, while the lender quotes no minimum for it.
+  test "a matured loan still owing is projected on its last level repayment" do
     loan = matured_loan_still_carrying_a_balance
+    schedule = loan.amortization_schedule
 
-    reamortized = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
+    assert_operator schedule.payoff_date, :<, Date.current, "the fixture must actually be matured"
+    assert_nil loan.current_minimum_payment, "past maturity there is no minimum to quote"
 
-    assert_equal 0, loan.amortization_schedule.remaining_payment_count,
-      "the fixture must actually be matured, or this test proves nothing"
-    assert loan.account.balance.positive?,
-      "and must still carry a balance, or there is nothing to project"
-    assert_not reamortized.applicable?,
-      "no payments remain to the original maturity, so there is no projection to make"
-    assert_nil loan.current_minimum_payment,
-      "the model already says there is no repayment to quote; the projection must agree"
-  end
-
-  # A typo like :reamortised read as neither :hold nor :reamortize by the
-  # branches in this class, silently selecting a hybrid of the two. Simulator
-  # does reject it, but only once a schedule is generated.
-  test "an unknown payment strategy is rejected at construction" do
-    loan = reamortize_loan
-
-    error = assert_raises(ArgumentError) do
-      Loan::PayoffProjection.new(loan, payment_strategy: :reamortised)
-    end
-
-    assert_match(/unsupported payment strategy/, error.message)
-
-    # nil, false and numerics reach `to_sym` before the allowlist. Without
-    # normalising first they raise NoMethodError, bypassing the ArgumentError
-    # contract for precisely the sloppy inputs it exists to catch.
-    [ nil, false, 1 ].each do |bad|
-      assert_raises(ArgumentError, "#{bad.inspect} must raise ArgumentError, not NoMethodError") do
-        Loan::PayoffProjection.new(loan, payment_strategy: bad)
-      end
-    end
-
-    assert_nothing_raised { Loan::PayoffProjection.new(loan, payment_strategy: :hold) }
-    assert_nothing_raised { Loan::PayoffProjection.new(loan, payment_strategy: :reamortize) }
-  end
-
-  # CodeRabbit, #79. The THIRD occurrence of two bases in one row on this PR.
-  #
-  # Simulator tracks the GROSS balance -- an offset reduces the interest
-  # charged, not the principal owed -- but a repayment is quoted on the
-  # interest-bearing balance, which is what `current_minimum_payment` and
-  # `UI::Loan::RateChangeTable` both use. Sizing this projection on gross drove
-  # the trajectory with a repayment $678.54 above the one on screen.
-  #
-  # The earlier "driven by one number" test passes on a loan with NO offset,
-  # which is exactly why this went unnoticed.
-  test "a re-amortising projection sizes its repayment net of offset" do
-    loan = offset_loan
-
-    projection = Loan::PayoffProjection.new(loan, payment_strategy: :reamortize)
-
-    assert_operator loan.interest_bearing_balance.amount, :<, loan.account.balance,
-      "the fixture must actually carry an offset, or this test proves nothing"
-    assert_equal loan.current_minimum_payment.amount,
-      projection.payments.first[:payment_amount],
-      "an offset loan's projection must be driven by the repayment the table quotes"
+    projection = loan.payoff_projection
+    assert projection.converged?
+    assert_equal schedule.payments[-2].payment, projection.monthly_payment
   end
 
   private
-
-    # $400,762.12 owed against a $100,000 offset.
-    def offset_loan
-      family = families(:dylan_family)
-      loan = family.accounts.create!(
-        name: "Offset Projection Loan",
-        balance: 400_762.12,
-        currency: "USD",
-        accountable: Loan.new(
-          rate_type: "variable", interest_rate: 6.18, term_months: 360,
-          initial_balance: 400_762.12, start_date: Date.current - 83.months
-        )
-      ).loan
-
-      offset = family.accounts.create!(
-        name: "Projection Offset", balance: 100_000, currency: "USD", accountable: Depository.new
+    # Built the way the account form builds one: with an opening valuation for
+    # the amount borrowed. `Loan#original_balance` reads it; without it the
+    # principal follows whatever the current balance is later set to, and a
+    # schedule read after a balance update would amortise a different loan.
+    def build_loan(term_months:, rate_type: "fixed", interest_rate: 6)
+      account = Account.create!(
+        family: @family, name: "Loan #{SecureRandom.hex(4)}",
+        balance: 500_000, currency: "USD",
+        accountable: Loan.new(subtype: "mortgage", interest_rate: interest_rate,
+                              term_months: term_months, rate_type: rate_type,
+                              start_date: Date.new(2026, 1, 1))
       )
-      loan.update!(offset_account_ids: [ offset.id ])
-      loan.reload
+      account.entries.create!(
+        date: Date.new(2026, 1, 1), name: "Opening balance", amount: 500_000, currency: "USD",
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account.loan
+    end
+
+    def scheduled_balance_at(loan, date)
+      loan.amortization_schedule.payments
+        .select { |p| p.date <= date }.last.ending_balance.amount
+    end
+
+    # A loan whose opening valuation pins `Loan#original_balance`, so later
+    # moves of `account.balance` stand for the actual position.
+    def fork_loan(balance:, interest_rate: 3.5, term_months: 360, start_date: Date.current, rate_type: "fixed")
+      account = Account.create!(
+        family: @family, name: "Test Loan #{SecureRandom.hex(4)}", balance: balance, currency: "USD",
+        accountable: Loan.create!(subtype: "mortgage", interest_rate: interest_rate, term_months: term_months,
+                                  rate_type: rate_type, start_date: start_date)
+      )
+      account.entries.create!(name: "Starting balance", amount: balance, currency: "USD", date: start_date,
+                              entryable: Valuation.new(kind: "opening_anchor"))
+      account.loan
     end
 
     # Term ended a year ago, and $250,000 is still outstanding.
     def matured_loan_still_carrying_a_balance
-      families(:dylan_family).accounts.create!(
-        name: "Matured Loan",
-        balance: 250_000.00,
-        currency: "USD",
-        accountable: Loan.new(
-          rate_type: "variable", interest_rate: 6.0, term_months: 12,
-          initial_balance: 400_000, start_date: Date.current - 24.months
-        )
+      @family.accounts.create!(
+        name: "Matured Loan", balance: 250_000.00, currency: "USD",
+        accountable: Loan.new(rate_type: "variable", interest_rate: 6.0, term_months: 12,
+                              initial_balance: 400_000, start_date: Date.current - 24.months)
       ).loan.reload
     end
 
-    # Contracted at 1%, then a rise to 12% that is already in effect: the
-    # contracted repayment no longer covers a single period's interest.
+    # Contracted at 1%, then a rise to 12% already in effect: the contracted
+    # repayment no longer covers a single period's interest.
     def loan_whose_contracted_payment_no_longer_covers_interest
-      loan = families(:dylan_family).accounts.create!(
-        name: "Under-serviced Loan",
-        balance: 400_762.12,
-        currency: "USD",
-        accountable: Loan.new(
-          rate_type: "variable", interest_rate: 1.0, term_months: 360,
-          initial_balance: 400_762.12, start_date: Date.current - 83.months
-        )
+      loan = @family.accounts.create!(
+        name: "Under-serviced Loan", balance: 400_762.12, currency: "USD",
+        accountable: Loan.new(rate_type: "variable", interest_rate: 1.0, term_months: 360,
+                              initial_balance: 400_762.12, start_date: Date.current - 83.months)
       ).loan
 
       loan.add_variable_rate_change(Date.current - 1.month, 12.0)
       loan.reload.add_variable_rate_change(Date.current + 6.months, 13.0)
       loan.reload
-    end
-
-    def reamortize_loan
-      families(:dylan_family).accounts.create!(
-        name: "Reamortise Projection Loan",
-        balance: 400_762.12,
-        currency: "USD",
-        accountable: Loan.new(
-          rate_type: "variable", interest_rate: 6.18, term_months: 360,
-          initial_balance: 400_762.12, start_date: Date.current - 83.months
-        )
-      ).loan.tap { |loan| loan.add_variable_rate_change(Date.current + 2.months, 5.93) }.reload
     end
 end

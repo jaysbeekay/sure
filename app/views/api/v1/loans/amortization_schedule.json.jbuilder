@@ -7,7 +7,7 @@ json.loan do
   json.term_months loan.term_months
   json.original_balance loan.original_balance.to_s
   json.currency loan.account.currency
-  json.next_rate_change_date loan.next_rate_change_date
+  json.next_rate_change_date loan.next_rate_change_date(as_of: as_of)
 end
 
 # Summary fields are derived from the persisted amortizations table, not the
@@ -25,21 +25,21 @@ json.schedule do
   json.total_cost total_interest ? (loan.original_balance.amount + total_interest).to_s : nil
   json.payoff_date last_payment&.payment_date
   json.payment_count total_count
-  json.has_rate_changes loan.amortization_schedule.has_rate_changes?
+  json.has_rate_changes loan.variable_rate_type? && loan.variable_rate_schedule.present?
 end
 
 # Actual-balance-based projection: how the payoff shifts if the current
-# balance (reflecting any extra/lump-sum payments) is carried forward at the
-# same monthly payment, versus the original schedule above. Only present
-# when applicable (fixed-rate, amortizable, current balance still positive
-# and coverable by the existing payment amount) -- see Loan::PayoffProjection.
-if projection.applicable?
+# balance (reflecting any extra/lump-sum payments) is carried forward on the
+# contract's repayment, versus the original schedule above. Only present when
+# the projection clears the loan -- one that runs but never clears has no
+# payoff date to report -- see Loan::PayoffProjection.
+if projection.converged?
   json.payoff_projection do
     json.current_balance projection.current_balance.to_s
     json.projected_payoff_date projection.payoff_date
     json.projected_total_interest projection.total_interest.to_s
     json.months_saved projection.months_saved
-    json.interest_saved projection.interest_saved.to_s
+    json.interest_saved projection.interest_saved.amount.to_s
   end
 else
   json.payoff_projection nil

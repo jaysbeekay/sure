@@ -88,7 +88,7 @@ class LoanScenario < ApplicationRecord
   def record_calculation!
     update_columns(
       last_calculated_at: Time.current,
-      calculator_version: Loan::AmortizationSchedule::ALGORITHM_VERSION,
+      calculator_version: LoanAmortization::ALGORITHM_VERSION,
       updated_at: Time.current
     )
   end
@@ -109,6 +109,6 @@ class LoanScenario < ApplicationRecord
     # inherited value is left unchecked rather than rejected.
     def assign_defaults
       self.currency ||= loan&.account&.currency
-      self.calculator_version ||= Loan::AmortizationSchedule::ALGORITHM_VERSION
+      self.calculator_version ||= LoanAmortization::ALGORITHM_VERSION
     end
 end

@@ -290,7 +290,142 @@ class UI::Account::ChartTest < ViewComponent::TestCase
     refute_selector "[data-net-contributions-understated]"
   end
 
+  # --- #390: one loan chart at the top of the page --------------------------
+
+  # Test 1. A loan with a schedule takes the loan balance chart, inside the
+  # same chart_details frame every account's chart sits in.
+  test "an amortizable loan with a chart payload mounts the loan chart and no time-series chart" do
+    loan_account = amortizable_loan_account
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+    assert_not_nil payload, "the loan must have a schedule, or this test asserts nothing"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
+
+    assert_selector "turbo-frame##{ActionView::RecordIdentifier.dom_id(loan_account, :chart_details)} [data-controller='loan-payoff-chart']", count: 1
+    assert_no_selector "[data-controller='time-series-chart']"
+    mounted = JSON.parse(page.find("[data-controller='loan-payoff-chart']")["data-loan-payoff-chart-data-value"])
+    assert_equal payload.as_json, mounted
+    assert_selector "p.sr-only", text: payload[:aria_description], visible: :all
+  end
+
+  # Test 2. Every other account keeps the chart it always had: the time-series
+  # mount, every shared period in the picker, and nothing loan-shaped.
+  test "a depository account and a loan without a schedule keep the time-series chart" do
+    no_schedule = Account.create!(
+      family: @account.family, name: "No Rate Loan", balance: 10_000, currency: "USD",
+      accountable: Loan.create!(subtype: "other", interest_rate: nil, term_months: 360, rate_type: "fixed")
+    )
+    assert_nil Loan::PayoffChart.new(no_schedule.loan, as_of: Date.current).payload,
+      "a loan with no rate has no schedule to draw"
+
+    # An amount in the request (a stale link, a hand-edited URL) changes
+    # nothing for an account with no loan chart to draw it on.
+    [ accounts(:depository), no_schedule ].each do |account|
+      render_inline(UI::Account::Chart.new(account: account, period: Period.last_30_days, extra_payment_amount: "250"))
+
+      assert_selector "[data-controller='time-series-chart']", count: 1
+      assert_no_selector "[data-controller='loan-payoff-chart']"
+      assert_no_selector "ul[aria-label='#{I18n.t("UI.account.chart.loan.legend")}']"
+      assert_equal Period.all.size, page.all("a[role='menuitemradio']", visible: :all).size,
+        "#{account.name}: the picker offers every shared period"
+      assert_no_selector "a[href*='extra_payment']", visible: :all
+      assert_no_text I18n.t("UI.account.chart.loan.since_start")
+    end
+  end
+
+  # The legend promises only the lines the payload says are drawn, each in the
+  # style its line takes: solid is fact, dashed a forecast, dotted the extra.
+  test "the legend lists only the visible series, with the extra line dotted" do
+    loan_account = amortizable_loan_account
+    extra = loan_account.loan.payoff_projection_with_extra(amount: "250", as_of: Date.current)
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current, extra_projection: extra).payload
+    legend = "ul[aria-label='#{I18n.t("UI.account.chart.loan.legend")}'] li"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload.merge(visible: %w[actual scheduled])))
+    assert_selector legend, count: 2
+    assert_no_selector legend, text: payload[:labels][:extra]
+
+    assert_equal %w[actual scheduled projected extra], payload[:visible].map(&:to_s)
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
+    assert_selector legend, count: 4
+    assert_selector "#{legend} span.border-dotted", count: 1
+    assert_selector legend, text: payload[:labels][:extra]
+  end
+
+  # A loan's picker offers a subset of the shared periods, under their own
+  # labels. A saved period the loan chart does not offer reads as All.
+  test "a loan's period picker offers a subset of the shared periods" do
+    loan_account = amortizable_loan_account
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, period: Period.from_key("last_5_years")))
+
+    Loan::PayoffChart::WINDOW_KEYS.each do |key|
+      assert_selector "a[href*='period=#{key}'] span", exact_text: Period.from_key(key).label_short, visible: :all
+    end
+    assert_no_selector "a[href*='period=last_30_days']", visible: :all
+    assert_selector "button", text: "5Y"
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, period: Period.from_key("last_30_days")))
+    assert_selector "button", text: "All"
+  end
+
+  # Test 6 at the component: the picker's links keep the extra amount and the
+  # tab it came from, or picking a period silently drops the extra line.
+  test "a loan's period picker carries the extra amount and its tab" do
+    loan_account = amortizable_loan_account
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, extra_payment_amount: "250"))
+    links = page.all("a[role='menuitemradio']", visible: :all)
+    assert links.any?
+    links.each do |link|
+      query = Rack::Utils.parse_nested_query(URI.parse(link[:href]).query)
+      assert_equal "250", query.dig("extra_payment", "amount"), link[:href]
+      assert_equal "extra_repayments", query["tab"], link[:href]
+    end
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload))
+    assert_no_selector "a[href*='extra_payment']", visible: :all
+  end
+
+  # The loan chart shows the whole life by default, so its change line
+  # compares today's balance with the amount borrowed, not with a window the
+  # chart is not showing.
+  test "a loan's change line compares with the original loan amount" do
+    loan_account = amortizable_loan_account
+    payload = Loan::PayoffChart.new(loan_account.loan, as_of: Date.current).payload
+
+    render_inline(UI::Account::Chart.new(account: loan_account, loan_chart: payload, period: Period.from_key("last_30_days")))
+
+    assert_text I18n.t("UI.account.chart.loan.since_start")
+    assert_no_text Period.from_key("last_30_days").comparison_label
+  end
+
   private
+    # A thirty-year mortgage drawn down two years ago, with the opening
+    # valuation the account form records, then paid ahead of its contract.
+    def amortizable_loan_account
+      start_date = 2.years.ago.to_date
+      account = Account.create!(
+        family: @account.family, name: "Chart Mortgage", balance: 500_000, currency: "USD",
+        accountable: Loan.create!(subtype: "mortgage", interest_rate: 3.5, term_months: 360,
+                                  rate_type: "fixed", start_date: start_date)
+      )
+      account.entries.create!(
+        name: "Starting balance", amount: 500_000, currency: "USD", date: start_date,
+        entryable: Valuation.new(kind: "opening_anchor")
+      )
+      account.update!(balance: 450_000)
+      # Materialised the way the balance calculator writes a liability, so the
+      # recorded-balance line has points to draw.
+      [ [ start_date, 500_000 ], [ Date.current, 450_000 ] ].each do |date, amount|
+        account.balances.create!(date: date, balance: amount, currency: "USD",
+                                 start_cash_balance: amount, flows_factor: -1)
+      end
+      account
+    end
+
     # The two #300 stacking tests are about the family anchor, so check they
     # really got it rather than the 5-year fallback.
     def assert_family_anchor(period)

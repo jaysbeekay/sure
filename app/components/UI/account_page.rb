@@ -1,14 +1,24 @@
 class UI::AccountPage < ApplicationComponent
-  attr_reader :account, :chart_view, :chart_period, :statement_coverage, :statements, :reconciliation_statuses,
-              :can_manage_statements
+  attr_reader :account, :chart_view, :chart_period, :loan_chart, :as_of, :statement_coverage, :statements,
+              :reconciliation_statuses, :can_manage_statements
 
   renders_one :activity_feed, ->(feed_data:, pagy:, search:) { UI::Account::ActivityFeed.new(feed_data: feed_data, pagy: pagy, search: search) }
 
-  def initialize(account:, chart_view: nil, chart_period: nil, active_tab: nil, statement_coverage: nil, statements: [],
+  # `loan_chart` is the Loan::PayoffChart payload the controller built for a
+  # loan, nil for every other type and for a loan whose schedule cannot be
+  # drawn. `as_of` is the page's one reference date, captured by the
+  # controller. `loan_comparison` is the Loan::ExtraRepaymentComparison the
+  # controller built on that date, so the chart and the loan tabs read one
+  # pair of projections rather than simulating their own (#390).
+  def initialize(account:, chart_view: nil, chart_period: nil, loan_chart: nil, as_of: Date.current,
+                 loan_comparison: nil, active_tab: nil, statement_coverage: nil, statements: [],
                  reconciliation_statuses: {}, can_manage_statements: false)
     @account = account
     @chart_view = chart_view
     @chart_period = chart_period
+    @loan_chart = loan_chart
+    @as_of = as_of
+    @loan_comparison = loan_comparison
     @active_tab = active_tab
     @statement_coverage = statement_coverage
     @statements = statements
@@ -74,6 +84,18 @@ class UI::AccountPage < ApplicationComponent
     @fx_coverage_start_date = result
   end
 
+  # The controller's comparison when it built one; otherwise built here, once
+  # per render and on the page's own `as_of`, for callers that construct the
+  # page without it.
+  def loan_comparison
+    @loan_comparison ||= account.loan&.extra_repayment_comparison(amount: nil, as_of: as_of)
+  end
+
+  # The validated amount the comparison was built with, for the period picker.
+  def extra_payment_amount
+    loan_comparison&.amount
+  end
+
   def tab_content_for(tab)
     case tab
     when :activity
@@ -121,7 +143,7 @@ class UI::AccountPage < ApplicationComponent
   # page navigation on submit. Cherry-picked from #4 per #7's scope -- it is an
   # independent bug fix and should not wait for that PR's fate.
   def render_schedule_tab
-    return render "accounts/show/schedule_frame", account: account if active_tab == :schedule
+    return render "accounts/show/schedule_frame", account: account, as_of: as_of, comparison: loan_comparison if active_tab == :schedule
 
     turbo_frame_tag schedule_tab_frame_id,
                     src: helpers.account_path(account, tab: "schedule"),
@@ -135,7 +157,9 @@ class UI::AccountPage < ApplicationComponent
   # Mirrors render_schedule_tab, for the same reason: the eager branch must
   # still render a <turbo-frame>, or the tab's form has no frame to target.
   def render_extra_repayments_tab
-    return render "accounts/show/extra_repayments_frame", account: account if active_tab == :extra_repayments
+    if active_tab == :extra_repayments
+      return render "accounts/show/extra_repayments_frame", account: account, comparison: loan_comparison, period: chart_period
+    end
 
     turbo_frame_tag extra_repayments_tab_frame_id,
                     src: helpers.account_path(account, tab: "extra_repayments"),

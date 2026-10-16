@@ -1,5 +1,5 @@
-<%# locals: (account:) %>
+<%# locals: (account:, comparison:, period: nil) %>
 
 <%= turbo_frame_tag dom_id(account, :extra_repayments_tab) do %>
-  <%= render "loans/tabs/extra_repayments", account: account %>
+  <%= render "loans/tabs/extra_repayments", account: account, comparison: comparison, period: period %>
 <% end %>

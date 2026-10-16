@@ -18,7 +18,9 @@ de:
       day_count_convention: Zinsberechnungsbasis
       day_count_convention_actual_365: Actual/365
       day_count_convention_actual_actual: Actual/actual (366 im Schaltjahr)
-      day_count_convention_hint: Kreditgeber rechnen unterschiedlich. Actual/365 teilt den Jahreszins immer durch 365; actual/actual verwendet im Schaltjahr 366. Prüfen Sie einen Kontoauszug -- stimmt dies nicht mit Ihrem Kreditgeber überein, sind die angezeigten Zinsen eine Näherung.
+      day_count_convention_actual_360: Actual/360
+      day_count_convention_thirty_360: 30/360 (jeder Monat zählt 30 Tage)
+      day_count_convention_hint: Kreditgeber rechnen unterschiedlich. Actual/365 teilt den Jahreszins immer durch 365; actual/actual verwendet im Schaltjahr 366; actual/360 teilt die tatsächlichen Tage durch 360; 30/360 berechnet für jede volle Monatsperiode ein Zwölftel des Jahreszinses, unabhängig von ihrer Länge, und zählt eine Teilperiode in Monaten zu 30 Tagen. Prüfen Sie einen Kontoauszug -- stimmt dies nicht mit Ihrem Kreditgeber überein, sind die angezeigten Zinsen eine Näherung.
       none: Keine
       subtype_none: Keine
       subtype_prompt: Kreditart wählen
@@ -52,7 +54,7 @@ de:
           enter_amount: Mit der aktuellen Rate wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt. Geben Sie einen zusätzlichen Betrag ein, um zu sehen, ob eine höhere Zahlung ihn tilgt.
           cleared_by_extra: Mit der aktuellen Rate wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt, daher gibt es keinen Tilgungsplan zum Vergleich. Mit diesem zusätzlichen Betrag wird er abbezahlt, wie oben gezeigt.
           not_cleared_by_extra: Auch mit diesem zusätzlichen Betrag wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt. Versuchen Sie einen höheren Betrag.
-        variable_rate_notice: "Der Zinssatz dieses Kredits kann sich ändern. Die Projektion berücksichtigt bereits erfasste Zinsänderungen und behält die aktuelle Rate bei; noch nicht erfasste Zinsänderungen können die Ergebnisse verändern."
+        variable_rate_notice: "Der Zinssatz dieses Kredits kann sich ändern. Die Projektion zahlt die Rate laut Tilgungsplan, die sich mit jeder bereits erfassten Zinsänderung ändert; noch nicht erfasste Zinsänderungen können die Ergebnisse verändern."
       schedule:
         current_monthly_payment: Monatsrate
         total_interest: Zinsen gesamt

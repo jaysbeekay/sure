@@ -37,6 +37,18 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
                  "the detected rate was not recorded against the injected sync date")
   end
 
+  # #188: Redbark reports no day-count basis, so a basis the user chose survives
+  # a sync, as it does for Plaid.
+  test "processing Redbark's loan details leaves the day-count basis alone" do
+    @loan.update!(day_count_convention: "actual_actual")
+    detail lendingRate: "0.0675"
+
+    process
+
+    assert_equal({ "2026-09-21" => BigDecimal("6.75") }, rates, "the processor must have run")
+    assert_equal "actual_actual", @loan.reload.day_count_convention
+  end
+
   # Row 13: the date is the caller's, not the clock's. Travelling the clock
   # away from `as_of` is the only way to tell the two apart.
   test "the row is keyed by the injected date, never by today" do
@@ -395,11 +407,13 @@ class RedbarkAccount::LoanDetailsProcessorTest < ActiveSupport::TestCase
     assert_equal 12, @loan.reload.term_months
   end
 
-  # #303. Loan#original_balance does not read `initial_balance` on this tree, so
-  # a bad principal reaches the loan form and the account-creation flow rather
-  # than the maths -- but it is still a figure no loan was ever drawn for. One
-  # test per value, NOT a loop: the processor caches its loan, so a loop would
-  # let the first stored value stop the later iterations writing anything.
+  # #303. A bad principal is a figure no loan was ever drawn for. Since #184
+  # phase 2 Loan#original_balance prefers a positive `initial_balance`, so a
+  # stored principal reaches the maths -- the schedule, insurance, repaid
+  # ratio and leverage -- as well as the loan form; a non-positive one is
+  # ignored there, but must still not be stored. One test per value, NOT a
+  # loop: the processor caches its loan, so a loop would let the first stored
+  # value stop the later iterations writing anything.
   [ "0", "-400000", "NaN", "Infinity" ].each do |amount|
     test "a principal of #{amount} is not stored" do
       @loan.update_columns(initial_balance: nil)

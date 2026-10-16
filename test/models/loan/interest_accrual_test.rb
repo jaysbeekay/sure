@@ -64,7 +64,7 @@ class Loan::InterestAccrualTest < ActiveSupport::TestCase
     error = assert_raises(ArgumentError) do
       accrue(
         from_date: Date.new(2024, 1, 1), to_date: Date.new(2024, 2, 1),
-        balance: "1000", annual_rate: "12", day_count_convention: :thirty_360
+        balance: "1000", annual_rate: "12", day_count_convention: :actual_366
       )
     end
 

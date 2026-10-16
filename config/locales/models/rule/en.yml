@@ -17,3 +17,6 @@ en:
   rule:
     conditions:
       unsupported_label: "Unsupported (%{type})"
+    actions:
+      record_loan_rate_change:
+        label: "Record loan rate change from description"

@@ -1,11 +1,158 @@
 require "test_helper"
 
 class LoansControllerTest < ActionDispatch::IntegrationTest
+  OFFSET_SELECT = "account[accountable_attributes][offset_account_ids][]".freeze
+
   include AccountableResourceInterfaceTest
 
   setup do
     sign_in @user = users(:family_admin)
     @account = accounts(:loan)
+  end
+
+  test "saves the actual/360 day-count basis from the form (#284)" do
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, day_count_convention: "actual_360" } }
+    }
+
+    assert_redirected_to @account
+    assert_equal "actual_360", @account.accountable.reload.day_count_convention
+  end
+
+  test "the form offers the actual/360 basis (#284)" do
+    get edit_loan_path(@account)
+
+    assert_select "select[name='account[accountable_attributes][day_count_convention]'] option[value='actual_360']",
+      text: I18n.t("loans.form.day_count_convention_actual_360")
+  end
+
+  # The overview only shows what the loan actually records: a leverage figure
+  # needs a down payment, and an insurance card needs a premium. A loan with
+  # neither must not grow cards reading zero, which would say the borrower has
+  # insurance costing nothing rather than none.
+  test "the overview shows leverage and insurance once they are recorded" do
+    get account_path(@account)
+    assert_response :success
+    assert_no_match(/Leverage/, response.body, "nothing to compute a ratio from yet")
+    # The summary card's own title, not the word: the repayment breakdown below
+    # the cards has an "Insurance" row of its own, which would satisfy a match
+    # on the page body with the card deleted.
+    assert_select "h4", text: "Insurance", count: 0, message: "and no premium recorded"
+
+    @account.loan.update!(
+      down_payment: 100_000, interest_rate: 5, term_months: 120, rate_type: "fixed",
+      start_date: 2.years.ago.to_date, insurance_rate: 0.36, insurance_rate_type: "level_term"
+    )
+
+    get account_path(@account)
+    assert_response :success
+
+    assert_match(/Leverage/, response.body)
+    assert_match(/5\.0x/, response.body, "500,000 borrowed against 100,000 put in")
+    assert_match(/Moderate/, response.body, "and the band that ratio sits in")
+    assert_select "h4", text: "Insurance", count: 1, message: "the insurance summary card"
+    assert_match(/Total Cost/, response.body)
+    assert_select "[data-controller='donut-chart']", count: 1, message: "the repayment ring"
+    # The amount borrowed is money like the ratio beside it, so Privacy Mode
+    # must blur it too.
+    assert_select "[data-controller='donut-chart'] p.privacy-sensitive", text: /of \$500,000/, count: 1
+  end
+
+  # The Schedule tab's "Total Cost" is what the borrower repays: principal plus
+  # interest. Both tabs render in one request, so the Overview's card must
+  # either show that same figure or say what it adds -- a premium folded in
+  # under the same title put two different "Total Cost" amounts on one page.
+  test "the overview's total cost agrees with the schedule's and names the premium it adds" do
+    loan = @account.loan
+    loan.update!(interest_rate: 5, term_months: 120, rate_type: "fixed", start_date: 2.years.ago.to_date)
+
+    # The fork renders the Schedule tab lazily unless it is the active one, so
+    # the page that carries both cards is the one opened on that tab.
+    get account_path(@account, tab: "schedule")
+    uninsured = card_values("Total Cost")
+    assert_equal 2, uninsured.size, "precondition: the Overview and Schedule tabs each render the card"
+    assert_equal 1, uninsured.uniq.size, "with no premium the two figures are the same figure"
+
+    loan.update!(insurance_rate: 0.36, insurance_rate_type: "level_term")
+    loan = Loan.find(loan.id)
+
+    get account_path(@account, tab: "schedule")
+    assert_equal uninsured.first(1), card_values("Total Cost"),
+                 "one card still calls itself Total Cost, and it has not moved"
+    assert_equal [ format_money(loan.amortization_schedule.total_paid + loan.total_insurance) ],
+                 card_values("Total Cost incl. Insurance"),
+                 "the Overview names the premium it adds, and adds it to the Schedule's figure"
+  end
+
+  # A rate saved on a loan with no term has no schedule to project a premium
+  # against. The card must still say a policy is recorded rather than vanish,
+  # which read as though the save had been lost.
+  test "a recorded insurance rate shows even when no premium can be projected" do
+    @account.loan.update!(term_months: nil, insurance_rate: 0.36, insurance_rate_type: "level_term")
+    assert_nil Loan.find(@account.loan.id).insurance, "precondition: nothing to project against"
+
+    get account_path(@account)
+    assert_response :success
+    assert_equal [ "0.36% a year" ], card_values("Insurance")
+  end
+
+  # A negative opening valuation (imports produce them) has no leverage band,
+  # and the card built its label from the band -- a key that does not exist.
+  test "a negative opening balance shows no leverage card rather than a missing translation" do
+    @account.loan.update!(down_payment: 100_000)
+    @account.entries.create!(
+      date: Date.current - 2.years, name: "Opening balance", amount: -500_000, currency: @account.currency,
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+    assert @account.loan.original_balance.negative?, "precondition: the opening balance is negative"
+
+    get account_path(@account)
+    assert_response :success
+    assert_no_match(/translation missing: en\.loans/, response.body)
+    assert_select "h4", text: "Leverage", count: 0
+  end
+
+  # The form renders these fields, so a save must keep them. Measured against
+  # the loan's own state before the request: all three start blank.
+  test "updates the down payment and insurance terms from the form" do
+    loan = @account.loan
+    assert_nil loan.down_payment
+    assert_nil loan.insurance_rate
+    assert_nil loan.insurance_rate_type
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_type: "Loan",
+        accountable_attributes: {
+          id: @account.accountable_id,
+          down_payment: "100000", insurance_rate: "0.36", insurance_rate_type: "level_term"
+        }
+      }
+    }
+
+    assert_redirected_to @account
+    loan.reload
+    assert_equal BigDecimal("100000"), loan.down_payment
+    assert_equal BigDecimal("0.36"), loan.insurance_rate
+    assert_equal "level_term", loan.insurance_rate_type
+  end
+
+  # The type select's blank option is the form's "None": no type recorded, read
+  # as decreasing. It submits an empty string, which must clear the type rather
+  # than fail validation (and the column's check constraint, which admits NULL
+  # but not '').
+  test "the insurance type's blank option clears a recorded type" do
+    @account.loan.update!(insurance_rate: 0.36, insurance_rate_type: "level_term")
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_type: "Loan",
+        accountable_attributes: { id: @account.accountable_id, insurance_rate_type: "" }
+      }
+    }
+
+    assert_redirected_to @account
+    assert_nil @account.loan.reload.insurance_rate_type
   end
 
   test "updates the day-count basis" do
@@ -162,6 +309,80 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to created_account
     assert_equal "Loan account created", flash[:notice]
     assert_enqueued_with(job: SyncJob)
+  end
+
+  # jaysbeekay/sure#424: the opening anchor holds the original principal, so
+  # it belongs on the day the loan was drawn down, not on the form's separate
+  # opening balance date (which defaults to today minus two years).
+  test "a new loan's opening anchor is dated on its start date" do
+    account = create_loan(start_date: Date.new(2020, 1, 15))
+
+    anchor = account.valuations.opening_anchor.first.entry
+    assert_equal Date.new(2020, 1, 15), anchor.date
+    assert_equal 400_000, anchor.amount
+  end
+
+  test "a new loan's recorded balance opens on its principal at its start date" do
+    start_date = Date.new(2020, 1, 15)
+    account = create_loan(start_date: start_date)
+    Balance::Materializer.new(account, strategy: :forward).materialize_balances
+
+    series = account.balance_series(
+      period: Period.custom(start_date: start_date, end_date: Date.current),
+      interval: "1 month"
+    )
+    assert_equal 400_000, series.values.first.value.amount
+    assert_equal start_date, account.balances.minimum(:date)
+  end
+
+  test "a new loan keeps its entered current balance" do
+    account = create_loan(start_date: Date.new(2020, 1, 15))
+    Balance::Materializer.new(account, strategy: :forward).materialize_balances
+
+    today = account.entries.valuations.find_by(date: Date.current)
+    assert_not_nil today
+    assert_equal 399_600, today.amount
+    assert_equal 399_600, account.balances.find_by(date: Date.current).balance
+  end
+
+  test "a loan without a start date keeps the form's opening date" do
+    opening_balance_date = Date.current - 3.years # not the manager's own two-year default
+    account = create_loan(start_date: nil, opening_balance_date: opening_balance_date)
+
+    assert_equal opening_balance_date, account.valuations.opening_anchor.first.entry.date
+  end
+
+  test "a loan with a start date but no original balance keeps the form's opening date" do
+    # Without a principal the anchor holds the entered current balance, which
+    # was not the balance on the start date.
+    opening_balance_date = Date.current - 3.years
+    account = create_loan(start_date: Date.new(2020, 1, 15), initial_balance: nil,
+                          opening_balance_date: opening_balance_date)
+
+    anchor = account.valuations.opening_anchor.first.entry
+    assert_equal opening_balance_date, anchor.date
+    assert_equal 399_600, anchor.amount
+  end
+
+  test "a loan started today has its opening anchor today and no reconciliation" do
+    account = create_loan(start_date: Date.current)
+
+    valuations = account.entries.valuations
+    assert_equal 1, valuations.count
+    assert_equal Date.current, valuations.first.date
+    assert_equal 400_000, valuations.first.amount
+    assert_equal "opening_anchor", valuations.first.entryable.kind
+  end
+
+  test "a loan with a future start date keeps the form's opening date and today's balance" do
+    # Loan does not validate start_date. An anchor after today would leave no
+    # balance row for today, so a future start date is not used.
+    opening_balance_date = Date.current - 3.years
+    account = create_loan(start_date: Date.current + 1.month, opening_balance_date: opening_balance_date)
+    Balance::Materializer.new(account, strategy: :forward).materialize_balances
+
+    assert_equal opening_balance_date, account.valuations.opening_anchor.first.entry.date
+    assert_equal 399_600, account.balances.find_by(date: Date.current)&.balance
   end
 
   test "updates with loan details" do
@@ -887,6 +1108,160 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_not_includes response.body, "linked offset balance"
   end
 
+  # --- #325: the new-loan form offers offsets ---------------------------------
+
+  test "the new-loan form lists a same-currency asset shared with the family" do
+    offset = shared_offset
+
+    get new_loan_path
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offset.id
+  end
+
+  test "the new-loan form leaves out what the save would refuse" do
+    assert @account.family.share_all_by_default?, "precondition"
+    private_offset = @account.family.accounts.create!(
+      name: "Private offset", balance: 100, currency: @account.currency, owner: @user, accountable: Depository.new
+    )
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+    other_family = families(:empty).accounts.create!(
+      name: "Other family offset", balance: 100, currency: @account.currency, accountable: Depository.new
+    )
+
+    get new_loan_path
+
+    assert_response :success
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, private_offset.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, accounts(:credit_card).id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, other_family.id, count: 0
+  end
+
+  test "the new-loan form lists the owner's private asset when the family does not share by default" do
+    @account.family.update!(default_account_sharing: "private")
+    private_offset = @account.family.accounts.create!(
+      name: "Private offset", balance: 100, currency: @account.currency, owner: @user, accountable: Depository.new
+    )
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, private_offset.id
+  end
+
+  test "the new-loan form lists offsets in the submitted currency" do
+    usd = shared_offset
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+
+    get new_loan_path, params: { account: { currency: "EUR" } }
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id, count: 0
+  end
+
+  # The form always submits one currency. A crafted request can send a list,
+  # which `where(currency:)` reads as IN. A list names no currency, so both
+  # lists render exactly as they do on a first render.
+  test "the new-loan form reads a currency submitted as a list as no currency" do
+    usd = shared_offset
+    euro = @account.family.accounts.create!(
+      name: "Euro offset", balance: 100, currency: "EUR", accountable: Depository.new
+    ).tap(&:auto_share_with_family!)
+
+    get new_loan_path
+    first_render = css_select("option").map { |option| option["value"] }
+
+    get new_loan_path, params: { account: { currency: [ "USD", "EUR" ] } }
+
+    assert_response :success
+    assert_equal first_render, css_select("option").map { |option| option["value"] }
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, usd.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, euro.id, count: 0
+  end
+
+  test "the new-loan form renders when the account param is not a hash" do
+    get new_loan_path, params: { account: "USD" }
+
+    assert_response :success
+  end
+
+  test "the new-loan form renders when the loan attributes are not a hash" do
+    get new_loan_path, params: { account: { currency: "USD", accountable_attributes: "offsets" } }
+
+    assert_response :success
+  end
+
+  test "a failed create re-renders with the offsets listed" do
+    offset = shared_offset
+    params = variable_loan_params(currency: @account.currency, offset_ids: [ offset.id ])
+    params[:accountable_attributes][:interest_rate] = -1
+
+    assert_no_difference -> { Account.where(accountable_type: "Loan").count } do
+      post loans_path, params: { account: params }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offset.id
+  end
+
+  test "every account the new-loan form offers is one the save accepts" do
+    offered = shared_offset
+
+    get new_loan_path
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, offered.id
+
+    post loans_path, params: { account: variable_loan_params(currency: @account.currency, offset_ids: [ offered.id ]) }
+
+    created = Account.where(accountable_type: "Loan").order(:created_at).last.accountable
+    assert_equal [ offered.id ], created.offset_accounts.pluck(:id)
+  end
+
+  test "the edit form lists the same offsets as before" do
+    offset = shared_offset
+    expected = LoanOffsetAccount.eligible_accounts_for(@account.loan, viewer: @user).map(&:id)
+    assert_includes expected, offset.id, "precondition"
+
+    get edit_loan_path(@account)
+
+    expected.each { |id| assert_select "select[name=?] option[value=?]", OFFSET_SELECT, id }
+    assert_select "select[name='#{OFFSET_SELECT}'] option", count: expected.size
+  end
+
+  # Gatekeeper light review on #393: the collateral list narrows to `visible`
+  # accounts and this one did not, so an account being deleted, or one the user
+  # disabled, was offered as a new offset. The control differs from them only in
+  # its status.
+  test "the new-loan form leaves out an account that is pending deletion or disabled" do
+    control = shared_offset
+    deleting = shared_offset.tap { |account| account.update_columns(status: "pending_deletion") }
+    disabled = shared_offset.tap { |account| account.update_columns(status: "disabled") }
+
+    get new_loan_path
+
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, control.id
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, deleting.id, count: 0
+    assert_select "select[name=?] option[value=?]", OFFSET_SELECT, disabled.id, count: 0
+  end
+
+  # The select submits only what it lists (`include_hidden: false`), so a linked
+  # offset left off it is unlinked the next time the form is saved with any
+  # selection. Narrowing to `visible` must not do that to a link the loan
+  # already has, as `set_collateral_candidates` keeps the current collateral.
+  test "the edit form keeps listing an offset the loan already has once it is disabled" do
+    offset = shared_offset
+    @account.loan.update!(rate_type: "variable") unless @account.loan.variable_rate_type?
+    LoanOffsetAccount.create!(loan: @account.loan, account: offset)
+    offset.update_columns(status: "disabled")
+
+    get edit_loan_path(@account)
+
+    assert_select "select[name=?] option[value=?][selected]", OFFSET_SELECT, offset.id
+  end
+
   # CodeRabbit on we-promise/sure#3473: `create_and_sync` can raise RecordInvalid
   # from the opening valuation's `entries.create!` or from `lock_saved_attributes!`,
   # and then `e.record` is an Entry or the accountable, not the account the form
@@ -944,6 +1319,40 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     # id and its unchanged rate type, and no other loan field.
     def offset_only_params(loan, offset_ids)
       { account: { accountable_attributes: { id: loan.id, rate_type: loan.rate_type, offset_account_ids: offset_ids } } }
+    end
+
+    # The figure under every summary card titled exactly `title`, in page order.
+    def card_values(title)
+      css_select("h4").select { |h4| h4.text.strip == title }.map { |h4| h4.next_element.text.strip }
+    end
+
+    def format_money(money)
+      ApplicationController.helpers.format_money(money)
+    end
+
+    # Posts the new-loan form as a browser does: the "Opening balance date"
+    # field is always sent, defaulting to today minus two years.
+    def create_loan(start_date:, initial_balance: 400_000, opening_balance_date: Date.current - 2.years)
+      post loans_path, params: {
+        account: {
+          name: "Mortgage",
+          balance: 399_600,
+          currency: "USD",
+          accountable_type: "Loan",
+          opening_balance_date: opening_balance_date.iso8601,
+          accountable_attributes: {
+            subtype: "mortgage",
+            interest_rate: 5,
+            term_months: 360,
+            rate_type: "fixed",
+            initial_balance: initial_balance,
+            start_date: start_date&.iso8601
+          }
+        }
+      }
+      account = Account.order(:created_at).last
+      assert_redirected_to account
+      account
     end
 
     def variable_loan_params(currency:, offset_ids:)

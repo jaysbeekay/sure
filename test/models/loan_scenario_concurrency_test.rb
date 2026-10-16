@@ -76,7 +76,7 @@ class LoanScenarioConcurrencyTest < ActiveSupport::TestCase
     assert_raises ActiveRecord::RecordNotUnique do
       LoanScenario.create!(
         loan: @loan, name: "Sixth", currency: "USD", slot: 0,
-        calculator_version: Loan::AmortizationSchedule::ALGORITHM_VERSION
+        calculator_version: LoanAmortization::ALGORITHM_VERSION
       )
     end
 
@@ -87,7 +87,7 @@ class LoanScenarioConcurrencyTest < ActiveSupport::TestCase
     assert_raises ActiveRecord::StatementInvalid do
       LoanScenario.new(
         loan: @loan, name: "Out of range", currency: "USD", slot: 9,
-        calculator_version: Loan::AmortizationSchedule::ALGORITHM_VERSION
+        calculator_version: LoanAmortization::ALGORITHM_VERSION
       ).save(validate: false)
     end
   end

@@ -1,17 +1,25 @@
 class Loan
-  # Resolves linked asset balances into the change-point shape consumed by the
-  # daily simulator. Historical ranges use each account's end-of-day balance;
-  # ranges at and after today use the accounts' current totals held flat.
+  # Resolves linked asset balances into the change-point shape consumed by
+  # Loan::DailyInterest. Historical ranges use each account's end-of-day
+  # balance; ranges at and after `as_of` use the accounts' current totals held
+  # flat (C16).
+  #
+  # `as_of` is the caller's "today" -- the projection's -- so a projection
+  # anchored on a date other than the wall clock splits history from the
+  # forward assumption where it is anchored (#184).
   class OffsetResolver
-    def initialize(loan)
+    def initialize(loan, as_of: Date.current)
       @loan = loan
+      @as_of = as_of
     end
 
+    # A resolver answers for one projection, which asks once per period, so
+    # the linked accounts and today's total are read once and kept.
     def change_points(from_date, to_date)
-      return [] unless @loan.countable_offset_accounts.exists?
+      return [] if offset_accounts.empty?
       return [] if from_date >= to_date
 
-      today = Date.current
+      today = @as_of
       return [ { date: from_date, amount: current_total } ] if from_date >= today
 
       historical_end = [ to_date - 1, today - 1 ].min
@@ -29,7 +37,7 @@ class Loan
       end
 
       def current_total
-        Account.where(id: offset_accounts.map(&:id)).sum(:balance).to_d
+        @current_total ||= Account.where(id: offset_accounts.map(&:id)).sum(:balance).to_d
       end
 
       def historical_points(from_date, to_date)

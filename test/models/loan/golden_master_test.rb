@@ -58,7 +58,7 @@ class Loan::GoldenMasterTest < ActiveSupport::TestCase
 
   private
     def build_loan(start_date:, rate_type: "fixed", interest_rate: 6, term_months: 360, balance: 285_000,
-                   variable_rate_schedule: {}, day_count_convention: nil, initial_balance: nil, offset_balance: nil)
+                   variable_rate_schedule: {}, day_count_convention: "actual_365", initial_balance: nil, offset_balance: nil)
       loan = Loan.new(rate_type: rate_type, interest_rate: interest_rate, term_months: term_months,
                       start_date: start_date, variable_rate_schedule: variable_rate_schedule,
                       initial_balance: initial_balance)
@@ -78,16 +78,26 @@ class Loan::GoldenMasterTest < ActiveSupport::TestCase
       Loan.find(account.loan.id)
     end
 
+    # The keys every captured row carries. Since #184's core swap the
+    # simulator's rows also carry `sizing_rate`; it is a new field rather than
+    # a moved figure, and upstream's simulator tests pin it, so the files keep
+    # the row shape they were recorded in.
+    ROW_KEYS = %i[payment_number payment_date payment_amount principal_payment interest_payment
+                  beginning_balance ending_balance interest_rate].freeze
+
     def capture(loan)
       schedule = loan.amortization_schedule
-      projection = loan.payoff_projection
+      projection = loan.payoff_projection(as_of: AS_OF)
 
       {
         "schedule" => {
-          "monthly_payment" => scalar(schedule.monthly_payment),
+          # The repayment the schedule opens on (upstream's periodic_payment;
+          # the fork called it monthly_payment).
+          "monthly_payment" => scalar(schedule.periodic_payment),
           "total_interest" => scalar(schedule.total_interest),
           "payoff_date" => scalar(schedule.payoff_date),
-          "rows" => schedule.payments.map { |row| canonical(row) }
+          # The rows as the persisted cache and the API carry them.
+          "rows" => loan.amortization_rows.map { |row| canonical(row) }
         },
         "projection" => {
           "applicable" => projection.applicable?,
@@ -95,7 +105,7 @@ class Loan::GoldenMasterTest < ActiveSupport::TestCase
           "payoff_date" => scalar(projection.payoff_date),
           "total_interest" => scalar(projection.total_interest),
           "converged" => projection.converged?,
-          "rows" => projection.payments.map { |row| canonical(row) }
+          "rows" => projection.payments.map { |row| canonical(row.slice(*ROW_KEYS)) }
         },
         "current_minimum_payment" => scalar(loan.current_minimum_payment(as_of: AS_OF)),
         # RetirementPlan#seed_loans reads exactly this figure for a loan it seeds.
