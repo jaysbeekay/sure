@@ -10,7 +10,8 @@ module InsightsHelper
     "budget_on_track" => "circle-check",
     # Same shield the reserve panel uses on the goal page, so the two read as
     # the same object seen from two places.
-    "maintained_goal_depleted" => "shield-alert"
+    "maintained_goal_depleted" => "shield-alert",
+    "spending_pace" => "gauge"
   }.freeze
 
   def insight_icon_key(insight)
@@ -81,6 +82,13 @@ module InsightsHelper
     when "budget_on_track"
       # Still the right figure here, where overall usage *is* the subject.
       facts["budget_spent_pct"] && [ "#{facts["budget_spent_pct"]}%", t("insights.figures.of_budget") ]
+    when "spending_pace"
+      # Ahead of pace: what the month projects to. Already over: by how much.
+      if insight.metadata&.dig("status") == "over"
+        facts["over_by"] && [ facts["over_by"], t("insights.figures.over_budget") ]
+      else
+        facts["projected_spend"] && [ facts["projected_spend"], t("insights.figures.on_pace") ]
+      end
     end
   end
 
@@ -111,7 +119,7 @@ module InsightsHelper
         href: transactions_path(q: { start_date: insight.period_start.to_s, end_date: insight.period_end.to_s }) }
     when "net_worth_milestone"
       { text: t("insights.actions.net_worth_milestone"), href: reports_path }
-    when "budget_at_risk", "budget_on_track"
+    when "budget_at_risk", "budget_on_track", "spending_pace"
       return nil unless insight.period_start
       { text: t("insights.actions.budget"), href: budget_path(Budget.date_to_param(insight.period_start)) }
     when "maintained_goal_depleted"
@@ -158,7 +166,7 @@ module InsightsHelper
       metadata["direction"] == "below" ? :positive : :warning
     when "cash_flow_warning"
       metadata["negative"] ? :negative : :warning
-    when "budget_at_risk", "maintained_goal_depleted"
+    when "budget_at_risk", "maintained_goal_depleted", "spending_pace"
       # Warning, not negative: the reserve is short, not overdrawn, and red is
       # reserved here for money actually going the wrong side of zero.
       :warning
