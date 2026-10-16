@@ -1,8 +1,9 @@
 # Project status automation
 
 `.github/workflows/project-status.yml` moves cards on the project board as work goes through the
-delivery sequence. Decisions are in `.github/project-status/logic.mjs`, tested in
-`.github/project-status/test/`.
+delivery sequence. Decisions are in `.github/project-status/logic.mjs`. The tests in
+`.github/project-status/test/` cover those decisions and run `main.mjs` end to end against a fake
+GitHub (`node --test .github/project-status/test/*.test.mjs`).
 
 ## What moves a card
 
@@ -18,6 +19,9 @@ delivery sequence. Decisions are in `.github/project-status/logic.mjs`, tested i
 - **Forward-only.** A card is never moved back, so one you have dragged further on stays put.
 - **Epics are skipped** (`type:epic`); their progress comes from sub-issues.
 - **Closed items are skipped.** Done, closed and reopened are left to the board's built-in workflows.
+- **PRs from outside the repository move only their own card.** `pull_request_target` runs for PRs
+  from forks too, whose body anyone can write, so the issues a PR names move only when its author is
+  the owner, a member or a collaborator.
 - **Pre-flights work too.** GitHub does not link a PR into `mirror/upstream-main` to its issue, but
   this reads the PR body, so `Closes #N` on a pre-flight still moves issue `#N`.
 

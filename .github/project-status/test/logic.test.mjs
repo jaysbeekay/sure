@@ -25,8 +25,8 @@ function commentEvent(c, { pr = false, number = 455 } = {}) {
   return { action: "created", issue: { number, ...(pr ? { pull_request: {} } : {}) }, comment: c };
 }
 
-function prEvent(action, { draft = true, base = "main", body = "Closes #424", number = 432, state = "open" } = {}) {
-  return { action, pull_request: { number, draft, state, body, base: { ref: base } } };
+function prEvent(action, { draft = true, base = "main", body = "Closes #424", number = 432, state = "open", association = "OWNER" } = {}) {
+  return { action, pull_request: { number, draft, state, body, base: { ref: base }, author_association: association } };
 }
 
 describe("shouldMove: forward only", () => {
@@ -181,6 +181,21 @@ describe("decide: pull requests", () => {
   test("an upstream PR line on a PR into main is not an upstream move", () => {
     const e = prEvent("edited", { draft: false, base: "main", body: "Closes #424\nUpstream PR: we-promise/sure#4174" });
     assert.equal(decide("pull_request_target", e, CTX)[0].status, "In review");
+  });
+
+  test("a PR from someone outside the repository moves only its own card", () => {
+    for (const association of ["NONE", "FIRST_TIME_CONTRIBUTOR", "CONTRIBUTOR"]) {
+      const e = prEvent("ready_for_review", { draft: false, body: "Closes #424\nPart of #118", association });
+      assert.deepEqual(decide("pull_request_target", e, CTX), [{ number: 432, status: "In review" }], association);
+    }
+  });
+
+  test("a collaborator's PR moves the issues it names", () => {
+    const e = prEvent("opened", { body: "Closes #424", association: "COLLABORATOR" });
+    assert.deepEqual(decide("pull_request_target", e, CTX), [
+      { number: 432, status: "In progress" },
+      { number: 424, status: "In progress" },
+    ]);
   });
 
   test("closed PRs and other actions are left to the board's own workflows", () => {

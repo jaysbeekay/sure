@@ -122,7 +122,10 @@ export function decide(eventName, event, ctx) {
     // A pre-flight whose upstream PR is named has moved on to upstream.
     if (pr.base?.ref === ctx.mirrorBase && upstreamPr(pr.body, ctx.upstreamRepo)) status = "Upstream";
 
-    return [{ number: pr.number, status }, ...linkedIssues(pr.body, ctx.repo).map((number) => ({ number, status }))];
+    // pull_request_target also runs for PRs from forks, whose body anyone
+    // can write, so only a trusted author's PR moves the issues it names.
+    const issues = TRUSTED.includes(pr.author_association) ? linkedIssues(pr.body, ctx.repo) : [];
+    return [{ number: pr.number, status }, ...issues.map((number) => ({ number, status }))];
   }
 
   return [];
