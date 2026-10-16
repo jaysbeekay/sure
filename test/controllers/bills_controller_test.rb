@@ -619,6 +619,19 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
     assert_no_match "Beta paused", response.body
   end
 
+  # `.form-field__input` is the bare control inside a form field: no border and
+  # no padding of its own. Without the `.form-field` wrapper the filters render
+  # as unstyled text beside the bordered search box.
+  test "every all-view filter select sits inside a bordered form field" do
+    get bills_url(view: "all")
+    assert_response :success
+
+    %w[status bill_type sort].each do |field|
+      assert_select "select[name=?]", "q[#{field}]", count: 1
+      assert_select ".form-field > select.form-field__input[name=?]", "q[#{field}]", count: 1
+    end
+  end
+
   test "the calendar renders the month grid with paid and overdue states" do
     paid_bill = create_bill(name: "Paid on time", amount: 40, expected_day_of_month: 5)
     paid_occurrence = paid_bill.recurring_occurrences.find_by!(due_on: Date.current.beginning_of_month + 4)
