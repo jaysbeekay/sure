@@ -412,6 +412,7 @@ class SimplefinItemsController < ApplicationController
     # The relink below clears the legacy FK on the account holding it, moves
     # the AccountProvider off its account and may queue that account for deletion.
     return unless require_relinkable_provider_account!(simplefin_account, @account)
+    orphaned_account = nil
 
     # Relink behavior: detach any legacy link and point provider link at the chosen account
     relinked = relinking(simplefin_account, @account) do
@@ -451,7 +452,7 @@ class SimplefinItemsController < ApplicationController
             # consolidation we want the duplicate to disappear from the UI.
             # Use the app's standard deletion path (async) so the "pending_deletion" state
             # remains truthful in the UI.
-            previous_account.destroy_later if previous_account.may_mark_for_deletion?
+            orphaned_account = previous_account if previous_account.may_mark_for_deletion?
           else
             Rails.logger.info("Skipped disabling account ##{previous_account.id} after relink because it still has active provider links")
           end
@@ -461,6 +462,16 @@ class SimplefinItemsController < ApplicationController
       end
     end
     return unless relinked
+
+    # Queue the orphan for deletion only after the relink commits. destroy_later
+    # pushes DestroyJob only once every open transaction commits, so called in
+    # the block above, an enqueue error would leave it from the commit, past
+    # the rescue inside it.
+    begin
+      orphaned_account&.destroy_later
+    rescue => e
+      Rails.logger.warn("Failed disabling-orphan check for account ##{orphaned_account.id}: #{e.class} - #{e.message}")
+    end
 
     if turbo_frame_request?
       # Reload the item to ensure associations are fresh
