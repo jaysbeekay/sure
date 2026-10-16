@@ -760,12 +760,16 @@ class InvestmentStatement
     # `Money * numeric` preserves the source currency — so multiplying a
     # foreign-currency Money by a rate would FX-scale the amount but keep the
     # wrong currency label, corrupting downstream sums.
+    #
+    # A currency with no rate at all converts to 0: the amount is left out of
+    # every sum here rather than counted at 1 (#3640). Both sides of a trend
+    # come from the same holding, so they drop out together.
     def convert_to_family_currency(amount, from_currency)
       return amount if amount.nil?
       numeric = amount.is_a?(Money) ? amount.amount : amount
       return numeric if from_currency == family.currency
-      rate = exchange_rates[from_currency] || 1
-      numeric * rate
+      rate = exchange_rates[from_currency]
+      rate ? numeric * rate : 0
     end
 
     def all_time_totals
@@ -1562,7 +1566,7 @@ class InvestmentStatement
         # totals; v3: fees, and contributions net of reported fees; v4: a
         # zero-amount Fee-labelled trade counts its fee column; v5: income
         # summed signed) so a deploy never serves the previous shape from Redis.
-        "investment_statement", "totals_query/v5", family.id, user&.id,
+        "investment_statement", "totals_query/v5", ExchangeRate::CONVERSION_CACHE_VERSION, family.id, user&.id,
         account_ids_hash, date_range.begin, date_range.end, family.entries_cache_version
       ]) { Totals.new(family, account_ids: account_ids, date_range: date_range).call }
     end

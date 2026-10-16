@@ -250,6 +250,7 @@ class TradeTest < ActiveSupport::TestCase
 
     assert_nil sell.realized_gain_loss, "a neighbouring day's rate is not this day's"
     assert_equal :missing_exchange_rate, sell.realized_gain_loss_unavailable_reason
+    assert sell.realized_gain_unconvertible?
   end
 
   # `exchange_rates` can no longer store a 0 or a negative

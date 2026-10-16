@@ -588,11 +588,18 @@ class ReportsController < ApplicationController
       to_numeric = ->(value) { value.is_a?(Money) ? value.amount : value }
 
       # Unrealized gains mark holdings to market, so convert at today's FX.
+      # Both conversions return nil when there is no rate. Converting at 1
+      # instead reported a ¥1,000,000 gain as $1,000,000 (#3640); a figure that
+      # cannot be converted is left out of the total and counted, so the card
+      # can say the total is partial.
       foreign_holding_currencies = current_holdings.map(&:currency).compact.uniq.reject { |c| c == currency }
       holding_rates = ExchangeRate.rates_for(foreign_holding_currencies, to: currency, date: Date.current)
       convert_current = ->(amount, from) {
         numeric = to_numeric.call(amount)
-        from == currency ? numeric : numeric * (holding_rates[from] || 1)
+        next numeric if from == currency
+
+        rate = holding_rates[from]
+        rate && numeric * rate
       }
 
       # Build metrics per treatment
@@ -601,10 +608,16 @@ class ReportsController < ApplicationController
         disposals = disposals_by_treatment[treatment] || []
         trades = disposals.map(&:trade)
 
-        # Sum unrealized gains from holdings (only those with known cost basis)
+        # Sum unrealized gains from holdings (only those with known cost basis
+        # and a rate into family currency)
+        unconverted = 0
         unrealized = holdings.sum do |h|
           trend = h.trend
-          trend ? convert_current.call(trend.value, h.currency) : 0
+          next 0 unless trend
+
+          converted = convert_current.call(trend.value, h.currency)
+          unconverted += 1 if converted.nil?
+          converted || 0
         end
 
         # Already converted, each from the currency its own figure carries and
@@ -633,6 +646,8 @@ class ReportsController < ApplicationController
           # missing a disposal looked exactly like one that had none
           # (jaysbeekay/sure#167).
           excluded_trades: Portfolio::RealizedGains.exclusion_tally(disposals.filter_map(&:exclusion_reason)),
+          # Holdings and sells left out of the totals for want of a rate.
+          unconverted_count: unconverted,
           total_gain: Money.new(unrealized + realized, currency)
         }
       end
