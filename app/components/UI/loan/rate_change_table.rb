@@ -104,6 +104,9 @@ class UI::Loan::RateChangeTable < ApplicationComponent
     # the last change before any one payment. A change past maturity has no
     # row and is dropped, and so is one whose row is the payment in force: that
     # repayment is already the card's figure, sized at the new rate (#392).
+    #
+    # The schedule rows are memoised: each `loan.amortization_schedule` call
+    # reloads the account to check the signature, a query per change otherwise.
     def priced_changes
       in_force = loan.scheduled_payment_in_force(as_of: as_of)
       priced = future_rate_changes.filter_map do |effective_date, new_rate|

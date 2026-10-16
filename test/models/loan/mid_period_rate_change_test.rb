@@ -80,17 +80,13 @@ class Loan::MidPeriodRateChangeTest < ActiveSupport::TestCase
     def simulate(balance:, changes:)
       Loan::Simulator.new(
         starting_balance: balance,
-        starting_balance_as_of: Date.new(2026, 1, 1),
         accrual_start_date: Date.new(2026, 1, 1),
         payment_schedule: [ Date.new(2026, 2, 1), Date.new(2026, 3, 1) ],
         accrual_rate_for: ->(_date) { BigDecimal("6") },
-        accrual_rate_changes: ->(_from, _to) { changes },
-        re_amortisation_events: ->(_from, _to) { [] },
         payment_strategy: :hold,
-        payment_amount_for: ->(**_args) { BigDecimal("1000") },
+        payment_amount: BigDecimal("1000"),
         currency_precision: 2,
-        daily_accrual: true,
-        day_count_convention: :actual_365
+        interest_for: Loan::DailyInterest.new(day_count_convention: :actual_365, rate_changes: ->(_from, _to) { changes })
       ).run
     end
 

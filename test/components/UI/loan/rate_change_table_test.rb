@@ -121,6 +121,34 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
     assert_equal Money.new(schedule_row[:payment_amount], "USD"), row[:new_payment]
   end
 
+  # code master, #394 (finding 1): every `loan.amortization_schedule` call
+  # reloads the account to check the schedule's signature, so looking the
+  # schedule up once per change added a query per listed change. Pricing the
+  # rows reads the schedule once, however many changes there are.
+  test "pricing more rate changes does not add queries" do
+    one = queries_to_price_rows(@loan, months: [ 3 ])
+    three = queries_to_price_rows(variable_loan, months: [ 3, 6, 9 ])
+
+    assert_equal one, three
+  end
+
+  # code master, #394 (finding 2): a change effective on a payment date that is
+  # also as_of. That payment counts as made (payment_in_force reads strictly
+  # after as_of), and the change is in effect, so the table lists nothing and
+  # the card quotes the next row, already sized at the new rate.
+  test "a change effective on a payment date that is as_of is the card's figure, not a row" do
+    payment_date = @loan.amortization_schedule.payments.map(&:date).find { |d| d > Date.current + 3.months }
+    @loan.add_variable_rate_change(payment_date, 5.93)
+    @loan.reload
+
+    component = UI::Loan::RateChangeTable.new(loan: @loan, as_of: payment_date)
+    following = @loan.amortization_schedule.payments.find { |p| p.date > payment_date }
+
+    assert_empty component.rows
+    assert_equal following.payment, component.current_payment
+    assert_equal BigDecimal("5.93"), component.current_rate
+  end
+
   # The base moved off the actual balance: neither an offset nor paying ahead
   # changes what the lender's letter quotes.
   test "an offset and a lower actual balance change neither column" do
@@ -269,6 +297,20 @@ class UI::Loan::RateChangeTableTest < ViewComponent::TestCase
         currency_precision: 2,
         interest_for: Loan::DailyInterest.for(loan)
       ).run.converged?
+    end
+
+    def queries_to_price_rows(loan, months:)
+      months.each { |m| loan.add_variable_rate_change(Date.current + m.months, 5.93 + m / 100.0) }
+      loan.reload
+      component = UI::Loan::RateChangeTable.new(loan: loan)
+      loan.amortization_schedule.payments
+      assert_equal months.length, component.rows.length, "precondition: each change is listed"
+
+      component = UI::Loan::RateChangeTable.new(loan: loan)
+      count = 0
+      counter = ->(*, payload) { count += 1 unless payload[:name].in?(%w[SCHEMA TRANSACTION]) || payload[:cached] }
+      ActiveSupport::Notifications.subscribed(counter, "sql.active_record") { component.rows }
+      count
     end
 
     # With an opening valuation, as a real loan has, so `original_balance` --
