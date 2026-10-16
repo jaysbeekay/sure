@@ -6,6 +6,9 @@ class Rule::ActionExecutor::SendEmailNotificationTest < ActiveSupport::TestCase
   setup do
     @family = families(:dylan_family)
     @rule = rules(:one)
+    # The fixture rule is inactive by the column default, and an inactive rule
+    # sends nothing. Switch it on so these tests exercise the sending path.
+    @rule.update_columns(active: true)
     @account = @family.accounts.create!(name: "Notify test", balance: 1000, currency: "USD", accountable: Depository.new)
     @txn1 = create_transaction(date: Date.current, account: @account, amount: 100, name: "Coffee").transaction
     @scope = @account.transactions
