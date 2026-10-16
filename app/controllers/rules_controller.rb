@@ -1,20 +1,11 @@
 class RulesController < ApplicationController
   include StreamExtensions
 
-  before_action :set_rule, only: [  :edit, :update, :destroy, :apply, :confirm, :move ]
+  before_action :require_non_guest!, except: %i[index]
+  before_action :set_rule, only: [  :edit, :update, :destroy, :apply, :confirm ]
 
   def index
-    @sort_by = params[:sort_by] || "priority"
-    @direction = params[:direction] || "asc"
-
-    allowed_columns = [ "priority", "name", "updated_at" ]
-    @sort_by = "priority" unless allowed_columns.include?(@sort_by)
-    @direction = "asc" unless [ "asc", "desc" ].include?(@direction)
-
-    rules = Current.family.rules.includes(conditions: :sub_conditions)
-    # Priority is the order rules run in, so it is always shown oldest-first;
-    # reversing it would make the arrows on each row point the wrong way.
-    @rules = @sort_by == "priority" ? rules.prioritised : rules.order(@sort_by => @direction)
+    @rules = Current.family.rules.includes(conditions: :sub_conditions).ordered
 
     # Fetch recent rule runs with pagination
     recent_runs_scope = RuleRun
@@ -56,7 +47,7 @@ class RulesController < ApplicationController
     if @rule.save
       redirect_to confirm_rule_path(@rule, reload_on_close: true)
     else
-      render :new, status: :unprocessable_entity
+      render_invalid_rule :new
     end
   end
 
@@ -67,6 +58,7 @@ class RulesController < ApplicationController
   end
 
   def confirm
+    @active_rules_above_count = @rule.active_rules_above.count
     # Compute provider, model, and cost estimation for auto-categorize actions
     if @rule.actions.any? { |a| a.action_type == "auto_categorize" }
       @selected_model, @estimated_cost = auto_categorize_estimate(@rule)
@@ -83,19 +75,20 @@ class RulesController < ApplicationController
         format.turbo_stream { stream_redirect_back_or_to rules_path, notice: t(".success") }
       end
     else
-      render :edit, status: :unprocessable_entity
+      render_invalid_rule :edit
     end
-  end
-
-  def move
-    @rule.move(params[:direction]) if Rule::MOVE_DIRECTIONS.map(&:to_s).include?(params[:direction])
-
-    redirect_to rules_path
   end
 
   def destroy
     @rule.destroy
     redirect_to rules_path, notice: t(".success")
+  end
+
+  def reorder
+    Rule.update_positions!(Current.family, params.require(:rule_ids))
+    head :no_content
+  rescue ArgumentError
+    head :unprocessable_entity
   end
 
   def destroy_all
@@ -127,6 +120,25 @@ class RulesController < ApplicationController
   end
 
   private
+    def render_invalid_rule(template)
+      # A native select cannot preserve an invalid option on resubmission.
+      invalid_selector = @rule.errors[:resource_type].any? ||
+        @rule.actions.any? { |action| action.errors[:action_type].any? } ||
+        @rule.conditions.any? { |condition| invalid_condition_selector?(condition) }
+
+      if invalid_selector
+        render plain: @rule.errors.full_messages.to_sentence, status: :unprocessable_entity
+        return
+      end
+
+      render template, status: :unprocessable_entity
+    end
+
+    def invalid_condition_selector?(condition)
+      condition.errors[:condition_type].any? || condition.errors[:operator].any? ||
+        condition.sub_conditions.any? { |sub_condition| invalid_condition_selector?(sub_condition) }
+    end
+
     # Pricing lives on Family so the batch suggestion page quotes the same way.
     def auto_categorize_estimate(scope, transaction_count: nil)
       family = scope.is_a?(Rule) ? scope.family : scope
@@ -186,7 +198,7 @@ class RulesController < ApplicationController
 
     def rule_params
       params.require(:rule).permit(
-        :resource_type, :effective_date, :active, :name,
+        :resource_type, :effective_date, :active, :name, :stop_processing,
         conditions_attributes: [
           :id, :condition_type, :operator, :value, :_destroy,
           sub_conditions_attributes: [ :id, :condition_type, :operator, :value, :_destroy ]

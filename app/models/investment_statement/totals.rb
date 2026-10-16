@@ -69,7 +69,11 @@ class InvestmentStatement::Totals
     #
     # Income is by label, whether the provider stored it as a qty-0 Trade or
     # as a Transaction: the same labels Portfolio::FlowClassifier calls
-    # income, read from it so the two cannot drift. Fees are the Fee-labelled
+    # income, read from it so the two cannot drift. Income is summed signed
+    # and then negated, as Portfolio::FlowClassifier requires: a negative
+    # amount is money in, so a margin-interest charge or a dividend reversal
+    # carrying an income label reduces the total instead of adding to it
+    # (we-promise/sure#4082). Fees are the Fee-labelled
     # entries plus trades.fee on every other trade; a Fee-labelled trade reads
     # its fee column only when its amount is zero, never both (P23). Pending is
     # the classifier's rule too, not Transaction's ::boolean cast (P25).
@@ -91,8 +95,8 @@ class InvestmentStatement::Totals
             THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as contributions,
           COALESCE(SUM(CASE WHEN trades.qty < 0 AND NOT #{income_or_fee_sql}
             THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as withdrawals,
-          COALESCE(SUM(CASE WHEN #{label_sql} = 'Dividend' THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as dividends,
-          COALESCE(SUM(CASE WHEN #{label_sql} = 'Interest' THEN ABS(entries.amount * COALESCE(er.rate, 1)) ELSE 0 END), 0) as interest,
+          COALESCE(-SUM(CASE WHEN #{label_sql} = 'Dividend' THEN entries.amount * COALESCE(er.rate, 1) ELSE 0 END), 0) as dividends,
+          COALESCE(-SUM(CASE WHEN #{label_sql} = 'Interest' THEN entries.amount * COALESCE(er.rate, 1) ELSE 0 END), 0) as interest,
           COALESCE(SUM(CASE
             WHEN #{fee_sql} THEN COALESCE(NULLIF(ABS(entries.amount), 0), trades.fee, 0)
             WHEN trades.id IS NOT NULL THEN trades.fee

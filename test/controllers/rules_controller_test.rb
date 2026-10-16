@@ -5,80 +5,6 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     sign_in @user = users(:family_admin)
   end
 
-  test "index lists rules in priority order by default" do
-    family = @user.family
-    family.rules.destroy_all
-    # Created Bravo, Charlie, Alpha; by name they would read Alpha, Bravo, Charlie. Only
-    # priority produces Charlie, Alpha, Bravo.
-    bravo, charlie, alpha = %w[Bravo Charlie Alpha].map do |name|
-      family.rules.create!(resource_type: "transaction", name: name, actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    end
-    charlie.update_columns(priority: 1)
-    alpha.update_columns(priority: 2)
-    bravo.update_columns(priority: 3)
-
-    get rules_url
-
-    assert_response :success
-    positions = %w[Charlie Alpha Bravo].map { |name| response.body.index(">#{name}<") }
-    assert_equal positions.sort, positions
-    assert positions.all?
-  end
-
-  test "index still sorts by name on request and then offers no reordering" do
-    get rules_url(sort_by: "name")
-
-    assert_response :success
-    assert_select "a[href*='move']", count: 0
-  end
-
-  test "index offers reordering controls in priority order, except where they would do nothing" do
-    family = @user.family
-    family.rules.destroy_all
-    first = family.rules.create!(resource_type: "transaction", name: "first", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    second = family.rules.create!(resource_type: "transaction", name: "second", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-
-    get rules_url
-
-    assert_select "a[data-turbo-method='patch'][href='#{move_rule_path(first, direction: "down")}']", count: 1
-    assert_select "a[data-turbo-method='patch'][href='#{move_rule_path(second, direction: "up")}']", count: 1
-    assert_select "a[href='#{move_rule_path(first, direction: "up")}']", count: 0
-    assert_select "a[href='#{move_rule_path(second, direction: "down")}']", count: 0
-  end
-
-  test "move changes the order and redirects back to the list" do
-    family = @user.family
-    family.rules.destroy_all
-    first = family.rules.create!(resource_type: "transaction", name: "first", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    second = family.rules.create!(resource_type: "transaction", name: "second", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-
-    patch move_rule_url(second, direction: "up")
-
-    assert_redirected_to rules_url
-    assert_equal [ second, first ], family.rules.prioritised.to_a
-  end
-
-  test "move ignores a direction it does not know" do
-    family = @user.family
-    family.rules.destroy_all
-    first = family.rules.create!(resource_type: "transaction", name: "first", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    second = family.rules.create!(resource_type: "transaction", name: "second", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-
-    assert_no_changes -> { family.rules.prioritised.map(&:id) } do
-      patch move_rule_url(second, direction: "sideways")
-    end
-
-    assert_redirected_to rules_url
-  end
-
-  test "move cannot reach another family's rule" do
-    other = families(:empty).rules.create!(resource_type: "transaction", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-
-    patch move_rule_url(other, direction: "down")
-
-    assert_response :not_found
-  end
-
   test "should get new" do
     get new_rule_url(resource_type: "transaction")
     assert_response :success
@@ -165,6 +91,143 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to confirm_rule_url(rule, reload_on_close: true)
   end
 
+  test "rejects a null byte in a condition instead of returning a server error" do
+    assert_no_difference "Rule.count" do
+      post rules_url, params: {
+        rule: {
+          resource_type: "transaction",
+          conditions_attributes: {
+            "0" => { condition_type: "transaction_name", operator: "like", value: "cof\0fee" }
+          },
+          actions_attributes: {
+            "0" => { action_type: "exclude_transaction" }
+          }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "p.text-destructive", text: /Conditions value is invalid/
+  end
+
+  test "rejects a null byte when updating an action" do
+    rule = rules(:one)
+    action = rule.actions.first
+
+    patch rule_url(rule), params: {
+      rule: {
+        actions_attributes: {
+          "0" => { id: action.id, action_type: "set_transaction_name", value: "bad\0value" }
+        }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal action.value, action.reload.value
+  end
+
+  test "rejects a null byte in the condition operator" do
+    assert_no_difference "Rule.count" do
+      post rules_url, params: {
+        rule: {
+          resource_type: "transaction",
+          conditions_attributes: {
+            "0" => { condition_type: "transaction_name", operator: "like\0", value: "coffee" }
+          },
+          actions_attributes: { "0" => { action_type: "exclude_transaction" } }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal "text/plain", response.media_type
+    assert_match(/operator is invalid/i, response.body)
+  end
+
+  test "rejects a null byte in a nested condition operator" do
+    assert_no_difference "Rule.count" do
+      post rules_url, params: {
+        rule: {
+          resource_type: "transaction",
+          conditions_attributes: {
+            "0" => {
+              condition_type: "compound", operator: "and",
+              sub_conditions_attributes: {
+                "0" => { condition_type: "transaction_name", operator: "like\0", value: "coffee" }
+              }
+            }
+          },
+          actions_attributes: { "0" => { action_type: "exclude_transaction" } }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal "text/plain", response.media_type
+    assert_match(/operator is invalid/i, response.body)
+  end
+
+  test "rejects a null byte in the condition type without selecting a different type" do
+    post rules_url, params: {
+      rule: {
+        resource_type: "transaction",
+        conditions_attributes: {
+          "0" => { condition_type: "transaction_name\0", operator: "like", value: "coffee" }
+        },
+        actions_attributes: { "0" => { action_type: "exclude_transaction" } }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal "text/plain", response.media_type
+    assert_match(/condition type is invalid/i, response.body)
+  end
+
+  test "rejects a null byte in the action type without failing to render" do
+    assert_no_difference "Rule.count" do
+      post rules_url, params: {
+        rule: {
+          resource_type: "transaction",
+          actions_attributes: { "0" => { action_type: "exclude_transaction\0" } }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal "text/plain", response.media_type
+    assert_match(/action type is invalid/i, response.body)
+  end
+
+  test "rejects a null byte when updating the action type" do
+    rule = rules(:one)
+    action = rule.actions.first
+    original_type = action.action_type
+
+    patch rule_url(rule), params: {
+      rule: { actions_attributes: { "0" => { id: action.id, action_type: "#{original_type}\0" } } }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal "text/plain", response.media_type
+    assert_match(/action type is invalid/i, response.body)
+    assert_equal original_type, action.reload.action_type
+  end
+
+  test "rejects a null byte in the resource type without failing to render" do
+    assert_no_difference "Rule.count" do
+      post rules_url, params: {
+        rule: {
+          resource_type: "transaction\0",
+          actions_attributes: { "0" => { action_type: "exclude_transaction" } }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_equal "text/plain", response.media_type
+    assert_match(/resource type is invalid/i, response.body)
+  end
+
   test "can update rule" do
     rule = rules(:one)
 
@@ -208,6 +271,53 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_equal "100", rule.conditions.order("created_at ASC").last.value
 
     assert_redirected_to rules_url
+  end
+
+  test "saves stop processing" do
+    rule = rules(:one)
+
+    patch rule_url(rule), params: { rule: { stop_processing: "1" } }
+
+    assert rule.reload.stop_processing
+  end
+
+  test "index lists rules in run order" do
+    family = @user.family
+    newest = family.rules.create!(resource_type: "transaction",
+      actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    ordered_ids = [ newest.id ] + (family.rules.ordered.pluck(:id) - [ newest.id ])
+    Rule.update_positions!(family, ordered_ids)
+
+    get rules_url
+
+    assert_response :success
+    assert_equal ordered_ids, css_select("[data-sortable-list-target='item']").map { |item| item["data-sortable-list-id"] }
+  end
+
+  test "reorder saves the new order" do
+    family = @user.family
+    second = family.rules.create!(resource_type: "transaction",
+      actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    ordered_ids = family.rules.ordered.pluck(:id).reverse
+
+    patch reorder_rules_url, params: { rule_ids: ordered_ids }, as: :json
+
+    assert_response :no_content
+    assert_equal ordered_ids, family.rules.ordered.pluck(:id)
+    assert_equal second.id, ordered_ids.first
+  end
+
+  test "reorder rejects rules of another family" do
+    family = @user.family
+    other_rule = families(:empty).rules.create!(resource_type: "transaction",
+      actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    before = family.rules.ordered.pluck(:id, :position)
+
+    patch reorder_rules_url, params: { rule_ids: family.rules.pluck(:id) + [ other_rule.id ] }, as: :json
+
+    assert_response :unprocessable_entity
+    assert_equal before, family.rules.ordered.pluck(:id, :position)
+    assert_equal 1, other_rule.reload.position
   end
 
   test "can destroy conditions and actions while editing" do
@@ -340,6 +450,27 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_match "Cost estimation unavailable", response.body
   end
 
+  test "confirm says the active rules above run first" do
+    family = @user.family
+    family.rules.destroy_all
+    build = ->(name, active) do
+      family.rules.create!(name: name, resource_type: "transaction", active: active,
+        actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    end
+    build.call("Active above", true)
+    build.call("Inactive above", false)
+    rule = build.call("Applied", true)
+    build.call("Below", true)
+
+    get confirm_rule_url(rule)
+    assert_response :success
+    assert_match I18n.t("rules.confirm.rules_above_notice", count: 1), response.body
+
+    get confirm_rule_url(family.rules.find_by!(name: "Active above"))
+    assert_response :success
+    assert_no_match "run first", response.body
+  end
+
   test "confirm does not name Jev when the family has not selected it" do
     rule = rules(:one)
     rule.actions.create!(action_type: "auto_categorize")
@@ -362,6 +493,45 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     end
 
     assert_redirected_to rules_url
+  end
+
+  test "guest cannot create rule" do
+    sign_in family_guest
+
+    assert_no_difference "Rule.count" do
+      post rules_url, params: { rule: { name: "Guest Rule", resource_type: "transaction" } }
+    end
+
+    assert_redirected_to accounts_url
+  end
+
+  test "guest cannot apply rule" do
+    sign_in family_guest
+    rule = rules(:one)
+
+    assert_no_enqueued_jobs do
+      post apply_rule_url(rule)
+    end
+
+    assert_redirected_to accounts_url
+    assert_not rule.reload.active?
+  end
+
+  test "member can create rule" do
+    sign_in users(:family_member)
+
+    assert_difference "Rule.count", 1 do
+      post rules_url, params: {
+        rule: {
+          name: "Member Rule",
+          resource_type: "transaction",
+          actions_attributes: {
+            "0" => {
+              action_type: "set_transaction_category",
+              value: categories(:food_and_drink).id } } } }
+    end
+
+    assert_redirected_to confirm_rule_path(Rule.order(:created_at).last, reload_on_close: true)
   end
 
   test "clear_ai_cache enqueues job and records the request in the debug log" do
