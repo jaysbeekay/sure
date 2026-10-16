@@ -1104,7 +1104,11 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     get reports_path
     assert_response :ok
 
-    assert_select "[data-testid='unconverted-gains-note']", text: /1 gain is not included/
+    # In this build realised gains come from Portfolio::RealizedGains, which
+    # excludes the sale as :missing_exchange_rate and names it in the card's
+    # exclusion list, rather than in the unconverted-gains note.
+    assert_select "[data-testid='realized-exclusions'] li",
+                  text: "1 disposal has no exchange rate for its trade date and is left out."
   end
 
   # The same for an open position: a JPY holding showing a ¥250,000 gain with
