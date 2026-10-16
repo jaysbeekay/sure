@@ -327,8 +327,11 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     # follow in declaration order. `drivers` is absent on purpose: this
     # family's period moves no value, so every component is zero and the
     # section hides rather than printing a table of zeros that reconciles to
-    # zero.
-    assert_equal %w[value_chart kpis performance index_chart comparison realized_gains income holdings accounts allocation data_quality retirement],
+    # zero. `index_chart` and `comparison` are absent for the same kind of
+    # reason: no account holds a balance on two days of the period, so there
+    # is no time-weighted return to draw, rather than a flat line of 100s
+    # chained from calendar rows of zeros.
+    assert_equal %w[value_chart kpis performance realized_gains income holdings accounts allocation data_quality retirement],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -755,7 +758,15 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # made the baseline invisible in dark mode, so the token that replaced it must
   # actually be in the markup or the line has no colour to follow.
   test "the comparison legend names every line and carries the theme token for the baseline" do
-    build_portfolio(accounts: 1, securities: 2)
+    travel_to Date.current.beginning_of_month + 14.days
+    # Two days of balance history in the period for each account, so each has
+    # a time-weighted return to draw. The section needs the portfolio line and
+    # at least two account lines; an account with no history has no line.
+    build_portfolio(accounts: 2, securities: 2).each do |account|
+      [ 1.day.ago.to_date, Date.current ].each_with_index do |date, i|
+        account.balances.create!(date: date, balance: 2000 + i * 100, cash_balance: 50, currency: "USD")
+      end
+    end
 
     get portfolio_path
     assert_response :success
@@ -888,11 +899,15 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             period's and the trailing year's. Per request: Performance#income
   #             is its own cache entry, so the comparison's six Performances do
   #             not run it (folded into the shared metrics it cost 106)
+  #  100 -> 106 the v2 return series (we-promise/sure#4197): each
+  #             Portfolio::DailyReturns refuses a liability account before it
+  #             is queried, one existence check per series -- the portfolio's
+  #             and up to five comparison lines, so bounded by D7's cap
   #
   # Neither rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 103
+  PORTFOLIO_QUERY_CEILING = 109
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one

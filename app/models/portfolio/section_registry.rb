@@ -693,7 +693,10 @@ class Portfolio::SectionRegistry
     # series is zero.
     def income_bars
       @income_bars ||= begin
-        buckets = income[:buckets]
+        # Portfolio::Income emits each month as an ISO 8601 string, so the
+        # payload survives the Rails.cache round trip unchanged; to_date reads
+        # that and a Date alike.
+        buckets = income[:buckets].map { |bucket| bucket.merge(month: bucket[:month].to_date) }
         short_format = buckets.map { |bucket| bucket[:month].year }.uniq.size > 1 ? "%b %y" : "%b"
 
         buckets.map do |bucket|

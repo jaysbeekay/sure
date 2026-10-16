@@ -628,7 +628,10 @@ class InvestmentStatement
   # look up, or the per-account breakdown silently omits a contributor to the
   # total it sits beside.
   def return_scopes(period: Period.current_month_for(family))
-    Portfolio::ReturnScope.resolve_all(accounts: historical_scope.accounts, period: period)
+    Portfolio::ReturnScope.resolve_all(
+      accounts: historical_scope.accounts, period: period,
+      active_until_dates: historical_scope.active_until_dates
+    )
   end
 
   # Realised profit and loss over the period, by the month it was crystallised.
