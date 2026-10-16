@@ -30,6 +30,33 @@ class Loan::MidPeriodRateChangeTest < ActiveSupport::TestCase
       run.call(Loan::DailyInterest.new(day_count_convention: :actual_365, rate_changes: change))
   end
 
+  # code master, #395 (findings 3 and 10): the rate-change source is asked for
+  # each period's changes, but the engine keeps only those inside the period.
+  # A source that also hands back a change from the next period must not move
+  # this period's figure.
+  test "a change outside the period does not reach that period's charge" do
+    result = simulate(
+      balance: BigDecimal("300000"),
+      changes: [
+        { date: Date.new(2026, 1, 15), rate: BigDecimal("7") },
+        { date: Date.new(2026, 2, 15), rate: BigDecimal("9") }
+      ]
+    )
+
+    assert_equal BigDecimal("1668.49"), result.payments.first[:interest_payment]
+  end
+
+  # code master, #395 (finding 2): the segments are summed unrounded and the
+  # period is rounded once. At 100,000 the two ways differ:
+  #   14 days @ 6% = 230.1370, 17 days @ 7% = 326.0274
+  #   rounded once:          556.1644 -> 556.16
+  #   rounded per segment:   230.14 + 326.03 = 556.17
+  test "the period is rounded once, not segment by segment" do
+    result = simulate(balance: BigDecimal("100000"), changes: [ { date: Date.new(2026, 1, 15), rate: BigDecimal("7") } ])
+
+    assert_equal BigDecimal("556.16"), result.payments.first[:interest_payment]
+  end
+
   test "a variable loan's schedule charges the split figure for that period" do
     loan = variable_loan(changes: { "2026-01-15" => "7" })
 
@@ -49,6 +76,23 @@ class Loan::MidPeriodRateChangeTest < ActiveSupport::TestCase
   end
 
   private
+
+    def simulate(balance:, changes:)
+      Loan::Simulator.new(
+        starting_balance: balance,
+        starting_balance_as_of: Date.new(2026, 1, 1),
+        accrual_start_date: Date.new(2026, 1, 1),
+        payment_schedule: [ Date.new(2026, 2, 1), Date.new(2026, 3, 1) ],
+        accrual_rate_for: ->(_date) { BigDecimal("6") },
+        accrual_rate_changes: ->(_from, _to) { changes },
+        re_amortisation_events: ->(_from, _to) { [] },
+        payment_strategy: :hold,
+        payment_amount_for: ->(**_args) { BigDecimal("1000") },
+        currency_precision: 2,
+        daily_accrual: true,
+        day_count_convention: :actual_365
+      ).run
+    end
 
     def variable_loan(changes:)
       account = families(:dylan_family).accounts.create!(
