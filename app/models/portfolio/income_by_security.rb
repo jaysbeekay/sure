@@ -4,8 +4,8 @@
 # The reason the bucket exists: the daily rows are scope-wide, and a
 # Transaction-shaped dividend names a security only when the provider recorded
 # one (Transaction#activity_security_id). A table of just the attributed rows
-# would sum to less than the bars above it -- one period, two totals, the defect
-# #167 was opened for. So `unattributed` is `total - attributed`, and the table
+# would sum to less than the monthly total beside it -- one period, two
+# totals. So `unattributed` is `total - attributed`, and the table
 # adds up to `total` by construction rather than by two queries agreeing.
 #
 # `total` is whatever the daily rows report for the same period
@@ -33,10 +33,12 @@ class Portfolio::IncomeBySecurity
     }.sort_by { |row| [ -row.amount, row.security.ticker.to_s, row.security.id.to_s ] }
   end
 
-  # The amount attributed to one security, or zero. Takes the id as given, so a
-  # caller holding a Security or a string does not have to normalise first.
-  def amount_for(security_id)
-    amounts.fetch(security_id.to_s, BigDecimal(0))
+  # The amount attributed to one security, or zero. Takes a Security or its id,
+  # so a caller holding either does not have to normalise first. A Security is
+  # read by its id: its to_s is not the id, and the key would match nothing.
+  def amount_for(security_or_id)
+    id = security_or_id.respond_to?(:id) ? security_or_id.id : security_or_id
+    amounts.fetch(id.to_s, BigDecimal(0))
   end
 
   def attributed
