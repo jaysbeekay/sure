@@ -53,27 +53,29 @@ export function isCodebotRequest(comment) {
   return (comment.body ?? "").trimStart().startsWith("@codebot") && comment.author_association === "OWNER";
 }
 
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+// Both patterns capture any "owner/repo", which is then compared with the
+// one wanted, so neither has to be built from a repository name.
+const LINK = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of)\s+(?:https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/|([\w.-]+\/[\w.-]+)#|#)(\d+)\b/gi;
+const UPSTREAM_PR = /upstream (?:draft )?(?:PR|pull request)\W{0,12}?(?:https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/|([\w.-]+\/[\w.-]+)#)(\d+)/i;
+
+function sameRepo(a, b) {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 // Fork issues a PR answers: "Closes #N", "Fixes #N", "Resolves #N",
 // "Part of #N". A bare mention ("Fork-main fix: #432") is not a link, and an
 // upstream reference ("Fixes we-promise/sure#3383") is not a fork issue.
 export function linkedIssues(body, repo) {
-  const R = escapeRe(repo);
-  const re = new RegExp(
-    String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|part of)\s+(?:https://github\.com/${R}/issues/|${R}#|#)(\d+)\b`,
-    "gi",
-  );
-  return [...new Set([...(body ?? "").matchAll(re)].map((m) => Number(m[1])))];
+  const numbers = [...(body ?? "").matchAll(LINK)]
+    .filter((m) => !(m[1] ?? m[2]) || sameRepo(m[1] ?? m[2], repo))
+    .map((m) => Number(m[3]));
+  return [...new Set(numbers)];
 }
 
 // "Upstream PR: we-promise/sure#4174", or "Upstream draft PR:", or a link.
 export function upstreamPr(body, upstreamRepo) {
-  const U = escapeRe(upstreamRepo);
-  const re = new RegExp(String.raw`upstream (?:draft )?(?:PR|pull request)\W{0,12}?(?:https://github\.com/${U}/pull/|${U}#)(\d+)`, "i");
-  return Number((body ?? "").match(re)?.[1] ?? NaN) || null;
+  const m = (body ?? "").match(UPSTREAM_PR);
+  return m && sameRepo(m[1] ?? m[2], upstreamRepo) ? Number(m[3]) : null;
 }
 
 // The moves an event asks for, as [{ number, status, force }]. The caller

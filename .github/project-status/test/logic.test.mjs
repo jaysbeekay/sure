@@ -201,3 +201,41 @@ describe("decide: manual", () => {
     assert.deepEqual(decide("workflow_dispatch", { inputs: { status: "Done" } }, CTX), []);
   });
 });
+
+// Comments and PR bodies are written by anyone on a public repository, and
+// GitHub allows 65,536 characters. No pattern may backtrack into a stall.
+describe("crafted input parses in linear time", () => {
+  const within = (fn) => {
+    const start = performance.now();
+    fn();
+    return performance.now() - start < 500;
+  };
+
+  test("a first line of 60,000 symbols or escapes", () => {
+    for (const filler of ["!", "\\", "\\u", "\\u1F50E"]) {
+      const body = `## ${filler.repeat(60000)} QB Review`;
+      assert.ok(within(() => isQaReview(comment(1, body, { login: "sure-gatekeeper" }), CTX.gatekeepers)), filler);
+    }
+  });
+
+  test("long PR bodies", () => {
+    const body = "Closes jaysbeekay/sure# upstream PR we-promise/sure# ".repeat(2000);
+    assert.ok(within(() => linkedIssues(body, REPO)));
+    assert.ok(within(() => upstreamPr(body, "we-promise/sure")));
+    assert.ok(within(() => citedIds(body)));
+  });
+});
+
+describe("other repositories are not this one", () => {
+  test("a keyword link to another repository is not a fork issue", () => {
+    assert.deepEqual(linkedIssues("Closes other/sure#12\nFixes https://github.com/other/sure/issues/13", REPO), []);
+  });
+
+  test("repository names match case-insensitively", () => {
+    assert.deepEqual(linkedIssues("Closes JaysBeeKay/Sure#12", REPO), [12]);
+  });
+
+  test("an upstream PR line naming another repository is not the upstream PR", () => {
+    assert.equal(upstreamPr("Upstream PR: other/sure#4174", "we-promise/sure"), null);
+  });
+});

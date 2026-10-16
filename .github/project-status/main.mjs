@@ -24,8 +24,12 @@ function log(line) {
   summary.push(line);
 }
 
+// Only ever api.github.com: the tokens must not go anywhere else, whatever
+// URL a paging header or a future caller supplies.
 async function call(token, method, path, body) {
-  const res = await fetch(path.startsWith("http") ? path : `${API}${path}`, {
+  const url = path.startsWith("http") ? path : `${API}${path}`;
+  if (!url.startsWith(`${API}/`)) throw new Error(`Refusing to send a token to ${url}`);
+  const res = await fetch(url, {
     method,
     headers: {
       authorization: `Bearer ${token}`,
