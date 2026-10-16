@@ -63,6 +63,7 @@ class Rule::ActionExecutor::SendEmailNotificationTest < ActiveSupport::TestCase
     assert_no_enqueued_jobs only: RuleEmailNotificationJob do
       rule = @family.rules.create!(
         resource_type: "transaction",
+        active: true,
         actions_attributes: [ { action_type: "send_email_notification" } ]
       )
     end
@@ -76,4 +77,18 @@ class Rule::ActionExecutor::SendEmailNotificationTest < ActiveSupport::TestCase
     assert_equal 0, result
     assert_includes NotificationDelivery.where(rule: rule).pluck(:transaction_id), @txn1.id
   end
+
+  test "an inactive rule records and enqueues nothing" do
+    @rule.update_columns(active: false)
+
+    result = nil
+    assert_no_difference -> { NotificationDelivery.where(rule: @rule).count } do
+      assert_no_enqueued_jobs only: RuleEmailNotificationJob do
+        result = action.apply(@scope)
+      end
+    end
+
+    assert_equal 0, result
+  end
+
 end
