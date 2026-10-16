@@ -175,5 +175,4 @@ class SnaptradeAccount::HoldingsProcessorTest < ActiveSupport::TestCase
       @account.holdings.find_by!(security: original).remap_security!(listed)
       [ original, listed ]
     end
-
 end

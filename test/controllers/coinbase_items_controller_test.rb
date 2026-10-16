@@ -265,5 +265,4 @@ class CoinbaseItemsControllerTest < ActionDispatch::IntegrationTest
     assert_equal target, coinbase_account.reload.current_account
     assert_equal "active", orphan.reload.status
   end
-
 end

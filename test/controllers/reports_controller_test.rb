@@ -1204,5 +1204,4 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
         create_trade(security, account: account, qty: -2, date: date, price: 150, currency: "EUR")
       end
     end
-
 end

@@ -995,5 +995,4 @@ class Balance::ChartSeriesBuilderTest < ActiveSupport::TestCase
         currency: account.currency, cost_basis: cost_basis, cost_basis_source: "provider", account_provider: link
       )
     end
-
 end

@@ -334,92 +334,6 @@ class TradeTest < ActiveSupport::TestCase
     assert_equal :missing_cost_basis, sell.realized_gain_loss_unavailable_reason
   end
 
-  private
-    # A position whose cost basis is known, which is what makes a fabricated
-    # gain possible: without one, realized_gain_loss returns nil for any reason.
-    def position_with_known_cost_basis
-      family = families(:empty)
-      account = family.accounts.create!(name: "Wallet", balance: 100, currency: "USD",
-                                        accountable: Investment.new)
-      security = Security.find_or_create_by!(ticker: "MOVE") { |s| s.name = "Movable" }
-      Holding.create!(account: account, security: security, date: 10.days.ago.to_date,
-                      qty: 100, price: 2, amount: 200, currency: "USD", cost_basis: 1)
-
-      [ account, security ]
-    end
-
-    def build_negative_trade(account, security, label:)
-      account.entries.create!(
-        date: 3.days.ago.to_date, name: "out #{label}", amount: 0, currency: "USD",
-        entryable: Trade.new(security: security, qty: -40, price: 3, currency: "USD",
-                             investment_activity_label: label)
-      ).entryable
-    end
-
-    # "Exchange" means a currency exchange on cash and is internal there. On a
-    # security the label covers currency *or security* exchanges, and a
-    # security-for-security exchange can dispose of an appreciated asset — so
-    # borrowing Transaction's list erased a realized gain with nothing to show
-    # for it.
-    test "an exchange is not treated as an internal movement on a trade" do
-      assert_not Trade.new(investment_activity_label: "Exchange").internal_movement?
-    end
-
-    test "the labels that unambiguously preserve ownership still are" do
-      %w[Transfer Sweep\ In Sweep\ Out].each do |label|
-        assert Trade.new(investment_activity_label: label).internal_movement?, label
-      end
-    end
-
-    # The two lists are deliberately different; this fails if one is ever
-    # realized_gain_loss memoises on first call, so a trade measured before its
-    # holdings arrived would keep the figure it derived without them. The writer
-    # clears that memo; attr_writer would not, and the stale figure would stand.
-    test "assigning preloaded holdings re-derives a realised figure already taken" do
-      family = families(:empty)
-      account = create_portfolio_account(family: family)
-      sell = sell_trade(account: account, date: Date.new(2026, 3, 10), qty: 2, price: 150).entryable
-
-      sell.preloaded_holdings = []
-      assert_nil sell.realized_gain_loss, "no holding means no basis, so no figure"
-
-      sell.preloaded_holdings = [ account.holdings.create!(
-        security: security_under_test, date: Date.new(2026, 3, 10), qty: 5, price: 150,
-        amount: BigDecimal(750), currency: account.currency, cost_basis: 100
-      ) ]
-
-      assert_equal BigDecimal(100), sell.realized_gain_loss.value.amount,
-                   "the second assignment must be read, not swallowed by the memo"
-    end
-
-    # aliased back onto the other.
-    test "a trade does not borrow the cash list" do
-      assert_includes Transaction::INTERNAL_MOVEMENT_LABELS, "Exchange"
-      assert_not_includes Trade::INTERNAL_MOVEMENT_LABELS, "Exchange"
-    end
-
-  private
-    # A USD account holding a EUR-listed security, with one disposal in it.
-    def cross_currency_disposal(rate:, rate_date: Date.new(2026, 3, 10), fee: 0)
-      account, security = cross_currency_account
-      date = Date.new(2026, 3, 10)
-
-      ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: rate_date, rate: rate)
-      account.holdings.create!(security: security, date: date, qty: 5, price: 150,
-                               amount: BigDecimal(750), currency: "USD", cost_basis: 100)
-
-      create_trade(security, account: account, qty: -2, date: date, price: 150, fee: fee, currency: "EUR").entryable
-    end
-
-    def cross_currency_account
-      account = families(:empty).accounts.create!(
-        name: "Brokerage", balance: 10_000, currency: "USD", accountable: Investment.new
-      )
-      security = Security.create!(ticker: "EUX#{SecureRandom.hex(3)}", name: "Euro Listed")
-
-      [ account, security ]
-    end
-
   # A sale that closes the position leaves a snapshot holding nothing, with no
   # stored basis, so the snapshot cannot say what the units cost. Average cost
   # does not move on a sale, so the sale is priced at the average before it:
@@ -558,6 +472,92 @@ class TradeTest < ActiveSupport::TestCase
     assert_equal BigDecimal(40), gain.value.amount
   end
 
+  private
+    # A position whose cost basis is known, which is what makes a fabricated
+    # gain possible: without one, realized_gain_loss returns nil for any reason.
+    def position_with_known_cost_basis
+      family = families(:empty)
+      account = family.accounts.create!(name: "Wallet", balance: 100, currency: "USD",
+                                        accountable: Investment.new)
+      security = Security.find_or_create_by!(ticker: "MOVE") { |s| s.name = "Movable" }
+      Holding.create!(account: account, security: security, date: 10.days.ago.to_date,
+                      qty: 100, price: 2, amount: 200, currency: "USD", cost_basis: 1)
+
+      [ account, security ]
+    end
+
+    def build_negative_trade(account, security, label:)
+      account.entries.create!(
+        date: 3.days.ago.to_date, name: "out #{label}", amount: 0, currency: "USD",
+        entryable: Trade.new(security: security, qty: -40, price: 3, currency: "USD",
+                             investment_activity_label: label)
+      ).entryable
+    end
+
+    # "Exchange" means a currency exchange on cash and is internal there. On a
+    # security the label covers currency *or security* exchanges, and a
+    # security-for-security exchange can dispose of an appreciated asset — so
+    # borrowing Transaction's list erased a realized gain with nothing to show
+    # for it.
+    test "an exchange is not treated as an internal movement on a trade" do
+      assert_not Trade.new(investment_activity_label: "Exchange").internal_movement?
+    end
+
+    test "the labels that unambiguously preserve ownership still are" do
+      %w[Transfer Sweep\ In Sweep\ Out].each do |label|
+        assert Trade.new(investment_activity_label: label).internal_movement?, label
+      end
+    end
+
+    # The two lists are deliberately different; this fails if one is ever
+    # realized_gain_loss memoises on first call, so a trade measured before its
+    # holdings arrived would keep the figure it derived without them. The writer
+    # clears that memo; attr_writer would not, and the stale figure would stand.
+    test "assigning preloaded holdings re-derives a realised figure already taken" do
+      family = families(:empty)
+      account = create_portfolio_account(family: family)
+      sell = sell_trade(account: account, date: Date.new(2026, 3, 10), qty: 2, price: 150).entryable
+
+      sell.preloaded_holdings = []
+      assert_nil sell.realized_gain_loss, "no holding means no basis, so no figure"
+
+      sell.preloaded_holdings = [ account.holdings.create!(
+        security: security_under_test, date: Date.new(2026, 3, 10), qty: 5, price: 150,
+        amount: BigDecimal(750), currency: account.currency, cost_basis: 100
+      ) ]
+
+      assert_equal BigDecimal(100), sell.realized_gain_loss.value.amount,
+                   "the second assignment must be read, not swallowed by the memo"
+    end
+
+    # aliased back onto the other.
+    test "a trade does not borrow the cash list" do
+      assert_includes Transaction::INTERNAL_MOVEMENT_LABELS, "Exchange"
+      assert_not_includes Trade::INTERNAL_MOVEMENT_LABELS, "Exchange"
+    end
+
+  private
+    # A USD account holding a EUR-listed security, with one disposal in it.
+    def cross_currency_disposal(rate:, rate_date: Date.new(2026, 3, 10), fee: 0)
+      account, security = cross_currency_account
+      date = Date.new(2026, 3, 10)
+
+      ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: rate_date, rate: rate)
+      account.holdings.create!(security: security, date: date, qty: 5, price: 150,
+                               amount: BigDecimal(750), currency: "USD", cost_basis: 100)
+
+      create_trade(security, account: account, qty: -2, date: date, price: 150, fee: fee, currency: "EUR").entryable
+    end
+
+    def cross_currency_account
+      account = families(:empty).accounts.create!(
+        name: "Brokerage", balance: 10_000, currency: "USD", accountable: Investment.new
+      )
+      security = Security.create!(ticker: "EUX#{SecureRandom.hex(3)}", name: "Euro Listed")
+
+      [ account, security ]
+    end
+
 
   private
     # The snapshot the calculators write on the day a position closes: nothing
@@ -566,5 +566,4 @@ class TradeTest < ActiveSupport::TestCase
       account.holdings.create!(security: security, date: date, qty: 0, price: 0,
                                amount: 0, currency: "USD", cost_basis: nil)
     end
-
 end
