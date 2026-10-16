@@ -1422,7 +1422,9 @@ class Family::DataImporter
         # (see Rule::Action#keep_notification_baseline).
         had_email_action = rule.stored_email_notification_action?
 
-        rule.conditions.destroy_all unless created
+        # Marked rather than destroyed now, so the rule's save removes them and
+        # sees its conditions change (Rule re-seeds an email rule's baseline then).
+        rule.conditions.each(&:mark_for_destruction) unless created
         rule.actions.destroy_all unless created
 
         # Build conditions
