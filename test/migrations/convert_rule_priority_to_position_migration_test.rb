@@ -79,6 +79,144 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
     assert_not connection.index_exists?(:rules, [ :family_id, :priority ])
   end
 
+  # #464 nightly review: a rename, then a rule matching the new name. Under the
+  # fork the rename ran first, so the second rule saw the new name. Reversing
+  # the order would run the matcher before the rename and it would match
+  # nothing. The two rules set different fields, so nothing is lost by keeping
+  # the fork's order for them.
+  test "a rule matching a name an earlier rule wrote still runs after it" do
+    entry = create_transaction(date: Date.current, account: @account, name: "AMZN Mktp 123")
+    rename = rule_renaming("amzn", to: "Amazon", name: "Alpha", priority: 1)
+    matcher = rule_setting(@groceries, name: "Zulu", priority: 2, matching: "amazon")
+    number_by_name_as_upstream_does
+
+    assert_equal @groceries, category_under_fork_order(entry, name: "AMZN Mktp 123"), "precondition: under the fork the chain categorises it"
+
+    migrate(:up)
+    reset_category(entry, name: "AMZN Mktp 123")
+    ApplyAllRulesJob.perform_now(@family)
+
+    assert_equal @groceries, category_of(entry)
+    assert_equal [ rename.id, matcher.id ], @family.rules.ordered.pluck(:id)
+  end
+
+  # The mirror case: a rule matched the name BEFORE a later rule renamed it.
+  # Reversed, the rename would run first and the matcher would miss.
+  test "a rule matching a name a later rule rewrites still runs before it" do
+    entry = create_transaction(date: Date.current, account: @account, name: "AMZN Mktp 123")
+    matcher = rule_setting(@groceries, name: "Alpha", priority: 1, matching: "amzn")
+    rename = rule_renaming("amzn", to: "Amazon", name: "Zulu", priority: 2)
+
+    assert_equal @groceries, category_under_fork_order(entry, name: "AMZN Mktp 123"), "precondition: under the fork the matcher saw the old name"
+
+    migrate(:up)
+    reset_category(entry, name: "AMZN Mktp 123")
+    ApplyAllRulesJob.perform_now(@family)
+
+    assert_equal @groceries, category_of(entry)
+    assert_equal [ matcher.id, rename.id ], @family.rules.ordered.pluck(:id)
+  end
+
+  # A condition nested in a compound condition is read like a top-level one.
+  test "a chain through a compound condition is kept" do
+    rename = rule_renaming("amzn", to: "Amazon", name: "rename", priority: 1)
+    matcher = @family.rules.create!(
+      resource_type: "transaction", name: "matcher", active: true,
+      conditions: [ Rule::Condition.new(condition_type: "compound", operator: "and",
+                                        sub_conditions: [ Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: "amazon") ]) ],
+      actions: [ Rule::Action.new(action_type: "set_transaction_category", value: @groceries.id) ]
+    )
+    matcher.update_columns(priority: 2)
+
+    migrate(:up)
+
+    assert_equal [ rename.id, matcher.id ], @family.rules.ordered.pluck(:id)
+  end
+
+  # Each write and the condition that reads it: a chain on any of them is kept.
+  test "every written field keeps a chain to the condition that reads it" do
+    tag = @family.tags.create!(name: "Shop")
+    merchant = FamilyMerchant.create!(family: @family, name: "Amazon")
+    other = @family.accounts.create!(name: "Card", balance: 0, currency: "USD", accountable: CreditCard.new)
+    {
+      [ "set_transaction_category", @dining.id ] => [ "transaction_category", "=", @dining.id ],
+      [ "set_transaction_merchant", merchant.id ] => [ "transaction_merchant", "=", merchant.id ],
+      [ "set_transaction_tags", tag.id ] => [ "transaction_tag", "=", tag.id ],
+      [ "set_as_transfer_or_payment", other.id ] => [ "transaction_type", "=", "transfer" ]
+    }.each do |(action_type, value), (condition_type, operator, condition_value)|
+      @family.rules.destroy_all
+      writer = @family.rules.create!(resource_type: "transaction", name: "w", actions: [ Rule::Action.new(action_type: action_type, value: value) ])
+      reader = @family.rules.create!(
+        resource_type: "transaction", name: "r",
+        conditions: [ Rule::Condition.new(condition_type: condition_type, operator: operator, value: condition_value) ],
+        actions: [ Rule::Action.new(action_type: "exclude_transaction") ]
+      )
+      writer.update_columns(priority: 1)
+      reader.update_columns(priority: 2)
+
+      migrate(:up)
+      assert_equal [ writer.id, reader.id ], @family.rules.ordered.pluck(:id), action_type
+      migrate(:down)
+    end
+  end
+
+  # The chain holds the matcher behind the rename, which leaves the middle rule
+  # (matching on the account, which no rule writes) free to go first. It set the category before the matcher did on the fork,
+  # so the matcher won; it must still run above the middle rule.
+  test "a conflict is still reversed when a chain holds one of its rules back" do
+    entry = create_transaction(date: Date.current, account: @account, name: "AMZN Mktp 123")
+    rename = rule_renaming("amzn", to: "Amazon", name: "rename", priority: 1)
+    middle = @family.rules.create!(
+      resource_type: "transaction", name: "middle", active: true,
+      conditions: [ Rule::Condition.new(condition_type: "transaction_account", operator: "=", value: @account.id) ],
+      actions: [ Rule::Action.new(action_type: "set_transaction_category", value: @dining.id) ]
+    )
+    middle.update_columns(priority: 2)
+    matcher = rule_setting(@groceries, name: "matcher", priority: 3, matching: "amazon")
+
+    assert_equal @groceries, category_under_fork_order(entry, name: "AMZN Mktp 123"), "precondition: under the fork the matcher wins"
+
+    migrate(:up)
+    reset_category(entry, name: "AMZN Mktp 123")
+    ApplyAllRulesJob.perform_now(@family)
+
+    assert_equal @groceries, category_of(entry)
+    assert_equal [ rename.id, matcher.id, middle.id ], @family.rules.ordered.pluck(:id)
+  end
+
+  # Neither a chain nor a conflict: tags are additive and the account is not
+  # written by any rule. Such a pair is reversed, as every pair was before.
+  test "rules with no chain or conflict between them are reversed" do
+    tags = [ @family.tags.create!(name: "One"), @family.tags.create!(name: "Two") ]
+    first, second = tags.each_with_index.map do |tag, index|
+      rule = @family.rules.create!(
+        resource_type: "transaction", name: "tag #{index}",
+        conditions: [ Rule::Condition.new(condition_type: "transaction_account", operator: "=", value: @account.id) ],
+        actions: [ Rule::Action.new(action_type: "set_transaction_tags", value: tag.id) ]
+      )
+      rule.update_columns(priority: index + 1)
+      rule
+    end
+
+    migrate(:up)
+
+    assert_equal [ second.id, first.id ], @family.rules.ordered.pluck(:id)
+  end
+
+  # Both a chain and a conflict: the dependent rule matches what the first one
+  # renamed, and both set the category. No order keeps both. The chain wins:
+  # reversed, the matcher would run first and miss the renamed rows outright,
+  # losing every action it has, not just the category.
+  test "a chain that also conflicts keeps the chain" do
+    rename = rule_renaming("amzn", to: "Amazon", name: "rename", priority: 1, category: @dining)
+    matcher = rule_setting(@groceries, name: "matcher", priority: 2, matching: "amazon")
+
+    messages = capture_migration_messages { migrate(:up, quiet: false) }
+
+    assert_equal [ rename.id, matcher.id ], @family.rules.ordered.pluck(:id)
+    assert_includes messages, "Rule #{rename.id} now runs before rule #{matcher.id} to keep a chain", "the unkept conflict is reported"
+  end
+
   test "down restores priority in the fork's order, so the same rule wins again" do
     first, twins, elder, younger = rules_with_every_tie
 
@@ -95,20 +233,42 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
       ActiveRecord::Base.connection
     end
 
-    def migrate(direction)
-      ActiveRecord::Migration.suppress_messages { ConvertRulePriorityToPosition.new.migrate(direction) }
+    def migrate(direction, quiet: true)
+      migration = ConvertRulePriorityToPosition.new
+      quiet ? ActiveRecord::Migration.suppress_messages { migration.migrate(direction) } : migration.migrate(direction)
       Rule.reset_column_information
     end
 
-    def rule_setting(category, name:, priority:, created_at: nil)
+    def rule_setting(category, name:, priority:, created_at: nil, matching: "whole foods")
       rule = @family.rules.create!(
         resource_type: "transaction", name: name, active: true,
-        conditions: [ Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: "whole foods") ],
+        conditions: [ Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: matching) ],
         actions: [ Rule::Action.new(action_type: "set_transaction_category", value: category.id) ]
       )
       rule.update_columns(priority: priority)
       rule.update_columns(created_at: created_at) if created_at
       rule
+    end
+
+    def rule_renaming(matching, to:, name:, priority:, category: nil)
+      actions = [ Rule::Action.new(action_type: "set_transaction_name", value: to) ]
+      actions << Rule::Action.new(action_type: "set_transaction_category", value: category.id) if category
+      rule = @family.rules.create!(
+        resource_type: "transaction", name: name, active: true,
+        conditions: [ Rule::Condition.new(condition_type: "transaction_name", operator: "like", value: matching) ],
+        actions: actions
+      )
+      rule.update_columns(priority: priority)
+      rule
+    end
+
+    def capture_migration_messages
+      out = StringIO.new
+      original, $stdout = $stdout, out
+      yield
+      out.string
+    ensure
+      $stdout = original
     end
 
     # Five rules whose fork order needs every key. Priority puts `first` before
@@ -143,14 +303,17 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
     # The fork's ApplyAllRulesJob: every rule in ascending priority, each one
     # overwriting what the ones before it set (Rule.apply_in_priority_order ran
     # RuleJob, which ran Rule#apply with no claims).
-    def category_under_fork_order
-      reset_category
+    def category_under_fork_order(entry = @entry, name: nil)
+      reset_category(entry, name: name)
       @family.rules.order(:priority, :created_at, :id).each { |rule| rule.apply(ignore_attribute_locks: true) }
-      category_of(@entry)
+      category_of(entry)
     end
 
-    def reset_category
-      @entry.transaction.update_columns(category_id: nil, locked_attributes: {})
+    # `name:` puts back the provider's name, so a rename from the run before
+    # does not carry into the next one.
+    def reset_category(entry = @entry, name: nil)
+      entry.update_columns(name: name, locked_attributes: {}) if name
+      entry.transaction.update_columns(category_id: nil, locked_attributes: {})
     end
 
     def category_of(entry)
