@@ -1890,10 +1890,10 @@ class Family::DataImporterTest < ActiveSupport::TestCase
   test "an export from before the loan columns were dropped still imports, without its collateral link" do
     ndjson = build_ndjson([
       { type: "Account", data: { id: "old-property", name: "House", balance: "500000.0", currency: "USD",
-                                 accountable_type: "Property", status: "active",
+                                 accountable_type: "Property", subtype: "single_family_home", status: "active",
                                  accountable: { id: "old-property-detail", subtype: "single_family_home", locked_attributes: {} } } },
       { type: "Account", data: { id: "old-loan", name: "Mortgage", balance: "400000.0", currency: "USD",
-                                 accountable_type: "Loan", status: "active",
+                                 accountable_type: "Loan", subtype: "mortgage", status: "active",
                                  accountable: { id: "old-loan-detail", subtype: "mortgage", rate_type: "fixed",
                                                 interest_rate: "6.0", term_months: 360, initial_balance: "450000.0",
                                                 start_date: "2024-01-01", variable_rate_schedule: {}, locked_attributes: {},
