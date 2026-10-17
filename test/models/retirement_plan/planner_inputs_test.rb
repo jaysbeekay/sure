@@ -59,13 +59,16 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
   end
 
   test "a loan seeds its repayment, ending the year it is paid off" do
-    loan_account = own_loan(balance: 50_000, term_months: 60)
+    # Ahead of its schedule (about 49,400 owed by now), so the contracted
+    # repayment clears it before maturity and there is a payoff year to end on.
+    loan_account = own_loan(balance: 45_000, term_months: 60)
     projection = Loan::PayoffProjection.new(loan_account.loan, as_of: AS_OF)
 
     @plan.seed_streams!(as_of: AS_OF)
     stream = @plan.streams.find_by!(source: "seeded_loan")
 
-    assert_equal projection.monthly_payment.amount * 12, stream.annual_amount
+    next_payment = loan_account.loan.amortization_schedule.payments.find { |payment| payment.date > AS_OF }
+    assert_equal next_payment.payment.amount * 12, stream.annual_amount
     assert_equal projection.payoff_date.year, stream.end_year
     assert_equal [ "expense", false, loan_account ], [ stream.kind, stream.indexed, stream.account ]
   end

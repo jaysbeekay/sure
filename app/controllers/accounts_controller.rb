@@ -85,26 +85,38 @@ class AccountsController < ApplicationController
   def show
     @chart_view = params[:chart_view] || "balance"
     @tab = params[:tab]
+    # One reference date for everything on the page that is date-sensitive:
+    # the chart, its projection, the cards and the Schedule tab. Read
+    # separately, a render crossing midnight shows a chart projecting from one
+    # date beside a table shaded against another.
+    @as_of = Date.current
     @accessible_account_ids = Current.user.accessible_accounts.pluck(:id).to_set
     @q = params.fetch(:q, {}).permit(:search, :uncategorized, status: [])
-    @extra_payment_params = extra_payment_params
     entries = @account.entries.excluding_split_parents.search(@q).reverse_chronological.includes(:entryable)
     if statement_tab_active?
       build_statement_tab_data
       return render_statement_tab_frame if statement_tab_frame_request?
     end
 
-    if schedule_tab_frame_request?
-      build_schedule_tab_data
-      return render_schedule_tab_frame
+    # Only for a response that will actually show the chart card. The payload
+    # runs the schedule and the projection; a Turbo frame request for the
+    # activity feed's `entries` frame (its pagination) renders the whole page
+    # and keeps one frame, so building it there was a full simulation per page
+    # turn for nothing. Same reasoning as the statements-frame return above.
+    #
+    # The chart and the Schedule tab's forecast card read the same projection,
+    # so it is built once here and handed to both. The Extra repayments tab's
+    # projection is built on the same date, and only when there is an extra
+    # to model; the chart draws it beside the others.
+    if @account.accountable.is_a?(Loan)
+      @loan_projection = @account.loan.payoff_projection(as_of: @as_of)
+      @extra_repayment = loan_extra_repayment
+      if @extra_repayment.applied?
+        @loan_extra_projection = @account.loan.payoff_projection(as_of: @as_of, extra: @extra_repayment.amount)
+      end
     end
-
-    if extra_repayments_tab_frame_request?
-      build_schedule_tab_data
-      return render_extra_repayments_tab_frame
-    end
-
-    build_schedule_tab_data if schedule_tab_active? || extra_repayments_tab_active?
+    @loan_chart = loan_payoff_chart(@account, as_of: @as_of, period: @period, projection: @loan_projection,
+                                    extra_projection: @loan_extra_projection) if chart_card_requested?
 
     per_page = safe_per_page(stored_per_page_default)
     store_per_page!(per_page) if params[:per_page].present?
@@ -327,6 +339,49 @@ class AccountsController < ApplicationController
   end
 
   private
+    # Built here rather than in the template: assembling a chart payload is
+    # domain work, and `show` asks for it exactly once per request, so there
+    # is nothing to memoise.
+    #
+    # The payload runs the schedule, the projection and a balance query from
+    # inputs this app does not fully control: `term_months` and `rate_type`
+    # arrive from providers, `start_date` and the rate schedule from the form,
+    # balances from sync. A raise in any of them costs the chart, not the page:
+    # nil is what the component already takes as "no chart", and the account
+    # page then renders exactly as it did before the chart existed. Reported,
+    # because a loan silently losing its chart is a bug someone has to see.
+    def loan_payoff_chart(account, as_of:, period:, projection: nil, extra_projection: nil)
+      return nil unless account.accountable.is_a?(Loan)
+
+      Loan::PayoffChart.new(account.loan, as_of: as_of, period: period, projection: projection,
+                            extra_projection: extra_projection).payload
+    rescue StandardError => e
+      Rails.logger.error("Loan payoff chart failed for account #{account.id}: #{e.class} - #{e.message}")
+      Sentry.capture_exception(e) { |scope| scope.set_tags(record_type: "Account", record_id: account.id) } if defined?(Sentry)
+      nil
+    end
+
+    # The Extra repayments tab's form submits `extra_payment[amount]` over GET.
+    # Params of any other shape -- a scalar for the hash, an array for the
+    # amount -- are no extra rather than an error.
+    def loan_extra_repayment
+      extra_payment = params[:extra_payment]
+      amount = extra_payment.permit(:amount)[:amount] if extra_payment.is_a?(ActionController::Parameters)
+      Loan::ExtraRepayment.new(amount: amount, currency: @account.currency)
+    end
+
+    # A plain visit, or a frame request for one of the two frames the chart
+    # card sits inside: the account's container frame and the chart card's own
+    # chart_details frame. Any other frame is rendered and then discarded.
+    def chart_card_requested?
+      return true unless turbo_frame_request?
+
+      request.headers["Turbo-Frame"].in?([
+        helpers.dom_id(@account, :container),
+        helpers.dom_id(@account, :chart_details)
+      ])
+    end
+
     def ensure_linked_account
       return if @account.linked?
 
@@ -458,22 +513,6 @@ class AccountsController < ApplicationController
       render partial: "accounts/show/statements_frame", locals: statement_tab_locals, layout: false
     end
 
-    def schedule_tab_frame_request?
-      turbo_frame_request? && request.headers["Turbo-Frame"] == helpers.dom_id(@account, :schedule_tab)
-    end
-
-    def render_schedule_tab_frame
-      render partial: "accounts/show/schedule_frame", locals: { account: @account }, layout: false
-    end
-
-    def extra_repayments_tab_frame_request?
-      turbo_frame_request? && request.headers["Turbo-Frame"] == helpers.dom_id(@account, :extra_repayments_tab)
-    end
-
-    def render_extra_repayments_tab_frame
-      render partial: "accounts/show/extra_repayments_frame", locals: { account: @account }, layout: false
-    end
-
     def statement_tab_locals
       {
         account: @account,
@@ -486,70 +525,6 @@ class AccountsController < ApplicationController
 
     def statement_tab_active?
       @tab == "statements"
-    end
-
-    def schedule_tab_active?
-      @tab == "schedule"
-    end
-
-    # The Extra repayments tab reads the same schedule rows as the Schedule
-    # tab, so it enqueues the same rebuild when they are stale.
-    def extra_repayments_tab_active?
-      @tab == "extra_repayments"
-    end
-
-    # A GET must not write.
-    #
-    # This used to call Loan#ensure_amortization_schedule_current!, which takes
-    # a row lock and does delete_all + insert_all! inline. On any deploy that
-    # changes the schedule signature -- an ALGORITHM_VERSION bump invalidates
-    # every loan at once -- the first page view per loan paid a full rebuild
-    # inside the request, under a lock. Prebuilds belong in controlled batches
-    # (#10); page views do not own completion.
-    #
-    # Mirrors Api::V1::LoansController#amortization_schedule: report the
-    # persisted rows' status, enqueue a rebuild when they are not current, and
-    # render what is available. LoanAmortizationRebuildJob is locked
-    # :until_executed on the loan id, so repeated views coalesce into one job.
-    def build_schedule_tab_data
-      loan = @account.loan
-      return unless loan&.amortizable?
-
-      return if loan.schedule_current?
-
-      LoanAmortizationRebuildJob.perform_later(loan.id)
-    end
-
-    # Upper bound for a modeled extra payment. Purely defensive -- rejects
-    # absurd/non-finite input (e.g. "1e400", which BigDecimal parses as
-    # Infinity without raising) rather than feeding it into the simulation.
-    # Generous on purpose: this only needs to reject nonsense, not model a
-    # realistic maximum.
-    MAX_EXTRA_PAYMENT_AMOUNT = BigDecimal("10000000")
-
-    # Hypothetical extra-payment "what if" params for the Extra repayments
-    # tab's chart/cards (see Loan#payoff_chart_payload). One amount, paid each
-    # month (#304); a `frequency` is no longer read. Malformed input -- a
-    # non-finite, non-positive, unbounded, or non-numeric amount, or a param
-    # that isn't even hash-shaped -- degrades to {} (baseline projection, no
-    # hypothesis) rather than raising, same posture as
-    # Api::V1::LoansController#safe_page_param.
-    def extra_payment_params
-      extra_payment_value = params[:extra_payment]
-      return {} unless extra_payment_value.is_a?(ActionController::Parameters) || extra_payment_value.is_a?(Hash)
-
-      raw = params.fetch(:extra_payment, {}).permit(:amount).to_h.compact_blank
-      return {} unless raw["amount"].present?
-      return {} unless valid_extra_payment_amount?(raw["amount"])
-
-      raw
-    end
-
-    def valid_extra_payment_amount?(value)
-      amount = BigDecimal(value.to_s)
-      amount.finite? && amount.positive? && amount <= MAX_EXTRA_PAYMENT_AMOUNT
-    rescue ArgumentError, TypeError
-      false
     end
 
     # Builds sync stats maps for all provider types to avoid N+1 queries in views

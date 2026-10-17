@@ -1,17 +1,6 @@
 ---
 en:
   UI:
-    loan:
-      rate_change_table:
-        title: Scheduled rate changes
-        effective_date: Effective date
-        balance: Projected balance
-        current_rate: Current rate
-        new_rate: New rate
-        current_payment: Current repayment
-        new_payment: New repayment
-        unknown: Unknown
-        assumptions: "Projected from the recorded rate changes: the repayment is re-amortised over the payments remaining to the original payoff date, any linked offset balance is held at today's total, and no extra repayments are assumed. Your lender's figure may differ slightly through rounding."
     net_worth_pace:
       velocity: Velocity
       momentum: Momentum
@@ -19,13 +8,6 @@ en:
     period_picker:
       aria_label: "Time period: %{period}"
     account:
-      collateral_position:
-        secured_by: Secured by
-        secures: Secures
-        value: Value
-        debt: Debt secured
-        equity: Equity
-        equity_withheld: Equity is not shown because the loans secured on this asset cannot all be included for you.
       activity_feed:
         toggle_selection_checkboxes: Toggle selection
       balance_reconciliation:
@@ -82,6 +64,27 @@ en:
           start_principal: The principal balance at the beginning of this day
           start_value: The asset value at the beginning of this day
       chart:
+        loan:
+          actual: Recorded balance
+          scheduled: Original schedule
+          projected: Projected from today
+          today: Today
+          interactive_chart: interactive chart
+          no_payoff: not on the current repayment
+          aria_description: Loan balance chart. Recorded balance %{current_balance}. Original scheduled payoff %{scheduled_payoff_date}. Projected payoff from today's balance %{projected_payoff_date}.
+          aria_extra_payoff: Projected payoff with the extra repayment %{date}.
+          extra: With extra repayment
+          aria_actual_history_starts: Recorded balance history begins %{date}.
+          projected_payoff: Projected payoff
+          months_saved:
+            one: "%{count} month sooner than scheduled"
+            other: "%{count} months sooner than scheduled"
+          on_schedule: On schedule
+          interest_saved: Interest saved
+          not_converged: On the current repayment this balance is not paid off by the original maturity; %{balloon} would still be owed.
+          projection_basis: Compares today's recorded balance with the schedule's balance on the same day. A payment posted before its scheduled date reads as ahead until that date; one posted after reads as behind.
+          legend: Chart series
+          since_start: since the loan started
         net_contributions:
           difference: Difference
           label: Net contributions
@@ -94,7 +97,8 @@ en:
           estimated_property_value: Estimated property value
           estimated_vehicle_value: Estimated vehicle value
           holdings_value: Holdings value
-          remaining_principal_balance: Remaining loan balance
+          loan_remaining_balance: Remaining balance
+          remaining_principal_balance: Remaining principal balance
           total_account_value: Total account value
           total_gains: Total gains
         views:

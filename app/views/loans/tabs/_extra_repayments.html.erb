@@ -1,98 +1,80 @@
-<%# locals: (account:) %>
+<%# locals: (account:, projection:, extra_projection:, extra_repayment:) %>
 
-<% loan = account.loan %>
-<% extra_amount = (@extra_payment_params || {})["amount"] %>
-<%# One "today" for both projections, the cards and the chart (CLAUDE.md,
-    reference dates). The baseline stays on the chart with or without an
-    amount, so the extra line is always read against it (#304). %>
-<% comparison = loan.extra_repayment_comparison(amount: extra_amount, as_of: Date.current) %>
-<% chart_payload = comparison.chart_payload %>
+<%# What paying an extra amount on top of every repayment does to the payoff
+    date and the interest. `projection` is the page's projection with no extra
+    and `extra_projection` the same loan on the same date with the extra, nil
+    when none applies. The chart above draws both, so the cards and the lines
+    quote one date. Each comparison is against paying no extra, not against
+    the contract: the Schedule tab and the chart already say how far ahead or
+    behind the loan is. %>
+<% invalid = extra_repayment.invalid? %>
 
 <div class="space-y-4">
   <p class="text-sm text-secondary"><%= t(".intro") %></p>
 
-  <%= form_with url: account_path(account, tab: "extra_repayments"), scope: :extra_payment, method: :get,
-                data: { controller: "auto-submit-form" } do |f| %>
-    <div class="flex flex-wrap items-end gap-2">
-      <div class="form-field">
-        <%= f.label :amount, t(".amount_label"), class: "text-xs text-secondary" %>
-        <%= f.number_field :amount, value: extra_amount, min: 0, step: "0.01",
-              placeholder: t(".amount_placeholder"),
-              "data-auto-submit-form-target": "auto" %>
+  <% if projection.applicable? %>
+    <%= form_with url: account_path(account), method: :get, scope: :extra_payment,
+                  data: { turbo_action: "advance" } do |f| %>
+      <%= hidden_field_tag :tab, "extra_repayments", id: nil %>
+      <div class="flex flex-wrap items-end gap-2">
+        <%# A bounded width: `.form-field` is full width, which pushes Apply
+            onto a line of its own. %>
+        <div class="form-field w-48">
+          <%= f.label :amount, t(".amount_label"), class: "form-field__label" %>
+          <%= f.number_field :amount, value: extra_repayment.input.presence, min: 0, step: "any",
+                class: "form-field__input", placeholder: t(".amount_placeholder"),
+                "aria-invalid": (invalid ? "true" : nil),
+                "aria-describedby": (dom_id(account, :extra_amount_error) if invalid) %>
+        </div>
+        <%= render DS::Button.new(text: t(".apply"), type: "submit", variant: "outline") %>
+        <% if extra_repayment.input.present? %>
+          <%= render DS::Link.new(text: t(".clear"), href: account_path(account, tab: "extra_repayments"), variant: "ghost") %>
+        <% end %>
       </div>
-      <%# Auto-submit (JS) fires on change; this button is the real,
-          always-working submit control for JS-disabled clients. %>
-      <%= render DS::Button.new(text: t(".apply"), type: "submit", variant: "outline", size: "sm") %>
-      <% if extra_amount.present? %>
-        <%= link_to t(".clear"), account_path(account, tab: "extra_repayments"),
-              class: "text-sm text-secondary underline" %>
-      <% end %>
-    </div>
-    <%# The projection applies rate changes already recorded on the loan and
-        holds the repayment; what it cannot know is a change nobody has
-        recorded yet (#54). %>
-    <% if loan.variable_rate_type? %>
-      <p class="text-xs text-subdued mt-1"><%= t(".variable_rate_notice") %></p>
-    <% end %>
-  <% end %>
-
-  <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
-    <% if comparison.extra_applicable? %>
-      <%= summary_card title: t(".payoff_with_extra") do %>
-        <span data-testid="extra-payoff-date"><%= l comparison.extra.payoff_date, format: :long %></span>
-        <% if (sooner = comparison.months_sooner) %>
-          <span class="block text-xs text-secondary mt-1" data-testid="extra-months-sooner"><%= t(".months_sooner", count: sooner) %></span>
-        <% end %>
-      <% end %>
-
-      <% if (saved = comparison.interest_saved) %>
-        <%= summary_card title: t(".interest_saved") do %>
-          <span data-testid="extra-interest-saved"><%= format_money saved %></span>
-        <% end %>
+      <% if invalid %>
+        <p id="<%= dom_id(account, :extra_amount_error) %>" class="text-xs text-destructive mt-1" data-testid="extra-amount-error"><%= extra_repayment.errors[:amount].first %></p>
       <% end %>
     <% end %>
 
-    <% if comparison.baseline.applicable? %>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+      <% if extra_projection&.payoff_date %>
+        <%= summary_card title: t(".payoff_with_extra") do %>
+          <span data-testid="extra-payoff-date"><%= l extra_projection.payoff_date, format: :long %></span>
+          <% if (sooner = extra_projection.months_sooner_than(projection)) %>
+            <span class="block text-xs text-secondary mt-1" data-testid="extra-months-sooner"><%= t(".months_sooner", count: sooner) %></span>
+          <% end %>
+        <% end %>
+
+        <% if (saved = extra_projection.interest_saved_versus(projection)) %>
+          <%= summary_card title: t(".interest_saved") do %>
+            <span data-testid="extra-interest-saved"><%= format_money saved %></span>
+          <% end %>
+        <% end %>
+      <% end %>
+
       <%= summary_card title: t(".payoff_without_extra") do %>
-        <span data-testid="baseline-payoff-date"><%= l comparison.baseline.payoff_date, format: :long %></span>
+        <% if projection.payoff_date %>
+          <span data-testid="baseline-payoff-date"><%= l projection.payoff_date, format: :long %></span>
+        <% else %>
+          <%= t(".not_cleared") %>
+        <% end %>
       <% end %>
-    <% end %>
-  </div>
-
-  <% if chart_payload %>
-    <% if chart_payload[:extra_payment_label].present? %>
-      <p class="text-xs text-secondary"><%= chart_payload[:extra_payment_label] %></p>
-    <% end %>
-
-    <div data-controller="loan-payoff-chart"
-         data-loan-payoff-chart-data-value="<%= chart_payload.to_json %>"
-         class="h-64">
     </div>
-    <ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
-      <% if chart_payload[:scheduled_history].any? %>
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5 bg-primary" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:scheduled] %>
-        </li>
+
+    <% if extra_projection %>
+      <% if !extra_projection.converged? %>
+        <p class="text-sm text-secondary" data-testid="extra-not-cleared"><%= t(".extra_not_cleared") %></p>
+      <% elsif !projection.converged? %>
+        <p class="text-sm text-secondary privacy-sensitive" data-testid="baseline-not-cleared"><%= t(".baseline_not_cleared", balloon: format_money(projection.balloon_amount)) %></p>
+      <% else %>
+        <p class="text-xs text-secondary"><%= t(".comparison_basis") %></p>
       <% end %>
-      <li class="flex items-center gap-1.5">
-        <span class="inline-block w-3 h-0.5 bg-secondary" style="border-top: 1px dashed currentColor; background: none;" aria-hidden="true"></span>
-        <%= chart_payload[:labels][:original] %>
-      </li>
-      <li class="flex items-center gap-1.5">
-        <span class="inline-block w-3 h-0.5" style="border-top: 2px dashed <%= chart_payload[:ahead] ? "var(--color-green-600)" : "var(--color-yellow-600)" %>;" aria-hidden="true"></span>
-        <%= chart_payload[:labels][:accelerated] %>
-      </li>
-      <% if chart_payload[:labels][:extra] %>
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5" style="border-top: 2px solid var(--color-blue-600);" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:extra] %>
-        </li>
-      <% end %>
-    </ul>
-    <%# The chart's key figures as real DOM text for screen readers. %>
-    <p class="sr-only"><%= chart_payload[:aria_description] %></p>
-  <% elsif (notice = comparison.non_convergence_notice) %>
-    <p class="text-sm text-secondary"><%= t(".projection_not_converged.#{notice}") %></p>
+    <% end %>
+
+    <% if account.loan.variable_rate_type? %>
+      <p class="text-xs text-secondary"><%= t(".variable_rate_notice") %></p>
+    <% end %>
+  <% else %>
+    <p class="text-sm text-secondary"><%= t(".not_applicable") %></p>
   <% end %>
 </div>

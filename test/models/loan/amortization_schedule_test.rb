@@ -1,772 +1,154 @@
 require "test_helper"
 
 class Loan::AmortizationScheduleTest < ActiveSupport::TestCase
-  setup do
-    @family = families(:dylan_family)
-    @loan_account = Account.create! \
-      family: @family,
-      name: "Test Mortgage",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        subtype: "mortgage",
-        interest_rate: 3.5,
-        term_months: 360,
-        rate_type: "fixed"
-      )
-    @loan = @loan_account.loan
-    @schedule = @loan.amortization_schedule
+  test "builds one payment per month of the term" do
+    schedule = build_schedule
+
+    assert_equal 360, schedule.payments.count
+    assert_equal 1, schedule.payments.first.number
+    assert_equal 360, schedule.payments.last.number
   end
 
-  test "hands the loan's day-count convention to the simulator" do
-    @loan.update!(day_count_convention: "actual_actual")
-
-    Loan::Simulator.expects(:new).with do |kwargs|
-      kwargs[:day_count_convention] == "actual_actual"
-    end.returns(stub(run: nil))
-
-    @loan.amortization_schedule.send(:generate_simulation, daily_accrual: false)
+  test "level payment matches the standard amortization formula" do
+    assert_equal BigDecimal("2245.22"), build_schedule.periodic_payment.amount
   end
 
-  test "schedule is amortizable for fixed rate loan with positive principal and term" do
-    assert @schedule.amortizable?
+  test "first payment is mostly interest and last payment is mostly principal" do
+    schedule = build_schedule
+    first = schedule.payments.first
+    last = schedule.payments.last
+
+    # 500,000 at 3.5% => 1,458.33 of interest in month one.
+    assert_equal BigDecimal("1458.33"), first.interest.amount
+    assert_equal BigDecimal("786.89"), first.principal.amount
+    assert first.interest.amount > first.principal.amount
+    assert last.principal.amount > last.interest.amount
   end
 
-  test "schedule is amortizable for variable rate loan with a base interest rate" do
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 360
-      )
-
-    schedule = variable_loan.loan.amortization_schedule
-    assert schedule.amortizable?
-    assert_equal 360, schedule.payment_count
+  test "amortizes down to exactly zero" do
+    assert_equal BigDecimal("0"), build_schedule.payments.last.ending_balance.amount
   end
 
-  test "schedule is not amortizable for variable rate loan without an interest rate" do
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan No Rate",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: nil,
-        term_months: 360
-      )
+  test "principal portions sum to the original principal" do
+    schedule = build_schedule
+    total_principal = schedule.payments.sum(BigDecimal(0)) { |payment| payment.principal.amount }
 
-    schedule = variable_loan.loan.amortization_schedule
-    assert_not schedule.amortizable?
+    assert_equal BigDecimal("500000"), total_principal
   end
 
-  test "variable rate loan applies configured rate changes on their effective dates" do
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan With Changes",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 360,
-        start_date: 2.years.ago.to_date
-      )
-    loan = variable_loan.loan
-    loan.add_variable_rate_change(loan.start_date, 3.5)
-    loan.add_variable_rate_change(loan.start_date + 12.months, 4.5)
+  test "total paid is principal plus total interest" do
+    schedule = build_schedule
 
-    schedule = loan.amortization_schedule
-    payments = schedule.payments
-
-    before_change = payments.find { |p| p[:payment_date] < loan.start_date + 12.months }
-    after_change = payments.find { |p| p[:payment_date] >= loan.start_date + 12.months }
-
-    assert_equal 3.5, before_change[:interest_rate].to_f
-    assert_equal 4.5, after_change[:interest_rate].to_f
+    # Slightly above the naive payment*term figure because interest is rounded
+    # to cents every month, exactly as a lender's table does.
+    assert_equal BigDecimal("308281.36"), schedule.total_interest.amount
+    assert_equal schedule.principal + schedule.total_interest.amount, schedule.total_paid.amount
   end
 
-  test "variable rate changes between payments use the latest rate on the next payment" do
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan Multiple Changes",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 6,
-        start_date: Date.new(2023, 1, 1)
-      )
-    loan = variable_loan.loan
-    loan.add_variable_rate_change(Date.new(2023, 2, 15), 4.5)
-    loan.add_variable_rate_change(Date.new(2023, 2, 20), 5.5)
+  test "payment dates step monthly from origination" do
+    schedule = build_schedule(start_date: Date.new(2026, 1, 31))
 
-    payments = loan.amortization_schedule.payments
-
-    assert_equal 6, payments.length
-    assert_equal Date.new(2023, 2, 1), payments[0][:payment_date]
-    assert_equal 3.5, payments[0][:interest_rate].to_f
-    assert_equal Date.new(2023, 3, 1), payments[1][:payment_date]
-    assert_equal 5.5, payments[1][:interest_rate].to_f
+    assert_equal Date.new(2026, 2, 28), schedule.payments.first.date
+    assert_equal Date.new(2026, 3, 31), schedule.payments.second.date
   end
 
-  test "variable rate changes after maturity do not create extra segments" do
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan After Maturity",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 6,
-        start_date: Date.new(2023, 1, 1)
-      )
-    loan = variable_loan.loan
-    loan.add_variable_rate_change(Date.new(2025, 1, 1), 5.5)
+  test "payoff date is the last payment date" do
+    schedule = build_schedule(start_date: Date.new(2026, 1, 1), term_months: 12)
 
-    assert_equal 6, loan.amortization_schedule.payment_count
+    assert_equal Date.new(2027, 1, 1), schedule.payoff_date
   end
 
-  # FR-205 markers follow the ACCRUAL clock (C7), not the payment-sizing clock
-  # (C8). Comparing consecutive rows' `interest_rate` -- which is C8 -- gets
-  # both of these wrong, and did (cubic, #77).
-  test "the rate-change marker falls on the payment whose accrual period carries the new rate" do
-    loan = variable_loan_for_markers("Marker Effective On Payment Date")
-    payment_dates = loan.amortization_schedule.payments.map { |payment| payment[:payment_date] }
+  test "handles a zero-interest loan with straight-line principal" do
+    schedule = build_schedule(annual_rate: 0, term_months: 10, principal: 1000)
 
-    # Effective ON payment 4's date. Accrual windows are half-open, so it
-    # governs [payment 4, payment 5) -- payment 4 accrued entirely at the old
-    # rate, and payment 5 is the first the borrower is charged the new one.
-    loan.add_variable_rate_change(payment_dates[3], 9.5)
-
-    assert_equal({ 5 => 9.5 }, loan.amortization_schedule.accrual_rate_change_markers)
+    assert_equal BigDecimal("100"), schedule.periodic_payment.amount
+    assert schedule.payments.all? { |payment| payment.interest.amount.zero? }
+    assert_equal BigDecimal("0"), schedule.total_interest.amount
+    assert_equal BigDecimal("0"), schedule.payments.last.ending_balance.amount
   end
 
-  test "a rate change that reverts inside one payment period is still marked" do
-    loan = variable_loan_for_markers("Marker Reverted Mid Period")
-    payment_dates = loan.amortization_schedule.payments.map { |payment| payment[:payment_date] }
+  test "rounds to whole units for a currency without minor units" do
+    schedule = build_schedule(currency: "JPY", principal: 1_000_000, annual_rate: 2, term_months: 12)
 
-    # Both changes fall strictly inside [payment 3, payment 4), so neither
-    # payment's sizing rate moves and comparing them marks nothing -- even
-    # though the borrower was charged 9.5% for part of that period.
-    loan.add_variable_rate_change(payment_dates[2] + 5, 9.5)
-    loan.add_variable_rate_change(payment_dates[2] + 12, 3.5)
-
-    assert_equal [ 4 ], loan.amortization_schedule.accrual_rate_change_markers.keys
+    assert schedule.payments.all? { |payment| payment.payment.amount.frac.zero? }
+    assert_equal BigDecimal("0"), schedule.payments.last.ending_balance.amount
   end
 
-  # #14: `adjustable` had been an option in the loan form since 2024 and was
-  # read by nothing -- amortizable? tested for "fixed" or "variable", so the
-  # loan silently had no schedule, no chart and no summary cards. It now
-  # schedules off the variable path.
-  test "an adjustable-rate loan is amortizable and honours its rate changes" do
-    loan = variable_loan_for_markers("Adjustable Rate Loan")
-    loan.update!(rate_type: "adjustable")
-
-    assert loan.amortization_schedule.amortizable?,
-      "selecting Adjustable must not silently remove the schedule"
-
-    payment_dates = loan.amortization_schedule.payments.map { |payment| payment[:payment_date] }
-    loan.add_variable_rate_change(payment_dates[3], 9.5)
-
-    assert_equal({ 5 => 9.5 }, loan.amortization_schedule.accrual_rate_change_markers)
+  test "returns no payments when the term is zero" do
+    assert_empty build_schedule(term_months: 0).payments
+    assert_nil build_schedule(term_months: 0).payoff_date
+    assert_equal BigDecimal("0"), build_schedule(term_months: 0).periodic_payment.amount
+    assert_equal BigDecimal("0"), build_schedule(principal: 0).periodic_payment.amount
   end
 
-  test "a fixed-rate loan is amortizable and has no rate changes" do
-    assert @schedule.amortizable?
-    assert_not @schedule.has_rate_changes?
+  test "keeps the periods it built when rounding clears the balance early" do
+    # 10 over 51 months rounds to a 0.20 payment, which pays the loan off in 50.
+    schedule = build_schedule(principal: 10, annual_rate: 0, term_months: 51)
+
+    assert_equal 50, schedule.payments.count
+    assert_equal BigDecimal("0"), schedule.payments.last.ending_balance.amount
+    assert_equal BigDecimal("10"), schedule.total_paid.amount
+    assert_equal schedule.payments.last.date, schedule.payoff_date
   end
 
-  test "a fixed-rate loan has no rate-change markers" do
-    assert_empty @schedule.accrual_rate_change_markers
+  test "payment_for finds the payment landing in a given month" do
+    schedule = build_schedule(start_date: Date.new(2026, 1, 1), term_months: 12)
+
+    assert_equal 3, schedule.payment_for(Date.new(2026, 4, 17)).number
+    assert_nil schedule.payment_for(Date.new(2030, 1, 1))
   end
 
-  test "monthly payment uses the rate effective on the first payment date" do
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan First Payment Rate",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 360,
-        start_date: Date.new(2023, 1, 1)
-      )
-    loan = variable_loan.loan
-    loan.add_variable_rate_change(Date.new(2023, 1, 15), 5.5)
+  test "builds from a loan record" do
+    loan = loan_account(interest_rate: 3.5, term_months: 360, rate_type: "fixed").loan
 
-    assert_equal loan.amortization_schedule.payments.first[:payment_amount], loan.monthly_payment.amount
+    assert_equal BigDecimal("2245.22"), Loan::AmortizationSchedule.for(loan).periodic_payment.amount
   end
 
-  test "schedule is not amortizable for zero principal" do
-    zero_loan = Account.create! \
-      family: @family,
-      name: "Zero Loan",
-      balance: 0,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 3.5,
-        term_months: 360
-      )
+  # Reversed by #104. A variable loan was excluded while a schedule could only
+  # be built off one rate; it now re-amortises at each recorded change, so the
+  # reason for the exclusion is gone.
+  test "is buildable for a variable rate loan" do
+    loan = loan_account(interest_rate: 3.5, term_months: 360, rate_type: "variable").loan
 
-    schedule = zero_loan.loan.amortization_schedule
-    assert_not schedule.amortizable?
+    assert_not_nil Loan::AmortizationSchedule.for(loan)
   end
 
-  test "rejects zero or negative term at the validation layer" do
-    loan = Loan.new(rate_type: "fixed", interest_rate: 3.5, term_months: 0)
-    assert_not loan.valid?
-    assert_includes loan.errors[:term_months], "must be greater than 0"
+  # A rate type outside the form's vocabulary is still a rate type (#100
+  # decision 8). PlaidAccount::Liabilities::MortgageProcessor writes Plaid's
+  # raw `interest_rate.type` straight through, so this is reachable from a
+  # sync, not only from the form, and such a loan is variable rather than
+  # unknown.
+  test "is buildable for a provider's own rate type" do
+    loan = loan_account(interest_rate: 3.5, term_months: 360, rate_type: "teaser").loan
+
+    assert_not_nil Loan::AmortizationSchedule.for(loan)
   end
 
-  test "rejects a term months beyond the supported maximum" do
-    loan = Loan.new(rate_type: "fixed", interest_rate: 3.5, term_months: Loan::MAX_TERM_MONTHS + 1)
-    assert_not loan.valid?
-    assert_includes loan.errors[:term_months], "must be less than or equal to #{Loan::MAX_TERM_MONTHS}"
-  end
+  # What is still not buildable: no rate type at all.
+  test "is not buildable for a blank rate type" do
+    loan = loan_account(interest_rate: 3.5, term_months: 360, rate_type: "").loan
 
-  test "schedule is not amortizable for zero term" do
-    zero_term_loan = Account.new \
-      family: @family,
-      name: "Zero Term Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.new(
-        rate_type: "fixed",
-        interest_rate: 3.5,
-        term_months: 0
-      )
-
-    schedule = zero_term_loan.loan.amortization_schedule
-    assert_not schedule.amortizable?
-  end
-
-  test "monthly payment is calculated correctly" do
-    payment = @schedule.monthly_payment
-    assert_equal BigDecimal("2245.22"), payment.amount
-  end
-
-  test "monthly payment is nil, not zero, when the loan is not amortizable" do
-    no_rate_loan = Account.create! \
-      family: @family,
-      name: "No Rate Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: nil,
-        term_months: 360
-      )
-
-    schedule = no_rate_loan.loan.amortization_schedule
-    assert_nil schedule.monthly_payment
-  end
-
-  test "a rate segment does not amortize as if the loan ended when the rate changes again" do
-    # Same rate re-registered partway through the term, purely to force a
-    # segment split with no change in rate value -- isolates the "amortize
-    # over this segment's own length" bug from any rate-driven difference.
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan Long Segment",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 360,
-        start_date: Date.new(2020, 1, 1)
-      )
-    loan = variable_loan.loan
-    loan.add_variable_rate_change(loan.start_date + 300.months, 3.5)
-
-    schedule = loan.amortization_schedule
-    first_payment = schedule.payments.first
-
-    # Segment 1 covers only 300 of the 360 payments, but the level payment
-    # must still amortize the full 360-payment term (matching the fixed-rate
-    # loan's payment at the same rate/principal/term), not a 300-payment
-    # payoff -- which would be a substantially larger payment.
-    assert_equal BigDecimal("2245.22"), first_payment[:payment_amount]
-  end
-
-  test "a rate-change segment landing in a short calendar month is not skipped" do
-    # Feb 1 -> Mar 1 is 28-29 days, under the ~30.44-day average a single
-    # 1.month duration division would round down to 0 payments and silently
-    # drop this segment's payment from the schedule.
-    variable_loan = Account.create! \
-      family: @family,
-      name: "Variable Loan Short Month",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "variable",
-        interest_rate: 3.5,
-        term_months: 360,
-        start_date: Date.new(2023, 1, 1)
-      )
-    loan = variable_loan.loan
-    loan.add_variable_rate_change(Date.new(2023, 3, 1), 4.5)
-
-    schedule = loan.amortization_schedule
-    payments = schedule.payments
-
-    assert_equal 360, payments.length
-    assert_equal Date.new(2023, 2, 1), payments[0][:payment_date]
-    assert_equal 3.5, payments[0][:interest_rate].to_f
-    assert_equal Date.new(2023, 3, 1), payments[1][:payment_date]
-    assert_equal 4.5, payments[1][:interest_rate].to_f
-  end
-
-  # C11: "The contracted schedule itself does not track live balance." The
-  # account balance moves as repayments land; the schedule must keep sizing
-  # from the opening principal, or every repayment would re-shape the contract
-  # it is measured against. Measured as a delta: the same schedule before and
-  # after the live balance moves, with the move itself asserted so the
-  # comparison cannot pass on a balance that never changed.
-  test "the contracted schedule is built from the opening principal, not the live balance" do
-    account = Account.create! \
-      family: @family,
-      name: "Contracted Schedule Loan",
-      balance: 200000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 6,
-        term_months: 120,
-        start_date: Date.new(2024, 1, 1)
-      )
-    account.entries.create!(
-      name: "Starting balance",
-      amount: 200000,
-      currency: "USD",
-      date: Date.new(2024, 1, 1),
-      entryable: Valuation.new(kind: "opening_anchor")
-    )
-    before = Loan.find(account.loan.id).amortization_schedule.payments
-
-    account.update_columns(balance: 150000)
-    loan = Loan.find(account.loan.id)
-    assert_equal 150000, loan.account.balance.to_i, "test setup must move the live balance"
-
-    after = loan.amortization_schedule.payments
-    assert_equal 200000, after.first[:beginning_balance].to_i
-    assert_equal before, after
-  end
-
-  # Regression/contract test: start_date is the loan's origination/anchor
-  # date, not the first payment date -- the first payment falls one
-  # calendar month after it. See the doc comment on
-  # Loan::AmortizationSchedule#scheduled_payment_dates.
-  test "the first payment date is one calendar month after start_date, regardless of its day-of-month" do
-    first_of_month_loan = Account.create! \
-      family: @family,
-      name: "First-of-Month Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 3.5,
-        term_months: 12,
-        start_date: Date.new(2024, 1, 1)
-      )
-    assert_equal Date.new(2024, 2, 1), first_of_month_loan.loan.amortization_schedule.payments.first[:payment_date]
-
-    mid_month_loan = Account.create! \
-      family: @family,
-      name: "Mid-Month Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 3.5,
-        term_months: 12,
-        start_date: Date.new(2024, 1, 15)
-      )
-    assert_equal Date.new(2024, 2, 15), mid_month_loan.loan.amortization_schedule.payments.first[:payment_date]
-  end
-
-  # Date#next_month clamps to the shorter month rather than overflowing --
-  # an anchor on Jan 31 lands its first payment on Feb 29 (2024 is a leap
-  # year), not Mar 2/3. Each subsequent month's date is computed by calling
-  # #next_month again on the *previous, already-clamped* date rather than
-  # re-clamping from the original day-31 anchor each time, so once clamped
-  # to 29 the schedule stays on the 29th (not drifting back to 30/31 in a
-  # longer month) -- see Ruby's own Date#next_month semantics.
-  test "an anchor on the 31st clamps into shorter months and stays clamped" do
-    loan_account = Account.create! \
-      family: @family,
-      name: "End-of-Month Loan",
-      balance: 500000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 3.5,
-        term_months: 3,
-        start_date: Date.new(2024, 1, 31)
-      )
-
-    dates = loan_account.loan.amortization_schedule.payments.map { |p| p[:payment_date] }
-
-    assert_equal [ Date.new(2024, 2, 29), Date.new(2024, 3, 29), Date.new(2024, 4, 29) ], dates
-  end
-
-  test "zero interest rate calculates straight line principal" do
-    zero_interest_loan = Account.create! \
-      family: @family,
-      name: "Zero Interest Loan",
-      balance: 120000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 0,
-        term_months: 120
-      )
-
-    schedule = zero_interest_loan.loan.amortization_schedule
-    payment = schedule.monthly_payment
-    assert_equal BigDecimal("1000"), payment.amount
-  end
-
-  test "payment schedule has correct number of payments" do
-    assert_equal 360, @schedule.payment_count
-  end
-
-  test "first payment is principal + interest" do
-    first_payment = @schedule.payments.first
-    assert_equal 1, first_payment[:payment_number]
-    assert_equal BigDecimal("500000"), first_payment[:beginning_balance]
-    assert first_payment[:interest_payment] > 0
-    assert first_payment[:principal_payment] > 0
-  end
-
-  test "final payment clears balance" do
-    last_payment = @schedule.payments.last
-    assert_equal 0, last_payment[:ending_balance]
-  end
-
-  test "each payment amount equals principal plus interest" do
-    @schedule.payments.each do |payment|
-      assert_equal payment[:principal_payment] + payment[:interest_payment], payment[:payment_amount]
-    end
-  end
-
-  test "principal portions sum to original principal" do
-    total_principal = @schedule.payments.sum { |p| p[:principal_payment] }
-    assert_equal BigDecimal("500000"), total_principal.round(2)
-  end
-
-  test "ending balance decreases monotonically" do
-    balances = @schedule.payments.map { |p| p[:ending_balance] }
-    balances.each_cons(2) do |prev, curr|
-      assert curr <= prev, "Ending balance should decrease monotonically"
-    end
-  end
-
-  test "beginning_balance of next payment equals ending_balance of current" do
-    @schedule.payments.each_cons(2) do |current, next_payment|
-      assert_equal current[:ending_balance], next_payment[:beginning_balance]
-    end
-  end
-
-  test "payment_for returns correct payment data" do
-    payment_date = @schedule.payments.first[:payment_date]
-    payment = @schedule.payment_for(payment_date)
-
-    assert payment.present?
-    assert_equal 1, payment[:payment_number]
-    assert_equal payment_date, payment[:payment_date]
-  end
-
-  test "payment_for returns nil for non-existent date" do
-    payment = @schedule.payment_for(Date.new(2100, 1, 1))
-    assert_nil payment
-  end
-
-  test "total_cost equals principal plus total_interest" do
-    expected_total_cost = @loan.original_balance + @schedule.total_interest
-    assert_equal expected_total_cost, @schedule.total_cost
-  end
-
-  test "payoff_date is set correctly" do
-    payoff_date = @schedule.payoff_date
-    assert payoff_date.present?
-    assert payoff_date > Date.current
-  end
-
-  test "schedule handles small loan amounts" do
-    small_loan = Account.create! \
-      family: @family,
-      name: "Small Loan",
-      balance: 1000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 5.0,
-        term_months: 12
-      )
-
-    schedule = small_loan.loan.amortization_schedule
-    assert schedule.amortizable?
-    assert_equal 12, schedule.payment_count
-    assert_equal 0, schedule.payments.last[:ending_balance]
-  end
-
-  test "schedule with different currency precision" do
-    jpy_loan = Account.create! \
-      family: @family,
-      name: "JPY Loan",
-      balance: 5000000,
-      currency: "JPY",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 3.5,
-        term_months: 360
-      )
-
-    schedule = jpy_loan.loan.amortization_schedule
-    assert schedule.amortizable?
-    assert_equal 360, schedule.payment_count
-  end
-
-  test "monthly payment calculation with very low interest rate" do
-    low_rate_loan = Account.create! \
-      family: @family,
-      name: "Low Rate Loan",
-      balance: 100000,
-      currency: "USD",
-      accountable: Loan.create!(
-        rate_type: "fixed",
-        interest_rate: 0.5,
-        term_months: 120
-      )
-
-    schedule = low_rate_loan.loan.amortization_schedule
-    payment = schedule.monthly_payment
-    assert payment.positive?
-    assert payment < Money.new(1000, "USD")
-  end
-
-  test "characterization golden master covers fixed-rate rows" do
-    loan = accounts(:characterization_fixed).loan
-
-    assert_characterized_schedule loan, [
-      characterized_row(1, "2024-02-15", "12.0", "340.02", "329.83", "10.19", "1000.00", "670.17"),
-      characterized_row(2, "2024-03-15", "12.0", "340.02", "333.63", "6.39", "670.17", "336.54"),
-      characterized_row(3, "2024-04-15", "12.0", "339.97", "336.54", "3.43", "336.54", "0.00")
-    ]
-  end
-
-  test "characterization golden master covers variable rate rows with two changes" do
-    loan = accounts(:characterization_variable).loan
-
-    assert_characterized_schedule loan, [
-      characterized_row(1, "2024-02-01", "0.0", "333.33", "333.33", "0.00", "1000.00", "666.67"),
-      # Row 2 carries the SIZING rate 12% and charges 0.00 interest, and row 3
-      # carries sizing rate 0% and charges 3.35. That is the two-clock contract
-      # (C7/C8/C10, #48), not a defect: the rate effective 2024-03-01 applies to
-      # the half-open accrual window [03-01, 04-01) -- row 3 -- while row 2's
-      # window ran entirely at the old 0%. Payment sizing moves on the first
-      # payment on or after the effective date, which is row 2.
-      characterized_row(2, "2024-03-01", "12.0", "338.34", "338.34", "0.00", "666.67", "328.33"),
-      characterized_row(3, "2024-04-01", "0.0", "331.68", "328.33", "3.35", "328.33", "0.00")
-    ]
-  end
-
-  test "characterization golden master covers zero-interest final settlement" do
-    loan = accounts(:characterization_zero_interest).loan
-
-    assert_characterized_schedule loan, [
-      characterized_row(1, "2024-02-01", "0.0", "33.33", "33.33", "0.00", "100.00", "66.67"),
-      characterized_row(2, "2024-03-01", "0.0", "33.33", "33.33", "0.00", "66.67", "33.34"),
-      characterized_row(3, "2024-04-01", "0.0", "33.34", "33.34", "0.00", "33.34", "0.00")
-    ]
-  end
-
-  test "characterization golden master covers a short one-period loan" do
-    loan = accounts(:characterization_short).loan
-
-    assert_characterized_schedule loan, [
-      characterized_row(1, "2024-02-15", "12.0", "1010.19", "1000.00", "10.19", "1000.00", "0.00")
-    ]
-  end
-
-  test "characterization golden master covers month-end clamping" do
-    loan = accounts(:characterization_month_end).loan
-
-    assert_characterized_schedule loan, [
-      characterized_row(1, "2024-02-29", "0.0", "33.33", "33.33", "0.00", "100.00", "66.67"),
-      characterized_row(2, "2024-03-29", "0.0", "33.33", "33.33", "0.00", "66.67", "33.34"),
-      characterized_row(3, "2024-04-29", "0.0", "33.34", "33.34", "0.00", "33.34", "0.00")
-    ]
-  end
-
-  # --- #36: which accrual the production read path runs -------------------
-  #
-  # #36's defect was the version advancing while the calculation did not, so
-  # every persisted row was invalidated to regenerate identical numbers. The
-  # pairing is pinned in both directions: version 3 means daily accrual, and
-  # daily accrual means version 3.
-  test "the persisted schedule accrues daily, and the algorithm version says so" do
-    assert_equal true, Loan::AmortizationSchedule::SCHEDULE_DAILY_ACCRUAL
-    assert_equal 3, Loan::AmortizationSchedule::ALGORITHM_VERSION,
-      "SCHEDULE_DAILY_ACCRUAL and ALGORITHM_VERSION move together -- the version is baked " \
-      "into the schedule signature, so a version that disagrees with the calculation either " \
-      "restages every row to produce identical numbers or serves rows the code did not " \
-      "produce (#36)"
-  end
-
-  test "payments and an unqualified simulation are the same calculation" do
-    schedule = accounts(:characterization_fixed).loan.amortization_schedule
-
-    assert_equal schedule.payments, schedule.simulation.payments
-  end
-
-  test "daily accrual is a different calculation, and is the one production runs" do
-    schedule = accounts(:characterization_fixed).loan.amortization_schedule
-
-    monthly = schedule.simulation(daily_accrual: false)
-    daily = schedule.simulation(daily_accrual: true)
-
-    assert_not_equal daily.total_interest, monthly.total_interest,
-      "if these agree the daily path is not doing anything and this test proves nothing"
-    assert_equal daily.payments, schedule.payments,
-      "production must run the daily path while SCHEDULE_DAILY_ACCRUAL is true (#36)"
-  end
-
-  test "simulation returns an empty converged result for a non-amortizable loan" do
-    loan = accounts(:characterization_fixed).loan
-    loan.update!(term_months: nil)
-
-    result = loan.amortization_schedule.simulation
-
-    assert_empty result.payments
-    assert result.converged?
-  end
-
-  # #8's gate: "Tests fail loudly on a deliberately introduced one-cent change
-  # (verify this -- an assertion that cannot fail is not a gate)."
-  #
-  # This replaces a test that built two hashes in its own body and asserted
-  # assert_equal raised on them. It never called the engine, so it passed
-  # against any implementation, correct or broken -- including a deliberately
-  # broken one. It was named as the gate for two tranches.
-  #
-  # This version perturbs Loan::AmortizationMath.step, the shared per-period
-  # math both the schedule and the projection run through, and asserts the
-  # golden master notices.
-  test "the golden masters fail when the engine's per-period math moves by one cent" do
-    loan = accounts(:characterization_fixed).loan
-    rows = [
-      characterized_row(1, "2024-02-15", "12.0", "340.02", "329.83", "10.19", "1000.00", "670.17"),
-      characterized_row(2, "2024-03-15", "12.0", "340.02", "333.63", "6.39", "670.17", "336.54"),
-      characterized_row(3, "2024-04-15", "12.0", "339.97", "336.54", "3.43", "336.54", "0.00")
-    ]
-
-    assert_characterized_schedule loan, rows
-
-    with_one_cent_mutation do
-      error = assert_raises(Minitest::Assertion) do
-        assert_equal rows, uncached_schedule_rows(loan)
-      end
-      assert_match(/interest_payment/, error.message,
-        "the failure must name the field that moved, not merely that something differs")
-    end
-
-    # And the gate must go green again once the mutation is removed, so a
-    # permanently-red harness cannot masquerade as a working one.
-    #
-    # This MUST bypass the caches. Loan#amortization_schedule memoises by
-    # signature and AmortizationSchedule#payments memoises its rows, so
-    # assert_characterized_schedule here would re-read what the first call
-    # cached and pass without ever invoking the restored method -- proven by
-    # disabling the restore, after which the test still passed. That is the
-    # same inert-assertion defect this test replaced.
-    assert_equal rows, uncached_schedule_rows(loan)
+    assert_nil Loan::AmortizationSchedule.for(loan)
   end
 
   private
-
-    def characterized_row(number, date, rate, payment, principal, interest, beginning, ending)
-      {
-        payment_number: number,
-        payment_date: Date.iso8601(date),
-        interest_rate: BigDecimal(rate),
-        payment_amount: BigDecimal(payment),
-        principal_payment: BigDecimal(principal),
-        interest_payment: BigDecimal(interest),
-        beginning_balance: BigDecimal(beginning),
-        ending_balance: BigDecimal(ending)
-      }
+    def build_schedule(principal: 500_000, annual_rate: 3.5, term_months: 360,
+                       start_date: Date.new(2026, 1, 1), currency: "USD")
+      Loan::AmortizationSchedule.new(
+        principal: principal,
+        annual_rate: annual_rate,
+        term_months: term_months,
+        start_date: start_date,
+        currency: currency
+      )
     end
 
-    # Adds a cent to every period's interest, through the module both the
-    # schedule and the projection share. Restored unconditionally.
-    def with_one_cent_mutation
-      original = Loan::AmortizationMath.method(:step)
-      Loan::AmortizationMath.singleton_class.send(:define_method, :step) do |**kwargs|
-        row = original.call(**kwargs)
-        row.merge(interest_payment: row[:interest_payment] + BigDecimal("0.01"))
-      end
-      yield
-    ensure
-      Loan::AmortizationMath.singleton_class.send(:define_method, :step, original)
-    end
-
-    # Bypasses both memoisation layers -- Loan#amortization_schedule caches by
-    # signature and AmortizationSchedule#payments caches its own rows, so a
-    # mutation applied after a first read would otherwise be invisible.
-    def uncached_schedule_rows(loan)
-      Loan::AmortizationSchedule.new(loan).payments.map do |row|
-        row.slice(
-          :payment_number, :payment_date, :interest_rate, :payment_amount,
-          :principal_payment, :interest_payment, :beginning_balance, :ending_balance
-        )
-      end
-    end
-
-    def assert_characterized_schedule(loan, expected_rows)
-      actual_rows = loan.amortization_schedule.payments.map do |row|
-        row.slice(
-          :payment_number,
-          :payment_date,
-          :interest_rate,
-          :payment_amount,
-          :principal_payment,
-          :interest_payment,
-          :beginning_balance,
-          :ending_balance
-        )
-      end
-
-      assert_equal expected_rows, actual_rows
-      actual_rows.each_cons(2) do |current, following|
-        assert_equal current[:ending_balance], following[:beginning_balance]
-      end
-      assert_equal BigDecimal("0"), actual_rows.last[:ending_balance]
-    end
-
-    def variable_loan_for_markers(name)
-      Account.create!(
-        family: @family,
-        name: name,
-        balance: 500000,
+    def loan_account(**loan_attrs)
+      Account.create! \
+        family: families(:dylan_family),
+        name: "Mortgage Loan",
+        balance: 500_000,
         currency: "USD",
-        accountable: Loan.create!(
-          rate_type: "variable",
-          interest_rate: 3.5,
-          term_months: 12,
-          start_date: Date.new(2023, 1, 1)
-        )
-      ).loan
+        accountable: Loan.create!(subtype: "mortgage", **loan_attrs)
     end
 end

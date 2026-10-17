@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_08_100000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_17_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1602,91 +1602,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_08_100000) do
     t.check_constraint "cache_read_tokens IS NULL OR cache_read_tokens >= 0", name: "chk_llm_usages_cache_read_tokens_non_negative"
   end
 
-  create_table "loan_amortizations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.integer "algorithm_version", default: 2, null: false
-    t.decimal "beginning_balance", precision: 19, scale: 4, null: false
-    t.datetime "created_at", null: false
-    t.decimal "ending_balance", precision: 19, scale: 4, null: false
-    t.datetime "generated_at", default: -> { "CURRENT_TIMESTAMP" }, null: false
-    t.decimal "interest_payment", precision: 19, scale: 4, null: false
-    t.decimal "interest_rate", precision: 10, scale: 3, null: false
-    t.uuid "loan_id", null: false
-    t.decimal "payment_amount", precision: 19, scale: 4, null: false
-    t.date "payment_date", null: false
-    t.integer "payment_number", null: false
-    t.decimal "principal_payment", precision: 19, scale: 4, null: false
-    t.string "schedule_signature", null: false
-    t.datetime "updated_at", null: false
-    t.index ["algorithm_version", "loan_id"], name: "index_loan_amortizations_on_algorithm_version_and_loan_id"
-    t.index ["loan_id", "algorithm_version"], name: "index_loan_amortizations_on_loan_id_and_algorithm_version"
-    t.index ["loan_id", "payment_date"], name: "index_loan_amortizations_on_loan_id_and_payment_date"
-    t.index ["loan_id", "payment_number"], name: "index_loan_amortizations_on_loan_id_and_payment_number", unique: true
-    t.index ["loan_id", "schedule_signature"], name: "index_loan_amortizations_on_loan_id_and_schedule_signature"
-    t.index ["loan_id"], name: "index_loan_amortizations_on_loan_id"
-    t.check_constraint "beginning_balance >= 0::numeric", name: "chk_loan_amortizations_beginning_balance_non_negative"
-    t.check_constraint "ending_balance >= 0::numeric", name: "chk_loan_amortizations_ending_balance_non_negative"
-    t.check_constraint "interest_payment >= 0::numeric", name: "chk_loan_amortizations_interest_payment_non_negative"
-    t.check_constraint "interest_rate >= 0::numeric AND interest_rate <= 100::numeric", name: "chk_loan_amortizations_interest_rate_bounds"
-    t.check_constraint "payment_amount >= 0::numeric", name: "chk_loan_amortizations_payment_amount_non_negative"
-    t.check_constraint "payment_number > 0", name: "chk_loan_amortizations_payment_number_positive"
-    t.check_constraint "principal_payment >= 0::numeric", name: "chk_loan_amortizations_principal_payment_non_negative"
-  end
-
-  create_table "loan_extra_repayments", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.decimal "amount", precision: 19, scale: 4, null: false
-    t.datetime "created_at", null: false
-    t.date "ends_on"
-    t.string "frequency"
-    t.integer "interval", default: 1
-    t.string "kind", null: false
-    t.uuid "loan_scenario_id", null: false
-    t.date "occurs_on"
-    t.date "starts_on"
-    t.datetime "updated_at", null: false
-    t.index ["loan_scenario_id"], name: "index_loan_extra_repayments_on_loan_scenario_id"
-    t.check_constraint "\"interval\" IS NULL OR \"interval\" > 0", name: "chk_loan_extra_repayments_interval_positive"
-    t.check_constraint "amount > 0::numeric", name: "chk_loan_extra_repayments_amount_positive"
-    t.check_constraint "frequency IS NULL OR (frequency::text = ANY (ARRAY['weekly'::character varying::text, 'fortnightly'::character varying::text, 'monthly'::character varying::text, 'quarterly'::character varying::text, 'yearly'::character varying::text]))", name: "chk_loan_extra_repayments_frequency"
-    t.check_constraint "kind::text <> 'recurring'::text OR starts_on IS NOT NULL", name: "chk_loan_extra_repayments_recurring_has_start"
-    t.check_constraint "kind::text = 'one_off'::text AND occurs_on IS NOT NULL AND frequency IS NULL OR kind::text = 'recurring'::text AND frequency IS NOT NULL AND occurs_on IS NULL", name: "chk_loan_extra_repayments_kind_coherent"
-    t.check_constraint "starts_on IS NULL OR ends_on IS NULL OR ends_on >= starts_on", name: "chk_loan_extra_repayments_date_order"
-  end
-
-  create_table "loan_offset_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "account_id", null: false
-    t.datetime "created_at", null: false
-    t.uuid "loan_id", null: false
-    t.datetime "updated_at", null: false
-    t.index ["account_id"], name: "index_loan_offset_accounts_on_account_id"
-    t.index ["loan_id", "account_id"], name: "index_loan_offset_accounts_on_loan_id_and_account_id", unique: true
-    t.index ["loan_id"], name: "index_loan_offset_accounts_on_loan_id"
-  end
-
-  create_table "loan_scenarios", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.decimal "assumed_offset_balance", precision: 19, scale: 4
-    t.integer "calculator_version", null: false
-    t.datetime "created_at", null: false
-    t.uuid "created_by_user_id"
-    t.string "currency", null: false
-    t.datetime "last_calculated_at"
-    t.uuid "loan_id", null: false
-    t.string "name", limit: 100, null: false
-    t.decimal "rate_override", precision: 10, scale: 3
-    t.integer "slot", null: false
-    t.datetime "updated_at", null: false
-    t.index ["created_by_user_id"], name: "index_loan_scenarios_on_created_by_user_id"
-    t.index ["loan_id", "slot"], name: "index_loan_scenarios_on_loan_id_and_slot", unique: true
-    t.index ["loan_id"], name: "index_loan_scenarios_on_loan_id"
-    t.check_constraint "assumed_offset_balance IS NULL OR assumed_offset_balance >= 0::numeric", name: "chk_loan_scenarios_offset_non_negative"
-    t.check_constraint "rate_override IS NULL OR rate_override >= 0::numeric AND rate_override <= 100::numeric", name: "chk_loan_scenarios_rate_override_range"
-    t.check_constraint "slot >= 0 AND slot <= 4", name: "chk_loan_scenarios_slot_range"
-  end
-
   create_table "loans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "collateral_account_id"
     t.datetime "created_at", null: false
-    t.string "day_count_convention", default: "actual_365", null: false
+    t.decimal "down_payment", precision: 19, scale: 4
     t.decimal "initial_balance", precision: 19, scale: 4
+    t.decimal "insurance_rate", precision: 8, scale: 4
+    t.string "insurance_rate_type"
     t.decimal "interest_rate", precision: 10, scale: 3
     t.jsonb "locked_attributes", default: {}
     t.string "rate_type"
@@ -1695,10 +1616,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_08_100000) do
     t.integer "term_months"
     t.datetime "updated_at", null: false
     t.jsonb "variable_rate_schedule", default: {}, null: false
-    t.index ["collateral_account_id"], name: "index_loans_on_collateral_account_id"
-    t.check_constraint "day_count_convention::text = ANY (ARRAY['actual_365'::character varying::text, 'actual_actual'::character varying::text])", name: "chk_loans_day_count_convention"
-    t.check_constraint "interest_rate IS NULL OR interest_rate >= 0::numeric AND interest_rate <= 100::numeric", name: "chk_loans_interest_rate_bounds"
-    t.check_constraint "term_months IS NULL OR term_months > 0 AND term_months <= 1200", name: "chk_loans_term_months_bounds"
+    t.check_constraint "down_payment IS NULL OR down_payment >= 0::numeric", name: "chk_loans_down_payment_non_negative"
+    t.check_constraint "insurance_rate IS NULL OR insurance_rate >= 0::numeric", name: "chk_loans_insurance_rate_non_negative"
+    t.check_constraint "insurance_rate_type IS NULL OR (insurance_rate_type::text = ANY (ARRAY['level_term'::character varying, 'decreasing_life'::character varying]::text[]))", name: "chk_loans_insurance_rate_type"
   end
 
   create_table "lunchflow_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -3241,13 +3161,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_08_100000) do
   add_foreign_key "kraken_accounts", "kraken_items"
   add_foreign_key "kraken_items", "families"
   add_foreign_key "llm_usages", "families"
-  add_foreign_key "loan_amortizations", "loans"
-  add_foreign_key "loan_extra_repayments", "loan_scenarios", on_delete: :cascade
-  add_foreign_key "loan_offset_accounts", "accounts", on_delete: :cascade
-  add_foreign_key "loan_offset_accounts", "loans", on_delete: :cascade
-  add_foreign_key "loan_scenarios", "loans", on_delete: :cascade
-  add_foreign_key "loan_scenarios", "users", column: "created_by_user_id", on_delete: :nullify
-  add_foreign_key "loans", "accounts", column: "collateral_account_id", on_delete: :nullify
   add_foreign_key "lunchflow_accounts", "lunchflow_items"
   add_foreign_key "lunchflow_items", "families"
   add_foreign_key "merchants", "families"
