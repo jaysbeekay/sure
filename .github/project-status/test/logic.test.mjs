@@ -201,6 +201,8 @@ describe("decide: pull requests", () => {
   test("closed PRs and other actions are left to the board's own workflows", () => {
     assert.deepEqual(decide("pull_request_target", prEvent("edited", { state: "closed" }), CTX), []);
     assert.deepEqual(decide("pull_request_target", prEvent("closed"), CTX), []);
+    // The board's "Item reopened" workflow sets Triage; moving it on here would race it.
+    assert.deepEqual(decide("pull_request_target", prEvent("reopened"), CTX), []);
     assert.deepEqual(decide("pull_request_target", prEvent("synchronize"), CTX), []);
   });
 });

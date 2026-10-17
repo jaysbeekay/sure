@@ -114,7 +114,7 @@ export function decide(eventName, event, ctx) {
   }
 
   if (eventName === "pull_request_target") {
-    if (!["opened", "reopened", "edited", "ready_for_review"].includes(event.action)) return [];
+    if (!["opened", "edited", "ready_for_review"].includes(event.action)) return [];
     const pr = event.pull_request;
     if (pr.state !== "open") return [];
 
