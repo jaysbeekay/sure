@@ -1883,6 +1883,35 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal category.id, action.value
   end
 
+  # An export written before the fork's loan tables were dropped (#475): fork
+  # main wrote each account as `as_json(include: { accountable: {} })`, loans
+  # last, so a loan carried its collateral link and day-count as keys. Both
+  # columns are gone. The import must still succeed, without the link.
+  test "an export from before the loan columns were dropped still imports, without its collateral link" do
+    ndjson = build_ndjson([
+      { type: "Account", data: { id: "old-property", name: "House", balance: "500000.0", currency: "USD",
+                                 accountable_type: "Property", status: "active",
+                                 accountable: { id: "old-property-detail", subtype: "single_family_home", locked_attributes: {} } } },
+      { type: "Account", data: { id: "old-loan", name: "Mortgage", balance: "400000.0", currency: "USD",
+                                 accountable_type: "Loan", status: "active",
+                                 accountable: { id: "old-loan-detail", subtype: "mortgage", rate_type: "fixed",
+                                                interest_rate: "6.0", term_months: 360, initial_balance: "450000.0",
+                                                start_date: "2024-01-01", variable_rate_schedule: {}, locked_attributes: {},
+                                                collateral_account_id: "old-property", day_count_convention: "actual_actual" } } }
+    ])
+
+    result = nil
+    assert_no_difference -> { DebugLogEntry.count } do
+      result = Family::DataImporter.new(@family, ndjson).import!
+    end
+
+    assert_equal %w[House Mortgage], result[:accounts].map(&:name).sort
+    loan = result[:accounts].find { |account| account.name == "Mortgage" }.loan
+    assert_equal "mortgage", loan.subtype
+    assert_not loan.has_attribute?(:collateral_account_id), "the column this link lived in is gone"
+    assert_not loan.has_attribute?(:day_count_convention)
+  end
+
   test "imports a rule's priority and keeps the exported run order" do
     rule_data = ->(name, priority) {
       data = {
