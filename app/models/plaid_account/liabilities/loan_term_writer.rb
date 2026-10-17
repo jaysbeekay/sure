@@ -55,7 +55,7 @@ module PlaidAccount::Liabilities::LoanTermWriter
     def write_terms_then_rate(loan, terms, rate)
       refusal = nil
       loan.transaction(requires_new: true) do
-        refusal = enrich(loan, terms) || enrich(loan, loan.variable_rate_update_for(rate, as_of: as_of))
+        refusal = enrich(loan, terms) || enrich(loan, variable_rate_update(loan, rate))
         raise ActiveRecord::Rollback if refusal
       end
       return if refusal.nil?
@@ -63,6 +63,29 @@ module PlaidAccount::Liabilities::LoanTermWriter
       # The rolled-back first save left its values on the in-memory loan.
       loan.reload
       report_refusal(*refusal)
+    end
+
+    # What a reported rate changes on a variable loan, or nil when it changes
+    # nothing. A loan with no rate yet takes it as its base rate: a schedule row
+    # would claim a change on a day nothing is known to have moved. A rate equal
+    # to the one in force on `as_of` (a same-day repeat included) is no change.
+    # Anything else is dated `as_of`. Rounded to three places so a reading that
+    # wobbles in the fourth does not record a row on every sync. Stored as the
+    # loan form stores a rate (Loan#rate_changes=), a plain decimal string.
+    #
+    # The same rules RedbarkAccount::LoanDetailsProcessor applies, on upstream's
+    # Loan API: `current_variable_rate` and `variable_rate_schedule`.
+    def variable_rate_update(loan, reported_rate)
+      return nil unless loan.variable_rate_type?
+
+      rate = BigDecimal(reported_rate.to_s).round(3)
+      return { interest_rate: rate } if loan.interest_rate.blank?
+
+      in_force = loan.current_variable_rate(as_of)
+      return nil if in_force.present? && BigDecimal(in_force.to_s) == rate
+
+      schedule = (loan.variable_rate_schedule || {}).stringify_keys
+      { variable_rate_schedule: schedule.merge(as_of.to_date.iso8601 => rate.to_s("F")) }
     end
 
     # Whether the loan will be variable once this payload's `rate_type` is

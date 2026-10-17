@@ -16,95 +16,76 @@ en:
       rate_type_adjustable: Adjustable
       rate_type_fixed: Fixed
       rate_type_variable: Variable
-      offset_accounts: Offset accounts
-      offset_accounts_hint: Only accounts visible to everyone who can access this loan can be linked.
-      collateral_account: Secured by
-      collateral_account_none: Not secured against an asset
-      collateral_account_hint: Link a property or vehicle in the same currency. Equity appears on both accounts only when you can see every loan secured on the asset and their currencies match. Only assets visible to everyone who can access this loan can be linked.
-      start_date: Origination date
-      start_date_hint: When the loan was drawn down. Leave blank to use the account's opening date.
       rate_changes: Rate changes
       rate_changes_hint: Each row sets the rate that applies from its effective date until the next one. Re-entering a date replaces that row rather than adding a second.
+      rate_changes_empty: No rate changes recorded. The loan runs at its interest rate above.
       rate_change_effective_date: Effective date
       rate_change_rate: Rate
       rate_change_add: Add rate change
       rate_change_remove: Remove
-      day_count_convention: Interest day-count basis
-      day_count_convention_actual_365: Actual/365
-      day_count_convention_actual_actual: Actual/actual (366 in a leap year)
-      day_count_convention_hint: Lenders differ. Actual/365 divides the annual rate by 365 every year; actual/actual uses 366 in a leap year. Check a statement -- if this does not match your lender, the interest shown is an approximation.
+      start_date: Origination date
+      start_date_hint: When the loan was drawn down. Leave blank to use the account's opening date.
+      down_payment: Down payment
+      insurance_rate: Insurance rate
+      insurance_rate_placeholder: '0.36'
+      insurance_rate_hint: An annual rate, charged monthly alongside the repayment. Level term is charged on the original balance; decreasing on what is still owed.
+      insurance_rate_type: Insurance type
+      insurance_rate_type_decreasing_life: Decreasing
+      insurance_rate_type_level_term: Level term
     new:
       title: Enter loan details
+    overview:
+      interest_rate: Interest Rate
+      monthly_payment: Monthly Payment
+      not_applicable: N/A
+      original_payoff_date: Original Payoff Date
+      original_principal: Original Loan Amount
+      remaining_principal: Remaining Loan Amount
+      term: Term
+      type: Type
+      unknown: Unknown
     tabs:
-      overview:
-        current_interest_rate: Current Interest Rate
-        current_monthly_payment: Current Monthly Payment
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
+      repayment_progress:
+        instalment: Payment %{number} · %{date}
+        insurance: Insurance
+        interest: Interest
+        of_original: of %{amount}
+        principal: Principal
+        repaid: Repaid
+        total: Total
+      schedule:
+        date: Date
+        description: Projected from the original balance, rate and term, starting %{start_date}. Extra payments are not reflected.
+        variable_rate_notice: This loan's rate changes over time. The schedule re-amortises at each recorded change, keeping the original payoff date and resizing the repayment; a change that has not been recorded yet will shift these figures.
+        opening_payment: Opening Payment
+        forecasted_payoff_date: Forecasted Payoff Date
+        forecasted_payoff_not_converged: Not paid off on the current repayment
+        interest: Interest
+        monthly_payment: Monthly Payment
         not_applicable: N/A
-        original_loan_balance: Original Loan Balance
-        remaining_principal: Remaining loan balance
-        original_payoff_date: Original payoff date
+        number: "#"
+        payment: Payment
+        principal: Principal
+        remaining_balance: Remaining Balance
+        total_cost: Total Cost
+        total_interest: Total Interest
+      overview:
+        insurance_rate_only: "%{rate} a year"
+        interest_rate: Interest Rate
+        leverage: Leverage
+        leverage_band_conservative: Conservative
+        leverage_band_high: High
+        leverage_band_moderate: Moderate
+        leverage_multiple: "%{ratio}x"
+        monthly_payment: Monthly Payment
+        not_applicable: N/A
+        original_payoff_date: Original Payoff Date
+        original_principal: Original Loan Amount
+        remaining_principal: Remaining Loan Amount
+        total_cost: Total Cost
+        total_cost_with_insurance: Total Cost incl. Insurance
+        total_insurance: Insurance
         term: Term
         type: Type
         unknown: Unknown
         edit_loan_details: "Edit loan details"
-        variable_with_offset: Variable + offset
-      extra_repayments:
-        intro: "See how much sooner the loan is paid off, and how much interest you save, if you pay an extra amount each month on top of the current repayment."
-        amount_label: Extra each month
-        amount_placeholder: "0.00"
-        apply: Apply
-        clear: Clear
-        payoff_with_extra: Payoff with extra
-        payoff_without_extra: Payoff without extra
-        interest_saved: Interest saved
-        months_sooner:
-          one: "%{count} month sooner"
-          other: "%{count} months sooner"
-        projection_not_converged:
-          enter_amount: The loan does not pay off within the supported term at the current repayment. Enter an extra amount to see whether paying more clears it.
-          cleared_by_extra: The loan does not pay off within the supported term at the current repayment, so there is no schedule to chart against. With this extra amount it does, as shown above.
-          not_cleared_by_extra: Even with this extra amount, the loan does not pay off within the supported term. Try a larger amount.
-        variable_rate_notice: "This loan's rate can change. The projection applies the rate changes already recorded on this loan and keeps the current repayment, so a rate change that hasn't been recorded yet will shift these figures."
-      schedule:
-        current_monthly_payment: Current Monthly Payment
-        total_interest: Total Interest
-        total_cost: Total Cost
-        payoff_date: Payoff Date
-        projected_payoff_date: Projected Payoff
-        interest_saved: Interest Saved
-        interest_added: Additional Interest
-        months_saved:
-          one: "%{count} month sooner"
-          other: "%{count} months sooner"
-        months_behind:
-          one: "%{count} month later"
-          other: "%{count} months later"
-        projection_not_converged: The projected payoff does not converge within the supported term.
-        recalculating: "These figures were recalculated for this page. The saved schedule is being refreshed in the background and will match shortly."
-        minimum_payment_rate: "At the current rate of %{rate}, to the original payoff date"
-        variable_rate_notice: "This loan has a variable interest rate. The schedule re-amortises at each recorded rate change, keeping the original payoff date and resizing the repayment; a rate change that has not been recorded yet will shift these figures."
-        offset_notice: "Projected interest assumes your linked offset balance stays at today's total. The loan balance itself is unchanged."
-        rate_change_marker: "rate change"
-        rate_change_marker_title: "The interest rate changes during this payment's period, to %{rate}%."
-        day_count_notice: "Interest accrues on an %{basis} basis. If your lender uses a different day-count basis, the interest figures here are an approximation."
-        chart:
-          today: Today
-          scheduled_history: "Scheduled (contracted terms)"
-          original_payoff: Original schedule
-          accelerated_payoff: Projected payoff
-          extra_payoff: With the extra each month
-          aria_label: "Loan payoff comparison chart"
-          aria_description: "Chart comparing the loan's original scheduled payoff against a projection based on the current balance. Current balance: %{current_balance}. Original scheduled payoff date: %{original_payoff_date}. Projected payoff date based on current balance: %{accelerated_payoff_date}. The tooltip on each scheduled point breaks the payment down into its Principal and Interest."
-          aria_description_extra: "Projected payoff date with the extra monthly payment: %{extra_payoff_date}."
-          extra_payment_applied: "Modeling an extra %{amount} %{frequency}"
-          frequency:
-            weekly: per week
-            monthly: per month
-            yearly: per year
-        number: "#"
-        date: Date
-        payment: Payment
-        principal: Principal
-        interest: Interest
-        remaining_balance: Remaining Balance

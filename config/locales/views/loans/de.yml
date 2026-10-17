@@ -13,57 +13,55 @@ de:
       rate_type_adjustable: Anpassbar
       rate_type_fixed: Fest
       rate_type_variable: Variabel
-      offset_accounts: Verrechnungskonten
-      offset_accounts_hint: Es können nur Konten verknüpft werden, die für alle Personen sichtbar sind, die Zugriff auf dieses Darlehen haben.
-      day_count_convention: Zinsberechnungsbasis
-      day_count_convention_actual_365: Actual/365
-      day_count_convention_actual_actual: Actual/actual (366 im Schaltjahr)
-      day_count_convention_hint: Kreditgeber rechnen unterschiedlich. Actual/365 teilt den Jahreszins immer durch 365; actual/actual verwendet im Schaltjahr 366. Prüfen Sie einen Kontoauszug -- stimmt dies nicht mit Ihrem Kreditgeber überein, sind die angezeigten Zinsen eine Näherung.
+      rate_changes: Zinsänderungen
+      rate_changes_hint: Jede Zeile legt den Zinssatz fest, der ab ihrem Stichtag bis zum nächsten gilt. Ein erneut eingegebener Stichtag ersetzt diese Zeile, statt eine zweite anzulegen.
+      rate_changes_empty: Keine Zinsänderungen erfasst. Der Kredit läuft mit dem oben angegebenen Zinssatz.
+      rate_change_effective_date: Stichtag
+      rate_change_rate: Zinssatz
+      rate_change_add: Zinsänderung hinzufügen
+      rate_change_remove: Entfernen
+      start_date: Auszahlungsdatum
+      start_date_hint: Wann der Kredit ausgezahlt wurde. Leer lassen, um das Eröffnungsdatum des Kontos zu verwenden.
       none: Keine
       subtype_none: Keine
       subtype_prompt: Kreditart wählen
     new:
       title: Kreditdetails eingeben
+    overview:
+      interest_rate: Zinssatz
+      monthly_payment: Monatliche Zahlung
+      not_applicable: Nicht zutreffend
+      original_payoff_date: Ursprüngliches Ablösedatum
+      original_principal: Ursprünglicher Kreditbetrag
+      remaining_principal: Verbleibender Kreditbetrag
+      term: Laufzeit
+      type: Typ
+      unknown: Unbekannt
     tabs:
+      schedule:
+        date: Datum
+        description: Hochgerechnet aus ursprünglicher Kreditsumme, Zinssatz und Laufzeit, beginnend am %{start_date}. Sondertilgungen sind nicht berücksichtigt.
+        variable_rate_notice: Der Zinssatz dieses Kredits ändert sich im Laufe der Zeit. Der Tilgungsplan wird bei jeder erfassten Änderung neu berechnet; das ursprüngliche Ablösedatum bleibt, die Rate passt sich an. Eine noch nicht erfasste Änderung verschiebt diese Zahlen.
+        opening_payment: Anfangsrate
+        forecasted_payoff_date: Voraussichtliches Ablösedatum
+        forecasted_payoff_not_converged: Mit der aktuellen Rate nicht getilgt
+        interest: Zinsen
+        monthly_payment: Monatsrate
+        not_applicable: "–"
+        number: "Nr."
+        payment: Rate
+        principal: Tilgung
+        remaining_balance: Restschuld
+        total_cost: Gesamtkosten
+        total_interest: Zinsen gesamt
       overview:
         edit_loan_details: Kreditdaten bearbeiten
-        variable_with_offset: Variabel + Verrechnungskonto
-        current_interest_rate: Zinssatz
-        current_monthly_payment: Monatsrate
+        interest_rate: Zinssatz
+        monthly_payment: Monatsrate
         not_applicable: "–"
-        original_loan_balance: Ursprünglicher Kreditbetrag
+        original_payoff_date: Ursprüngliches Ablösedatum
+        original_principal: Ursprüngliche Kreditsumme
         remaining_principal: Restschuld
         term: Laufzeit
         type: Art
         unknown: Unbekannt
-      extra_repayments:
-        intro: "Sehen Sie, wie viel früher der Kredit abbezahlt ist und wie viel Zinsen Sie sparen, wenn Sie jeden Monat zusätzlich zur aktuellen Rate einen Betrag tilgen."
-        amount_label: Zusätzlich pro Monat
-        amount_placeholder: "0,00"
-        apply: Anwenden
-        clear: Zurücksetzen
-        payoff_with_extra: Abbezahlt mit Sondertilgung
-        payoff_without_extra: Abbezahlt ohne Sondertilgung
-        interest_saved: Gesparte Zinsen
-        months_sooner:
-          one: "%{count} Monat früher"
-          other: "%{count} Monate früher"
-        projection_not_converged:
-          enter_amount: Mit der aktuellen Rate wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt. Geben Sie einen zusätzlichen Betrag ein, um zu sehen, ob eine höhere Zahlung ihn tilgt.
-          cleared_by_extra: Mit der aktuellen Rate wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt, daher gibt es keinen Tilgungsplan zum Vergleich. Mit diesem zusätzlichen Betrag wird er abbezahlt, wie oben gezeigt.
-          not_cleared_by_extra: Auch mit diesem zusätzlichen Betrag wird der Kredit innerhalb der unterstützten Laufzeit nicht abbezahlt. Versuchen Sie einen höheren Betrag.
-        variable_rate_notice: "Der Zinssatz dieses Kredits kann sich ändern. Die Projektion berücksichtigt bereits erfasste Zinsänderungen und behält die aktuelle Rate bei; noch nicht erfasste Zinsänderungen können die Ergebnisse verändern."
-      schedule:
-        current_monthly_payment: Monatsrate
-        total_interest: Zinsen gesamt
-        total_cost: Gesamtkosten
-        payoff_date: Tilgungsdatum
-        variable_rate_notice: "Dieser Kredit hat einen variablen Zinssatz. Der unten stehende Plan basiert auf dem aktuellen Zinssatz und erfassten Zinsänderungen -- künftige Zinsänderungen verschieben ihn."
-        offset_notice: "Für die prognostizierten Zinsen wird angenommen, dass Ihr verknüpftes Verrechnungsguthaben auf dem heutigen Gesamtbetrag bleibt. Die Kreditsumme selbst bleibt unverändert."
-        day_count_notice: "Zinsen werden auf Basis %{basis} berechnet. Verwendet Ihr Kreditgeber eine andere Zinsberechnungsbasis, sind die hier angezeigten Zinsbeträge eine Näherung."
-        number: "Nr."
-        date: Datum
-        payment: Zahlung
-        principal: Tilgung
-        interest: Zinsen
-        remaining_balance: Restschuld

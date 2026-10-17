@@ -7,13 +7,6 @@ class Account < ApplicationRecord
   before_destroy :cleanup_transfers
 
   after_destroy_commit :move_account_statements_to_inbox
-  # A loan offset link must keep both sides in one currency (#328). The form,
-  # a model call and provider syncs all change currency through a save, so a
-  # hook here sees every route. after_update, not after_commit: the account
-  # form saves again in the same transaction (`lock_saved_attributes!`), and by
-  # commit `saved_change_to_currency?` describes that later save. Inside the
-  # transaction, a rollback takes the removal back with the currency change.
-  after_update :invalidate_loan_offset_links_on_currency_change, if: :saved_change_to_currency?
 
   validates :name, :balance, :currency, presence: true
   validate :owner_belongs_to_family, if: -> { owner_id.present? && family_id.present? }
@@ -26,9 +19,6 @@ class Account < ApplicationRecord
   has_many :shared_users, through: :account_shares, source: :user
   has_many :import_mappings, as: :mappable, dependent: :destroy, class_name: "Import::Mapping"
   has_many :entries, dependent: :destroy
-  # Loans this account secures. No `dependent:`: loans.collateral_account_id
-  # nullifies in the database, so deleting the asset unlinks them.
-  has_many :secured_loans, class_name: "Loan", foreign_key: :collateral_account_id, inverse_of: :collateral_account
   has_many :transactions, through: :entries, source: :entryable, source_type: "Transaction"
   has_many :valuations, through: :entries, source: :entryable, source_type: "Valuation"
   has_many :trades, through: :entries, source: :entryable, source_type: "Trade"
@@ -38,7 +28,6 @@ class Account < ApplicationRecord
   has_many :goal_accounts, dependent: :destroy
   has_many :goals, through: :goal_accounts
   has_many :goal_pledges, dependent: :destroy
-  has_many :loan_offset_accounts, dependent: :destroy
   # Inverse for recurring transfers where this account is the destination.
   # Account#recurring_transactions only matches account_id; without this
   # association, destroying the destination account would hit the FK
@@ -158,14 +147,6 @@ class Account < ApplicationRecord
   end
 
   accepts_nested_attributes_for :accountable, update_only: true
-
-  # `loan.account` is nil while a new loan validates (Rails cannot infer the
-  # inverse across a polymorphic association), and on an update it is the account
-  # as stored, not as submitted. Either way the loan's check of its collateral link
-  # would compare the asset against the wrong account. So the account hands itself
-  # to the loan before validating (a transient `owning_account`, not the
-  # association); the loan's own validation then judges the link once, correctly.
-  before_validation :hand_loan_its_account, if: -> { loan? && association(:accountable).loaded? }
 
   # Account state machine
   aasm column: :status, timestamps: true do
@@ -756,13 +737,6 @@ class Account < ApplicationRecord
 
   private
 
-    # The loan's checks on its collateral need the account it is being saved
-    # through, as it will be saved: the currency the form submitted, and an account
-    # that does not exist yet. `loan.account` is neither (see Loan#owning_account).
-    def hand_loan_its_account
-      accountable.owning_account = self
-    end
-
     def assign_default_owner
       return if owner.present?
 
@@ -790,10 +764,6 @@ class Account < ApplicationRecord
 
     def capture_account_statement_ids_to_move
       @statement_ids_to_move = account_statements.ids
-    end
-
-    def invalidate_loan_offset_links_on_currency_change
-      LoanOffsetAccount.invalidate_for_currency_change!(self)
     end
 
     def move_account_statements_to_inbox

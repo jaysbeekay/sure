@@ -1,46 +1,19 @@
-<%# locals: (account:) %>
+<%# locals: (account:, projection:, as_of: Date.current) %>
 
-<% loan = account.loan %>
-<% schedule = loan.amortization_schedule %>
-<% payments = schedule.display_rows %>
-<% today = Date.current %>
-<%# FR-205: the payments whose ACCRUAL period opens a new rate (C7). Derived on
-    the model, because "which row does the borrower start being charged the new
-    rate on" is a question about the two rate clocks, not about this table. %>
-<% rate_change_markers = schedule.accrual_rate_change_markers(payments) %>
-<%# The extra-payment what-if moved to its own tab (#304); this tab shows the
-    contract against the actual-balance projection only. %>
-<% projection = loan.payoff_projection %>
-<%# A one-payment cleanup difference is the expected artifact of two
-    independently-terminated simulations, not a meaningful "ahead/behind
-    schedule" signal -- only show the projection once it diverges by more
-    than that. The rule lives on the projection so these cards and
-    Loan#payoff_chart_payload's chart appear and disappear together. %>
-<% show_comparison = projection.diverges_from_schedule? %>
-<% show_projection = show_comparison %>
+<%# `as_of` is the page's one reference date: the chart above the tabs and
+    this table shade "past" against the same day. `projection` is the loan's
+    payoff projection for that date, built once for the page and shared with
+    the chart. %>
+<% today = as_of %>
+<% schedule = account.loan.amortization_schedule %>
+<% payments = schedule.payments %>
 
 <div class="space-y-4">
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
-    <%# The same method the Overview card uses: the acceptance criterion for
-        #15 is that the two tabs never show different figures for one loan. %>
-    <%= summary_card title: t(".current_monthly_payment") do %>
-      <%# The tab's single `today`, NOT a fresh Date.current: this card, the
-          rate caption under it and the rate-change table further down must all
-          sit on one date. Read separately, a render that crosses midnight can
-          show a change in that table which this card already treats as
-          current (cubic, #86). %>
-      <% as_of = today %>
-      <% current_payment = loan.current_minimum_payment(as_of: as_of) %>
-      <%# Falling back to the contracted payment here would break the very
-          agreement this card exists to keep: past maturity there is no
-          repayment to quote, Overview says so, and this tab must say the same
-          thing rather than reaching for a different number. %>
-      <%= current_payment ? format_money(current_payment) : t("loans.tabs.overview.unknown") %>
-      <% if loan.rate_type != "fixed" && current_payment %>
-        <span class="block text-xs text-subdued mt-1">
-          <%= t(".minimum_payment_rate", rate: number_to_percentage(loan.current_variable_rate(as_of), precision: 3, strip_insignificant_zeros: true)) %>
-        </span>
-      <% end %>
+    <%# A re-amortising loan has no single monthly payment, so the card says
+        which one this is rather than implying the figure holds for the term. %>
+    <%= summary_card title: schedule.re_amortising? ? t(".opening_payment") : t(".monthly_payment") do %>
+      <%= format_money schedule.periodic_payment %>
     <% end %>
 
     <%= summary_card title: t(".total_interest") do %>
@@ -48,137 +21,43 @@
     <% end %>
 
     <%= summary_card title: t(".total_cost") do %>
-      <%= format_money schedule.total_cost %>
+      <%= format_money schedule.total_paid %>
     <% end %>
 
-    <%= summary_card title: t(".payoff_date") do %>
-      <%= l schedule.payoff_date, format: :long %>
+    <%# When the loan will actually be paid off: the projection from today's
+        balance at the contract's repayment, as the chart above draws it. The
+        Overview tab has the contract's own date. A balance that repayment no
+        longer clears has no date to give. %>
+    <%= summary_card title: t(".forecasted_payoff_date") do %>
+      <% if projection.payoff_date %>
+        <%= l projection.payoff_date, format: :long %>
+      <% elsif projection.applicable? %>
+        <%= t(".forecasted_payoff_not_converged") %>
+      <% else %>
+        <%= t(".not_applicable") %>
+      <% end %>
     <% end %>
   </div>
 
-  <% if show_projection %>
-    <% chart_payload = loan.payoff_chart_payload(projection: projection) %>
-
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-      <%= summary_card title: t(".projected_payoff_date") do %>
-        <%= l projection.payoff_date, format: :long %>
-        <% if show_comparison && projection.months_saved.nonzero? %>
-          <p class="text-xs text-secondary mt-1">
-            <% if projection.months_saved.positive? %>
-              <%= t(".months_saved", count: projection.months_saved) %>
-            <% else %>
-              <%= t(".months_behind", count: projection.months_saved.abs) %>
-            <% end %>
-          </p>
-        <% end %>
-      <% end %>
-
-      <% if show_comparison %>
-        <%= summary_card title: projection.interest_saved.positive? ? t(".interest_saved") : t(".interest_added") do %>
-          <%= format_money Money.new(projection.interest_saved.abs, account.currency) %>
-        <% end %>
-      <% end %>
-    </div>
-
-    <% if chart_payload %>
-      <div data-controller="loan-payoff-chart"
-           data-loan-payoff-chart-data-value="<%= chart_payload.to_json %>"
-           class="h-64">
-      </div>
-      <ul class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary">
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5 bg-primary" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:scheduled] %>
-        </li>
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5 bg-secondary" style="border-top: 1px dashed currentColor; background: none;" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:original] %>
-        </li>
-        <li class="flex items-center gap-1.5">
-          <span class="inline-block w-3 h-0.5" style="border-top: 2px dashed <%= chart_payload[:ahead] ? "var(--color-green-600)" : "var(--color-yellow-600)" %>;" aria-hidden="true"></span>
-          <%= chart_payload[:labels][:accelerated] %>
-        </li>
-      </ul>
-      <%# Text summary of the chart's key figures -- real DOM text (not just
-          an SVG aria-label), so it's available to screen readers the same
-          way the sighted summary cards above already are, and doesn't rely
-          on any keyboard/focus interaction with the SVG itself. %>
-      <p class="sr-only"><%= chart_payload[:aria_description] %></p>
-    <% end %>
-  <% elsif loan.amortization_schedule.amortizable? && projection.current_balance.amount.positive? &&
-      projection.monthly_payment.present? && !projection.converged? %>
-    <p class="text-sm text-secondary"><%= t(".projection_not_converged") %></p>
-  <% end %>
-
-  <% if schedule.stale? %>
-    <p class="text-sm text-secondary" role="status">
-      <%= t(".recalculating") %>
-    </p>
-  <% end %>
-
-  <% if loan.variable_rate_type? %>
-    <p class="text-sm text-secondary">
-      <%= t(".variable_rate_notice") %>
-    </p>
-  <% end %>
-
-  <%# FR-405. Renders nothing when there are no FUTURE changes -- a change
-      already in effect is the current rate, not news. %>
-  <%= render UI::Loan::RateChangeTable.new(loan: loan, as_of: today) %>
-
-  <% if loan.countable_offset_accounts.any? %>
-    <p class="text-sm text-secondary">
-      <%= t(".offset_notice") %>
-    </p>
-  <% end %>
-
-  <%# #11 requires the basis to be stated rather than the constant quietly tuned
-      to fit one lender: reconciliation showed a fixed 365 is an approximation
-      for at least one real lender (#65). %>
   <p class="text-sm text-secondary">
-    <%= t(".day_count_notice", basis: t("loans.form.day_count_convention_#{loan.day_count_convention}")) %>
+    <%= t(".description", start_date: l(account.loan.origination_date, format: :long)) %>
   </p>
 
-  <div class="rounded-lg bg-container shadow-xs border border-alpha-black-25 overflow-hidden">
-    <div class="max-h-128 overflow-y-auto overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead class="sticky top-0 bg-container border-b border-alpha-black-25">
-          <tr class="text-secondary text-left">
-            <th scope="col" class="font-medium px-4 py-3"><%= t(".number") %></th>
-            <th scope="col" class="font-medium px-4 py-3"><%= t(".date") %></th>
-            <th scope="col" class="font-medium px-4 py-3 text-right"><%= t(".payment") %></th>
-            <th scope="col" class="font-medium px-4 py-3 text-right"><%= t(".principal") %></th>
-            <th scope="col" class="font-medium px-4 py-3 text-right"><%= t(".interest") %></th>
-            <th scope="col" class="font-medium px-4 py-3 text-right"><%= t(".remaining_balance") %></th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-alpha-black-25">
-          <% payments.each do |payment| %>
-            <% accrual_rate = rate_change_markers[payment.payment_number] %>
-            <tr class="<%= "text-secondary bg-surface-hover" if payment.payment_date <= today %>">
-              <td class="px-4 py-2">
-                <%= payment.payment_number %>
-                <% if accrual_rate %>
-                  <%# The rate is repeated as visually hidden text rather than
-                      left only in `title`: a non-focusable span's title is
-                      unreachable by keyboard and unreliably announced, and the
-                      rate is the whole point of the marker (G6). %>
-                  <span class="ml-1 text-xs text-secondary" data-rate-change-marker
-                        title="<%= t(".rate_change_marker_title", rate: accrual_rate) %>">
-                    <%= t(".rate_change_marker") %>
-                    <span class="sr-only">: <%= t(".rate_change_marker_title", rate: accrual_rate) %></span>
-                  </span>
-                <% end %>
-              </td>
-              <td class="px-4 py-2"><%= l payment.payment_date, format: :long %></td>
-              <td class="px-4 py-2 text-right"><%= format_money Money.new(payment.payment_amount, account.currency) %></td>
-              <td class="px-4 py-2 text-right"><%= format_money Money.new(payment.principal_payment, account.currency) %></td>
-              <td class="px-4 py-2 text-right"><%= format_money Money.new(payment.interest_payment, account.currency) %></td>
-              <td class="px-4 py-2 text-right"><%= format_money Money.new(payment.ending_balance, account.currency) %></td>
-            </tr>
-          <% end %>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  <% if account.loan.variable_rate_type? %>
+    <p class="text-sm text-secondary"><%= t(".variable_rate_notice") %></p>
+  <% end %>
+
+  <%= render DS::Table.new(
+        rows: payments,
+        sticky_header: true,
+        label: t("accounts.show.tabs.schedule"),
+        row_class: ->(payment) { "bg-container-inset" if payment.date <= today }
+      ) do |table| %>
+    <% table.with_column(t(".number"), class: "text-secondary tabular-nums") { |payment| payment.number.to_s } %>
+    <% table.with_column(t(".date")) { |payment| l(payment.date, format: :long) } %>
+    <% table.with_column(t(".payment"), numeric: true, class: "privacy-sensitive") { |payment| format_money(payment.payment) } %>
+    <% table.with_column(t(".principal"), numeric: true, class: "privacy-sensitive") { |payment| format_money(payment.principal) } %>
+    <% table.with_column(t(".interest"), numeric: true, class: "text-secondary privacy-sensitive") { |payment| format_money(payment.interest) } %>
+    <% table.with_column(t(".remaining_balance"), numeric: true, class: "privacy-sensitive") { |payment| format_money(payment.ending_balance) } %>
+  <% end %>
 </div>

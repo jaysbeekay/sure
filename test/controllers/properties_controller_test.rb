@@ -537,28 +537,4 @@ class PropertiesControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to new_property_path
   end
-
-  test "the property page shows its equity and the loans secured on it" do
-    loan_account = accounts(:loan)
-    @account.update_columns(balance: 550_000)
-    loan_account.update_columns(balance: 500_000)
-    loan_account.loan.update!(collateral_account: @account)
-
-    get account_path(@account)
-
-    assert_response :success
-    assert_select "[data-collateral-position]" do
-      assert_select "h3", text: "Secures"
-      assert_select "a[href='#{account_path(loan_account)}']", text: loan_account.name
-      assert_select "h4", text: "Equity"
-      assert_select "p", text: "$50,000.00"
-    end
-  end
-
-  test "the property page shows no collateral section when no loan is secured on it" do
-    get account_path(@account)
-
-    assert_response :success
-    assert_select "[data-collateral-position]", count: 0
-  end
 end
