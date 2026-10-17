@@ -74,10 +74,9 @@ module PlaidAccount::Liabilities::LoanTermWriter
     # loan form stores a rate (Loan#rate_changes=), a plain decimal string.
     #
     # The same rules RedbarkAccount::LoanDetailsProcessor applies, on upstream's
-    # Loan API: `current_variable_rate` and `variable_rate_schedule`.
+    # Loan API: `current_variable_rate` and `variable_rate_schedule`. Called
+    # only once `variable_after_write?` holds, so the loan is variable here.
     def variable_rate_update(loan, reported_rate)
-      return nil unless loan.variable_rate_type?
-
       rate = BigDecimal(reported_rate.to_s).round(3)
       return { interest_rate: rate } if loan.interest_rate.blank?
 

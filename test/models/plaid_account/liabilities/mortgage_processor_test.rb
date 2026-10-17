@@ -243,6 +243,32 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
     assert_equal({ "2026-01-15" => "5.2" }, loan.variable_rate_schedule)
   end
 
+  # A loan whose rate was never recorded is not a loan whose rate just moved:
+  # the first rate seen is its base rate, and no change is dated.
+  test "a variable mortgage with no rate yet takes the reported one as its base rate" do
+    loan = loan_with(interest_rate: nil, rate_type: "variable")
+    payload(type: "variable", percentage: 5.2)
+
+    process_as_of(Date.new(2026, 1, 15))
+
+    loan.reload
+    assert_equal 5.2, loan.interest_rate.to_f
+    assert loan.variable_rate_schedule.blank?, "a first sighting was dated as a change"
+  end
+
+  # Taken to three places, so a reading that moves only in the fourth is the
+  # same rate and records nothing new on the next sync.
+  test "a reported rate is kept to three decimal places" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "variable")
+    payload(type: "variable", percentage: 5.2004)
+    process_as_of(Date.new(2026, 1, 15))
+
+    payload(type: "variable", percentage: 5.1996)
+    process_as_of(Date.new(2026, 1, 16))
+
+    assert_equal({ "2026-01-15" => "5.2" }, loan.reload.variable_rate_schedule)
+  end
+
   test "the dated row is keyed to the sync's date, not the clock" do
     loan = loan_with(interest_rate: 4.5, rate_type: "variable")
     payload(type: "variable", percentage: 5.2)
