@@ -175,10 +175,8 @@ class PeriodTest < ActiveSupport::TestCase
     mock_family.expects(:oldest_entry_date).returns(Date.current)
     Current.expects(:family).at_least_once.returns(mock_family)
 
-    Current.stubs(:family).returns(family)
     period = Period.from_key("all_time")
-
-    assert_equal Date.current - 1.month, period.start_date
+    assert_equal 5.years.ago.to_date, period.start_date
     assert_equal Date.current, period.end_date
   end
 
