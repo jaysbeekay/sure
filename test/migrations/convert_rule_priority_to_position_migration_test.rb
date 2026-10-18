@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require Rails.root.join("db/migrate/20261015090000_convert_rule_priority_to_position")
+require Rails.root.join("db/migrate/20261015090001_convert_rule_priority_to_position")
 
 # Fork only. The schema this test runs on has already been migrated, so the
 # fork's `priority` column is put back by hand to rebuild the state an existing
