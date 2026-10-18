@@ -164,7 +164,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_enqueued_with(job: SyncJob)
   end
 
-  # jaysbeekay/sure#424: the opening anchor holds the original principal, so
+  # #3383: the opening anchor holds the original principal, so
   # it belongs on the day the loan was drawn down, not on the form's separate
   # opening balance date (which defaults to today minus two years).
   test "a new loan's opening anchor is dated on its start date" do
@@ -215,6 +215,16 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     anchor = account.valuations.opening_anchor.first.entry
     assert_equal opening_balance_date, anchor.date
     assert_equal 399_600, anchor.amount
+  end
+
+  # An anchor on or before Entry.min_supported_date would fail Entry's own
+  # validation and the form would re-render; the loan is created instead.
+  test "a loan started on the earliest supported entry date is created with the form's opening date" do
+    opening_balance_date = Date.current - 3.years
+    assert_difference "Account.count", 1 do
+      account = create_loan(start_date: Entry.min_supported_date, opening_balance_date: opening_balance_date)
+      assert_equal opening_balance_date, account.valuations.opening_anchor.first.entry.date
+    end
   end
 
   test "a loan started today has its opening anchor today and no reconciliation" do

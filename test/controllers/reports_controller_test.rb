@@ -1058,6 +1058,15 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_select "a[href=?]", events_path, count: 0
   end
 
+  # POSTing to settings_api_keys_path is create, which needs api_key params.
+  test "google sheets instructions link to the API keys page" do
+    get google_sheets_instructions_reports_url
+
+    assert_response :success
+    assert_select "a[href=?][data-turbo-frame=_top]", settings_api_keys_path, text: I18n.t("reports.google_sheets_instructions.go_to_api_keys")
+    assert_select "form[action=?]", settings_api_keys_path, count: 0
+  end
+
   private
     # Second investment account holding the same security as
     # accounts(:investment), so top_holdings has something to roll up.

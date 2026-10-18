@@ -175,8 +175,42 @@ class PeriodTest < ActiveSupport::TestCase
     mock_family.expects(:oldest_entry_date).returns(Date.current)
     Current.expects(:family).at_least_once.returns(mock_family)
 
+    Current.stubs(:family).returns(family)
     period = Period.from_key("all_time")
-    assert_equal 5.years.ago.to_date, period.start_date
+
+    assert_equal Date.current - 1.month, period.start_date
+    assert_equal Date.current, period.end_date
+  end
+
+  test "all_time period ignores old valuations, starting one month before first transaction" do
+    family = families(:empty)
+    account = family.accounts.create!(name: "Checking", balance: 0, currency: "USD", accountable: Depository.new)
+    account.entries.create!(date: Date.new(2000, 1, 15), name: "Old valuation",
+                            amount: 5000, currency: "USD", entryable: Valuation.new)
+    first_transaction_date = Date.new(2025, 3, 10)
+    account.entries.create!(date: first_transaction_date, name: "Groceries",
+                            amount: -50, currency: "USD", entryable: Transaction.new)
+
+    Current.stubs(:family).returns(family)
+    period = Period.from_key("all_time")
+
+    assert_equal first_transaction_date - 1.month, period.start_date
+    assert_equal Date.current, period.end_date
+  end
+
+  test "all_time period falls back to oldest entry date for valuation-only families" do
+    # A family with only Valuations (no Transaction/Trade) keeps today's
+    # behaviour: the range starts exactly at the oldest entry date (#4007).
+    family = families(:empty)
+    account = family.accounts.create!(name: "House", balance: 0, currency: "USD", accountable: Depository.new)
+    valuation_date = Date.new(2000, 1, 15)
+    account.entries.create!(date: valuation_date, name: "Old valuation",
+                            amount: 5000, currency: "USD", entryable: Valuation.new)
+
+    Current.stubs(:family).returns(family)
+    period = Period.from_key("all_time")
+
+    assert_equal valuation_date, period.start_date
     assert_equal Date.current, period.end_date
   end
 
