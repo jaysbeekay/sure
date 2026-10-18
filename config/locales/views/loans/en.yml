@@ -22,7 +22,7 @@ en:
       collateral_account_none: Not secured against an asset
       collateral_account_hint: Link a property or vehicle in the same currency. Equity appears on both accounts only when you can see every loan secured on the asset and their currencies match. Only assets visible to everyone who can access this loan can be linked.
       start_date: Origination date
-      start_date_hint: When the loan was drawn down. Leave blank to use the account's opening date.
+      start_date_hint: When the loan was drawn down. A new loan's balance history starts on this date, not the opening balance date. Leave blank to use the opening balance date.
       rate_changes: Rate changes
       rate_changes_hint: Each row sets the rate that applies from its effective date until the next one. Re-entering a date replaces that row rather than adding a second.
       rate_change_effective_date: Effective date
