@@ -33,7 +33,7 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     quietly { @migration.down }
     seed_fork_rows
 
-    output = capture_io { @migration.up }.first
+    output = with_env_overrides(DropForkLoanTablesAndColumns::CONFIRM_ENV => "1") { capture_io { @migration.up }.first }
 
     { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1, "loan_amortizations" => 2,
       "loans.collateral_account_id" => 1, "loans.day_count_convention" => 1 }.each do |name, rows|
@@ -45,6 +45,67 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     assert_not connection.column_exists?(:loans, :day_count_convention)
     assert_empty loan_check_names & DropForkLoanTablesAndColumns::LOAN_CHECKS
     assert Loan.exists?(@loan.id), "the loans themselves stay"
+  end
+
+  test "up refuses while data a user entered is present, and drops nothing" do
+    quietly { @migration.down }
+    seed_fork_rows
+
+    [ nil, "0", "yes" ].each do |value|
+      error = with_env_overrides(DropForkLoanTablesAndColumns::CONFIRM_ENV => value) do
+        assert_raises(DropForkLoanTablesAndColumns::EnteredDataPresent) { quietly { @migration.up } }
+      end
+
+      { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1,
+        "loans.collateral_account_id" => 1 }.each do |name, rows|
+        assert_match(/#{Regexp.escape(name)}: #{rows}\b/, error.message)
+      end
+      assert_no_match(/loan_amortizations|day_count_convention/, error.message)
+      assert_match(/#{DropForkLoanTablesAndColumns::CONFIRM_ENV}=1/, error.message)
+    end
+
+    DropForkLoanTablesAndColumns::TABLES.each { |table| assert connection.table_exists?(table), "#{table} should still exist" }
+    assert_equal 1, rows_in("loan_scenarios")
+    assert connection.column_exists?(:loans, :collateral_account_id)
+    assert connection.column_exists?(:loans, :day_count_convention)
+  end
+
+  test "any one kind of entered data is enough to stop it" do
+    quietly { @migration.down }
+    loan_id = connection.quote(@loan.id)
+
+    {
+      "an offset link" => "INSERT INTO loan_offset_accounts (loan_id, account_id, created_at, updated_at) " \
+                          "VALUES (#{loan_id}, #{connection.quote(accounts(:depository).id)}, now(), now())",
+      "a collateral link" => "UPDATE loans SET collateral_account_id = #{connection.quote(accounts(:property).id)} WHERE id = #{loan_id}",
+      "a saved scenario" => "INSERT INTO loan_scenarios (loan_id, name, slot, currency, calculator_version, created_at, updated_at) " \
+                            "VALUES (#{loan_id}, 'Pay more', 0, 'USD', 1, now(), now())"
+    }.each do |kind, sql|
+      connection.transaction(requires_new: true) do
+        connection.execute(sql)
+        assert_raises(DropForkLoanTablesAndColumns::EnteredDataPresent, kind) { quietly { @migration.up } }
+        raise ActiveRecord::Rollback
+      end
+    end
+  end
+
+  # The amortisation rows were derived and upstream recomputes them; upstream has
+  # no day-count setting to carry a choice over to. Neither is worth stopping for.
+  test "derived amortisation rows and a day-count choice alone do not stop it" do
+    quietly { @migration.down }
+    loan_id = connection.quote(@loan.id)
+    connection.execute(<<~SQL)
+      UPDATE loans SET day_count_convention = 'actual_actual' WHERE id = #{loan_id};
+      INSERT INTO loan_amortizations (loan_id, payment_number, payment_date, payment_amount, principal_payment, interest_payment,
+                                      beginning_balance, ending_balance, interest_rate, schedule_signature, created_at, updated_at)
+        VALUES (#{loan_id}, 1, '2026-01-01', 100, 90, 10, 1000, 910, 5, 'sig', now(), now());
+    SQL
+
+    output = with_env_overrides(DropForkLoanTablesAndColumns::CONFIRM_ENV => nil) { capture_io { @migration.up }.first }
+
+    assert_match(/loan_amortizations: 1 row deleted/, output)
+    assert_match(/loans\.day_count_convention: 1 row deleted/, output)
+    assert_not connection.table_exists?(:loan_amortizations)
   end
 
   # A day-count of the default is every loan's value, not a choice anyone made.

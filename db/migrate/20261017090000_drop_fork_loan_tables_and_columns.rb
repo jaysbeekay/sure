@@ -6,6 +6,8 @@
 #
 # Each table and column is counted before it goes, and the counts are written
 # to the migration output and the log, so an installation can see what it lost.
+# If any of it is data a user entered (ENTERED), the migration stops instead,
+# naming what it found, until FORK_LOAN_DROP_CONFIRMED=1 is set.
 #
 # `if_exists` throughout: a database built from migrations alone never created
 # these, because the migrations that did were removed with the code.
@@ -15,8 +17,18 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
 
   LOAN_CHECKS = %w[chk_loans_day_count_convention chk_loans_interest_rate_bounds chk_loans_term_months_bounds].freeze
 
+  # What a user entered rather than what the app derived. Any of it present
+  # stops the migration unless the deletion is confirmed. The amortisation rows
+  # are recomputed upstream, and upstream has no day-count setting to keep.
+  ENTERED = %w[loan_extra_repayments loan_scenarios loan_offset_accounts loans.collateral_account_id].freeze
+  CONFIRM_ENV = "FORK_LOAN_DROP_CONFIRMED"
+
+  class EnteredDataPresent < StandardError; end
+
   def up
-    report_dropped_counts
+    counts = dropped_counts
+    refuse_unconfirmed_deletion(counts)
+    report_dropped_counts(counts)
 
     TABLES.each { |table| drop_table table, if_exists: true }
 
@@ -128,8 +140,21 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
   end
 
   private
-    def report_dropped_counts
-      dropped_counts.each do |name, rows|
+    def refuse_unconfirmed_deletion(counts)
+      return if ENV[CONFIRM_ENV] == "1"
+
+      entered = counts.slice(*ENTERED).select { |_name, rows| rows.positive? }
+      return if entered.empty?
+
+      raise EnteredDataPresent, <<~MESSAGE
+        This migration deletes the fork's loan data, and this database holds some that a user entered:
+        #{entered.map { |name, rows| "  #{name}: #{rows}" }.join("\n")}
+        Back it up if you need it, then run the migration again with #{CONFIRM_ENV}=1 to delete it.
+      MESSAGE
+    end
+
+    def report_dropped_counts(counts)
+      counts.each do |name, rows|
         message = "#{name}: #{rows} #{rows == 1 ? "row" : "rows"} deleted"
         say message
         Rails.logger.info("[DropForkLoanTablesAndColumns] #{message}")
