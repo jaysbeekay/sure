@@ -242,15 +242,23 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal "opening_anchor", valuations.first.entryable.kind
   end
 
-  test "a loan with a future start date keeps the form's opening date and today's balance" do
-    # Loan does not validate start_date. An anchor after today would leave no
-    # balance row for today, so a future start date is not used.
-    opening_balance_date = Date.current - 3.years
-    account = create_loan(start_date: Date.current + 1.month, opening_balance_date: opening_balance_date)
-    Balance::Materializer.new(account, strategy: :forward).materialize_balances
+  # Upstream's Loan refuses a start date after today, so no anchor can be
+  # dated after today's balance.
+  test "a loan with a future start date is refused" do
+    assert_no_difference [ "Account.count", "Loan.count" ] do
+      post loans_path, params: {
+        account: {
+          name: "Mortgage", balance: 399_600, currency: "USD", accountable_type: "Loan",
+          opening_balance_date: (Date.current - 3.years).iso8601,
+          accountable_attributes: {
+            subtype: "mortgage", interest_rate: 5, term_months: 360, rate_type: "fixed",
+            initial_balance: 400_000, start_date: (Date.current + 1.month).iso8601
+          }
+        }
+      }
+    end
 
-    assert_equal opening_balance_date, account.valuations.opening_anchor.first.entry.date
-    assert_equal 399_600, account.balances.find_by(date: Date.current)&.balance
+    assert_response :unprocessable_entity
   end
 
   test "updates with loan details" do
