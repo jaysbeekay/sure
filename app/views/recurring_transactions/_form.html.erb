@@ -154,6 +154,15 @@
       <% end %>
     <% end %>
 
+    <%# Edit shows category beside kind; a new bill has no kind to pick yet,
+        but a bill started from a transaction arrives with its category. %>
+    <% if recurring_transaction.new_record? && !income %>
+      <%= f.collection_select :category_id,
+            Current.family.categories.alphabetically,
+            :id, :name,
+            { label: t(".category_label"), include_blank: t(".category_blank") } %>
+    <% end %>
+
     <%= render DS::Disclosure.new(title: t(".more_options"), align: "left") do %>
       <div class="space-y-4 pt-2">
       <% unless income %>

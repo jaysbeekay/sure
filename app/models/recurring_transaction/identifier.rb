@@ -176,6 +176,8 @@ class RecurringTransaction
         matching_amounts = matching_entries.map(&:amount)
         last_entry = matching_entries.max_by(&:date)
 
+        fill_blank_category(recurring, modal_category_id(matching_entries))
+
         # Recalculate variance from all occurrences (including identical amounts)
         # The series' own schedule computes the next date so a manual row
         # with weekly or other non-monthly rules advances on its real
@@ -345,6 +347,8 @@ class RecurringTransaction
           sync_monthly_rule_day(recurring, pattern[:expected_day_of_month])
         end
 
+        fill_blank_category(recurring, Classifier.classify(name: pattern[:name].to_s, entries: pattern[:entries]).category_id)
+
         recurring.update!(
           last_occurrence_date: pattern[:last_occurrence_date],
           next_expected_date: recurring.schedule.next_occurrence_after(pattern[:last_occurrence_date]),
@@ -353,6 +357,27 @@ class RecurringTransaction
           expected_amount_max: pattern[:expected_amount_max],
           expected_amount_avg: pattern[:expected_amount_avg]
         )
+      end
+
+      # A series' category is classified once, when detection creates it, so
+      # transactions categorised afterwards never reached it. Fill a blank one
+      # from what its transactions now carry; a category already on the series
+      # (the user's, or an earlier fill) is never overwritten, and income stays
+      # uncategorised as it is at creation.
+      def fill_blank_category(recurring, category_id)
+        return if category_id.blank? || recurring.category_id.present? || recurring.typed_income?
+
+        recurring.category_id = category_id
+      end
+
+      # The manual pass loads entries without their transactions, so the
+      # category rides along as a selected column. Ties and the "most common"
+      # rule match Classifier#modal_category_id.
+      def modal_category_id(entries)
+        entries.filter_map { |entry| entry.read_attribute("transaction_category_id") }
+               .tally
+               .max_by { |_category_id, count| count }
+               &.first
       end
 
       # Scheduling reads recurrence_rules, not expected_day_of_month, so a
@@ -424,7 +449,7 @@ class RecurringTransaction
           .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
           .where(entries: { entryable_type: "Transaction", currency: currencies })
           .where("entries.date >= ?", lookback_date)
-          .select("entries.*, transactions.merchant_id AS transaction_merchant_id")
+          .select("entries.*, transactions.merchant_id AS transaction_merchant_id, transactions.category_id AS transaction_category_id")
           .order(date: :desc)
 
         # Legacy manual rows without account_id can match any account in the
