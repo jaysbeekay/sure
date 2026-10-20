@@ -2351,7 +2351,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     period = Period.last_30_days
 
     Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
-    dummy_result = { contributions: 0, withdrawals: 0, dividends: 0, interest: 0, trades_count: 0 }
+    dummy_result = { contributions: 0, withdrawals: 0, dividends: 0, interest: 0, fees: 0, trades_count: 0 }
     InvestmentStatement::Totals.expects(:new).twice.returns(stub(call: dummy_result))
 
     statement = InvestmentStatement.new(@family)
