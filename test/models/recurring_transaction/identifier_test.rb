@@ -950,6 +950,23 @@ class RecurringTransaction::IdentifierTest < ActiveSupport::TestCase
     assert_equal categories(:one), blank.reload.category
   end
 
+  # No categorised entry means no category to take: the series stays blank and
+  # the run still completes (an empty tally gives max_by nothing, not an error).
+  test "uncategorised entries leave a blank series blank" do
+    account = @family.accounts.first
+    detected = create_detected_series(account: account, name: "Pet Cover", amount: 54.73, day: 5)
+    manual = create_detected_series(account: account, name: "Declared Cover", amount: 54.73, day: 5, manual: true)
+    create_name_pattern_entries(account: account, name: "Pet Cover", amount: 54.73, day: 5, entry_categories: [ nil ] * 3)
+    create_name_pattern_entries(account: account, name: "Declared Cover", amount: 54.73, day: 5, entry_categories: [ nil ] * 3)
+
+    @identifier.identify_recurring_patterns
+
+    assert_equal 3, detected.reload.occurrence_count, "detection must have claimed the series"
+    assert_equal 3, manual.reload.occurrence_count, "the manual pass must have matched the entries"
+    assert_nil detected.category_id
+    assert_nil manual.category_id
+  end
+
   test "a manual series keeps the category it already has" do
     account = @family.accounts.first
     chosen = create_detected_series(account: account, name: "Declared Cover", amount: 54.73, day: 5, manual: true, category: categories(:one))

@@ -347,7 +347,9 @@ class RecurringTransaction
           sync_monthly_rule_day(recurring, pattern[:expected_day_of_month])
         end
 
-        fill_blank_category(recurring, Classifier.classify(name: pattern[:name].to_s, entries: pattern[:entries]).category_id)
+        if fillable_category?(recurring)
+          fill_blank_category(recurring, Classifier.classify(name: pattern[:name].to_s, entries: pattern[:entries]).category_id)
+        end
 
         recurring.update!(
           last_occurrence_date: pattern[:last_occurrence_date],
@@ -365,9 +367,13 @@ class RecurringTransaction
       # (the user's, or an earlier fill) is never overwritten, and income stays
       # uncategorised as it is at creation.
       def fill_blank_category(recurring, category_id)
-        return if category_id.blank? || recurring.category_id.present? || recurring.typed_income?
+        return if category_id.blank? || !fillable_category?(recurring)
 
         recurring.category_id = category_id
+      end
+
+      def fillable_category?(recurring)
+        recurring.category_id.blank? && !recurring.typed_income?
       end
 
       # The manual pass loads entries without their transactions, so the
