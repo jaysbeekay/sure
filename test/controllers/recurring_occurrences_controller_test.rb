@@ -141,6 +141,18 @@ class RecurringOccurrencesControllerTest < ActionDispatch::IntegrationTest
   # The dialog used to list the fifteen most RECENT transactions in the window.
   # On a real bill that hid every plausible match behind unrelated larger
   # charges, so the exact payment was invisible.
+  # The manual payment's inputs carried `.form-field__input` -- the bare control,
+  # no border or padding -- with nothing supplying the field around it.
+  test "the manual payment inputs sit inside bordered form fields" do
+    get recurring_occurrence_url(@occurrence)
+    assert_response :success
+
+    %w[amount paid_on].each do |field|
+      assert_select "input[name=?]", field, count: 1
+      assert_select ".form-field input.form-field__input[name=?]", field, count: 1
+    end
+  end
+
   test "the transaction list leads with the closest amount, not the most recent" do
     # Older than every distractor, so date order pushes it past the fifteen-row
     # cut. Everything sits in the past, because the window is clipped at today.
