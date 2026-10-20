@@ -1,0 +1,24 @@
+name: Project status tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/project-status/**'
+      - '.github/workflows/project-status*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/project-status
+
+      # Unquoted: the shell expands the glob, which Node 20 does not.
+      - name: Test
+        run: node --test .github/project-status/test/*.test.mjs

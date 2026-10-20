@@ -188,9 +188,21 @@ class Account < ApplicationRecord
       # and would convert to a very present-looking 0.
       raw_initial_balance = attributes.dig(:accountable_attributes, :initial_balance)
       initial_balance = raw_initial_balance.to_d if raw_initial_balance.present?
+      today = Date.current
 
       transaction do
         account.save!
+
+        # A loan's original principal was its balance on the day it was drawn
+        # down, so that is where its opening anchor belongs. The form always
+        # sends an opening balance date (defaulting to two years ago), so the
+        # server cannot tell a deliberate one from the default: the loan's
+        # start date wins. A future start date is ignored, since an anchor
+        # after today would leave no balance for today.
+        loan_start_date = account.accountable.start_date if initial_balance && account.loan?
+        if loan_start_date && loan_start_date <= today
+          opening_balance_date = loan_start_date
+        end
 
         manager = Account::OpeningBalanceManager.new(account)
         result = manager.set_opening_balance(
@@ -209,7 +221,7 @@ class Account < ApplicationRecord
         # is user-supplied and may be today, and a same-day reconciliation
         # would be matched to the opening anchor by date and overwrite it.
         # On its own date the opening balance wins.
-        if initial_balance && initial_balance != account.balance && manager.opening_date < Date.current
+        if initial_balance && initial_balance != account.balance && manager.opening_date < today
           # An explicit reconciliation, not CurrentBalanceManager: for cash
           # accounts its transaction-adjustment strategy computes a zero delta
           # here (account.balance already holds the entered value) and would
@@ -217,7 +229,7 @@ class Account < ApplicationRecord
           # for the first sync.
           reconciliation = Account::ReconciliationManager.new(account).reconcile_balance(
             balance: account.balance,
-            date: Date.current
+            date: today
           )
           raise reconciliation.error_message unless reconciliation.success?
         end
