@@ -91,8 +91,11 @@ class Rule::Condition < ApplicationRecord
   end
 
   private
-    # A blank value is already reported by the presence validation.
+    # A blank value is already reported by the presence validation, and one the
+    # database will not store (a null byte, malformed UTF-8) by
+    # DatabaseTextValidator. Neither can be probed: the driver refuses to send it.
     def regex_value_is_safe
+      return unless DatabaseTextValidator.acceptable?(value)
       return if value.blank?
 
       error = Rule::SafeRegex.error_for(value)

@@ -87,6 +87,7 @@ module Assistant
         Function::CreateGoal,
         Function::SetOpeningBalance,
         Function::UnmatchTransfer,
+        Function::UpdateTransfer,
         Function::GetTags,
         Function::CreateTag,
         Function::UpdateTag,

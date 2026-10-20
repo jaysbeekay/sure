@@ -1562,7 +1562,7 @@ class InvestmentStatement
         # totals; v3: fees, and contributions net of reported fees; v4: a
         # zero-amount Fee-labelled trade counts its fee column; v5: income
         # summed signed) so a deploy never serves the previous shape from Redis.
-        "investment_statement", "totals_query/v5", family.id, user&.id,
+        "investment_statement", "totals_query/v5", family.id, user&.id, family.currency,
         account_ids_hash, date_range.begin, date_range.end, family.entries_cache_version
       ]) { Totals.new(family, account_ids: account_ids, date_range: date_range).call }
     end

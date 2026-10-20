@@ -93,6 +93,7 @@ class Rule::Action < ApplicationRecord
 
     def seed_notification_baseline
       return unless action_type == "send_email_notification"
+      return if rule.notification_baseline_taken_in_this_save?
 
       NotificationDelivery.record_for(
         rule_id: rule_id,
@@ -101,8 +102,8 @@ class Rule::Action < ApplicationRecord
     rescue Rule::SafeRegex::TimeoutError => e
       # The action is already committed. With no baseline, leaving the rule on would
       # email every past match on its next run, so it is switched off instead; the
-      # user can turn it back on after changing the pattern.
-      Rails.logger.warn("Notification baseline for rule #{rule_id} timed out, rule switched off: #{e.message}")
-      rule.update_columns(active: false)
+      # user can turn it back on after changing the pattern. Through the rule, so
+      # an update that saved this action reports the switch-off, not success.
+      rule.notification_baseline_timed_out!(e, source: self.class.name)
     end
 end
