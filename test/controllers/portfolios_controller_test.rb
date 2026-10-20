@@ -872,7 +872,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # constant, are what prove the count does not grow with holdings. This comment
   # said 95 until the income section (#123), but `main` already measured 97 when
   # that landed; the 95 -> 97 drift is not attributed to any change below. The
-  # figure has moved five times:
+  # figure has moved six times:
   #
   #   54 -> 61  the performance section: one Portfolio::Performance for the
   #             request, memoised on the registry, which is its only caller
@@ -888,11 +888,15 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             period's and the trailing year's. Per request: Performance#income
   #             is its own cache entry, so the comparison's six Performances do
   #             not run it (folded into the shared metrics it cost 106)
+  #  102 -> 103 upstream's cache freshness key (we-promise/sure#4235): one
+  #             MAX(exchange_rates.updated_at) per request. Its accounts read
+  #             replaces MAX(accounts.updated_at), so that one is even. CI
+  #             counts one query more than a local run (104), hence 105
   #
   # Neither rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 103
+  PORTFOLIO_QUERY_CEILING = 105
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one
