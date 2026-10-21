@@ -1,4 +1,5 @@
 require "test_helper"
+require "ostruct"
 
 # #200 added constituent storage, the look-through model and the provider
 # mapping, and nothing ever asked for them: both importers pass
@@ -64,6 +65,53 @@ class FundConstituentIngestionTest < ActiveSupport::TestCase
     # precisely that this stayed nil, so asserting the rows without the
     # timestamp would leave half of what broke untested (raised by cubic).
     assert_not_nil fund.constituents_fetched_at
+  end
+
+  # jaysbeekay/sure#542. A malformed holdings list used to raise out of
+  # `import_provider_details`, and this loop has no rescue, so every security
+  # after the fund lost its prices on every run. The other security's prices
+  # are what this asserts, not the fund's own rows.
+  test "a fund with a malformed holdings list does not stop prices for the next security" do
+    family = Family.create!(name: "Smith", currency: "USD")
+    account = family.accounts.create!(name: "Brokerage", currency: "USD", balance: 0, accountable: Investment.new)
+    fund = Security.create!(ticker: "BADF", exchange_operating_mic: "XLON")
+    stock = Security.create!(ticker: "GOOD", exchange_operating_mic: "XNAS")
+    trade_date = 10.days.ago.to_date
+    [ fund, stock ].each do |security|
+      account.entries.create!(
+        name: "Buy #{security.ticker}", date: trade_date, amount: 100, currency: "USD",
+        entryable: Trade.new(security: security, qty: 1, price: 100, currency: "USD",
+                             investment_activity_label: "Buy")
+      )
+    end
+    # The fund must be reached first, or the stock is priced before anything
+    # raises and the test proves nothing.
+    assert_equal [ fund.id, stock.id ], account.trades.pluck(:security_id).uniq,
+                 "precondition: the fund is not first in the importer's loop"
+
+    provider = capable_provider("provider")
+    provider.stubs(:class).returns(Provider::TwelveData)
+    provider.stubs(:fetch_security_prices).returns(provider_success_response([]))
+    provider.stubs(:fetch_security_prices).with(has_entry(symbol: "GOOD")).returns(
+      provider_success_response([ OpenStruct.new(security: stock, date: trade_date, price: 100, currency: "USD") ])
+    )
+    malformed = Provider::SecurityConcept::SecurityInfo.new(
+      symbol: "BADF", name: "Bad Fund", links: nil, logo_url: "logo", description: nil,
+      kind: "ETF", exchange_operating_mic: "XLON",
+      constituents: [ { ticker: "AAA", weight: 5 }, { ticker: "AAA", weight: 3 } ]
+    )
+    provider.stubs(:fetch_security_info).returns(provider_success_response(OpenStruct.new(name: "Good", logo_url: "logo")))
+    provider.stubs(:fetch_security_info).with(has_entry(symbol: "BADF")).returns(provider_success_response(malformed))
+    Security.stubs(:provider).returns(provider)
+    Security.any_instance.stubs(:price_data_provider).returns(provider)
+
+    # The importer fills forward from the one provider price, so the count is
+    # asserted to rise rather than pinned to a figure the filler decides.
+    before = Security::Price.where(security: stock).count
+    Account::MarketDataImporter.new(account).import_security_prices
+    assert_operator Security::Price.where(security: stock).count, :>, before,
+                    "the security after the malformed fund received no prices"
+    assert_not_nil fund.reload.constituents_fetched_at
   end
 
   private

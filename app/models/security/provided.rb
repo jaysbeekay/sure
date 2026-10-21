@@ -412,23 +412,74 @@ module Security::Provided
   # door: an incapable provider reaching here would wipe a stored set it was
   # never in a position to replace, and then stamp the emptiness as fact
   # (raised on the #212 gate review).
+  #
+  # A row the table would refuse is skipped and logged, not raised: one bad row
+  # used to roll the whole fund back unstamped and stop both market data
+  # importers at this fund on every run (jaysbeekay/sure#542).
   def store_constituents(list)
     return unless price_data_provider&.supplies_constituents?
 
+    rows, skipped = constituent_rows_from(list)
+
     transaction do
       constituents.destroy_all
-
-      Array(list).each do |entry|
-        weight = entry[:weight] || entry["weight"]
-        constituents.create!(
-          ticker: entry[:ticker] || entry["ticker"],
-          name: entry[:name] || entry["name"],
-          weight: weight.present? ? BigDecimal(weight.to_s) : nil
-        )
-      end
-
+      rows.each { |row| constituents.create!(row) }
       update_column(:constituents_fetched_at, Time.current)
     end
+
+    skipped.each { |reason, entry| log_skipped_constituent(reason, entry) }
+  end
+
+  # Splits a provider list into rows the table will accept and [reason, entry]
+  # pairs it would refuse. Tickers are compared after the strip and
+  # case-sensitively, as `validates :ticker, uniqueness:` compares them, and
+  # the first occurrence of a ticker is the one kept.
+  def constituent_rows_from(list)
+    seen = Set.new
+    rows = []
+    skipped = []
+
+    Array(list).each do |entry|
+      ticker = (entry[:ticker] || entry["ticker"]).to_s.strip
+      raw_weight = entry[:weight] || entry["weight"]
+      weight = begin
+        raw_weight.present? ? BigDecimal(raw_weight.to_s) : nil
+      rescue ArgumentError, TypeError
+        :non_numeric
+      end
+
+      reason = if ticker.blank? then "blank_ticker"
+      elsif weight == :non_numeric then "non_numeric_weight"
+      elsif weight&.negative? then "negative_weight"
+      elsif seen.include?(ticker) then "duplicate_ticker"
+      end
+
+      if reason
+        skipped << [ reason, entry ]
+      else
+        seen << ticker
+        rows << { ticker: ticker, name: entry[:name] || entry["name"], weight: weight }
+      end
+    end
+
+    [ rows, skipped ]
+  end
+
+  def log_skipped_constituent(reason, entry)
+    DebugLogEntry.capture(
+      category: "security_holdings",
+      level: "warn",
+      message: "Skipped a fund holding the provider reported in a form that cannot be stored",
+      source: "Security#store_constituents",
+      provider: price_data_provider,
+      metadata: {
+        security_id: id,
+        security_ticker: ticker,
+        ticker: (entry[:ticker] || entry["ticker"]),
+        reason: reason,
+        entry: entry.to_h
+      }
+    )
   end
 
   # The fund expanded into what it actually holds, as fractions of the fund.
