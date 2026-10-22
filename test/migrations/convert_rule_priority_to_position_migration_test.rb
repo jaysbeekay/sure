@@ -13,9 +13,7 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
   include EntriesTestHelper
 
   setup do
-    connection.add_column :rules, :priority, :integer, null: false, default: 0
-    connection.add_index :rules, [ :family_id, :priority ]
-    Rule.reset_column_information
+    add_fork_priority_column
 
     @family = families(:empty)
     @account = @family.accounts.create!(name: "Rules", balance: 1000, currency: "USD", accountable: Depository.new)
@@ -156,7 +154,7 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
 
       migrate(:up)
       assert_equal [ writer.id, reader.id ], @family.rules.ordered.pluck(:id), action_type
-      migrate(:down)
+      add_fork_priority_column
     end
   end
 
@@ -204,28 +202,72 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
   end
 
   # Both a chain and a conflict: the dependent rule matches what the first one
-  # renamed, and both set the category. No order keeps both. The chain wins:
-  # reversed, the matcher would run first and miss the renamed rows outright,
-  # losing every action it has, not just the category.
-  test "a chain that also conflicts keeps the chain" do
+  # renamed, and both set the category. No order keeps both: reversed, the
+  # matcher would miss the renamed rows; kept, the rename's category would win
+  # where the matcher's won on the fork. The migration must stop before it
+  # writes anything, and say which rules to fix.
+  test "a chain that also conflicts stops the migration and changes nothing" do
     rename = rule_renaming("amzn", to: "Amazon", name: "rename", priority: 1, category: @dining)
     matcher = rule_setting(@groceries, name: "matcher", priority: 2, matching: "amazon")
+    bystander = @family.rules.create!(
+      resource_type: "transaction", name: "bystander", active: true,
+      conditions: [ Rule::Condition.new(condition_type: "transaction_account", operator: "=", value: @account.id) ],
+      actions: [ Rule::Action.new(action_type: "exclude_transaction") ]
+    )
+    bystander.update_columns(priority: 3)
+    number_by_name_as_upstream_does
+    before = rule_order_columns
 
-    messages = capture_migration_messages { migrate(:up, quiet: false) }
+    error = assert_raises(ActiveRecord::MigrationError) { migrate(:up) }
 
-    assert_equal [ rename.id, matcher.id ], @family.rules.ordered.pluck(:id)
-    assert_includes messages, "Rule #{rename.id} now runs before rule #{matcher.id} to keep a chain", "the unkept conflict is reported"
+    assert_equal before, rule_order_columns, "no rule's priority or position changed"
+    assert connection.column_exists?(:rules, :priority)
+    assert connection.index_exists?(:rules, [ :family_id, :priority ])
+    [ "Family #{@family.id}", %(rule #{rename.id} "rename"), %(rule #{matcher.id} "matcher"),
+      "both set category", "name, written by the first and read by the second's conditions",
+      "bin/rails db:migrate" ].each { |text| assert_includes error.message, text }
+    assert_not_includes error.message, bystander.id, "only the pair that cannot be kept is listed"
   end
 
-  test "down restores priority in the fork's order, so the same rule wins again" do
-    first, twins, elder, younger = rules_with_every_tie
+  # Disabling either rule of such a pair settles it: a rule that is not active
+  # takes no part in automatic runs. Its chain is still kept, since it fits.
+  test "a chain that also conflicts converts once one of the two is disabled" do
+    rename = rule_renaming("amzn", to: "Amazon", name: "rename", priority: 1, category: @dining)
+    matcher = rule_setting(@groceries, name: "matcher", priority: 2, matching: "amazon")
+    matcher.update_columns(active: false)
 
     migrate(:up)
-    migrate(:down)
 
-    assert_equal({ first.id => 1, twins.first.id => 2, twins.last.id => 3, elder.id => 4, younger.id => 5 },
-                 connection.select_rows("SELECT id, priority FROM rules WHERE family_id = '#{@family.id}'").to_h)
-    assert connection.index_exists?(:rules, [ :family_id, :priority ])
+    assert_equal [ rename.id, matcher.id ], @family.rules.ordered.pluck(:id)
+    assert_not connection.column_exists?(:rules, :priority)
+  end
+
+  # Two active rules set the category, and the fork's winner, `later`, must run
+  # first. A disabled rename sits between them: `earlier` reads the name before
+  # it rewrites it, and `later` reads what it wrote. That chain would force
+  # `earlier` above `later`; since the rename never runs on its own, it must
+  # give way instead of failing the migration or flipping the winner.
+  test "a disabled rule's chain gives way to a conflict between active rules" do
+    earlier = rule_setting(@dining, name: "earlier", priority: 1, matching: "amzn")
+    rename = rule_renaming("amzn", to: "Amazon", name: "rename", priority: 2)
+    rename.update_columns(active: false)
+    later = rule_setting(@groceries, name: "later", priority: 3, matching: "amazon")
+
+    migrate(:up)
+
+    assert_equal [ later.id, earlier.id, rename.id ], @family.rules.ordered.pluck(:id)
+  end
+
+  test "down is irreversible and leaves the rules as they are" do
+    rules_with_every_tie
+    migrate(:up)
+    before = Rule.where(family: @family).pluck(:id, :position).sort
+
+    error = assert_raises(ActiveRecord::IrreversibleMigration) { migrate(:down) }
+
+    assert_includes error.message, "restore the database from a backup"
+    assert_not connection.column_exists?(:rules, :priority)
+    assert_equal before, Rule.where(family: @family).pluck(:id, :position).sort
   end
 
   private
@@ -233,9 +275,19 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
       ActiveRecord::Base.connection
     end
 
-    def migrate(direction, quiet: true)
-      migration = ConvertRulePriorityToPosition.new
-      quiet ? ActiveRecord::Migration.suppress_messages { migration.migrate(direction) } : migration.migrate(direction)
+    def add_fork_priority_column
+      connection.add_column :rules, :priority, :integer, null: false, default: 0
+      connection.add_index :rules, [ :family_id, :priority ]
+      Rule.reset_column_information
+    end
+
+    def rule_order_columns
+      connection.select_rows("SELECT id, priority, position FROM rules ORDER BY id")
+    end
+
+    def migrate(direction)
+      ActiveRecord::Migration.suppress_messages { ConvertRulePriorityToPosition.new.migrate(direction) }
+    ensure
       Rule.reset_column_information
     end
 
@@ -260,15 +312,6 @@ class ConvertRulePriorityToPositionMigrationTest < ActiveSupport::TestCase
       )
       rule.update_columns(priority: priority)
       rule
-    end
-
-    def capture_migration_messages
-      out = StringIO.new
-      original, $stdout = $stdout, out
-      yield
-      out.string
-    ensure
-      $stdout = original
     end
 
     # Five rules whose fork order needs every key. Priority puts `first` before

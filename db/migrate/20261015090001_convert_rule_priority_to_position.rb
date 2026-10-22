@@ -20,13 +20,18 @@
 # - Any other pair is reversed too, so a family with no chains gets the exact
 #   reverse of the fork's order, as before.
 #
-# A pair that is both a chain and a conflict cannot keep both. The chain wins:
-# reversed, the dependent rule would miss the rows the first one rewrote and
-# lose every action it has on them, not just the contested field. Each such
-# pair is reported in the migration output.
+# A pair that is both a chain and a conflict cannot keep both, and no order
+# gives the same outcome as the fork. The migration then fails before writing
+# anything and lists each such pair, so the owner can edit, disable or merge
+# the rules and run it again. Only active rules can fail it: a rule that is
+# not active takes no part in automatic runs, so its edges are kept where they
+# fit and dropped where they would break a pair of active rules.
 #
 # The fork's order was total (created_at and id broke priority ties), so the
 # result is too, and every family's positions come out as 1..n.
+#
+# Irreversible: `position` does not record which pairs were kept in the fork's
+# order for a chain, so the fork's `priority` cannot be rebuilt from it.
 class ConvertRulePriorityToPosition < ActiveRecord::Migration[8.1]
   # The field each action writes, as a later condition would read it.
   # auto_categorize and auto_detect_merchants run in background jobs, after
@@ -68,45 +73,48 @@ class ConvertRulePriorityToPosition < ActiveRecord::Migration[8.1]
     actions = select_rows("SELECT rule_id, action_type FROM rule_actions").group_by(&:first)
     reads = condition_types_by_rule.transform_values { |types| types.filter_map { |type| READS[type] }.to_set }
 
-    families = select_rows(<<~SQL).group_by(&:last)
-      SELECT id, family_id FROM rules ORDER BY family_id, priority, created_at, id
+    families = select_rows(<<~SQL).group_by { |row| row[1] }
+      SELECT id, family_id, name, active FROM rules ORDER BY family_id, priority, created_at, id
     SQL
 
-    families.each_value do |rows|
+    unkept = []
+    rankings = families.map do |family_id, rows|
       fork_order = rows.map(&:first)
       action_types = fork_order.map { |id| Array(actions[id]).map(&:last) }
-      ranked = rank(
-        fork_order,
-        writes: action_types.map { |types| types.flat_map { |type| WRITES.fetch(type, []) }.to_set },
-        reads: fork_order.map { |id| reads.fetch(id, Set.new) },
-        claims: action_types.map { |types| types.flat_map { |type| CLAIMS.fetch(type, []) }.to_set }
+      writes = action_types.map { |types| types.flat_map { |type| WRITES.fetch(type, []) }.to_set }
+      claims = action_types.map { |types| types.flat_map { |type| CLAIMS.fetch(type, []) }.to_set }
+      reads_by_index = fork_order.map { |id| reads.fetch(id, Set.new) }
+
+      order, family_unkept = rank(
+        writes: writes, reads: reads_by_index, claims: claims,
+        active: rows.map { |row| ActiveModel::Type::Boolean.new.cast(row[3]) }
       )
-      write_positions(ranked)
+      rule = ->(index) { { id: rows[index][0], name: rows[index][2] } }
+      family_unkept.each do |earlier, later, chain|
+        unkept << {
+          family_id: family_id, earlier: rule.(earlier), later: rule.(later),
+          fields: (claims[earlier] & claims[later]).to_a.sort,
+          chain: chain.each_cons(2).map { |from, to| [ rule.(from), rule.(to), hop(from, to, writes, reads_by_index, claims) ] }
+        }
+      end
+      order.map { |index| fork_order[index] }
     end
 
+    raise ActiveRecord::MigrationError, unkept_conflicts_message(unkept) if unkept.any?
+
+    rankings.each { |ids| write_positions(ids) }
     remove_index :rules, [ :family_id, :priority ], if_exists: true
     remove_column :rules, :priority
   end
 
-  # Restores the fork's column, ranked so that the top rule (which wins under
-  # `position`) runs last again (where it won under `priority`). A chain that
-  # `up` kept in the fork's order comes back reversed: `position` does not
-  # record which pairs were chains.
   def down
-    add_column :rules, :priority, :integer, null: false, default: 0
-
-    execute <<~SQL
-      UPDATE rules SET priority = ranked.rn
-      FROM (
-        SELECT id, ROW_NUMBER() OVER (
-          PARTITION BY family_id ORDER BY position DESC, created_at DESC, id DESC
-        ) AS rn
-        FROM rules
-      ) ranked
-      WHERE rules.id = ranked.id
-    SQL
-
-    add_index :rules, [ :family_id, :priority ]
+    raise ActiveRecord::IrreversibleMigration, <<~MESSAGE
+      The fork's rule order cannot be rebuilt from `rules.position`. `up` kept
+      some pairs of rules in the fork's order (a chain) and reversed the rest,
+      and `position` does not record which were which, so a rebuilt `priority`
+      could run a chain backwards and change which rule wins. To go back,
+      restore the database from a backup taken before this migration ran.
+    MESSAGE
   end
 
   private
@@ -122,47 +130,72 @@ class ConvertRulePriorityToPosition < ActiveRecord::Migration[8.1]
       end
     end
 
-    # The new order, top first. `before[a]` holds the rules `a` must run
-    # before. Chain edges all point forward in the fork's order, so they never
-    # form a cycle; a conflict edge is added only when it does not close one.
-    # Among the rules free to go next, the one latest in the fork's order goes
-    # first, which reverses every pair nothing else constrains.
-    def rank(fork_order, writes:, reads:, claims:)
-      count = fork_order.size
+    # The new order, top first, as indices into the fork's order, and every
+    # conflict between two active rules that a chain prevents from keeping its
+    # winner, as [earlier, later, path from earlier to later].
+    #
+    # `before[a]` holds the rules `a` must run before. Chain edges point
+    # forward in the fork's order and conflict edges backward. Edges between
+    # active rules go in first: chains, which never form a cycle on their own,
+    # then each conflict, unless it would close one. Edges touching a rule
+    # that is not active go in after, wherever they fit. Among the rules free
+    # to go next, the one latest in the fork's order goes first, which
+    # reverses every pair nothing else constrains.
+    def rank(writes:, reads:, claims:, active:)
+      count = writes.size
       before = Array.new(count) { Set.new }
+      unkept = []
 
+      chains = []
       count.times do |i|
         (i + 1...count).each do |j|
-          before[i] << j if writes[i].intersect?(reads[j]) || writes[j].intersect?(reads[i])
+          chains << [ i, j ] if writes[i].intersect?(reads[j]) || writes[j].intersect?(reads[i])
         end
       end
 
+      conflicts = []
       (count - 1).downto(0) do |j|
-        (0...j).each do |i|
-          next unless claims[i].intersect?(claims[j])
+        (0...j).each { |i| conflicts << [ j, i ] if claims[i].intersect?(claims[j]) }
+      end
 
-          if reaches?(before, i, j)
-            report_unkept_conflict(fork_order[i], fork_order[j])
-          else
-            before[j] << i
-          end
+      both_active = ->(edge) { edge.all? { |index| active[index] } }
+
+      chains.select(&both_active).each { |from, to| before[from] << to }
+      conflicts.select(&both_active).each do |later, earlier|
+        if (chain = path(before, earlier, later))
+          unkept << [ earlier, later, chain ]
+        else
+          before[later] << earlier
         end
       end
 
-      topological_order(before, count).map { |index| fork_order[index] }
+      (chains + conflicts).reject(&both_active).each do |from, to|
+        before[from] << to unless path(before, to, from)
+      end
+
+      [ topological_order(before, count), unkept ]
     end
 
-    def reaches?(before, from, to)
-      seen = Set.new
-      stack = [ from ]
-      until stack.empty?
-        node = stack.pop
-        return true if node == to
-        next unless seen.add?(node)
+    # The rules from `from` to `to` along `before`, both ends included, or nil.
+    def path(before, from, to)
+      came_from = { from => nil }
+      queue = [ from ]
+      until queue.empty?
+        node = queue.shift
+        if node == to
+          route = [ node ]
+          route.unshift(came_from[route.first]) while came_from[route.first]
+          return route
+        end
 
-        stack.concat(before[node].to_a)
+        before[node].sort.each do |successor|
+          next if came_from.key?(successor)
+
+          came_from[successor] = node
+          queue << successor
+        end
       end
-      false
+      nil
     end
 
     def topological_order(before, count)
@@ -184,10 +217,57 @@ class ConvertRulePriorityToPosition < ActiveRecord::Migration[8.1]
       order
     end
 
-    def report_unkept_conflict(earlier_id, later_id)
-      say "Rule #{earlier_id} now runs before rule #{later_id} to keep a chain between them; " \
-          "both set the same field, so on rows both match the first rule's value now wins. " \
-          "Reorder or edit them if the second rule's value should win."
+    # Why `from` must run before `to`. Chain edges point forward in the fork's
+    # order, conflict edges backward.
+    def hop(from, to, writes, reads, claims)
+      if from < to
+        written = writes[from] & reads[to]
+        return "#{describe_fields(written)}, written by the first and read by the second's conditions" if written.any?
+
+        "#{describe_fields(reads[from] & writes[to])}, read by the first's conditions before the second rewrites it"
+      else
+        "#{describe_fields(claims[from] & claims[to])}, set by both; the first won on the fork"
+      end
+    end
+
+    def describe_fields(fields)
+      fields.to_a.sort.join(" and ")
+    end
+
+    def unkept_conflicts_message(unkept)
+      describe = ->(rule) { %(rule #{rule[:id]} "#{rule[:name].presence || "(unnamed)"}") }
+
+      pairs = unkept.group_by { |pair| pair[:family_id] }.map do |family_id, family_pairs|
+        lines = family_pairs.map do |pair|
+          chain = pair[:chain].map { |from, to, why| "      #{describe.(from)} -> #{describe.(to)}: #{why}" }
+          <<~PAIR.chomp
+            - #{describe.(pair[:earlier])} and #{describe.(pair[:later])} both set #{describe_fields(pair[:fields])}.
+                On the fork the second ran last and its value won. To keep that, it would have to run
+                first, but the first must run before it for this chain:
+            #{chain.join("\n")}
+          PAIR
+        end
+        "Family #{family_id}:\n#{lines.join("\n")}"
+      end
+
+      <<~MESSAGE
+        Rule order conversion stopped: no order of these rules gives the same results as before.
+
+        Each pair below sets the same field, and a chain (one rule's conditions reading what
+        another writes) forces them into an order where the other rule's value would win.
+
+        #{pairs.join("\n\n")}
+
+        To fix: for each pair, edit one of the two rules so they no longer both set that field,
+        disable one of them, or merge them into one rule. Then run `bin/rails db:migrate` again.
+        The Docker image's web server will not start while this migration is pending; edit
+        rules from `bin/rails console` instead, e.g. Rule.find("<id>").update!(active: false).
+
+        Nothing was changed by this migration: `rules.priority` is still in place. `rules.position`
+        holds the provisional A-Z order set by 20261006140000, which has already run. Until this
+        migration succeeds, do not run rules: stop the background worker (Sidekiq), which would
+        otherwise apply rules in that A-Z order during account syncs.
+      MESSAGE
     end
 
     def write_positions(ids)
