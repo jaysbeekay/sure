@@ -78,6 +78,8 @@ class Insight::Generators::TopMoversGenerator < Insight::Generator
           category_ids: listed.map(&:key).sort,
           change_bucket: change_bucket(lead)
         },
+        # Month to date, not the whole budget month the spending pace card
+        # uses: the comparison covers only the days elapsed so far.
         period: narrative.period,
         dedup_key: "top_movers:#{month_token(narrative.period.start_date)}"
       )
