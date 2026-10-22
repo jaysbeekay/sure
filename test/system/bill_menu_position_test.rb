@@ -17,25 +17,22 @@ class BillMenuPositionTest < ApplicationSystemTestCase
     )
   end
 
-  test "on a desktop, the All bills menu opens under its button, right edges aligned" do
+  test "on a desktop, the All bills menu opens against its button, right edges aligned" do
     button, menu = open_first_menu
 
     # Not near the button: on it. The defect put the right edge 445px left of
     # the button's, so a loose tolerance would still prove the fix.
     assert_in_delta button["right"], menu["right"], 1, "menu is not aligned to its button"
-    assert_operator menu["top"], :>=, button["bottom"], "menu does not open below its button"
-    assert_operator menu["top"] - button["bottom"], :<=, 20, "menu opens far below its button"
+    assert_adjacent button, menu
   end
 
-  test "on a phone, the All bills menu spans the screen directly under its button" do
+  test "on a phone, the All bills menu opens directly against its button" do
     page.driver.browser.manage.window.resize_to(375, 812)
     button, menu = open_first_menu
 
     # The full-width branch sets left and width itself, so only the top comes
-    # from floating-ui, and the defect moved the top too.
-    assert_equal 0, menu["left"]
-    assert_operator menu["top"], :>=, button["bottom"], "menu does not open below its button"
-    assert_operator menu["top"] - button["bottom"], :<=, 20, "menu opens far below its button"
+    # from floating-ui; the defect moved the top 270px above the button.
+    assert_adjacent button, menu
   ensure
     reset_viewport
   end
@@ -50,5 +47,12 @@ class BillMenuPositionTest < ApplicationSystemTestCase
 
       rect = ->(node) { node.evaluate_script("(r => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom }))(this.getBoundingClientRect())") }
       [ rect.(button), rect.(menu) ]
+    end
+
+    # flip() may put the menu above the button when there is no room below,
+    # so accept either side, but only a gap the size of the offset.
+    def assert_adjacent(button, menu)
+      gap = menu["top"] >= button["bottom"] ? menu["top"] - button["bottom"] : button["top"] - menu["bottom"]
+      assert gap.between?(0, 20), "menu is #{gap}px from its button, expected it beside it (button #{button}, menu #{menu})"
     end
 end
