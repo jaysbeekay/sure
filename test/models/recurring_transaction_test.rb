@@ -1534,8 +1534,20 @@ class RecurringTransactionTest < ActiveSupport::TestCase
     series.update!(name: "FNB App Payment To Golf Cart J Kaiser")
     series.update!(name: "Golf Cart")
 
-    assert_equal [ "FNB App Payment To Golf Cart J Kaiser", "Golf Cart", "Cart lease" ],
+    assert_equal [ "Cart lease", "FNB App Payment To Golf Cart J Kaiser" ],
                  series.reload.matcher_hints["name_aliases"]
+  end
+
+  # The bill page lists aliases under "Also matches", so the current name must
+  # never be among them.
+  test "renaming a bill back to an earlier name drops it from its aliases" do
+    series = name_keyed_series("Golf Cart")
+
+    series.update!(name: "Cart lease")
+    assert_equal [ "Golf Cart" ], series.reload.matcher_hints["name_aliases"]
+
+    series.update!(name: "Golf Cart")
+    assert_equal [ "Cart lease" ], series.reload.matcher_hints["name_aliases"]
   end
 
   # Detection, the staleness check and income claiming compare stored names

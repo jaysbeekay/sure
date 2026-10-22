@@ -211,6 +211,30 @@ class RecurringTransaction::MatcherTest < ActiveSupport::TestCase
     assert_includes series.reload.matcher_hints["name_aliases"], "WPM LLC WEB PMT"
   end
 
+  # Detection and the stale check compare names exactly, so a manual link to a
+  # spelling that differs only in case has to be remembered too.
+  test "manually attaching an entry that differs only in case keeps that spelling" do
+    series = create_series(name: "Watson Property", amount: 2150, day_offset: 5)
+    occurrence = series.recurring_occurrences.order(:due_on).first
+    entry = create_entry(amount: 2150, date: Date.current + 4, name: "WATSON PROPERTY")
+    assert_not_includes series.matching_transactions, entry
+
+    RecurringTransaction::Allocator.new(occurrence).allocate!(entry: entry)
+
+    assert_equal [ "WATSON PROPERTY" ], series.reload.matcher_hints["name_aliases"]
+    assert_includes series.matching_transactions, entry
+  end
+
+  test "manually attaching an entry under the bill's own name teaches no alias" do
+    series = create_series(name: "Watson Property", amount: 2150, day_offset: 5)
+    occurrence = series.recurring_occurrences.order(:due_on).first
+    entry = create_entry(amount: 2150, date: Date.current + 4, name: "Watson Property")
+
+    RecurringTransaction::Allocator.new(occurrence).allocate!(entry: entry)
+
+    assert_equal [], Array(series.reload.matcher_hints["name_aliases"])
+  end
+
   # Issue #503: a rename must not cut a name-keyed bill off from its payments.
   test "a renamed name-keyed bill still auto-links a payment under its old name" do
     series = create_series(name: "FNB App Payment To Golf Cart J Kaiser", amount: 3600, day_offset: 0)

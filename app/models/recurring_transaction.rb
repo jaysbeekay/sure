@@ -188,11 +188,14 @@ class RecurringTransaction < ApplicationRecord
     previous = name_in_database
     return if previous.blank?
 
+    # The current name is not its own alias: a rename back to an earlier name
+    # takes it off the "Also matches" list until the next rename.
     hints = matcher_hints.to_h.deep_dup
     aliases = Array(hints["name_aliases"])
-    return if aliases.include?(previous)
+    updated = (aliases + [ previous ]).uniq - [ name ]
+    return if updated == aliases
 
-    hints["name_aliases"] = aliases + [ previous ]
+    hints["name_aliases"] = updated
     self.matcher_hints = hints
   end
 

@@ -303,7 +303,9 @@ class RecurringTransaction
         hints = series.matcher_hints.deep_dup
 
         if series.merchant_id.blank? && series.name.present?
-          unless series.known_names.include?(Matcher.normalize_name(entry.name))
+          # Exact, like the rename alias: detection and the stale check compare
+          # stored names, so a spelling that differs only in case still counts.
+          unless series.matcher_names.include?(entry.name)
             hints["name_aliases"] = (Array(hints["name_aliases"]) + [ entry.name ]).uniq
           end
         end
