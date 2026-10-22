@@ -39,6 +39,7 @@ pl:
       over_budget: "ponad budżet"
       today: dzisiaj
       vs_previous: vs. poprzedni miesiąc
+      vs_prior_period: "vs. poprzedni okres"
     index:
       empty:
         description: Analizy pojawią się tutaj, gdy na kontach będzie wystarczająco
@@ -104,6 +105,9 @@ pl:
         over: "Wydałeś %{spent} przy budżecie %{budgeted}, czyli o %{over_by} za dużo."
       subscription_audit: "%{name} (%{amount}) nie pojawiło się od oczekiwanej daty
         %{expected_on}. Mogło zostać anulowane lub opłata mogła zostać przeniesiona."
+      top_movers:
+        up: "W porównaniu z poprzednimi %{days} dniami wydatki wzrosły najbardziej w: %{categories}; największy wzrost wyniósł %{top_change}."
+        down: "W porównaniu z poprzednimi %{days} dniami wydatki spadły najbardziej w: %{categories}; największy spadek wyniósł %{top_change}."
     titles:
       budget_at_risk:
         few: "%{count} kategorie wymagają uwagi w budżecie"
@@ -127,6 +131,9 @@ pl:
         approaching: "Twoje wydatki wyprzedzają tempo budżetu"
         over: "W tym miesiącu przekroczyłeś budżet"
       subscription_audit: Czy %{name} jest nadal aktywne?
+      top_movers:
+        up: "Wydatki w kategorii %{category} wzrosły najbardziej"
+        down: "Wydatki w kategorii %{category} spadły najbardziej"
     types:
       budget_at_risk: Budżet
       budget_on_track: Budżet
@@ -138,3 +145,4 @@ pl:
       spending_anomaly: Wydatki
       spending_pace: "Tempo wydatków"
       subscription_audit: Subskrypcje
+      top_movers: "Największe zmiany"

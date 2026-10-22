@@ -38,6 +38,7 @@ tr:
       vs_previous: önceki aya göre
       need_attention: dikkat gerektiriyor
       over_budget: "bütçe aşımı"
+      vs_prior_period: "önceki döneme göre"
     index:
       empty:
         description: Hesaplarınızda yeterli hareket olduğunda içgörüler burada görünür.
@@ -95,6 +96,9 @@ tr:
       spending_pace:
         approaching: "Ayın %{elapsed_pct}% kadarı geçti ve %{budgeted} bütçenizin %{spent_pct}% kadarını harcadınız. Bu tempoyla yaklaşık %{projected_spend} harcayacaksınız."
         over: "%{budgeted} bütçeye karşı %{spent} harcadınız; bu, bütçenin %{over_by} üzerinde."
+      top_movers:
+        up: "Önceki %{days} güne göre harcamalarınız en çok %{categories} kategorilerinde arttı; en büyük artış %{top_change}."
+        down: "Önceki %{days} güne göre harcamalarınız en çok %{categories} kategorilerinde azaldı; en büyük düşüş %{top_change}."
     titles:
       budget_at_risk:
         one: Bütçenizde bir kategori dikkat gerektiriyor
@@ -116,6 +120,9 @@ tr:
       spending_pace:
         approaching: "Harcamalarınız bütçe temposunun önünde"
         over: "Bu ay bütçenizi aştınız"
+      top_movers:
+        up: "Harcamalarınızda en çok %{category} arttı"
+        down: "Harcamalarınızda en çok %{category} azaldı"
     types:
       budget_at_risk: Bütçe
       budget_on_track: Bütçe
@@ -127,3 +134,4 @@ tr:
       subscription_audit: Abonelikler
       maintained_goal_depleted: Rezerv
       spending_pace: "Harcama temposu"
+      top_movers: "En büyük değişimler"

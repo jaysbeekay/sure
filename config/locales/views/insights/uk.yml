@@ -37,6 +37,7 @@ uk:
       budget_on_track: Бюджет
       maintained_goal_depleted: Резерв
       spending_pace: "Темп витрат"
+      top_movers: "Найбільші зміни"
     meta:
       next_n_days:
         one: Наступний день
@@ -66,6 +67,7 @@ uk:
         many: неактивний %{count} днів
       need_attention: потребують уваги
       over_budget: "понад бюджет"
+      vs_prior_period: "порівняно з попереднім періодом"
     actions:
       spending_anomaly: Переглянути транзакції %{category}
       cash_flow_warning: Переглянути повторювані транзакції
@@ -98,6 +100,9 @@ uk:
       spending_pace:
         approaching: "Витрати випереджають темп бюджету"
         over: "Цього місяця бюджет перевищено"
+      top_movers:
+        up: "Найбільше зросли витрати на %{category}"
+        down: "Найбільше зменшилися витрати на %{category}"
     templates:
       spending_anomaly:
         above: За поточних темпів ви витратите %{projected_spend} на %{category} цього місяця, що приблизно на %{deviation_pct}% більше, ніж ваш середньомісячний показник %{baseline_spend}.
@@ -120,3 +125,6 @@ uk:
       spending_pace:
         approaching: "Ви витратили %{spent_pct}% бюджету %{budgeted}, а минуло %{elapsed_pct}% місяця. За такого темпу ви витратите близько %{projected_spend}."
         over: "Ви витратили %{spent} при бюджеті %{budgeted}, тобто на %{over_by} більше."
+      top_movers:
+        up: "Порівняно з попереднім періодом (%{days} дн.) витрати найбільше зросли на %{categories}; найбільше зростання — %{top_change}."
+        down: "Порівняно з попереднім періодом (%{days} дн.) витрати найбільше зменшилися на %{categories}; найбільше зменшення — %{top_change}."
