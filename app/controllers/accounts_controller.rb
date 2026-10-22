@@ -83,6 +83,11 @@ class AccountsController < ApplicationController
   end
 
   def show
+    @breadcrumbs = [
+      [ t("breadcrumbs.home"), root_path ],
+      [ t("breadcrumbs.accounts"), accounts_path ],
+      [ @account.name, nil ]
+    ]
     @chart_view = params[:chart_view] || "balance"
     @tab = params[:tab]
     @accessible_account_ids = Current.user.accessible_accounts.pluck(:id).to_set

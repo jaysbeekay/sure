@@ -386,6 +386,22 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
+  # The default trail ends on "Accounts", which is never a link, so an account's
+  # page had no way back to the accounts list.
+  test "show links the Accounts crumb back to the accounts list" do
+    get account_url(@account)
+
+    assert_select "[data-breadcrumbs] a[href=?]", accounts_path, text: I18n.t("breadcrumbs.accounts")
+    assert_select "[data-breadcrumbs] > span:last-child", text: @account.name
+  end
+
+  test "the accounts list itself stays the unlinked current crumb" do
+    get accounts_url
+
+    assert_select "[data-breadcrumbs] a[href=?]", accounts_path, count: 0
+    assert_select "[data-breadcrumbs] > span:last-child", text: I18n.t("breadcrumbs.accounts")
+  end
+
   test "show renders the balance chart as drag-selectable for a custom date range" do
     get account_url(@account)
 

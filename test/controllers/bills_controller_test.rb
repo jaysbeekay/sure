@@ -556,6 +556,51 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
     assert_match "$78.50", response.body
   end
 
+  # The default trail ends on the controller's own name, and the last crumb is
+  # never a link, so the bill's page had no way back to the Bills index.
+  test "the bill page's Bills crumb links back to the bills index" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    get bill_url(bill)
+
+    assert_select "[data-breadcrumbs] a[href=?]", bills_path, text: I18n.t("breadcrumbs.bills")
+    assert_select "[data-breadcrumbs] > span:last-child", text: "Power Co"
+  end
+
+  test "the Bills crumb returns to the Bills tab the bill was opened from" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    tab = bills_path(view: "all", q: { bill_type: "subscription" })
+
+    # Browsers send an absolute referrer; a relative one is the same page.
+    [ "http://www.example.com#{tab}", tab ].each do |referer|
+      get bill_url(bill), headers: { "Referer" => referer }
+
+      assert_select "[data-breadcrumbs] a[href=?]", tab, { text: I18n.t("breadcrumbs.bills") }, "for referrer #{referer}"
+    end
+  end
+
+  # A new tab or a pasted link arrives with no referrer at all.
+  test "the Bills crumb falls back to the bills index without a referrer" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    get bill_url(bill)
+
+    assert_response :success
+    assert_nil request.referer
+    assert_select "[data-breadcrumbs] a[href=?]", bills_path
+  end
+
+  test "the Bills crumb ignores a referrer that is not the bills index" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    [ "https://evil.example/bills?view=all", "//evil.example/bills?view=all", transactions_url, "javascript:alert(1)", "not a uri ::" ].each do |referer|
+      get bill_url(bill), headers: { "Referer" => referer }
+
+      assert_select "[data-breadcrumbs] a[href=?]", bills_path, { text: I18n.t("breadcrumbs.bills") }, "for referrer #{referer}"
+    end
+  end
+
   # The drawer slot belongs to resolving a payment. If a bill's page claimed it
   # too, the page and the payment surface would compete for one frame id and
   # whichever lost would render nothing at all.
@@ -1836,6 +1881,8 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
   # Skipping closes the occurrence but keeps its suggestion. Before this month
   # the overview no longer lists the row, so the queue mustn't ask about it.
   test "a suggestion against a skipped occurrence from last month stays out of the payment review queue" do
+    travel_to Date.current.beginning_of_month + 9.days
+
     due = Date.current.beginning_of_month - 10
     bill = declare_bill(name: "SKIPPED GYM", amount: 40, due: due)
     RecurringTransaction::OccurrenceGenerator.new(bill).generate!
