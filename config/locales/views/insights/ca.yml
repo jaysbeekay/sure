@@ -35,6 +35,7 @@ ca:
       budget_on_track: Pressupost
       maintained_goal_depleted: Reserva
       spending_pace: "Ritme de despesa"
+      top_movers: "Canvis més grans"
     meta:
       next_n_days:
         one: Pròxim dia
@@ -56,6 +57,7 @@ ca:
         one: inactiu %{count} dia
         other: inactiu %{count} dies
       over_budget: "per sobre del pressupost"
+      vs_prior_period: "vs. el període anterior"
     actions:
       spending_anomaly: Veure les transaccions de %{category}
       cash_flow_warning: Revisa les transaccions recurrents
@@ -86,6 +88,9 @@ ca:
       spending_pace:
         approaching: "La teva despesa va per davant del ritme del pressupost"
         over: "Has superat el pressupost aquest mes"
+      top_movers:
+        up: "%{category} és el que més ha pujat en la teva despesa"
+        down: "%{category} és el que més ha baixat en la teva despesa"
     templates:
       spending_anomaly:
         above: Al ritme actual gastaràs %{projected_spend} en %{category} aquest mes, un %{deviation_pct}% més que la teva mitjana mensual recent de %{baseline_spend}.
@@ -108,3 +113,6 @@ ca:
       spending_pace:
         approaching: "Has gastat el %{spent_pct}% del teu pressupost de %{budgeted} amb el %{elapsed_pct}% del mes transcorregut. A aquest ritme gastaries uns %{projected_spend}."
         over: "Has gastat %{spent} davant d'un pressupost de %{budgeted}, és a dir, %{over_by} per sobre."
+      top_movers:
+        up: "En comparació amb els %{days} dies anteriors, la despesa ha pujat sobretot en %{categories}, amb l'augment més gran de %{top_change}."
+        down: "En comparació amb els %{days} dies anteriors, la despesa ha baixat sobretot en %{categories}, amb la disminució més gran de %{top_change}."

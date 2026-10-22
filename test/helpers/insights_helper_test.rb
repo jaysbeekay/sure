@@ -233,6 +233,7 @@ class InsightsHelperTest < ActionView::TestCase
   test "every title variant a generator emits exists" do
     {
       "spending_pace" => %w[approaching over],
+      "top_movers" => %w[up down],
       "spending_anomaly" => %w[above below],
       "savings_rate_change" => %w[up down],
       "cash_flow_warning" => %w[low negative]
@@ -248,6 +249,20 @@ class InsightsHelperTest < ActionView::TestCase
   # silently loses the figure it names.
   test "spending pace is translated in every insights locale with the English placeholders" do
     keys = %w[types.spending_pace figures.over_budget titles.spending_pace.approaching titles.spending_pace.over templates.spending_pace.approaching templates.spending_pace.over]
+    locales = Dir[Rails.root.join("config/locales/views/insights/*.yml")].map { |path| File.basename(path, ".yml") } - [ "en" ]
+    assert_not_empty locales
+
+    locales.each do |locale|
+      keys.each do |key|
+        assert I18n.exists?("insights.#{key}", locale.to_sym, fallback: false), "insights.#{key} is missing in #{locale}"
+        english = I18n.t("insights.#{key}", locale: :en).scan(/%\{\w+\}/).sort
+        assert_equal english, I18n.t("insights.#{key}", locale: locale.to_sym).scan(/%\{\w+\}/).sort, "placeholders differ for insights.#{key} in #{locale}"
+      end
+    end
+  end
+
+  test "top movers is translated in every insights locale with the English placeholders" do
+    keys = %w[types.top_movers figures.vs_prior_period titles.top_movers.up titles.top_movers.down templates.top_movers.up templates.top_movers.down]
     locales = Dir[Rails.root.join("config/locales/views/insights/*.yml")].map { |path| File.basename(path, ".yml") } - [ "en" ]
     assert_not_empty locales
 

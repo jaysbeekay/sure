@@ -35,6 +35,7 @@ pt-PT:
       budget_on_track: Orçamento
       maintained_goal_depleted: Reserva
       spending_pace: "Ritmo de gastos"
+      top_movers: "Maiores variações"
     meta:
       next_n_days:
         one: Próximo dia
@@ -56,6 +57,7 @@ pt-PT:
         one: parado há %{count} dia
         other: parado há %{count} dias
       over_budget: "acima do orçamento"
+      vs_prior_period: "vs. período anterior"
     actions:
       spending_anomaly: Ver transações de %{category}
       cash_flow_warning: Rever transações recorrentes
@@ -86,6 +88,9 @@ pt-PT:
       spending_pace:
         approaching: "Os seus gastos estão à frente do ritmo do orçamento"
         over: "Ultrapassou o orçamento este mês"
+      top_movers:
+        up: "%{category} foi o que mais subiu nos seus gastos"
+        down: "%{category} foi o que mais desceu nos seus gastos"
     templates:
       spending_anomaly:
         above: Está no caminho de gastar %{projected_spend} em %{category} este mês, cerca de %{deviation_pct}% mais do que a sua média mensal recente de %{baseline_spend}.
@@ -108,3 +113,6 @@ pt-PT:
       spending_pace:
         approaching: "Gastou %{spent_pct}% do seu orçamento de %{budgeted} com %{elapsed_pct}% do mês decorrido. A este ritmo, gastaria cerca de %{projected_spend}."
         over: "Gastou %{spent} face a um orçamento de %{budgeted}, ou seja, %{over_by} acima."
+      top_movers:
+        up: "Em comparação com os %{days} dias anteriores, os gastos subiram mais em %{categories}, com o maior aumento de %{top_change}."
+        down: "Em comparação com os %{days} dias anteriores, os gastos desceram mais em %{categories}, com a maior descida de %{top_change}."

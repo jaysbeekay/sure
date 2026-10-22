@@ -49,6 +49,7 @@ de:
       over_budget: "über Budget"
       today: heute
       vs_previous: vs. Vormonat
+      vs_prior_period: "vs. Vorperiode"
     index:
       empty:
         description: Insights erscheinen hier, sobald in deinen Konten genug passiert ist. Sie werden jede Nacht aktualisiert.
@@ -89,6 +90,9 @@ de:
         approaching: "Du hast %{spent_pct} % deines Budgets von %{budgeted} ausgegeben, und %{elapsed_pct} % des Monats sind vorbei. Bei diesem Tempo gibst du etwa %{projected_spend} aus."
         over: "Du hast %{spent} bei einem Budget von %{budgeted} ausgegeben, also %{over_by} darüber."
       subscription_audit: "%{name} (%{amount}) ist seit dem erwarteten Termin am %{expected_on} nicht mehr aufgetaucht. Vielleicht ist das Abo gekündigt oder die Abbuchung hat sich verschoben."
+      top_movers:
+        up: "Im Vergleich zu den vorherigen %{days} Tagen sind deine Ausgaben bei %{categories} am stärksten gestiegen, der größte Anstieg beträgt %{top_change}."
+        down: "Im Vergleich zu den vorherigen %{days} Tagen sind deine Ausgaben bei %{categories} am stärksten gesunken, der größte Rückgang beträgt %{top_change}."
     titles:
       budget_at_risk:
         one: Eine Kategorie in deinem Budget braucht Aufmerksamkeit
@@ -110,6 +114,9 @@ de:
         approaching: "Deine Ausgaben liegen über dem Budgettempo"
         over: "Du bist diesen Monat über dem Budget"
       subscription_audit: Läuft %{name} noch?
+      top_movers:
+        up: "%{category} ist bei deinen Ausgaben am stärksten gestiegen"
+        down: "%{category} ist bei deinen Ausgaben am stärksten gesunken"
     types:
       budget_at_risk: Budget
       budget_on_track: Budget
@@ -121,3 +128,4 @@ de:
       spending_anomaly: Ausgaben
       spending_pace: "Ausgabentempo"
       subscription_audit: Abos
+      top_movers: "Größte Veränderungen"
