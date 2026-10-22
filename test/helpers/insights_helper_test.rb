@@ -232,6 +232,23 @@ class InsightsHelperTest < ActionView::TestCase
     end
   end
 
+  # Fallbacks would render the English card among translated ones, so a missing
+  # locale passes every other test. A translation that drops a placeholder
+  # silently loses the figure it names.
+  test "spending pace is translated in every insights locale with the English placeholders" do
+    keys = %w[types.spending_pace figures.over_budget titles.spending_pace.approaching titles.spending_pace.over templates.spending_pace.approaching templates.spending_pace.over]
+    locales = Dir[Rails.root.join("config/locales/views/insights/*.yml")].map { |path| File.basename(path, ".yml") } - [ "en" ]
+    assert_not_empty locales
+
+    locales.each do |locale|
+      keys.each do |key|
+        assert I18n.exists?("insights.#{key}", locale.to_sym, fallback: false), "insights.#{key} is missing in #{locale}"
+        english = I18n.t("insights.#{key}", locale: :en).scan(/%\{\w+\}/).sort
+        assert_equal english, I18n.t("insights.#{key}", locale: locale.to_sym).scan(/%\{\w+\}/).sort, "placeholders differ for insights.#{key} in #{locale}"
+      end
+    end
+  end
+
   test "spending pace leads with the projection when approaching and the overshoot when over" do
     approaching = build_insight("spending_pace", metadata: { "status" => "approaching" }, facts: { "projected_spend" => "$1,107.14", "over_by" => "$0.00" })
     over = build_insight("spending_pace", metadata: { "status" => "over" }, facts: { "projected_spend" => "$2,767.86", "over_by" => "$250.00" })

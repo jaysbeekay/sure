@@ -37,6 +37,7 @@ tr:
       today: bugün
       vs_previous: önceki aya göre
       need_attention: dikkat gerektiriyor
+      over_budget: "bütçe aşımı"
     index:
       empty:
         description: Hesaplarınızda yeterli hareket olduğunda içgörüler burada görünür.
@@ -91,6 +92,9 @@ tr:
       subscription_audit: "%{name} (%{amount}), %{expected_on} tarihinde beklenmesine
         rağmen görünmedi. İptal edilmiş olabilir veya ödeme tarihi değişmiş olabilir."
       maintained_goal_depleted: '%{goal}, korunması gereken %{target} tutarının %{saved} kadarını tutuyor. %{missing} eksik.'
+      spending_pace:
+        approaching: "Ayın %{elapsed_pct}% kadarı geçti ve %{budgeted} bütçenizin %{spent_pct}% kadarını harcadınız. Bu tempoyla yaklaşık %{projected_spend} harcayacaksınız."
+        over: "%{budgeted} bütçeye karşı %{spent} harcadınız; bu, bütçenin %{over_by} üzerinde."
     titles:
       budget_at_risk:
         one: Bütçenizde bir kategori dikkat gerektiriyor
@@ -109,6 +113,9 @@ tr:
         below: "%{category} harcamaları azalış eğiliminde"
       subscription_audit: "%{name} hâlâ aktif mi?"
       maintained_goal_depleted: '%{goal} olması gereken seviyenin altına düştü'
+      spending_pace:
+        approaching: "Harcamalarınız bütçe temposunun önünde"
+        over: "Bu ay bütçenizi aştınız"
     types:
       budget_at_risk: Bütçe
       budget_on_track: Bütçe
@@ -119,3 +126,4 @@ tr:
       spending_anomaly: Harcama
       subscription_audit: Abonelikler
       maintained_goal_depleted: Rezerv
+      spending_pace: "Harcama temposu"

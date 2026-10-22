@@ -36,6 +36,7 @@ uk:
       budget_at_risk: Бюджет
       budget_on_track: Бюджет
       maintained_goal_depleted: Резерв
+      spending_pace: "Темп витрат"
     meta:
       next_n_days:
         one: Наступний день
@@ -64,6 +65,7 @@ uk:
         few: неактивний %{count} дні
         many: неактивний %{count} днів
       need_attention: потребують уваги
+      over_budget: "понад бюджет"
     actions:
       spending_anomaly: Переглянути транзакції %{category}
       cash_flow_warning: Переглянути повторювані транзакції
@@ -93,6 +95,9 @@ uk:
         many: '%{count} категорій потребують уваги у вашому бюджеті'
       budget_on_track: Ваш бюджет за планом
       maintained_goal_depleted: '%{goal} опустився нижче свого рівня'
+      spending_pace:
+        approaching: "Витрати випереджають темп бюджету"
+        over: "Цього місяця бюджет перевищено"
     templates:
       spending_anomaly:
         above: За поточних темпів ви витратите %{projected_spend} на %{category} цього місяця, що приблизно на %{deviation_pct}% більше, ніж ваш середньомісячний показник %{baseline_spend}.
@@ -112,3 +117,6 @@ uk:
         near: "%{categories} близькі до своїх лімітів цього місяця. Ви використали %{budget_spent_pct}% свого загального бюджету наразі."
       budget_on_track: Ви витратили %{spent} зі свого бюджету %{budgeted} (%{budget_spent_pct}%) і все в межах ліміту.
       maintained_goal_depleted: '%{goal} містить %{saved} із запланованих %{target}. Бракує %{missing}.'
+      spending_pace:
+        approaching: "Ви витратили %{spent_pct}% бюджету %{budgeted}, а минуло %{elapsed_pct}% місяця. За такого темпу ви витратите близько %{projected_spend}."
+        over: "Ви витратили %{spent} при бюджеті %{budgeted}, тобто на %{over_by} більше."

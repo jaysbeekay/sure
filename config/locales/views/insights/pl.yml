@@ -36,6 +36,7 @@ pl:
       need_attention: wymaga uwagi
       of_budget: z budżetu
       on_pace: zgodnie z tempem
+      over_budget: "ponad budżet"
       today: dzisiaj
       vs_previous: vs. poprzedni miesiąc
     index:
@@ -98,6 +99,9 @@ pl:
         below: Jesteś na dobrej drodze, aby wydać %{projected_spend} na %{category}
           w tym miesiącu, około %{deviation_pct}% mniej niż Twoja średnia miesięczna
           %{baseline_spend}.
+      spending_pace:
+        approaching: "Wydałeś %{spent_pct}% budżetu %{budgeted}, a minęło %{elapsed_pct}% miesiąca. W tym tempie wydasz około %{projected_spend}."
+        over: "Wydałeś %{spent} przy budżecie %{budgeted}, czyli o %{over_by} za dużo."
       subscription_audit: "%{name} (%{amount}) nie pojawiło się od oczekiwanej daty
         %{expected_on}. Mogło zostać anulowane lub opłata mogła zostać przeniesiona."
     titles:
@@ -119,6 +123,9 @@ pl:
       spending_anomaly:
         above: Wydatki w kategorii %{category} rosną
         below: Wydatki w kategorii %{category} spadają
+      spending_pace:
+        approaching: "Twoje wydatki wyprzedzają tempo budżetu"
+        over: "W tym miesiącu przekroczyłeś budżet"
       subscription_audit: Czy %{name} jest nadal aktywne?
     types:
       budget_at_risk: Budżet
@@ -129,4 +136,5 @@ pl:
       net_worth_milestone: Wartość netto
       savings_rate_change: Stopa oszczędności
       spending_anomaly: Wydatki
+      spending_pace: "Tempo wydatków"
       subscription_audit: Subskrypcje
