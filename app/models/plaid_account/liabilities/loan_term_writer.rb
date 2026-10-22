@@ -89,10 +89,15 @@ module PlaidAccount::Liabilities::LoanTermWriter
 
     # Whether the loan will be variable once this payload's `rate_type` is
     # applied. A locked `rate_type` is the user's and is not replaced.
+    #
+    # Judged by `Loan#variable_rate_type?`, the rule every schedule reader
+    # uses, not by the form's VARIABLE_RATE_TYPES: Plaid reports "arm", which
+    # the model treats as variable, and a stricter check here would move the
+    # base rate of a loan the schedule prices as variable.
     def variable_after_write?(loan, present)
       applied = present.key?(:rate_type) && !loan.locked?(:rate_type)
       rate_type = applied ? present[:rate_type] : loan.rate_type
-      Loan::VARIABLE_RATE_TYPES.include?(rate_type.to_s)
+      Loan.new(rate_type: rate_type).variable_rate_type?
     end
 
     def write_enriched(loan, present)

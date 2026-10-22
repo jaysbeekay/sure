@@ -243,6 +243,20 @@ class PlaidAccount::Liabilities::MortgageProcessorTest < ActiveSupport::TestCase
     assert_equal({ "2026-01-15" => "5.2" }, loan.variable_rate_schedule)
   end
 
+  # Plaid's own "arm" is variable to the model, so its change is dated like a
+  # "variable" one. Judged by the form's vocabulary instead, it moved the base
+  # rate and re-priced every period before the change.
+  test "a rate change under Plaid's own rate type is dated too" do
+    loan = loan_with(interest_rate: 4.5, rate_type: "arm")
+    payload(type: "arm", percentage: 5.2)
+
+    process_as_of(Date.new(2026, 1, 15))
+
+    loan.reload
+    assert_equal 4.5, loan.interest_rate.to_f, "the base rate was overwritten"
+    assert_equal({ "2026-01-15" => "5.2" }, loan.variable_rate_schedule)
+  end
+
   # A loan whose rate was never recorded is not a loan whose rate just moved:
   # the first rate seen is its base rate, and no change is dated.
   test "a variable mortgage with no rate yet takes the reported one as its base rate" do
