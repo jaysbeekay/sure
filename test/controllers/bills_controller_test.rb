@@ -564,7 +564,7 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
     get bill_url(bill)
 
     assert_select "[data-breadcrumbs] a[href=?]", bills_path, text: I18n.t("breadcrumbs.bills")
-    assert_select "[data-breadcrumbs] span", text: "Power Co"
+    assert_select "[data-breadcrumbs] > span:last-child", text: "Power Co"
   end
 
   test "the Bills crumb returns to the Bills tab the bill was opened from" do
