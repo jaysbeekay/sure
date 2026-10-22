@@ -1408,6 +1408,21 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "button[data-id='schedule']", count: 0
   end
 
+  # --- #469: the amount field is one design-system input ------------------
+
+  # The card is the field's only box: the input is borderless inside it
+  # (form-field__input) and the label is the field's own (form-field__label).
+  # Without them the browser draws the input's border inside the card.
+  test "the extra repayment amount is a design-system field input" do
+    get account_url(on_schedule_loan_account, tab: "extra_repayments")
+
+    assert_response :success
+    assert_select ".form-field" do
+      assert_select "label.form-field__label[for='extra_payment_amount']", count: 1
+      assert_select "input.form-field__input[name='extra_payment[amount]']", count: 1
+    end
+  end
+
   # --- #54: the what-if control is not gated on rate type ----------------
 
   test "a variable-rate loan gets the extra-payment control, with the rate assumption disclosed" do
