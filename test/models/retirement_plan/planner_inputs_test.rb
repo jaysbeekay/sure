@@ -73,6 +73,22 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
     assert_equal [ "expense", false, loan_account ], [ stream.kind, stream.indexed, stream.account ]
   end
 
+  # Pins the current behaviour, not a goal: upstream's projection gives a loan
+  # behind its contract no payoff date (the contracted repayment leaves a
+  # balloon), so seed_loans has no year to end the stream on and seeds nothing.
+  # Changing this is a decision about what the plan should assume; this test
+  # makes it a visible one.
+  test "a loan behind its contract seeds no stream" do
+    loan_account = own_loan(balance: 50_000, term_months: 60)
+    projection = Loan::PayoffProjection.new(loan_account.loan, as_of: AS_OF)
+    assert projection.applicable?, "the loan must still have repayments to make"
+    assert_nil projection.payoff_date, "the loan must be behind its contract for this test to mean anything"
+
+    @plan.seed_streams!(as_of: AS_OF)
+
+    assert_not @plan.streams.exists?(source: "seeded_loan")
+  end
+
   test "a loan with nothing left to pay seeds nothing" do
     own_loan(balance: 0, term_months: 60)
 
