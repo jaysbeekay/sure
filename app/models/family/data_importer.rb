@@ -662,6 +662,9 @@ class Family::DataImporter
           }.compact
         )
 
+        # The export's matcher_hints are what is being restored; a name that
+        # differs locally is not a rename to remember as an alias.
+        recurring_transaction.restoring_matcher_hints = true
         recurring_transaction.save!
         map_source!(:recurring_transactions, old_id, recurring_transaction)
         # A replacement points at another series that may not exist yet, so it

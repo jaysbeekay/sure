@@ -73,6 +73,12 @@ class RecurringTransaction < ApplicationRecord
   # post-commit regeneration consumes it.
   attr_accessor :rules_rewritten
 
+  # Set by the data importer: an export's matcher_hints are the record being
+  # restored, so a restore that changes the name is not a rename to remember.
+  attr_accessor :restoring_matcher_hints
+
+  before_update :remember_previous_name_as_alias, if: :renaming_name_keyed_series?
+
   after_commit :generate_occurrences, on: :create
   after_commit :regenerate_future_occurrences, on: :update, if: :schedule_shape_changed?
   after_commit :pin_amount_on_dates_already_due, on: :update, if: :saved_change_to_amount?
@@ -122,6 +128,17 @@ class RecurringTransaction < ApplicationRecord
     name.presence || merchant&.name
   end
 
+  # Every name a merchant-less series matches on, as typed: its own and the
+  # aliases a manual attach or a rename taught it. Raw, so SQL that compares
+  # entry names can use it; known_names is the normalised set for comparing.
+  def matcher_names
+    ([ name ] + Array(matcher_hints.to_h["name_aliases"])).compact_blank.uniq
+  end
+
+  def known_names
+    matcher_names.map { |known| Matcher.normalize_name(known) }.to_set
+  end
+
   def merchant_or_name_present
     if merchant_id.blank? && name.blank?
       errors.add(:base, :merchant_or_name_required)
@@ -155,6 +172,29 @@ class RecurringTransaction < ApplicationRecord
     return if payment_url.blank?
 
     errors.add(:payment_url, :invalid_scheme) unless self.class.valid_payment_url?(payment_url)
+  end
+
+  # A merchant-less series matches on its name, so renaming it would cut it off
+  # from the payments it was detected from. The old name stays on as an alias
+  # (issue #503) and shows on the bill page under "Also matches".
+  def renaming_name_keyed_series?
+    will_save_change_to_name? && !restoring_matcher_hints &&
+      merchant_id.blank? && merchant_id_in_database.blank?
+  end
+
+  def remember_previous_name_as_alias
+    previous = name_in_database
+    return if previous.blank?
+
+    normalized = Matcher.normalize_name(previous)
+    return if normalized == Matcher.normalize_name(name)
+
+    hints = matcher_hints.to_h.deep_dup
+    aliases = Array(hints["name_aliases"])
+    return if aliases.any? { |known| Matcher.normalize_name(known) == normalized }
+
+    hints["name_aliases"] = aliases + [ previous ]
+    self.matcher_hints = hints
   end
 
   def generate_occurrences
@@ -608,8 +648,8 @@ class RecurringTransaction < ApplicationRecord
         entry.entryable.is_a?(Transaction) && entry.entryable.merchant_id == merchant_id
       end
     else
-      # Match by entry name
-      entries.where(name: name)
+      # Match by entry name, including the names it was known by before a rename
+      entries.where(name: matcher_names)
     end
 
     schedule_matched(candidates)
