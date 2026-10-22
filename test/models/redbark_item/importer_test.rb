@@ -6,7 +6,7 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
     @importer = RedbarkItem::Importer.new(@redbark_item, redbark_provider: nil)
   end
 
-  # #142 row 7: account details are the one thing in the sync a loan's rate
+  # Row 7: account details are the one thing in the sync a loan's rate
   # depends on, and the one thing a user can live without. A failure there must
   # not cost them balances or transactions.
   test "a failing account details fetch leaves the payload alone and does not raise" do
@@ -64,7 +64,7 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
 
   # The batch is rejected whole when one id is stale or of the wrong category,
   # so one bad account must not cost every other loan its rate. Mirrors
-  # fetch_balances_with_fallback (raised on the #213 gate).
+  # fetch_balances_with_fallback.
   #
   # Two DISTINCT accounts, because the fallback only engages for a batch of
   # more than one: with a single id there is nothing to demote to.
@@ -170,4 +170,51 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
 
     assert_equal %w[old_posted post_1], merged.map { |t| t["id"] }.sort
   end
+
+  test "import_transactions fetches from the stored sync_start_date when it's still within the lookback window" do
+    redbark_account = redbark_accounts(:savings_account)
+    redbark_account.update!(sync_start_date: 6.months.ago.to_date)
+
+    assert_fetches_from(redbark_account, 6.months.ago.to_date)
+  end
+
+  test "import_transactions clamps an expired sync_start_date to the current max lookback" do
+    redbark_account = redbark_accounts(:savings_account)
+    # Bypass the model's own validation to simulate a date that was valid when
+    # set but has since drifted outside the rolling window by the time a
+    # delayed first fetch actually runs.
+    redbark_account.update_column(:sync_start_date, (RedbarkAccount::MAX_SYNC_START_DATE_LOOKBACK_DAYS + 50).days.ago.to_date)
+
+    assert_fetches_from(redbark_account, RedbarkAccount::MAX_SYNC_START_DATE_LOOKBACK_DAYS.days.ago.to_date)
+  end
+
+  test "import_transactions falls back to the default history window when there's no stored date" do
+    redbark_account = redbark_accounts(:savings_account)
+    redbark_account.update!(sync_start_date: nil)
+
+    assert_fetches_from(redbark_account, RedbarkAccount::DEFAULT_INITIAL_HISTORY_DAYS.days.ago.to_date)
+  end
+
+  private
+
+    # Asserts the date window import_transactions actually sends to Redbark,
+    # rather than calling calculate_transaction_start_date directly -- that
+    # private method's return value composing correctly with the rest of
+    # import_transactions is exactly what's under test here.
+    def assert_fetches_from(redbark_account, expected_start_date)
+      provider = mock("redbark_provider")
+      importer = RedbarkItem::Importer.new(@redbark_item, redbark_provider: provider)
+      importer.stubs(:transactable_connection?).returns(true)
+      importer.stubs(:connections_by_id).returns({})
+
+      provider.expects(:get_transactions).with(
+        connection_id: redbark_account.connection_id,
+        account_id: redbark_account.redbark_account_id,
+        start_date: expected_start_date,
+        end_date: Date.current,
+        include_pending: Rails.configuration.x.redbark.include_pending
+      ).returns([])
+
+      importer.send(:import_transactions, redbark_account)
+    end
 end

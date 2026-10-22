@@ -64,7 +64,7 @@ class RedbarkItem < ApplicationRecord
   # `as_of` is captured ONCE here and passed down, so every account in one sync
   # dates its findings the same way. A sync that starts at 23:59 must not write
   # one loan's detected rate change under today and the next loan's under
-  # tomorrow (#142).
+  # tomorrow (we-promise/sure#3891).
   def process_accounts(as_of: Date.current)
     return [] if redbark_accounts.empty?
 
