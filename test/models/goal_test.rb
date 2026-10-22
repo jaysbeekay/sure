@@ -189,11 +189,13 @@ class GoalTest < ActiveSupport::TestCase
     assert_equal BigDecimal("10000"), Goal.find(goal.id).current_balance.to_d
   end
 
-  test "a crypto account in another currency is still rejected" do
+  # Multi-currency goal funding (upstream #3974) lifted the same-currency
+  # rule, and it covers crypto as it does cash and investments.
+  test "a crypto account in another currency can fund a goal" do
     wallet = Account.create!(family: @family, accountable: Crypto.new, name: "Euro wallet", currency: "EUR", balance: 1_000)
     new_goal = @family.goals.new(name: "BTC reserve", target_amount: 20_000, currency: "USD")
     new_goal.goal_accounts.build(account: wallet)
-    assert_not new_goal.valid?
+    assert new_goal.valid?, new_goal.errors.full_messages.to_sentence
   end
 
   test "a crypto account in another family is still rejected" do
