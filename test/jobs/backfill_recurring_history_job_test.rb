@@ -59,6 +59,29 @@ class BackfillRecurringHistoryJobTest < ActiveJob::TestCase
     assert_not RecurringAllocation.where(entry_id: @entry.id).exists?
   end
 
+  test "does nothing for a family that has turned bills off" do
+    activate_without_callbacks(@series)
+    @family.update!(recurring_transactions_disabled: true)
+
+    assert_no_enqueued_jobs(only: BackfillRecurringHistoryJob) do
+      BackfillRecurringHistoryJob.perform_now(@series.id)
+    end
+    assert_equal 0, paid_past_occurrences
+  end
+
+  # The job's status check reads a record that a pause can overtake. The
+  # pause's own regeneration clears the upcoming rows, so the rebuild must
+  # read the status afresh rather than put them back on a paused bill.
+  test "a bill paused after the job loaded it gains no occurrences" do
+    activate_without_callbacks(@series)
+    loaded = RecurringTransaction.find(@series.id)
+    RecurringTransaction.where(id: @series.id).update_all(status: "inactive")
+
+    assert_no_difference -> { @series.recurring_occurrences.count } do
+      loaded.reconstruct_history!
+    end
+  end
+
   test "tries again later while a pipeline still holds the family lock" do
     activate_without_callbacks(@series)
 
