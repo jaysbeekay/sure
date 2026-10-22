@@ -1538,12 +1538,37 @@ class RecurringTransactionTest < ActiveSupport::TestCase
                  series.reload.matcher_hints["name_aliases"]
   end
 
-  test "a rename that only changes case or spacing adds no alias" do
+  # Detection, the staleness check and income claiming compare stored names
+  # exactly, so even a rename that only changes case or spacing has to keep the
+  # old spelling.
+  test "a rename that only changes case or spacing keeps the old spelling" do
     series = name_keyed_series("GOLF  CART")
 
     series.update!(name: "golf cart")
 
-    assert_equal [], Array(series.reload.matcher_hints["name_aliases"])
+    assert_equal [ "GOLF  CART" ], series.reload.matcher_hints["name_aliases"]
+  end
+
+  test "a case-only rename keeps the bill claimed and its payments found" do
+    [ 0, 1, 2 ].each do |months_ago|
+      @account.entries.create!(
+        date: months_ago.months.ago.beginning_of_month + 10.days,
+        amount: 25.00, currency: "USD", name: "LOCAL COFFEE SHOP",
+        entryable: Transaction.new(category: categories(:food_and_drink))
+      )
+    end
+    RecurringTransaction.identify_patterns_for!(@family)
+    series = @family.recurring_transactions.sole
+    before = series.matching_transactions.size
+
+    series.update!(name: "Local Coffee Shop")
+
+    assert_no_difference "@family.recurring_transactions.count" do
+      RecurringTransaction.identify_patterns_for!(@family)
+    end
+    assert_empty RecurringTransaction::Identifier.new(@family).candidate_patterns
+    assert_equal 3, before
+    assert_equal before, series.reload.matching_transactions.size
   end
 
   test "renaming a merchant-keyed bill adds no alias" do

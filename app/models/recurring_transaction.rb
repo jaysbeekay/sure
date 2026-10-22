@@ -182,16 +182,15 @@ class RecurringTransaction < ApplicationRecord
       merchant_id.blank? && merchant_id_in_database.blank?
   end
 
+  # Kept as stored, not normalised: detection, the staleness check and income
+  # claiming compare names exactly, so a case-only rename needs the old spelling.
   def remember_previous_name_as_alias
     previous = name_in_database
     return if previous.blank?
 
-    normalized = Matcher.normalize_name(previous)
-    return if normalized == Matcher.normalize_name(name)
-
     hints = matcher_hints.to_h.deep_dup
     aliases = Array(hints["name_aliases"])
-    return if aliases.any? { |known| Matcher.normalize_name(known) == normalized }
+    return if aliases.include?(previous)
 
     hints["name_aliases"] = aliases + [ previous ]
     self.matcher_hints = hints
