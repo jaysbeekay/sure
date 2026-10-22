@@ -27,6 +27,7 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     assert connection.column_exists?(:loans, :collateral_account_id)
     assert connection.column_exists?(:loans, :day_count_convention, :string, default: "actual_365", null: false)
     assert_equal DropForkLoanTablesAndColumns::LOAN_CHECKS.sort, loan_check_names & DropForkLoanTablesAndColumns::LOAN_CHECKS
+    assert_equal FORK_DAY_COUNT_CHECK, day_count_check_expression
   end
 
   test "up deletes every row and column it names and reports how many it deleted" do
@@ -36,15 +37,16 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     output = with_env_overrides(DropForkLoanTablesAndColumns::CONFIRM_ENV => "1") { capture_io { @migration.up }.first }
 
     { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1, "loan_amortizations" => 2,
-      "loans.collateral_account_id" => 1, "loans.day_count_convention" => 1 }.each do |name, rows|
+      "loans.collateral_account_id" => 1 }.each do |name, rows|
       assert_match(/#{Regexp.escape(name)}: #{rows} rows? deleted/, output)
     end
+    assert_no_match(/day_count_convention: \d+ rows? deleted/, output)
 
     DropForkLoanTablesAndColumns::TABLES.each { |table| assert_not connection.table_exists?(table), "#{table} should be gone" }
     assert_not connection.column_exists?(:loans, :collateral_account_id)
-    assert_not connection.column_exists?(:loans, :day_count_convention)
     assert_empty loan_check_names & DropForkLoanTablesAndColumns::LOAN_CHECKS
     assert Loan.exists?(@loan.id), "the loans themselves stay"
+    assert_equal "actual_actual", day_count_of(@loan), "the day-count choice is kept, not deleted"
   end
 
   test "up refuses while data a user entered is present, and drops nothing" do
@@ -89,8 +91,8 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     end
   end
 
-  # The amortisation rows were derived and upstream recomputes them; upstream has
-  # no day-count setting to carry a choice over to. Neither is worth stopping for.
+  # The amortisation rows were derived and upstream recomputes them, and the
+  # day-count choice is kept rather than deleted. Neither is worth stopping for.
   test "derived amortisation rows and a day-count choice alone do not stop it" do
     quietly { @migration.down }
     loan_id = connection.quote(@loan.id)
@@ -104,18 +106,63 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     output = with_env_overrides(DropForkLoanTablesAndColumns::CONFIRM_ENV => nil) { capture_io { @migration.up }.first }
 
     assert_match(/loan_amortizations: 1 row deleted/, output)
-    assert_match(/loans\.day_count_convention: 1 row deleted/, output)
+    assert_no_match(/day_count_convention: \d+ rows? deleted/, output)
     assert_not connection.table_exists?(:loan_amortizations)
+    assert_equal "actual_actual", day_count_of(@loan)
   end
 
-  # A day-count of the default is every loan's value, not a choice anyone made.
-  test "a loan left on the default day-count is not counted as a lost choice" do
+  # Upstream's loan (we-promise/sure#3639) reads this same column, with a third
+  # value, thirty_360, as the default for a new loan. Every value the fork could
+  # hold is one of upstream's, so each existing loan keeps the basis it was
+  # entered on; only the check and the default for new rows change.
+  test "up keeps each loan's day-count and takes upstream's check and default" do
+    quietly { @migration.down }
+    # A second loan left on the fork's default; the fixtures hold only one.
+    other = Loan.new(id: connection.select_value("INSERT INTO loans (created_at, updated_at) VALUES (now(), now()) RETURNING id"))
+    connection.execute("UPDATE loans SET day_count_convention = 'actual_actual' WHERE id = #{connection.quote(@loan.id)}")
+    assert_equal "actual_365", day_count_of(other), "precondition: the fork's default"
+    assert_raises(ActiveRecord::StatementInvalid, "precondition: the fork's check refuses thirty_360") do
+      connection.transaction(requires_new: true) { set_day_count(other, "thirty_360") }
+    end
+
+    quietly { @migration.up }
+
+    assert_equal "actual_actual", day_count_of(@loan)
+    assert_equal "actual_365", day_count_of(other)
+    assert connection.column_exists?(:loans, :day_count_convention, :string, default: "thirty_360", null: false)
+    assert_equal UPSTREAM_DAY_COUNT_CHECK, day_count_check_expression
+
+    assert_nothing_raised { set_day_count(other, "thirty_360") }
+    assert_raises(ActiveRecord::StatementInvalid) do
+      connection.transaction(requires_new: true) { set_day_count(other, "actual_360") }
+    end
+  end
+
+  # Built from migrations alone, before upstream's own migration arrives, the
+  # column was never created. up gives it upstream's shape, so every database
+  # ends this migration with the same column.
+  test "up adds the day-count column in upstream's shape where it is missing" do
+    connection.remove_check_constraint :loans, name: "chk_loans_day_count_convention", if_exists: true
+    connection.remove_column :loans, :day_count_convention, if_exists: true
+
+    quietly { @migration.up }
+
+    assert connection.column_exists?(:loans, :day_count_convention, :string, default: "thirty_360", null: false)
+    assert_equal UPSTREAM_DAY_COUNT_CHECK, day_count_check_expression
+    assert_equal "thirty_360", day_count_of(@loan)
+  end
+
+  # Rolled back to the fork's engine, which knows only its two conventions.
+  test "down after up restores the fork's check, default and choices" do
+    quietly { @migration.down }
+    connection.execute("UPDATE loans SET day_count_convention = 'actual_actual' WHERE id = #{connection.quote(@loan.id)}")
+    quietly { @migration.up }
+
     quietly { @migration.down }
 
-    assert_equal 0, @migration.dropped_counts["loans.day_count_convention"]
-
-    connection.execute("UPDATE loans SET day_count_convention = 'actual_actual' WHERE id = #{connection.quote(@loan.id)}")
-    assert_equal 1, @migration.dropped_counts["loans.day_count_convention"]
+    assert_equal "actual_actual", day_count_of(@loan)
+    assert connection.column_exists?(:loans, :day_count_convention, :string, default: "actual_365", null: false)
+    assert_equal FORK_DAY_COUNT_CHECK, day_count_check_expression
   end
 
   # A database built from migrations never had any of it: up must neither raise
@@ -126,9 +173,30 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     output = capture_io { assert_nothing_raised { @migration.up } }.first
 
     assert_no_match(/deleted/, output)
+    assert connection.column_exists?(:loans, :day_count_convention, :string, default: "thirty_360", null: false)
+    assert_equal UPSTREAM_DAY_COUNT_CHECK, day_count_check_expression
   end
 
+  # As upstream's schema.rb dumps it, after its 20260918210000.
+  UPSTREAM_DAY_COUNT_CHECK = "day_count_convention::text = ANY (ARRAY['thirty_360'::character varying, " \
+                             "'actual_365'::character varying, 'actual_actual'::character varying]::text[])"
+  # As fork main's schema.rb dumps it, after its 20260907000000.
+  FORK_DAY_COUNT_CHECK = "day_count_convention::text = ANY (ARRAY['actual_365'::character varying::text, " \
+                         "'actual_actual'::character varying::text])"
+
   private
+    def day_count_check_expression
+      connection.check_constraints(:loans).find { |check| check.name == "chk_loans_day_count_convention" }&.expression
+    end
+
+    def day_count_of(loan)
+      connection.select_value("SELECT day_count_convention FROM loans WHERE id = #{connection.quote(loan.id)}")
+    end
+
+    def set_day_count(loan, value)
+      connection.execute("UPDATE loans SET day_count_convention = #{connection.quote(value)} WHERE id = #{connection.quote(loan.id)}")
+    end
+
     def connection
       ActiveRecord::Base.connection
     end

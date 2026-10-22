@@ -1885,8 +1885,11 @@ class Family::DataImporterTest < ActiveSupport::TestCase
 
   # An export written before the fork's loan tables were dropped (#475): fork
   # main wrote each account as `as_json(include: { accountable: {} })`, loans
-  # last, so a loan carried its collateral link and day-count as keys. Both
-  # columns are gone. The import must still succeed, without the link.
+  # last, so a loan carried its collateral link and day-count as keys. The
+  # collateral column is gone. The day-count column is kept, in upstream's
+  # shape, but the importer copies only a loan's subtype and locked
+  # attributes, as upstream's does, so the loan takes the default for a new one.
+  # The import must still succeed, without the link.
   test "an export from before the loan columns were dropped still imports, without its collateral link" do
     ndjson = build_ndjson([
       { type: "Account", data: { id: "old-property", name: "House", balance: "500000.0", currency: "USD",
@@ -1909,7 +1912,7 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     loan = result[:accounts].find { |account| account.name == "Mortgage" }.loan
     assert_equal "mortgage", loan.subtype
     assert_not loan.has_attribute?(:collateral_account_id), "the column this link lived in is gone"
-    assert_not loan.has_attribute?(:day_count_convention)
+    assert_equal "thirty_360", loan.day_count_convention
   end
 
   test "imports a rule's priority and keeps the exported run order" do
