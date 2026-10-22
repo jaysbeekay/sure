@@ -619,6 +619,22 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
     assert_no_match "Beta paused", response.body
   end
 
+  # `.form-field__input` is the bare control inside a form field: no border and
+  # no padding of its own. Without the `.form-field` wrapper the filters render
+  # as unstyled text beside the bordered search box. `.form-field` alone pads
+  # py-2, which leaves the selects 4px shorter than DS::SearchInput; py-2.5 and
+  # the text-base/sm:text-sm pair are what match its 42px (46px below sm).
+  test "every all-view filter select sits inside a form field as tall as the search box" do
+    get bills_url(view: "all")
+    assert_response :success
+
+    %w[status bill_type sort].each do |field|
+      assert_select "select[name=?]", "q[#{field}]", count: 1
+      assert_select ".form-field[class~='py-2.5'] > " \
+        "select.form-field__input[class~='text-base'][class~='sm:text-sm'][name=?]", "q[#{field}]", count: 1
+    end
+  end
+
   test "the calendar renders the month grid with paid and overdue states" do
     paid_bill = create_bill(name: "Paid on time", amount: 40, expected_day_of_month: 5)
     paid_occurrence = paid_bill.recurring_occurrences.find_by!(due_on: Date.current.beginning_of_month + 4)
@@ -1836,6 +1852,8 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
   # Skipping closes the occurrence but keeps its suggestion. Before this month
   # the overview no longer lists the row, so the queue mustn't ask about it.
   test "a suggestion against a skipped occurrence from last month stays out of the payment review queue" do
+    travel_to Date.current.beginning_of_month + 9.days
+
     due = Date.current.beginning_of_month - 10
     bill = declare_bill(name: "SKIPPED GYM", amount: 40, due: due)
     RecurringTransaction::OccurrenceGenerator.new(bill).generate!
