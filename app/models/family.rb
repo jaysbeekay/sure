@@ -668,15 +668,6 @@ class Family < ApplicationRecord
     end
   end
 
-  # The "All Time" anchor for a family's real activity: the date of the earliest
-  # Transaction or Trade entry, whichever is earlier, or nil when the family has
-  # neither. Deliberately separate from #oldest_entry_date, whose other readers
-  # (Budget, the balance-sheet assistant function) keep the any-entry type
-  # behaviour; see #300.
-  def earliest_activity_date
-    entries.where(entryable_type: [ "Transaction", "Trade" ]).minimum(:date)
-  end
-
   def oldest_entry_date
     entries.order(:date).first&.date || Date.current
   end
