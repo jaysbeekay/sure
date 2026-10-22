@@ -243,6 +243,23 @@ class InsightsHelperTest < ActionView::TestCase
     end
   end
 
+  # Fallbacks would render the English card among translated ones, so a missing
+  # locale passes every other test. A translation that drops a placeholder
+  # silently loses the figure it names.
+  test "spending pace is translated in every insights locale with the English placeholders" do
+    keys = %w[types.spending_pace figures.over_budget titles.spending_pace.approaching titles.spending_pace.over templates.spending_pace.approaching templates.spending_pace.over]
+    locales = Dir[Rails.root.join("config/locales/views/insights/*.yml")].map { |path| File.basename(path, ".yml") } - [ "en" ]
+    assert_not_empty locales
+
+    locales.each do |locale|
+      keys.each do |key|
+        assert I18n.exists?("insights.#{key}", locale.to_sym, fallback: false), "insights.#{key} is missing in #{locale}"
+        english = I18n.t("insights.#{key}", locale: :en).scan(/%\{\w+\}/).sort
+        assert_equal english, I18n.t("insights.#{key}", locale: locale.to_sym).scan(/%\{\w+\}/).sort, "placeholders differ for insights.#{key} in #{locale}"
+      end
+    end
+  end
+
   test "spending pace leads with the projection when approaching and the overshoot when over" do
     approaching = build_insight("spending_pace", metadata: { "status" => "approaching" }, facts: { "projected_spend" => "$1,107.14", "over_by" => "$0.00" })
     over = build_insight("spending_pace", metadata: { "status" => "over" }, facts: { "projected_spend" => "$2,767.86", "over_by" => "$250.00" })
@@ -264,6 +281,53 @@ class InsightsHelperTest < ActionView::TestCase
 
     assert_equal budget_path(Budget.date_to_param(Date.new(2024, 3, 1))), action[:href]
     assert_equal I18n.t("insights.actions.budget"), action[:text]
+  end
+
+  test "dig in prompt carries the insight's title, body, period and figures" do
+    insight = build_insight("savings_rate_change",
+      facts: { "current_rate" => "12.1", "previous_rate" => "45.2" },
+      period_start: Date.new(2026, 9, 1), period_end: Date.new(2026, 9, 30))
+
+    prompt = insight_dig_in_prompt(insight)
+
+    assert_includes prompt, "Insight: t"
+    assert_includes prompt, "What Sure found: b"
+    assert_includes prompt, "#{l(Date.new(2026, 9, 1))} – #{l(Date.new(2026, 9, 30))}"
+    assert_includes prompt, "- Current rate: 12.1"
+    assert_includes prompt, "- Previous rate: 45.2"
+  end
+
+  test "dig in prompt uses the family's override and leaves unknown placeholders" do
+    insight = build_insight("idle_cash", facts: { "balance" => "$5,000" })
+    insight.family.update!(ai_prompt_insight_dig_in: "Look at %{title}: %{facts} %{titel}")
+
+    assert_equal "Look at t: - Balance: $5,000 %{titel}", insight_dig_in_prompt(insight)
+  end
+
+  test "dig in is unavailable when the family's assistant is MCP-only" do
+    insight = build_insight("idle_cash")
+    Provider::Registry.stubs(:preferred_llm_provider).returns(mock)
+    insight.family.stubs(:assistant_enabled?).returns(false)
+
+    assert_not insight_dig_in_available?(insight)
+  end
+
+  test "dig in is available through a configured external assistant without an LLM provider" do
+    insight = build_insight("idle_cash")
+    Provider::Registry.stubs(:preferred_llm_provider).returns(nil)
+    insight.family.stubs(:effective_assistant_type).returns("external")
+    Assistant::External.stubs(:configured?).returns(true)
+
+    assert insight_dig_in_available?(insight)
+  end
+
+  test "dig in is unavailable when the external assistant is not configured" do
+    insight = build_insight("idle_cash")
+    Provider::Registry.stubs(:preferred_llm_provider).returns(mock)
+    insight.family.stubs(:effective_assistant_type).returns("external")
+    Assistant::External.stubs(:configured?).returns(false)
+
+    assert_not insight_dig_in_available?(insight)
   end
 
   private

@@ -35,6 +35,7 @@ fr:
       need_attention: requièrent votre attention
       of_budget: du budget
       on_pace: au rythme actuel
+      over_budget: "au-dessus du budget"
       today: aujourd'hui
       vs_previous: vs mois précédent
     index:
@@ -95,6 +96,9 @@ fr:
       subscription_audit: "%{name} (%{amount}) n'est pas réapparu depuis la date
         prévue du %{expected_on}. Il est possible que l'abonnement ait été annulé
         ou que le prélèvement ait changé de date."
+      spending_pace:
+        approaching: "Vous avez dépensé %{spent_pct}% de votre budget de %{budgeted} alors que %{elapsed_pct}% du mois est écoulé. À ce rythme, vous dépenseriez environ %{projected_spend}."
+        over: "Vous avez dépensé %{spent} pour un budget de %{budgeted}, soit %{over_by} de plus."
     titles:
       budget_at_risk:
         one: Une catégorie de votre budget nécessite votre attention
@@ -113,6 +117,9 @@ fr:
         above: Les dépenses de %{category} sont en hausse
         below: Les dépenses de %{category} sont en baisse
       subscription_audit: "%{name} est-il toujours actif ?"
+      spending_pace:
+        approaching: "Vos dépenses dépassent le rythme de votre budget"
+        over: "Vous avez dépassé votre budget ce mois-ci"
     types:
       budget_at_risk: Budget
       budget_on_track: Budget
@@ -122,4 +129,5 @@ fr:
       net_worth_milestone: Patrimoine net
       savings_rate_change: Taux d'épargne
       spending_anomaly: Dépenses
+      spending_pace: "Rythme des dépenses"
       subscription_audit: Abonnements
