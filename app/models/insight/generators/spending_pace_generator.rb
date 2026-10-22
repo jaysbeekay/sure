@@ -61,6 +61,9 @@ class Insight::Generators::SpendingPaceGenerator < Insight::Generator
           status: status,
           spent_pct_bucket: (spent_pct / 10) * 10
         },
+        # The whole budget month, not the month-to-date `narrative.period` the
+        # spend is read over: the pace is judged against the whole month's
+        # budget, and the "View budget" action links to period_start's month.
         period: budget.period,
         dedup_key: "spending_pace:#{month_token(budget.start_date)}"
       )
