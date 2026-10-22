@@ -21,6 +21,7 @@ class BillsMobileTest < ApplicationSystemTestCase
   end
 
   teardown do
+    page.driver.browser.execute_cdp("Emulation.clearDeviceMetricsOverride")
     page.driver.browser.manage.window.resize_to(1400, 1400)
   end
 
@@ -168,6 +169,60 @@ class BillsMobileTest < ApplicationSystemTestCase
       assert_selector "button[aria-label='#{I18n.t("ds.dialog.close")}']", visible: true
     end
     assert_no_horizontal_scroll("the payment drawer")
+  end
+
+  # The fallback payment form puts two fields and a button on one row. Wrapped
+  # as form fields, each field's minimum width is its date or number input's
+  # own, so at phone width the row ran past its box and the Record payment
+  # button ended at the screen's edge. The drawer measurement above misses it:
+  # the overflow lands in the drawer's padding, not its scroll width.
+  test "the manual payment form fits its box on a phone without clipping a field" do
+    bill = @family.recurring_transactions.create!(
+      name: "CITY WATER", account: accounts(:depository), amount: 80, currency: "USD",
+      expected_day_of_month: Date.current.day, anchor_date: Date.current,
+      last_occurrence_date: Date.current, next_expected_date: Date.current,
+      status: "active", manual: true
+    )
+
+    # Chrome will not size a window below 500px, so the resize in setup
+    # leaves a 500px viewport. Emulate a real phone's width instead.
+    page.driver.browser.execute_cdp("Emulation.setDeviceMetricsOverride",
+                                    width: 390, height: 844, deviceScaleFactor: 1, mobile: true)
+    visit recurring_occurrence_url(bill.recurring_occurrences.order(:due_on).first)
+    assert_equal 390, page.evaluate_script("window.innerWidth")
+    find("summary", text: I18n.t("recurring_occurrences.show.cant_find")).click
+    assert_selector "input[name='paid_on']", visible: true
+
+    fit = page.evaluate_script(<<~JS)
+      (() => {
+        const form = document.querySelector("input[name='paid_on']").closest("form");
+        const box = form.parentElement.getBoundingClientRect();
+        const button = form.querySelector("button, [type=submit]").getBoundingClientRect();
+        // How much narrower the date input is than its own content: squeezed
+        // below its natural width it loses the year behind the picker. (A
+        // number input's natural width is its size attribute, not its value,
+        // so the amount field has no such measure.)
+        const clipped = (input) => {
+          const probe = input.cloneNode();
+          probe.style.cssText = "position:absolute;visibility:hidden;width:max-content";
+          input.after(probe);
+          const natural = probe.getBoundingClientRect().width;
+          probe.remove();
+          return natural - input.getBoundingClientRect().width;
+        };
+        return {
+          form: form.scrollWidth - form.clientWidth,
+          right: form.getBoundingClientRect().right - box.right,
+          button: button.right - box.right,
+          date: clipped(form.querySelector("input[name='paid_on']"))
+        };
+      })()
+    JS
+
+    assert_operator fit["form"], :<=, 1, "the payment form's row is wider than the form"
+    assert_operator fit["right"], :<=, 1, "the payment form runs past its box"
+    assert_operator fit["button"], :<=, 1, "Record payment runs past the form's box"
+    assert_operator fit["date"], :<=, 1, "the date input is narrower than its date"
   end
 
   # A row's verb needs @lg of list to sit beside the bill's name. Below it the
