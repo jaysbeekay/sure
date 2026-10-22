@@ -563,25 +563,41 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
 
     get bill_url(bill)
 
-    assert_select "[data-breadcrumbs] a[href=?]", bills_path, text: "Bills"
+    assert_select "[data-breadcrumbs] a[href=?]", bills_path, text: I18n.t("breadcrumbs.bills")
     assert_select "[data-breadcrumbs] span", text: "Power Co"
   end
 
   test "the Bills crumb returns to the Bills tab the bill was opened from" do
     bill = create_bill(name: "Power Co", amount: 80)
 
-    get bill_url(bill), headers: { "Referer" => bills_url(view: "all", q: { bill_type: "subscription" }) }
+    tab = bills_path(view: "all", q: { bill_type: "subscription" })
 
-    assert_select "[data-breadcrumbs] a[href=?]", bills_path(view: "all", q: { bill_type: "subscription" }), text: "Bills"
+    # Browsers send an absolute referrer; a relative one is the same page.
+    [ "http://www.example.com#{tab}", tab ].each do |referer|
+      get bill_url(bill), headers: { "Referer" => referer }
+
+      assert_select "[data-breadcrumbs] a[href=?]", tab, { text: I18n.t("breadcrumbs.bills") }, "for referrer #{referer}"
+    end
+  end
+
+  # A new tab or a pasted link arrives with no referrer at all.
+  test "the Bills crumb falls back to the bills index without a referrer" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    get bill_url(bill)
+
+    assert_response :success
+    assert_nil request.referer
+    assert_select "[data-breadcrumbs] a[href=?]", bills_path
   end
 
   test "the Bills crumb ignores a referrer that is not the bills index" do
     bill = create_bill(name: "Power Co", amount: 80)
 
-    [ "https://evil.example/bills?view=all", transactions_url, "not a uri ::" ].each do |referer|
+    [ "https://evil.example/bills?view=all", "//evil.example/bills?view=all", transactions_url, "javascript:alert(1)", "not a uri ::" ].each do |referer|
       get bill_url(bill), headers: { "Referer" => referer }
 
-      assert_select "[data-breadcrumbs] a[href=?]", bills_path, { text: "Bills" }, "for referrer #{referer}"
+      assert_select "[data-breadcrumbs] a[href=?]", bills_path, { text: I18n.t("breadcrumbs.bills") }, "for referrer #{referer}"
     end
   end
 

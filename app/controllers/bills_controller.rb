@@ -204,11 +204,12 @@ class BillsController < ApplicationController
 
   private
     # The bill's page opens from every Bills tab, so the crumb goes back to the
-    # one the user came from, filters included. Only a referrer on this host's
-    # own Bills index counts; anything else falls back to the plain index.
+    # one the user came from, filters included. safe_return_path already
+    # decides which referrers count as ours; only the Bills index itself is
+    # kept, and only as a path, so the link never leaves this host.
     def bills_return_path
-      referer = URI.parse(request.referer.to_s)
-      return bills_path unless referer.host == request.host && referer.path == bills_path
+      referer = URI.parse(safe_return_path(fallback: bills_path))
+      return bills_path unless referer.path == bills_path
 
       [ referer.path, referer.query.presence ].compact.join("?")
     rescue URI::InvalidURIError
