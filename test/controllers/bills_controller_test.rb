@@ -1925,17 +1925,19 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
 
   # The strip printed a name and an amount only, so a bill due last week and
   # the same bill next month read as one entry listed twice.
-  test "the covered bridge shows each bill's due date" do
+  test "the covered bridge shows each bill's due date and opens its occurrence" do
     @family.accounts.where(accountable_type: "Depository").update_all(balance: 5_000)
     declare_income(name: "Frito Lay", amount: -1200, payday: Date.current + 5)
     due = Date.current + 2
-    declare_bill(name: "Curbside Cuts", amount: 150, due: due)
+    bill = declare_bill(name: "Curbside Cuts", amount: 150, due: due)
+    occurrence = bill.recurring_occurrences.find_by!(due_on: due)
 
     get bills_url(view: "paycheck")
 
     assert_response :success
     assert_select "[data-paycheck-bridge] [data-paycheck-item]", 1 do
       assert_select "[data-paycheck-item-date]", text: I18n.l(due, format: :short)
+      assert_select "a[href=?][data-turbo-frame=drawer]", recurring_occurrence_path(occurrence), text: "Curbside Cuts"
     end
   end
 
