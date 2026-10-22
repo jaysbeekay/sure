@@ -194,10 +194,27 @@ class BillsController < ApplicationController
     # Only the bill's own page carries the deep material, so only it pays for
     # the aggregates behind it.
     load_deep_extras
+    @breadcrumbs = [
+      [ t("breadcrumbs.home"), root_path ],
+      [ t("breadcrumbs.bills"), bills_return_path ],
+      [ @series.display_name, nil ]
+    ]
     render
   end
 
   private
+    # The bill's page opens from every Bills tab, so the crumb goes back to the
+    # one the user came from, filters included. Only a referrer on this host's
+    # own Bills index counts; anything else falls back to the plain index.
+    def bills_return_path
+      referer = URI.parse(request.referer.to_s)
+      return bills_path unless referer.host == request.host && referer.path == bills_path
+
+      [ referer.path, referer.query.presence ].compact.join("?")
+    rescue URI::InvalidURIError
+      bills_path
+    end
+
     # The plan plus the income facts the page states alongside it. One planner
     # instance answers both, so the income list and the periods always agree.
     def load_paycheck_plan

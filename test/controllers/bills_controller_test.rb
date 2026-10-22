@@ -556,6 +556,35 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
     assert_match "$78.50", response.body
   end
 
+  # The default trail ends on the controller's own name, and the last crumb is
+  # never a link, so the bill's page had no way back to the Bills index.
+  test "the bill page's Bills crumb links back to the bills index" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    get bill_url(bill)
+
+    assert_select "[data-breadcrumbs] a[href=?]", bills_path, text: "Bills"
+    assert_select "[data-breadcrumbs] span", text: "Power Co"
+  end
+
+  test "the Bills crumb returns to the Bills tab the bill was opened from" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    get bill_url(bill), headers: { "Referer" => bills_url(view: "all", q: { bill_type: "subscription" }) }
+
+    assert_select "[data-breadcrumbs] a[href=?]", bills_path(view: "all", q: { bill_type: "subscription" }), text: "Bills"
+  end
+
+  test "the Bills crumb ignores a referrer that is not the bills index" do
+    bill = create_bill(name: "Power Co", amount: 80)
+
+    [ "https://evil.example/bills?view=all", transactions_url, "not a uri ::" ].each do |referer|
+      get bill_url(bill), headers: { "Referer" => referer }
+
+      assert_select "[data-breadcrumbs] a[href=?]", bills_path, { text: "Bills" }, "for referrer #{referer}"
+    end
+  end
+
   # The drawer slot belongs to resolving a payment. If a bill's page claimed it
   # too, the page and the payment surface would compete for one frame id and
   # whichever lost would render nothing at all.
