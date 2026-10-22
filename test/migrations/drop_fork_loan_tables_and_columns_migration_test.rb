@@ -177,6 +177,41 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     assert_equal UPSTREAM_DAY_COUNT_CHECK, day_count_check_expression
   end
 
+  # Upstream's 20260918210000 adds the column with no guard, so on a database
+  # that already has it the migrator would raise PG::DuplicateColumn once that
+  # file arrives. up leaves the column exactly as that migration would, so it
+  # records the version as run and the migrator skips it.
+  test "up records upstream's day-count migration as run" do
+    forget_upstream_day_count_version
+    assert_not upstream_day_count_recorded?, "precondition: not recorded"
+
+    quietly { @migration.up }
+
+    assert upstream_day_count_recorded?
+  end
+
+  test "up where upstream's day-count migration is already recorded does not fail" do
+    forget_upstream_day_count_version
+    connection.execute("INSERT INTO schema_migrations (version) VALUES ('#{UPSTREAM_DAY_COUNT_VERSION}')")
+
+    assert_nothing_raised { quietly { @migration.up } }
+    assert_equal 1, connection.select_value("SELECT COUNT(*) FROM schema_migrations WHERE version = '#{UPSTREAM_DAY_COUNT_VERSION}'").to_i
+  end
+
+  # down puts back the fork's two-value column, which is not what upstream's
+  # migration leaves, so that migration must no longer count as run.
+  test "down forgets upstream's day-count migration" do
+    forget_upstream_day_count_version
+    quietly { @migration.up }
+    assert upstream_day_count_recorded?, "precondition: recorded by up"
+
+    quietly { @migration.down }
+
+    assert_not upstream_day_count_recorded?
+  end
+
+  UPSTREAM_DAY_COUNT_VERSION = "20260918210000"
+
   # As upstream's schema.rb dumps it, after its 20260918210000.
   UPSTREAM_DAY_COUNT_CHECK = "day_count_convention::text = ANY (ARRAY['thirty_360'::character varying, " \
                              "'actual_365'::character varying, 'actual_actual'::character varying]::text[])"
@@ -185,6 +220,14 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
                          "'actual_actual'::character varying::text])"
 
   private
+    def upstream_day_count_recorded?
+      connection.select_value("SELECT 1 FROM schema_migrations WHERE version = '#{UPSTREAM_DAY_COUNT_VERSION}'").present?
+    end
+
+    def forget_upstream_day_count_version
+      connection.execute("DELETE FROM schema_migrations WHERE version = '#{UPSTREAM_DAY_COUNT_VERSION}'")
+    end
+
     def day_count_check_expression
       connection.check_constraints(:loans).find { |check| check.name == "chk_loans_day_count_convention" }&.expression
     end

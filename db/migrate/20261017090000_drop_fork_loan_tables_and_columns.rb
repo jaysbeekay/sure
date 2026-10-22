@@ -13,6 +13,13 @@
 # A database without the column, built from migrations alone, gets it in that
 # same shape, so every database leaves here with the column upstream expects.
 #
+# It then records upstream's 20260918210000 as run. That migration adds the
+# column with no guard, so on a database that already has it, it would raise
+# PG::DuplicateColumn when it arrives. The migrator chooses what to run from
+# schema_migrations before running anything, so only a version already
+# recorded skips it. The record is accurate: the column is now exactly what
+# that migration leaves.
+#
 # Each table and column is counted before it goes, and the counts are written
 # to the migration output and the log, so an installation can see what it lost.
 # If any of it is data a user entered (ENTERED), the migration stops instead,
@@ -32,6 +39,7 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
   DAY_COUNT_DEFAULT = "thirty_360"
   FORK_DAY_COUNT_CONVENTIONS = %w[actual_365 actual_actual].freeze
   FORK_DAY_COUNT_DEFAULT = "actual_365"
+  UPSTREAM_DAY_COUNT_VERSION = "20260918210000"
 
   # What a user entered rather than what the app derived. Any of it present
   # stops the migration unless the deletion is confirmed. The amortisation rows
@@ -157,11 +165,18 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
       change_column_default :loans, :day_count_convention, DAY_COUNT_DEFAULT
       remove_check_constraint :loans, name: DAY_COUNT_CHECK, if_exists: true
       add_check_constraint :loans, "day_count_convention IN (#{quoted(DAY_COUNT_CONVENTIONS)})", name: DAY_COUNT_CHECK
+
+      # Already there on a database that ran upstream's migration first.
+      schema_migration.create_version(UPSTREAM_DAY_COUNT_VERSION) unless schema_migration.versions.include?(UPSTREAM_DAY_COUNT_VERSION)
     end
 
     # The fork's engine knows two conventions. A loan created on thirty_360
     # since `up` goes to the fork's default; every other choice is kept.
+    #
+    # The fork's two-value column is not what upstream's 20260918210000 leaves,
+    # so that migration no longer counts as run, whoever recorded it.
     def restore_fork_day_count
+      schema_migration.delete_version(UPSTREAM_DAY_COUNT_VERSION)
       add_column :loans, :day_count_convention, :string, default: FORK_DAY_COUNT_DEFAULT, null: false, if_not_exists: true
       remove_check_constraint :loans, name: DAY_COUNT_CHECK, if_exists: true
       execute <<~SQL.squish
@@ -171,6 +186,10 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
       change_column_default :loans, :day_count_convention, FORK_DAY_COUNT_DEFAULT
       add_check_constraint :loans, "day_count_convention::text = ANY (ARRAY['actual_365'::character varying::text, 'actual_actual'::character varying::text])",
                            name: DAY_COUNT_CHECK
+    end
+
+    def schema_migration
+      connection.pool.schema_migration
     end
 
     def quoted(values)
