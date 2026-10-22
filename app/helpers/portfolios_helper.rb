@@ -117,4 +117,23 @@ module PortfoliosHelper
   def portfolio_comparison_color(index)
     COMPARISON_COLORS[index % COMPARISON_COLORS.length]
   end
+
+  # The drivers that measure how the holdings performed. These read green or
+  # red by direction, as the KPI cards' Trend does. The rest are cash or scope
+  # moving in and out (external_net, composition) or the reconciliation residue
+  # (unexplained): a withdrawal is not a loss and an account added is not a
+  # gain, so those stay neutral and the sign alone says which way they went.
+  PERFORMANCE_DRIVERS = %i[income fees market revaluations fx_effect].freeze
+
+  def portfolio_driver_amount_class(key, amount)
+    return "text-primary" unless PERFORMANCE_DRIVERS.include?(key.to_sym)
+
+    if amount.positive?
+      "text-success"
+    elsif amount.negative?
+      "text-destructive"
+    else
+      "text-primary"
+    end
+  end
 end

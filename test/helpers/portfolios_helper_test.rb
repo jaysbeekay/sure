@@ -17,6 +17,21 @@ class PortfoliosHelperTest < ActionView::TestCase
     assert_equal [ { "id" => "USD", "name" => "USD", "amount" => 1234.57, "currency" => "USD", "percentage" => 61.2, "color" => Category::COLORS.first } ], json
   end
 
+  # #550. Every key the registry can emit, against both signs: a performance
+  # driver takes its direction's colour, a flow or the residue never does.
+  test "driver amounts colour performance by direction and leave flows neutral" do
+    %i[income fees market revaluations fx_effect].each do |key|
+      assert_equal "text-success", portfolio_driver_amount_class(key, BigDecimal(1)), key
+      assert_equal "text-destructive", portfolio_driver_amount_class(key, BigDecimal(-1)), key
+      assert_equal "text-primary", portfolio_driver_amount_class(key, BigDecimal(0)), key
+    end
+
+    %i[external_net composition unexplained].each do |key|
+      assert_equal "text-primary", portfolio_driver_amount_class(key, BigDecimal(1)), key
+      assert_equal "text-primary", portfolio_driver_amount_class(key, BigDecimal(-1)), key
+    end
+  end
+
   # The period-return card's hint. Three branches a regression would break
   # silently: the plain label when nothing was excluded, the singular and
   # plural disclosure, and the concatenation that keeps the comparison label

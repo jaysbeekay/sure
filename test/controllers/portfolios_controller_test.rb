@@ -698,6 +698,39 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       message: "a reconciling table does not warn"
   end
 
+  # #550. A driver's colour says whether it was performance, not just which way
+  # it pointed. Each case is the one the other branch would colour differently:
+  # a gain the sign-only rule left uncoloured, a withdrawal it painted as a
+  # loss, and a deposit a sign-for-everything rule would paint as a gain.
+  test "the drivers table colours performance by direction and leaves flows neutral" do
+    drivers = {
+      value_open: BigDecimal(1_000), value_close: BigDecimal(1_010),
+      change: BigDecimal(10), external_net: BigDecimal(-50), composition: BigDecimal(25),
+      income: BigDecimal(0), fees: BigDecimal(20), market: BigDecimal(80),
+      revaluations: BigDecimal(-25), fx_effect: BigDecimal(0), unexplained: BigDecimal(0)
+    }
+    Portfolio::Performance.any_instance.stubs(:drivers).returns(drivers)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-drivers" do
+      assert_select "[data-portfolio-driver=market] td.text-success", count: 1
+      assert_select "[data-portfolio-driver=revaluations] td.text-destructive", count: 1
+      assert_select "[data-portfolio-driver=fees] td.text-destructive", count: 1
+
+      assert_select "[data-portfolio-driver=external_net] td.text-primary", count: 1
+      assert_select "[data-portfolio-driver=external_net] td.text-destructive", count: 0,
+        message: "a withdrawal is cash leaving, not a loss"
+      assert_select "[data-portfolio-driver=composition] td.text-primary", count: 1
+      assert_select "[data-portfolio-driver=composition] td.text-success", count: 0,
+        message: "an account added is scope, not a gain"
+
+      assert_select ".border-primary", count: 0, message: "rules inside the card use the lighter divider"
+      assert_select ".border-secondary", count: 2
+    end
+  end
+
   test "the drivers table warns when the components do not reconcile" do
     drivers = {
       value_open: BigDecimal(1_000), value_close: BigDecimal(1_100),
@@ -712,6 +745,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_match I18n.t("portfolios.drivers.unreconciled_title"), response.body
     assert_select "[data-portfolio-driver=?]", "unexplained"
+    assert_select "[data-portfolio-driver=unexplained] td.text-primary", count: 1
+    assert_select "[data-portfolio-driver=unexplained] td.text-success", count: 0,
+      message: "a reconciliation gap is neither a gain nor a loss"
   end
 
   # B1 of the senior review on #121. The flatness test above grows HOLDINGS and
