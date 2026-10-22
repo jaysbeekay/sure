@@ -876,6 +876,20 @@ class RecurringTransactionsControllerTest < ActionDispatch::IntegrationTest
     assert RecurringAllocation.where(entry_id: entry.id, state: "confirmed").exists?
   end
 
+  # The backfill prunes unpaid past rows of whatever it is scoped to, so it
+  # must stay scoped to the bill being confirmed.
+  test "confirming a detected bill leaves other bills' past rows alone" do
+    _, suggestion, = suggested_bill_with_past_payment
+    other_row = @recurring_transaction.recurring_occurrences.create!(
+      family: @family, original_due_on: 3.months.ago.to_date, due_on: 3.months.ago.to_date, currency: "USD"
+    )
+
+    post confirm_recurring_transaction_url(suggestion)
+
+    assert suggestion.reload.active?
+    assert RecurringOccurrence.exists?(other_row.id), "another bill's history is not this confirm's to prune"
+  end
+
   test "confirming an already-active bill queues nothing" do
     assert @recurring_transaction.active?
 
