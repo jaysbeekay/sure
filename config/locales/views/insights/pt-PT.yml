@@ -34,6 +34,7 @@ pt-PT:
       budget_at_risk: Orçamento
       budget_on_track: Orçamento
       maintained_goal_depleted: Reserva
+      spending_pace: "Ritmo de gastos"
     meta:
       next_n_days:
         one: Próximo dia
@@ -54,6 +55,7 @@ pt-PT:
       idle_days:
         one: parado há %{count} dia
         other: parado há %{count} dias
+      over_budget: "acima do orçamento"
     actions:
       spending_anomaly: Ver transações de %{category}
       cash_flow_warning: Rever transações recorrentes
@@ -81,6 +83,9 @@ pt-PT:
         one: Uma categoria precisa de atenção no seu orçamento
         other: "%{count} categorias precisam de atenção no seu orçamento"
       budget_on_track: O seu orçamento está dentro do ritmo
+      spending_pace:
+        approaching: "Os seus gastos estão à frente do ritmo do orçamento"
+        over: "Ultrapassou o orçamento este mês"
     templates:
       spending_anomaly:
         above: Está no caminho de gastar %{projected_spend} em %{category} este mês, cerca de %{deviation_pct}% mais do que a sua média mensal recente de %{baseline_spend}.
@@ -100,3 +105,6 @@ pt-PT:
         over: "%{categories} excederam o orçamento este mês. Utilizou %{budget_spent_pct}% do orçamento total até agora."
         near: "%{categories} estão perto dos seus limites este mês. Utilizou %{budget_spent_pct}% do orçamento total até agora."
       budget_on_track: Gastou %{spent} do seu orçamento de %{budgeted} (%{budget_spent_pct}%) e tudo está dentro do limite.
+      spending_pace:
+        approaching: "Gastou %{spent_pct}% do seu orçamento de %{budgeted} com %{elapsed_pct}% do mês decorrido. A este ritmo, gastaria cerca de %{projected_spend}."
+        over: "Gastou %{spent} face a um orçamento de %{budgeted}, ou seja, %{over_by} acima."
