@@ -33,10 +33,8 @@ class SimplefinAccount::Liabilities::LoanProcessor
     # (https://www.simplefin.org/protocol.html) -- `extra` is the only place
     # one could appear, and it is optional and server-discretionary.
     #
-    # So there is no provider-metadata path to build here. Rate and term for
-    # SimpleFIN users come from transaction text instead
-    # (jaysbeekay/sure#142 phase 2), which never depended on the provider
-    # supplying them.
+    # So there is no provider-metadata path to build here. SimpleFIN users
+    # enter rate and term on the loan form.
     #
     # One server answering for itself is not proof that no server populates
     # `extra`. If one ever turns up, this is the method that would read it --

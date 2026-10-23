@@ -1,9 +1,9 @@
-# Upstream's migration (we-promise/sure#3473), admitted so weekly syncs stop
-# having to delete it (#184, phase 1). The fork's own
-# 20260831160656_create_loan_amortizations_with_variable_rate_tracking already
-# adds both columns, so here they are guarded with `if_not_exists`: on a fork
-# database this runs and changes nothing. Upstream's copy has no guards and a
-# reversible `change`; the guards and the no-op `down` are the differences.
+# Upstream's migration (we-promise/sure#3473). On a fork database the two
+# columns were already added by the fork's own
+# 20260831160656_create_loan_amortizations_with_variable_rate_tracking, whose
+# file is gone but whose version is still recorded, so here they are guarded
+# with `if_not_exists`. Upstream's copy has no guards and a reversible
+# `change`; the guards and the no-op `down` are the differences.
 class AddVariableRateTrackingToLoans < ActiveRecord::Migration[8.1]
   def up
     # Effective date => annual percentage, e.g. {"2026-04-01" => "6.15"}.
@@ -17,10 +17,9 @@ class AddVariableRateTrackingToLoans < ActiveRecord::Migration[8.1]
     add_column :loans, :start_date, :date, if_not_exists: true
   end
 
-  # Deliberately empty. The columns belong to the fork's earlier migration,
-  # which drops them on its own rollback. Reversing `add_column` here would
-  # drop them while that migration still counts as applied, taking every
-  # loan's rate schedule and start date with it (cubic, #396).
+  # Deliberately empty. On a fork database these columns predate this
+  # migration, so reversing `add_column` here would drop every loan's rate
+  # schedule and start date on a rollback past it (cubic, #396).
   def down
   end
 end
