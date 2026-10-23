@@ -109,8 +109,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path(period: "last_5_years")
 
     assert_response :success
-    assert_select "turbo-frame#portfolio_sections > div:first-child" do
-      assert_select "h1", text: I18n.t("portfolios.show.title")
+    assert_select "turbo-frame#portfolio_sections > div:first-child > header h1",
+      text: I18n.t("portfolios.show.title")
+    assert_select "turbo-frame#portfolio_sections > div:first-child > header + div[data-controller='DS--menu']" do
       assert_select "button[aria-label=?]", I18n.t("UI.period_picker.aria_label", period: "5Y")
     end
     assert_select "turbo-frame#portfolio_sections > div:first-child + div[role=list]"
