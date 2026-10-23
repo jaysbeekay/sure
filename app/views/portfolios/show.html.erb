@@ -19,10 +19,11 @@
       </div>
 
       <div
-        data-controller="reports-sortable"
-        data-reports-sortable-url-value="<%= update_preferences_portfolio_path %>"
-        data-reports-sortable-preference-key-value="portfolio"
-        data-action="dragover->reports-sortable#dragOver drop->reports-sortable#drop"
+        data-controller="sortable-list"
+        data-sortable-list-url-value="<%= update_preferences_portfolio_path %>"
+        data-sortable-list-param-value="preferences.portfolio_section_order"
+        data-sortable-list-hold-delay-value="800"
+        data-action="dragover->sortable-list#dragOver drop->sortable-list#drop"
         role="list"
         aria-label="<%= t(".sections_aria_label") %>">
         <% @sections.each do |section| %>
@@ -30,7 +31,8 @@
           <% collapsed = Current.user.section_collapsed?("portfolio", section[:key]) %>
           <section
             class="bg-container rounded-xl shadow-border-xs transition-all mb-6 group focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-900 focus-visible:ring-offset-2"
-            data-reports-sortable-target="section"
+            data-sortable-list-target="item"
+            data-sortable-list-id="<%= section[:key] %>"
             data-section-key="<%= section[:key] %>"
             data-controller="reports-section"
             data-reports-section-section-key-value="<%= section[:key] %>"
@@ -43,12 +45,14 @@
             aria-grabbed="false"
             aria-label="<%= t(".section_aria_label", title: t(section[:title])) %>"
             data-action="
-              dragstart->reports-sortable#dragStart
-              dragend->reports-sortable#dragEnd
-              touchstart->reports-sortable#touchStart
-              touchmove->reports-sortable#touchMove
-              touchend->reports-sortable#touchEnd
-              keydown->reports-sortable#handleKeyDown">
+              dragstart->sortable-list#dragStart
+              dragend->sortable-list#dragEnd
+              touchstart->sortable-list#touchStart
+              touchmove->sortable-list#touchMove
+              touchend->sortable-list#touchEnd
+              touchcancel->sortable-list#touchCancel
+              contextmenu->sortable-list#suppressContextMenu
+              keydown->sortable-list#handleKeyDown">
             <div class="px-4 py-2 flex items-center justify-between">
               <div class="flex items-center gap-2">
                 <% if section[:collapsible] %>

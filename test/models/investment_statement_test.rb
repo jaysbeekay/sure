@@ -867,8 +867,10 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     totals = @statement.totals(period: period)
 
     assert_equal Money.new(0, "USD"), totals.contributions
-    assert_equal Money.new(120, "USD"), totals.dividends
-    assert_equal Money.new(120, "USD"), totals.total_income
+    # Income is signed (Portfolio::FlowClassifier): the 120 left the account,
+    # so the relabeled row nets against income rather than adding to it.
+    assert_equal Money.new(-120, "USD"), totals.dividends
+    assert_equal Money.new(-120, "USD"), totals.total_income
   end
 
   test "a sell relabeled to Interest is counted as income only, not also as a withdrawal" do
@@ -929,6 +931,40 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     assert_equal 40, @statement.total_dividends
     assert_equal 5, @statement.total_interest
+  end
+
+  test "income nets by sign, so a charge or reversal labelled as income reduces it" do
+    # Portfolio::FlowClassifier decides income by label, not sign, and says to
+    # sum signed amounts: a margin-interest charge labelled "Interest" is money
+    # out and must lower interest, not add to it.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 100, date: period.start_date)
+    create_income_trade(account: account, label: "Interest", amount: 50, date: period.start_date)
+    reversal = create_income_trade(account: account, label: "Dividend", amount: 30, date: period.start_date)
+    reversal.update_columns(amount: 30)
+    create_labelled_transaction(account: account, label: "Interest", amount: 10, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(70, "USD"), totals.dividends
+    assert_equal Money.new(40, "USD"), totals.interest
+    assert_equal Money.new(110, "USD"), totals.total_income
+  end
+
+  test "trades_count counts trades, not the income transactions read beside them" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_trade(account: account, qty: 2, amount: 120, date: period.start_date)
+    create_income_transaction(account: account, label: "Dividend", amount: 10, date: period.start_date)
+    create_income_transaction(account: account, label: "Interest", amount: 3, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(13, "USD"), totals.total_income
+    assert_equal 1, totals.trades_count
   end
 
   test "current_holdings memoizes so repeated dashboard-style calls issue a single query" do
@@ -1164,7 +1200,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "Totals splits income into dividends and interest by literal label; a new income label needs its own bucket there"
   end
 
-  test "totals cache key carries the v4 aggregation version" do
+  test "totals cache key carries the v5 aggregation version" do
     create_investment_account(balance: 500)
     seen_keys = []
     Rails.cache.stubs(:fetch).with { |*args| seen_keys << Array(args.first); true }.returns(
@@ -1174,7 +1210,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     @statement.totals(period: Period.current_month)
 
     assert_equal 1, seen_keys.size
-    assert_includes seen_keys.first, "totals_query/v4"
+    assert_includes seen_keys.first, "totals_query/v5"
   end
 
   test "series cache key changes when a share is revoked" do
@@ -2308,6 +2344,21 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       assert_includes InvestmentStatement::ALLOCATION_GROUPINGS, grouping
       assert_nothing_raised { @statement.allocation_by(grouping) }
     end
+  end
+
+  test "totals cache invalidates when family currency changes" do
+    create_investment_account(balance: 500)
+    period = Period.last_30_days
+
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    dummy_result = { contributions: 0, withdrawals: 0, dividends: 0, interest: 0, fees: 0, trades_count: 0 }
+    InvestmentStatement::Totals.expects(:new).twice.returns(stub(call: dummy_result))
+
+    statement = InvestmentStatement.new(@family)
+    statement.totals(period: period)
+
+    @family.update!(currency: "EUR")
+    InvestmentStatement.new(@family.reload).totals(period: period)
   end
 
   private

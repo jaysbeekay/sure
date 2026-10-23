@@ -198,11 +198,16 @@ class Account::ProviderImportAdapter
         date
       end
 
-      entry.assign_attributes(
-        amount: amount,
-        currency: currency,
-        date: effective_date
-      )
+      # A date or amount the user changed without marking the entry user_modified
+      # (an API PATCH, for example) is still locked by lock_saved_attributes!.
+      # Respect that lock the way enrich_attribute does for name and category.
+      # Amount and currency only make sense together, so a lock on either keeps both.
+      financial_attributes = { amount: amount, currency: currency, date: effective_date }
+      if entry.persisted?
+        financial_attributes.delete(:date) if entry.locked?(:date)
+        financial_attributes.except!(:amount, :currency) if entry.locked?(:amount) || entry.locked?(:currency)
+      end
+      entry.assign_attributes(financial_attributes)
 
       # Use enrichment pattern to respect user overrides
       entry.enrich_attribute(:name, name, source: source)
@@ -226,7 +231,7 @@ class Account::ProviderImportAdapter
       # Auto-detect investment activity labels for investment accounts
       detected_label = investment_activity_label
       if account.investment? && detected_label.nil? && entry.entryable.is_a?(Transaction)
-        detected_label = detect_activity_label(name, amount)
+        detected_label = detect_activity_label(name, entry.amount)
       end
 
       # Determine the transaction kind. Activity-label and account-type classification
@@ -243,7 +248,7 @@ class Account::ProviderImportAdapter
       elsif detected_label == "Contribution"
         auto_kind = "investment_contribution"
         auto_category = account.family.investment_contributions_category
-      elsif account.accountable_type == "Loan" && amount.negative?
+      elsif account.accountable_type == "Loan" && entry.amount.negative?
         auto_kind = "loan_payment"
       elsif account.accountable_type == "CreditCard" && amount.negative?
         auto_kind = "cc_payment"
@@ -256,8 +261,17 @@ class Account::ProviderImportAdapter
           entry.transaction.assign_attributes(investment_activity_label: detected_label)
         end
 
+        # A leg that is already matched to a Transfer takes its kind from the
+        # transfer, not from this row. Re-classifying it here, e.g. a negative
+        # amount on a Loan turning the matched inflow back into loan_payment,
+        # makes budgets and reports count the same payment as an expense on
+        # both legs. Deriving it from the transfer also repairs legs an earlier
+        # sync already overwrote. An unconfirmed auto-match gets its kinds only
+        # in Transfer#confirm!, so until then the leg keeps its own kind.
         if auto_kind.present?
-          entry.transaction.assign_attributes(kind: auto_kind)
+          transfer = matched_transfer_for(entry)
+          transfer = nil if transfer&.pending?
+          entry.transaction.assign_attributes(kind: transfer ? transfer.kind_for_leg(entry.transaction) : auto_kind)
         end
 
         if auto_category.present? && entry.transaction.category_id.blank?
@@ -477,7 +491,15 @@ class Account::ProviderImportAdapter
           account_provider_id: account_provider_id
         )
       else
-        holding = account.holdings.find_or_initialize_by(
+        # A remapped row sits on the user's chosen security, so a lookup by the
+        # incoming security alone misses it and the save hits the unique index.
+        # Match it by provider_security first, as fallback 1a does, scoped by
+        # account_provider_id so another provider's row is not claimed.
+        remapped_attrs = { provider_security: security, date: date, currency: currency }
+        remapped_attrs[:account_provider_id] = account_provider_id if account_provider_id.present?
+        holding = account.holdings.find_by(remapped_attrs)
+
+        holding ||= account.holdings.find_or_initialize_by(
           security: security,
           date: date,
           currency: currency
@@ -504,6 +526,10 @@ class Account::ProviderImportAdapter
         end
       end
 
+      # A new row for a later day starts without the user's corrections, which
+      # live on the earlier day's row. Carry them forward from that row.
+      carried = holding.new_record? ? previous_holding_for(security: security, currency: currency, date: date, account_provider_id: account_provider_id) : nil
+
       # Reconcile cost_basis to respect priority hierarchy
       reconciled = Holding::CostBasisReconciler.reconcile(
         existing_holding: holding.persisted? ? holding : nil,
@@ -523,7 +549,11 @@ class Account::ProviderImportAdapter
       }
 
       # Only update security if not locked by user
-      if holding.new_record? || holding.security_replaceable_by_provider?
+      if carried&.security_locked?
+        attributes[:security] = carried.security
+        attributes[:provider_security_id] = carried.provider_security_id || security.id
+        attributes[:security_locked] = true
+      elsif holding.new_record? || holding.security_replaceable_by_provider?
         attributes[:security] = security
         # Track the provider's original security so reset_security_to_provider! works
         # Only set if not already set (preserves original if user remapped then unlocked)
@@ -531,7 +561,11 @@ class Account::ProviderImportAdapter
       end
 
       # Only update cost_basis if reconciliation says to
-      if reconciled[:should_update]
+      if carried&.cost_basis_locked?
+        attributes[:cost_basis] = carried.cost_basis
+        attributes[:cost_basis_source] = carried.cost_basis_source
+        attributes[:cost_basis_locked] = true
+      elsif reconciled[:should_update]
         attributes[:cost_basis] = reconciled[:cost_basis]
         attributes[:cost_basis_source] = reconciled[:cost_basis_source]
       end
@@ -1042,6 +1076,51 @@ class Account::ProviderImportAdapter
   end
 
   private
+
+    # The latest earlier holding of the security the provider reports. A
+    # remapped row records that security in provider_security_id; an
+    # unremapped one has it as its own security. A provider that reports the
+    # user's chosen security instead still finds the row the user locked to
+    # it. Only the latest row counts, so a correction the user has since
+    # undone is not revived from an older day.
+    #
+    # Within that day, a row recording this provider security is the position
+    # it came from, and wins over a correction locked to it: with chained
+    # remaps (A onto B, B onto C) an incoming B matches both the B->C row and
+    # the A->B row on the same date. `id` settles anything left, so the pick
+    # never depends on the query plan.
+    def previous_holding_for(security:, currency:, date:, account_provider_id:)
+      scope = account.holdings
+        .where(currency: currency)
+        .where("holdings.date < ?", date)
+        .where(
+          "holdings.provider_security_id = :id OR (holdings.provider_security_id IS NULL AND holdings.security_id = :id) " \
+          "OR (holdings.security_locked AND holdings.security_id = :id)",
+          id: security.id
+        )
+      scope = scope.where(account_provider_id: account_provider_id) if account_provider_id.present?
+
+      match_rank = ActiveRecord::Base.sanitize_sql_array([
+        "CASE WHEN holdings.provider_security_id = :id THEN 0 " \
+        "WHEN holdings.provider_security_id IS NULL AND holdings.security_id = :id THEN 1 ELSE 2 END",
+        id: security.id
+      ])
+      scope.order(date: :desc).order(Arel.sql(match_rank)).order(:id).first
+    end
+
+    # Loads the transfer together with both legs, their entries and accounts in
+    # one joined query, so Transfer#kind_for_leg reads them without the lazy
+    # loads it would otherwise pay on every re-imported row. Looked up per row
+    # rather than memoized per adapter: most processors build an adapter per
+    # row, and some link or destroy transfers mid-sync (Trade Republic), so a
+    # memo would be both costlier and stale.
+    def matched_transfer_for(entry)
+      return nil unless entry.persisted?
+
+      transaction_id = entry.transaction.id
+      transfers = Transfer.eager_load(inflow_transaction: { entry: :account }, outflow_transaction: { entry: :account })
+      transfers.where(inflow_transaction_id: transaction_id).or(transfers.where(outflow_transaction_id: transaction_id)).first
+    end
 
     # Memoized per adapter instance (which is per-account). Membership in
     # goal_accounts is stable across a sync batch.
