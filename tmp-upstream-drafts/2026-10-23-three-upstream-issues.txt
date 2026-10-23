@@ -1,0 +1,193 @@
+=== ISSUE (fork #494)
+TITLE: Bug: Goal form silently refuses to save when a ticked funding account is in another currency
+SEARCH: 
+--- BODY START
+## Before you start (required)
+
+### General checklist
+
+- [ ] I have removed personal / sensitive data from screenshots and logs
+- [ ] I have searched [existing issues](https://github.com/we-promise/sure/issues?q=is:issue) and [discussions](https://github.com/we-promise/sure/discussions) to ensure this is not a duplicate issue
+
+### How are you using Sure?
+
+- [ ] I was a paying Maybe customer (hosted version)
+- [ ] I use it on PikaPod, Umbrel or similar (VPS included)
+- [ ] I am a self-hosted user (local only)
+
+### Self hoster checklist
+
+- Self hosted app commit SHA (find in user menu): [enter commit sha here]
+  - [ ] I have confirmed that my app's commit is the latest version of Sure
+- Where are you hosting?
+  - [ ] Render
+  - [ ] Docker Compose
+  - [ ] Umbrel
+  - [ ] PikaPod
+  - [ ] Other (please specify)
+
+---
+
+## Bug description
+
+When one of the accounts ticked on the goal form is in a different currency from the goal, the save is refused and nothing explains why. The form re-renders with a 422 and no message, and none of the ticked accounts is linked, not even the ones in the right currency. To the user it looks as if ticking several accounts at once doesn't work.
+
+The picker lists every fundable account in every currency, so this is easy to hit when a family has, for example, a USD brokerage account and a EUR one with similar names.
+
+Read from `main` at 9884e617.
+
+### To Reproduce
+
+1. Have a goal in one currency (say EUR). In the same family, have one Depository or Investment account in EUR and one in USD.
+2. Edit the goal, tick both accounts and save.
+3. The form re-renders (HTTP 422). Nothing is linked and no error is shown.
+
+The same thing happens on **New goal** when the first ticked account and a later one are in different currencies, because the new goal takes its currency from the first ticked account.
+
+### Expected behavior
+
+The form says why it refused the save, ideally naming the account and the goal currency. Better still, the edit form doesn't offer an account the goal can never hold, since a linked goal's currency is locked.
+
+### Cause
+
+- `Goal` validates `linked_accounts_must_match_goal_currency` (`app/models/goal.rb:67`, body `:1312-1321`). It adds `errors.add(:linked_accounts, :currency_mismatch)` ("All linked accounts must share the same currency.", `config/locales/models/goal/en.yml:28`).
+- Two more validations add their errors to `:linked_accounts` (`linked_accounts_must_be_fundable`, `:1293-1300`, and `linked_accounts_must_belong_to_family`, `:1323-1332`). `currency_locked_once_linked` adds one to `:currency` (`:1377-1382`).
+- `app/views/goals/_form.html.erb` renders errors only for `:name` (`:49`), `:target_amount` (`:83`), `:base` (`:187`) and `goal_accounts.base` (`:192-194`). Nothing renders `:linked_accounts` or `:currency`.
+- `GoalsController#create` and `#update` rescue `ActiveRecord::RecordInvalid` and re-render with 422 (`app/controllers/goals_controller.rb:76-86`, `:131-136`). The error is on the record, but the page never shows it.
+- The picker is `linkable_accounts_for_new` (`goals_controller.rb:219-221`), used by new, edit and both failure re-renders. It filters by fundable type and visibility, not by currency. `create` sets the goal currency from the first ticked account (`:61`).
+
+### Suggested fix
+
+1. In `_form.html.erb`, render `goal.errors[:linked_accounts]` and `goal.errors[:currency]` under the funding accounts group, next to the existing `goal_accounts.base` loop.
+2. On the edit form, disable an account in another currency **unless it is already linked**. A disabled checkbox isn't submitted, and `sync_linked_accounts!` (`goals_controller.rb:223-235`) would unlink an already-linked account whose box goes missing.
+3. If the message names accounts, name only accounts the viewer can access. A family goal can be linked to another member's private account that never renders as a checkbox (see the comment in `sync_linked_accounts!`, `:227-231`), so naming every mismatched link could reveal it. Count the hidden ones instead.
+
+### Related
+
+- #3974 (open PR, "Support multi-currency goal funding") removes the single-currency rule. If it lands, the currency case goes away, but the form still doesn't render the other `:linked_accounts` and `:currency` errors listed above.
+
+Fork tracking issue: jaysbeekay/sure#494
+
+### Screenshots and/or recordings
+
+(Optional: the edit form after the refused save. Use made-up account names.)
+--- BODY END
+
+=== ISSUE (fork #495)
+TITLE: Bug: Shares transferred in from another broker are booked as market gain, so a contributions-basis goal shows 0
+SEARCH: 
+--- BODY START
+## Before you start (required)
+
+### General checklist
+
+- [ ] I have removed personal / sensitive data from screenshots and logs
+- [ ] I have searched [existing issues](https://github.com/we-promise/sure/issues?q=is:issue) and [discussions](https://github.com/we-promise/sure/discussions) to ensure this is not a duplicate issue
+
+### How are you using Sure?
+
+- [ ] I was a paying Maybe customer (hosted version)
+- [ ] I use it on PikaPod, Umbrel or similar (VPS included)
+- [ ] I am a self-hosted user (local only)
+
+### Self hoster checklist
+
+- Self hosted app commit SHA (find in user menu): [enter commit sha here]
+  - [ ] I have confirmed that my app's commit is the latest version of Sure
+- Where are you hosting?
+  - [ ] Render
+  - [ ] Docker Compose
+  - [ ] Umbrel
+  - [ ] PikaPod
+  - [ ] Other (please specify)
+
+---
+
+## Bug description
+
+When shares move between brokers in kind, providers record the move as a trade with a quantity, `price: 0` and `amount: 0`, labelled `Transfer`, `Sweep In` or `Sweep Out`. The balance calculator gets no non-cash flow from a zero-amount trade, so the arriving position's whole value is booked as **market movement** (`balances.net_market_flows`). The sending account shows the reverse: a market loss on the day the shares leave.
+
+The visible symptom is on goals. A goal on the **contributions** basis takes `net_market_flows` off the balance, so an account funded only by transferred-in shares contributes 0 to the goal, however much the shares are worth. The same split feeds the balance reconciliation breakdown on the account page and the investment statement's market figures.
+
+Read from `main` at 9884e617.
+
+### To Reproduce
+
+1. Create a manual investment account with no cash. Give a security a price of 100 for the last 10 days.
+2. Add a trade of 10 units at price 0, labelled `Sweep In` (or `Transfer`), dated 10 days ago. Let balances recalculate.
+3. Link the account to a goal and set the goal's progress basis to contributions (an investment-backed goal defaults to it).
+4. The goal shows 0 contributed. The account's balance rows show about 1,000 of `net_market_flows` and no non-cash inflow on the trade date.
+
+For comparison, depositing 1,000 cash and buying the same 10 units at 100 gives 1,000 contributed and 0 market movement.
+
+### Expected behavior
+
+An in-kind transfer moves value into or out of the account, not market return. On the trade date the arriving position is booked as a non-cash inflow (an outflow for the sending side), and `net_market_flows` stays near 0. A contributions-basis goal then counts the shares at their value on arrival.
+
+### Cause
+
+- `Balance::BaseCalculator#flows_for_date` (`app/models/balance/base_calculator.rb:89-130`) gets non-cash flows only from trade **amounts**: `non_cash_inflows = trade_cash_outflow_sum` (`:121`) over `regular_trades` (`:103`, `qty != 0`). A zero-amount trade adds nothing.
+- `market_value_change_on_date` (`:77-87`) is the change in holdings value minus net non-cash flows, so the jump in holdings lands entirely in `net_market_flows`.
+- `Goal#net_contributed_for` (`app/models/goal.rb:1069-1072`) is the balance minus the summed `net_market_flows` (`Goal.market_flows_for`, `:250-255`), floored at 0.
+- The labels are already defined as ownership-preserving: `Trade::INTERNAL_MOVEMENT_LABELS = %w[Transfer Sweep\ In Sweep\ Out]` (`app/models/trade.rb:26`). `Holding::PortfolioCache` already keeps these zero-price journal trades from being dropped as income (`app/models/holding/portfolio_cache.rb:172-179`).
+- Other readers of the same column: `UI::Account::BalanceReconciliation` (`app/components/UI/account/balance_reconciliation.rb:76,124,144`), `InvestmentStatement` (`app/models/investment_statement.rb:178`), and the balances API (`app/views/api/v1/balances/_balance.json.jbuilder:28-29`).
+
+### Suggested fix
+
+In `flows_for_date`, value a trade with `amount == 0`, `qty != 0` and a label in `Trade::INTERNAL_MOVEMENT_LABELS` at `qty.abs ×` the price on that security's holdings row for the trade date. Convert it into the account currency the same way `Balance::SyncCache` converts that row. Book it as a non-cash inflow (qty > 0) or outflow (qty < 0), and leave cash flows unchanged. When the row has no price on the trade date, value the journal at 0. That matches what the holdings value does that day, so the day reads the same as it does now.
+
+Existing balances are corrected on the next full recalculation. Manual accounts recalculate from a sync window, so their journal days may need a full resync.
+
+### Related
+
+- #4198 (open) corrects the daily returns series for `Transfer` journals by taking the value back out of `market`. If the calculator stops booking journals as market, that take-back has to go, or the value is removed twice. The `Sweep In` and `Sweep Out` labels may need the same treatment there.
+
+Fork tracking issue: jaysbeekay/sure#495
+
+### Screenshots and/or recordings
+
+(Optional: the goal card and the account's balance breakdown. Use test data.)
+--- BODY END
+
+=== ISSUE (fork #473)
+TITLE: Goals: let the projection assume an expected annual return
+SEARCH: 
+--- BODY START
+## Issue description
+
+A goal's projection assumes the money already saved earns nothing. That's close enough for a short savings goal in a bank account. For a goal backed by investments over many years, it understates the projected balance by a wide margin, overstates the "required per month" figure, and can show a goal as falling short when growth alone would reach the target.
+
+Read from `main` at 9884e617:
+
+- `Goal#projection_end_amount` (`app/models/goal.rb:810-815`) is linear: `current_balance + pace × months`, with `months = days / 30.44`.
+- `Goal#monthly_target_amount` (`app/models/goal.rb:693-703`) is `remaining_amount / months_remaining`, with `months_remaining = days / 30.0` (`:686-691`).
+- The chart draws both lines as straight two-point segments (`app/javascript/controllers/goal_projection_chart_controller.js:153-170`), and the hover value interpolates linearly between the endpoints (`:584`).
+
+### Proposal
+
+- An optional **expected annual return** per goal (a percentage; blank means 0%, which is today's behaviour), set on the goal form and shown on the projection ("assuming 5% a year").
+- The projection compounds monthly: with `r = annual / 12`, balance after `n` months = `B(1+r)^n + P((1+r)^n − 1)/r`.
+- Required monthly solves the same formula for `P`: `P = (T − B(1+r)^n) · r / ((1+r)^n − 1)`, floored at 0. When growth alone reaches the target, nothing more is needed.
+- Status, the catch-up amount, milestones and the chart all read the same compounded figures, so the card and the chart agree. Blank or 0% gives exactly today's numbers.
+
+### Example
+
+B = 100,000 saved today, target T = 200,000 in 15 years (n = 180 months):
+
+- Today (0%): required ≈ 556 / month.
+- At 5% a year: B alone compounds to about 211,000, so required = 0 and the goal is on track on growth alone.
+- At 2% a year: B compounds to about 135,000, so required ≈ 310 / month.
+
+### Points to settle in the design
+
+- **One month count.** Required monthly uses `days / 30.0` and the projection uses `days / 30.44`. With a straight line the difference hardly shows. Once compounded, the card and the chart would disagree, so both should use one count.
+- **Due or past-due goals.** The required-monthly formula divides by zero when `n = 0`. Today's code handles that case (`months_remaining.zero?` returns `remaining_amount`), and the compounded version has to keep that guard.
+- **Maintained reserves** have no target date, so they would ignore the rate.
+- Out of scope: inflation-adjusting the target, deriving the rate from history, per-account rates.
+
+### Related
+
+- #4316 (open): goal pace on valuation-tracked accounts. It fixes the pace term of the projection; this proposal adds the return term.
+
+Fork tracking issue: jaysbeekay/sure#473
+--- BODY END
