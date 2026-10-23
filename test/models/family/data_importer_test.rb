@@ -1717,6 +1717,41 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal "Candidate outflow", rejected_transfer.outflow_transaction.entry.name
   end
 
+  test "restores a transfer the user made a plain transfer instead of an investment contribution" do
+    ndjson = build_ndjson([
+      { type: "Account", data: { id: "checking", name: "Checking", balance: "1000", currency: "USD", accountable_type: "Depository" } },
+      { type: "Account", data: { id: "brokerage", name: "Brokerage", balance: "2500", currency: "USD", accountable_type: "Investment" } },
+      { type: "Transaction", data: { id: "fx-outflow", account_id: "checking", date: "2024-01-15", amount: "100.00", name: "To brokerage", currency: "USD", kind: "funds_movement" } },
+      { type: "Transaction", data: { id: "fx-inflow", account_id: "brokerage", date: "2024-01-15", amount: "-100.00", name: "From checking", currency: "USD", kind: "funds_movement" } },
+      { type: "Transfer", data: { id: "transfer-1", inflow_transaction_id: "fx-inflow", outflow_transaction_id: "fx-outflow", status: "confirmed", investment_contribution: false } }
+    ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    outflow = Transaction.joins(:entry).find_by!(entries: { name: "To brokerage" })
+    assert_equal "funds_movement", outflow.kind
+    assert_nil outflow.category
+    assert outflow.locked?(:kind)
+    assert_equal false, outflow.transfer_as_outflow.investment_contribution_choice
+  end
+
+  test "imports a pending transfer without applying transfer kinds" do
+    ndjson = build_ndjson([
+      { type: "Account", data: { id: "checking", name: "Checking", balance: "1000", currency: "USD", accountable_type: "Depository" } },
+      { type: "Account", data: { id: "savings", name: "Savings", balance: "2500", currency: "USD", accountable_type: "Depository" } },
+      { type: "Transaction", data: { id: "pending-outflow", account_id: "checking", date: "2024-01-15", amount: "100.00", name: "Pending outflow", currency: "USD", kind: "standard" } },
+      { type: "Transaction", data: { id: "pending-inflow", account_id: "savings", date: "2024-01-15", amount: "-100.00", name: "Pending inflow", currency: "USD", kind: "standard" } },
+      { type: "Transfer", data: { id: "transfer-1", inflow_transaction_id: "pending-inflow", outflow_transaction_id: "pending-outflow", status: "pending" } }
+    ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    transfer = Transfer.joins(inflow_transaction: :entry).find_by!(entries: { name: "Pending inflow" })
+    assert transfer.pending?
+    assert_equal "standard", transfer.inflow_transaction.kind
+    assert_equal "standard", transfer.outflow_transaction.kind
+  end
+
   test "skips rejected transfers with missing transactions under strict import" do
     session = @family.import_sessions.create!(expected_chunks: 1)
 
@@ -1912,6 +1947,34 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal 500.0, budget_category.budgeted_spending.to_f
   end
 
+  test "imports rules in their exported run order after existing rules" do
+    existing = @family.rules.create!(resource_type: "transaction",
+      actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    rule_record = ->(name, position, stop_processing) do
+      {
+        type: "Rule",
+        version: 1,
+        data: {
+          name: name,
+          resource_type: "transaction",
+          active: true,
+          position: position,
+          stop_processing: stop_processing,
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
+          actions: [ { action_type: "exclude_transaction" } ]
+        }
+      }
+    end
+    ndjson = build_ndjson([ rule_record.call("Second", 2, false), rule_record.call("First", 1, true) ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    assert_equal [ existing.id ] + @family.rules.where(name: %w[First Second]).in_order_of(:name, %w[First Second]).pluck(:id),
+      @family.rules.ordered.pluck(:id).last(3)
+    assert @family.rules.find_by(name: "First").stop_processing
+    assert_not @family.rules.find_by(name: "Second").stop_processing
+  end
+
   test "imports rules with conditions and actions" do
     ndjson = build_ndjson([
       {
@@ -1962,58 +2025,54 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal category.id, action.value
   end
 
-  test "imports a rule's priority and keeps the exported run order" do
-    rule_data = ->(name, priority) {
-      data = {
-        name: name, resource_type: "transaction", active: true,
-        conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
-        actions: [ { action_type: "exclude_transaction" } ]
-      }
-      data[:priority] = priority unless priority.nil?
-      { type: "Rule", version: 1, data: data.merge(id: SecureRandom.uuid) }
-    }
+  test "rejects a rule with an unknown resource type or action type" do
+    [
+      [ "account", "exclude_transaction" ],
+      [ "transaction", "garbage" ]
+    ].each do |resource_type, action_type|
+      ndjson = build_ndjson([ {
+        type: "Rule", version: 1,
+        data: { id: "unknown-type-rule", name: "Unknown type", resource_type: resource_type,
+                conditions: [ { condition_type: "transaction_name", operator: "like", value: "coffee" } ],
+                actions: [ { action_type: action_type } ] }
+      } ])
 
-    Family::DataImporter.new(@family, build_ndjson([ rule_data.call("Later", 9), rule_data.call("Sooner", 3) ])).import!
+      error = assert_raises(ActiveRecord::RecordInvalid, action_type) do
+        Family::DataImporter.new(@family, ndjson).import!
+      end
 
-    assert_equal [ "Sooner", "Later" ], @family.rules.prioritised.pluck(:name)
-    assert_equal [ 3, 9 ], @family.rules.prioritised.pluck(:priority)
+      assert_match(/is not included in the list/, error.message)
+      assert_nil @family.rules.find_by(name: "Unknown type")
+    end
   end
 
-  # An export's numbers mean "relative to each other"; into a family that already has
-  # rules they must not collide with, or jump ahead of, the rules already there.
-  test "imported priorities are placed after the rules the family already has, keeping their order" do
-    existing = @family.rules.create!(resource_type: "transaction", name: "Existing", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    existing.update_columns(priority: 50)
-    rule_data = ->(name, priority) {
-      { type: "Rule", version: 1, data: {
-        id: SecureRandom.uuid, name: name, resource_type: "transaction", active: true, priority: priority,
-        conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
-        actions: [ { action_type: "exclude_transaction" } ]
-      } }
-    }
+  test "rejects invalid rule references before creating related records" do
+    valid_condition = { condition_type: "transaction_name", operator: "like", value: "coffee" }
+    cases = [
+      [ { condition_type: "transaction_category", operator: "=", value: "Bad\0Category" },
+        { action_type: "exclude_transaction" }, "value" ],
+      [ valid_condition,
+        { action_type: "set_transaction_merchant", value_ref: { name: "Bad\0Merchant" } }, "value_ref" ],
+      [ valid_condition,
+        { action_type: "set_transaction_tags", value_ref: [ { name: "Safe" }, { name: "Bad\0Tag" } ] }, "value_ref" ]
+    ]
+    counts = [ @family.rules.count, @family.categories.count, @family.merchants.count, @family.tags.count ]
 
-    Family::DataImporter.new(@family, build_ndjson([ rule_data.call("Later", 9), rule_data.call("Sooner", 3) ])).import!
+    cases.each do |condition, action, field|
+      ndjson = build_ndjson([ {
+        type: "Rule", version: 1,
+        data: { name: "Invalid reference", resource_type: "transaction", conditions: [ condition ], actions: [ action ] }
+      } ])
 
-    assert_equal [ "Existing", "Sooner", "Later" ], @family.rules.prioritised.where(name: [ "Existing", "Sooner", "Later" ]).pluck(:name)
-    assert_equal [ 53, 59 ], @family.rules.where(name: [ "Sooner", "Later" ]).order(:priority).pluck(:priority)
-    assert_equal 50, existing.reload.priority
-  end
+      error = assert_raises(Family::DataImporter::InvalidRecordError) do
+        Family::DataImporter.new(@family, ndjson).import!
+      end
 
-  test "imports rules without a priority at the end of the run order, in file order" do
-    rule_data = ->(name) {
-      { type: "Rule", version: 1, data: {
-        id: SecureRandom.uuid, name: name, resource_type: "transaction", active: true,
-        conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
-        actions: [ { action_type: "exclude_transaction" } ]
-      } }
-    }
-
-    existing = @family.rules.create!(resource_type: "transaction", name: "Existing", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    existing.update_columns(priority: 50)
-
-    Family::DataImporter.new(@family, build_ndjson([ rule_data.call("One"), rule_data.call("Two") ])).import!
-
-    assert_equal [ "Existing", "One", "Two" ], @family.rules.prioritised.where(name: [ "Existing", "One", "Two" ]).pluck(:name)
+      assert_equal "invalid_import_record", error.code
+      assert_equal field, error.details[:field]
+      assert_equal "(invalid text)", error.details[:value]
+      assert_equal counts, [ @family.rules.count, @family.categories.count, @family.merchants.count, @family.tags.count ]
+    end
   end
 
   test "imports transaction_tag rule condition by remapping the tag name to an id" do

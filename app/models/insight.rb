@@ -1,7 +1,7 @@
 # A proactive, typed observation about a family's finances, produced nightly
 # by GenerateInsightsJob. The financial logic lives in Insight::Generators::*;
-# the LLM (when configured) only writes the `body` prose from pre-computed
-# numbers, so rows are safe to render verbatim.
+# the `body` prose is an i18n template filled with pre-computed numbers, so
+# rows are safe to render verbatim.
 #
 # Status semantics: `read` and `acknowledged` are user actions; `expired` is the
 # system's — set when a signal stops being generated (the condition cleared).
@@ -46,7 +46,30 @@ class Insight < ApplicationRecord
   validates :dedup_key, uniqueness: { scope: :family_id }
 
   # Everything the user hasn't acknowledged; what the feed renders.
-  scope :visible, -> { where(status: [ :active, :read ]) }
+  scope :visible, -> { where(status: [ :active, :read ]).about_shared_accounts }
+
+  # The feed is shared by the whole family, so an insight that names an
+  # account (metadata account_id) shows only while every active member can
+  # see that account. Generators already skip other accounts; this read-time
+  # check also covers rows written before access changed (a share revoked, a
+  # member joined, the account moved, hidden or deleted), which would
+  # otherwise stay in the feed until the next nightly run expires them.
+  # Nothing is written, so the row reappears as it was if access is restored.
+  #
+  # The id is cast to uuid (not the column to text) so the lookup stays a
+  # primary-key probe; the CASE keeps a malformed value from raising.
+  scope :about_shared_accounts, -> {
+    shared_account = Account.visible.accessible_by_all_active_members
+      .where("accounts.family_id = insights.family_id")
+      .where(<<~SQL.squish)
+        accounts.id = CASE
+          WHEN insights.metadata->>'account_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          THEN (insights.metadata->>'account_id')::uuid
+        END
+      SQL
+    where("NOT (insights.metadata ? 'account_id')").or(where(shared_account.arel.exists))
+  }
+
   scope :ordered, -> {
     order(Arel.sql("CASE insights.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END"))
       .order(generated_at: :desc)
@@ -56,9 +79,13 @@ class Insight < ApplicationRecord
   # so it is generated only while every member can see the account. When a
   # share is removed that stops being true at once, not at the next nightly
   # run, so the card is expired here.
+  #
+  # By status, not `visible`: `visible` now also hides a card whose account is
+  # no longer shared with every member (we-promise/sure#4061), which is exactly
+  # the card this has to find, and hiding is not expiring -- a hidden card
+  # comes back if the share is restored.
   def self.expire_stale_valuation_for!(account)
-    where(family_id: account.family_id, insight_type: "stale_valuation")
-      .visible
+    where(family_id: account.family_id, insight_type: "stale_valuation", status: [ :active, :read ])
       .where("metadata->>'account_id' = ?", account.id.to_s)
       .update_all(status: "expired", updated_at: Time.current)
   end

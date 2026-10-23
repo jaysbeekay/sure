@@ -96,7 +96,9 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     )
     sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
     set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
-    set_rate from: "GBP", to: "USD", date: date, rate: 0
+    # `exchange_rates` can no longer store a 0 (we-promise/sure#3790), so the
+    # statement leg is handed the rate the guard exists for directly.
+    Portfolio::RealizedGains.any_instance.stubs(:rates_by_date).returns({ date => { "GBP" => 0 } })
 
     get reports_path
     assert_response :ok
@@ -289,17 +291,18 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
                   "a disposal line was rendered for a family with nothing to show"
   end
 
-  # The Reports section controllers gained `url` and `preferenceKey` values so
-  # the portfolio hub can reuse them. Reports passes neither, so the page must
+  # The Reports section controller gained `url` and `preferenceKey` values so
+  # the portfolio hub can reuse it. Reports passes neither, so the page must
   # carry no override attributes and its endpoint must still accept the
-  # original keys; otherwise the defaults have drifted from the literals.
+  # original keys; otherwise the defaults have drifted from the literals. The
+  # sortable list (we-promise/sure#4013's shared controller) names its endpoint
+  # and key explicitly, so those are asserted as written.
   test "reports sections rely on the Stimulus defaults and still post to their own endpoint" do
     get reports_path
     assert_response :ok
 
-    assert_select "[data-controller='reports-sortable']"
-    assert_select "[data-reports-sortable-url-value]", count: 0
-    assert_select "[data-reports-sortable-preference-key-value]", count: 0
+    assert_select "[data-controller='sortable-list'][data-sortable-list-url-value=?][data-sortable-list-param-value=?]",
+                  update_preferences_reports_path, "preferences.reports_section_order"
     assert_select "[data-reports-section-url-value]", count: 0
     assert_select "[data-reports-section-preference-key-value]", count: 0
 
@@ -317,6 +320,36 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   test "index renders successfully" do
     get reports_path
     assert_response :ok
+  end
+
+  test "index sections keep data-section-key next to the sortable id" do
+    get reports_path
+    assert_response :ok
+
+    assert_select "section[data-sortable-list-id]" do |sections|
+      assert sections.any?
+      sections.each do |section|
+        assert_equal section["data-sortable-list-id"], section["data-section-key"]
+      end
+    end
+  end
+
+  # The desktop app clones these into the tray when a download such as the CSV
+  # export ends, since it has no download list of its own, and reads their data
+  # attributes for its native notification.
+  test "index provides the download toasts the desktop app shows" do
+    get reports_path
+
+    assert_response :ok
+    scope = "layouts.shared.notification_tray"
+    assert_select "template#desktop-download-complete", 1
+    assert_select "template#desktop-download-failed", 1
+    assert_select "template#desktop-download-complete[data-message=?][data-description=?]",
+      I18n.t("#{scope}.download_complete"), I18n.t("#{scope}.download_location")
+    assert_select "template#desktop-download-failed[data-message=?]", I18n.t("#{scope}.download_failed")
+    assert_includes response.body, I18n.t("#{scope}.download_complete")
+    assert_includes response.body, I18n.t("#{scope}.download_location")
+    assert_includes response.body, I18n.t("#{scope}.download_failed")
   end
 
   test "index with monthly period" do
@@ -744,15 +777,22 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     income_href = transactions_path(q: { categories: [ income_category.name ], start_date: start_date, end_date: end_date })
     uncategorized_href = transactions_path(q: { categories: [ Category.uncategorized.filter_value ], start_date: start_date, end_date: end_date })
 
-    assert_select "tr[data-category='category-#{expense_category.id}'] a[href=?]", expense_href, text: expense_category.name
-    assert_select "tr[data-category='category-#{income_category.id}'] a[href=?]", income_href, text: income_category.name
-    assert_select "tr[data-category='category-uncategorized'] a[href=?]", uncategorized_href, text: Category.uncategorized.name
+    assert_select "tr[data-category='category-#{expense_category.id}'] a[href=?]", expense_href, text: /#{Regexp.escape(expense_category.name)}/
+    assert_select "tr[data-category='category-#{income_category.id}'] a[href=?]", income_href, text: /#{Regexp.escape(income_category.name)}/
+    assert_select "tr[data-category='category-uncategorized'] a[href=?]", uncategorized_href, text: /#{Regexp.escape(Category.uncategorized.name)}/
 
-    # Hit target via stretched ::before, anchored to the category cell's flex
-    # wrapper. Deliberately NOT the <tr>: CSS 2.1 9.3.1 leaves position:relative
-    # undefined on table rows and WebKit does not implement it, so anchoring
-    # there let the overlay escape and swallow every click on the page in Safari.
-    assert_select "tr.group\\/category-row[data-category='category-#{expense_category.id}'] td div.relative a[class*='before:absolute'][class*='before:inset-0']"
+    # Full-row hit target via a normal flex <a> wrapping icon+name+count —
+    # deliberately not a `position: relative`/`absolute` stretched-link inside
+    # the <table>, which caused a WebKit scrollHeight bug (see #3093).
+    assert_select "tr[data-category='category-#{expense_category.id}'] a.flex.items-center"
+    assert_select "tr[data-category='category-#{expense_category.id}'].relative", 0
+    assert_select "tr[data-category='category-#{expense_category.id}'] a[class*='before:absolute']", 0
+
+    # Amount and percentage cells are each wrapped in their own normal-flow
+    # <a> to the same href, so the full row remains clickable without a
+    # stretched-link overlay spanning the <tr>.
+    assert_select "tr[data-category='category-#{expense_category.id}'] td:nth-child(2) a[href=?]", expense_href
+    assert_select "tr[data-category='category-#{expense_category.id}'] td:nth-child(3) a[href=?]", expense_href
   end
 
   test "index uncategorized category link stays on the stable filter value while the displayed text is localized" do
@@ -768,7 +808,7 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_response :ok
 
     href = transactions_path(q: { categories: [ Category::UNCATEGORIZED_FILTER_VALUE ], start_date: start_date, end_date: end_date })
-    assert_select "tr[data-category='category-uncategorized'] a[href=?]", href, text: localized_name
+    assert_select "tr[data-category='category-uncategorized'] a[href=?]", href, text: /#{Regexp.escape(localized_name)}/
   end
 
   test "index excludes tax-advantaged account transactions from activity breakdown" do
@@ -1016,6 +1056,15 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
 
     assert_response :success
     assert_select "a[href=?]", events_path, count: 0
+  end
+
+  # POSTing to settings_api_keys_path is create, which needs api_key params.
+  test "google sheets instructions link to the API keys page" do
+    get google_sheets_instructions_reports_url
+
+    assert_response :success
+    assert_select "a[href=?][data-turbo-frame=_top]", settings_api_keys_path, text: I18n.t("reports.google_sheets_instructions.go_to_api_keys")
+    assert_select "form[action=?]", settings_api_keys_path, count: 0
   end
 
   private

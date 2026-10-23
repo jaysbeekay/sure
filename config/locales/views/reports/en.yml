@@ -8,6 +8,7 @@ en:
       print_report: Print Report
       events_link: Events
       drag_to_reorder: "Drag to reorder section"
+      sections_aria: Reports sections
       toggle_section: "Toggle section visibility"
       periods:
         monthly: Monthly

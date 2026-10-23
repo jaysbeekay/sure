@@ -18,8 +18,7 @@ class RedbarkItem::Syncer
     # clock against itself. Reading `Time.current` in the import and
     # `Date.current` again in the processing gives a sync that fetches at
     # 23:59 and processes at 00:00 two different dates, and the processor then
-    # discards the snapshot this very sync just stored (raised on the #213
-    # sweep).
+    # discards the snapshot this very sync just stored.
     synced_at = Time.current
 
     # Phase 1: Import data from provider API

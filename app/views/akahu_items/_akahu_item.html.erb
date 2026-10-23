@@ -1,4 +1,4 @@
-<%# locals: (akahu_item:, visible_accounts: akahu_item.accounts) %>
+<%# locals: (akahu_item:, visible_accounts:) %>
 
 <%= tag.div id: dom_id(akahu_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -18,7 +18,7 @@
             </div>
 
             <%# The institution belongs to every account on the connection, so it is
-                shown only to a viewer who can see them all (#235). %>
+                shown only to a viewer who can see them all (#3630). %>
             <% if akahu_item.accounts.any? && visible_accounts.size == akahu_item.accounts.size %>
               <p class="text-xs text-secondary"><%= akahu_item.institution_summary %></p>
             <% end %>

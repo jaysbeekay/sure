@@ -6,7 +6,7 @@ class RedbarkAccount::Processor
   attr_reader :redbark_account, :as_of
 
   # `as_of` is the sync's own date, injected by the caller rather than read
-  # here: a detected rate change is keyed by it (#142).
+  # here: a detected rate change is keyed by it (we-promise/sure#3891).
   def initialize(redbark_account, as_of: Date.current)
     @redbark_account = redbark_account
     @as_of = as_of
