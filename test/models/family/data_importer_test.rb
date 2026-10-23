@@ -2764,6 +2764,23 @@ class Family::DataImporterTest < ActiveSupport::TestCase
   # Everything below the series was silently absent from an export: a restored
   # bill kept its name and amount and lost its cadence, its payment history and
   # every setting that decides how it behaves.
+  # A restore writes the export's matcher_hints as they are. The rename-alias
+  # callback (issue #503) must not add the local name to them.
+  test "re-importing a bill renamed locally restores its matcher hints exactly" do
+    session = @family.import_sessions.create!(expected_chunks: 2)
+    records = bills_ndjson_records.first(2)
+    Family::DataImporter.new(@family, build_ndjson(records), import_session: session).import!
+    series = @family.recurring_transactions.sole
+    series.update!(name: "Renamed locally")
+    assert_includes series.reload.matcher_hints["name_aliases"], "Rent"
+
+    Family::DataImporter.new(@family, build_ndjson([ records.last ]), import_session: session).import!
+
+    assert_equal 1, @family.recurring_transactions.count, "the second chunk updates the restored bill"
+    assert_equal "Rent", series.reload.name
+    assert_equal [ "WATSON PROPERTY" ], series.matcher_hints["name_aliases"]
+  end
+
   test "imports the bills subsystem, reattaching payments to their transactions" do
     importer = Family::DataImporter.new(@family, build_ndjson(bills_ndjson_records))
     importer.import!
