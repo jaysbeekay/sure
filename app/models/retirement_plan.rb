@@ -5,6 +5,8 @@
 # project a different set of accounts for each member who opened it.
 class RetirementPlan < ApplicationRecord
   belongs_to :user
+  has_many :streams, class_name: "RetirementPlan::Stream", dependent: :destroy
+  has_many :funding_links, class_name: "RetirementPlan::FundingAccount", dependent: :destroy
 
   validates :safe_withdrawal_rate, presence: true,
                                    numericality: { greater_than: 0, less_than_or_equal_to: 1 }
@@ -16,13 +18,21 @@ class RetirementPlan < ApplicationRecord
                            allow_nil: true
   validate :percent_inputs_are_numbers
 
+  # The year-by-year planner. Mirrors the database checks.
+  MODES = %w[traditional fire].freeze
+  validates :end_age, numericality: { only_integer: true, greater_than_or_equal_to: 50, less_than_or_equal_to: 120 }
+  validates :birth_year, numericality: { only_integer: true, greater_than_or_equal_to: 1900, less_than_or_equal_to: 2100 },
+                         allow_nil: true
+  validates :inflation_rate, presence: true, numericality: { greater_than: -1, less_than_or_equal_to: 1 }
+  validates :mode, inclusion: { in: MODES }
+
   # The user's saved plan, or an unsaved one carrying the column defaults.
   # Never writes: opening a page must not create a row.
   def self.for(user)
     find_by(user: user) || new(user: user)
   end
 
-  PERCENT_ATTRIBUTES = %i[safe_withdrawal_rate expected_annual_return savings_rate].freeze
+  PERCENT_ATTRIBUTES = %i[safe_withdrawal_rate expected_annual_return savings_rate inflation_rate].freeze
 
   # The form speaks in percent; the columns hold fractions. Blank stays blank,
   # which for the savings rate means "derive it". Input that is not a number
@@ -75,6 +85,57 @@ class RetirementPlan < ApplicationRecord
     )
   end
 
+  # --- The year-by-year planner ---------------------------------------------
+
+  # Spending a FIRE plan draws down once retired leaves out loan payments as
+  # well as contributions: each loan gets its own stream that stops when the
+  # loan is paid off, so counting its payment here too would count it twice.
+  LIVING_COSTS_EXCLUDED_KINDS = %w[investment_contribution loan_payment].freeze
+
+  # The year-by-year projection for a traditional plan, retiring in the year of
+  # the plan's date (or `retirement_year`, when given). Nil until the plan has
+  # a birth year and a retirement date: without them there is no end age and
+  # no retirement to plan to. Nil too when retirement falls after the end age,
+  # since there is then no retirement inside the plan to fund.
+  def simulation(as_of:, retirement_year: retirement_date&.year)
+    return nil if retirement_year.nil? || !plannable?(as_of)
+    return nil if retirement_year > birth_year + end_age
+
+    RetirementPlan::Simulation.new(**simulation_inputs(as_of:), retirement_year: retirement_year)
+  end
+
+  # FIRE mode: the earliest year the money lasts to the end age.
+  def solve(as_of:)
+    return nil unless plannable?(as_of)
+
+    RetirementPlan::Solver.new(**simulation_inputs(as_of:)).call
+  end
+
+  # The accounts a user may fund the plan from: the ones the default funding
+  # set draws on. Anything else, a property say, has no balance the funding
+  # total counts, so linking it would leave the plan with nothing.
+  def eligible_funding_accounts
+    finance_accounts.where(accountable_type: LIQUID_AND_INVESTMENT_TYPES)
+  end
+
+  # Seeds the plan's streams from the user's spending and loans, once. Called
+  # by the controller after a save, never on a page view, with the page's
+  # reference date. The row lock reloads the plan, so two saves that race
+  # here seed once between them.
+  def seed_streams!(as_of:)
+    # with_lock reloads the row; a new record has none, and would either fail
+    # on streams.create! or be saved here as a side effect.
+    raise ArgumentError, "seed_streams! needs a saved plan" if new_record?
+
+    with_lock do
+      next if streams_seeded_on.present?
+
+      seed_living_costs(as_of)
+      seed_loans(as_of)
+      update!(streams_seeded_on: as_of)
+    end
+  end
+
   # Accounts left out of the asset total for want of an exchange rate on the
   # reference date. The card says so rather than showing a quietly low figure.
   def unconverted_account_count(as_of:)
@@ -91,6 +152,80 @@ class RetirementPlan < ApplicationRecord
     end
 
     AssetTotal = Data.define(:total, :unconverted_count)
+
+    # A plan runs from the reference year to the end-age year. With the owner
+    # born after the reference year, or the end age already past, there are
+    # no years to plan: an empty table would read as a plan that lasts.
+    def plannable?(as_of)
+      birth_year.present? && birth_year <= as_of.year && birth_year + end_age >= as_of.year
+    end
+
+    # Two spending windows, on purpose. The contribution before retirement is
+    # #projection's: income less the median month over all history, without
+    # contributions. Living costs after it are the seeded stream: the median
+    # of the last 12 whole months, without contributions or loan payments
+    # (each loan seeds its own stream). Not a mismatch to reconcile.
+    def simulation_inputs(as_of:)
+      {
+        as_of: as_of,
+        current_assets: funding_total(as_of),
+        annual_contribution: projection(as_of: as_of).annual_contribution,
+        expected_annual_return: expected_annual_return,
+        inflation_rate: inflation_rate,
+        streams: streams.map(&:to_simulation_stream),
+        birth_year: birth_year,
+        end_age: end_age
+      }
+    end
+
+    # Linked accounts when any the user picked can still fund the plan,
+    # otherwise the default set. A deleted account takes its link with it; one
+    # hidden, excluded from reports or no longer shared keeps its link but
+    # leaves the eligible set, and falls back the same way rather than
+    # funding the plan with nothing.
+    def funding_total(as_of)
+      linked = eligible_funding_accounts.where(id: funding_links.select(:account_id))
+      return assets_as_of(as_of).total unless linked.exists?
+
+      asset_total(as_of, linked).total
+    end
+
+    # The 12 whole months before the reference date's month.
+    def living_costs_period(as_of)
+      month_start = as_of.beginning_of_month
+      Period.custom(start_date: month_start - 12.months, end_date: month_start - 1.day)
+    end
+
+    def seed_living_costs(as_of)
+      monthly = income_statement.median_expense(
+        interval: "month", excluding_kinds: LIVING_COSTS_EXCLUDED_KINDS, period: living_costs_period(as_of)
+      ).to_d
+      return unless monthly.positive?
+
+      streams.create!(kind: "expense", source: "seeded_living_costs", indexed: true,
+                      name: I18n.t("retirement_plans.streams.seeded.living_costs"), annual_amount: monthly * 12)
+    end
+
+    # Each loan's repayment, at the payment in force on the reference date,
+    # until the year its projection pays it off. A loan whose projection does
+    # not apply (nothing left to pay, or a payment that never clears it) seeds
+    # nothing rather than an invented figure.
+    def seed_loans(as_of)
+      finance_accounts.where(accountable_type: "Loan").includes(:accountable).find_each do |account|
+        projection = Loan::PayoffProjection.new(account.accountable, as_of: as_of)
+        next unless projection.applicable? && projection.payoff_date
+
+        payment = account.accountable.amortization_schedule&.payment_in_force(as_of)
+        next if payment.nil?
+
+        # Twelve: AmortizationSchedule#payment_schedule is monthly.
+        annual = payment.exchange_to(user.family.currency, date: as_of).amount * 12
+        streams.create!(kind: "expense", source: "seeded_loan", indexed: false, account: account,
+                        name: account.name, annual_amount: annual, end_year: projection.payoff_date.year)
+      rescue Money::ConversionError
+        next
+      end
+    end
 
     # The same scope InvestmentStatement#investment_accounts uses:
     # what this user counts in their own finances. Family-wide would show a
