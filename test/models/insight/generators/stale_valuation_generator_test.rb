@@ -200,22 +200,20 @@ class Insight::Generators::StaleValuationGeneratorTest < ActiveSupport::TestCase
   # must not carry anything that ages: a count of days would be wrong by the next
   # night.
   test "the stored prose carries no day count that would age" do
-    @family.users.update_all(ai_enabled: false)
     value_on(@property, 91.days.ago.to_date)
 
     generated = generate.first
-    body = Insight::BodyWriter.new(@family).write(generated)
+    body = Insight::BodyWriter.new.write(generated)
 
     assert_no_match(/\b91\b/, body)
     assert_includes body, generated.facts[:last_valued_on]
   end
 
   test "writes the insight in German" do
-    @family.users.update_all(ai_enabled: false)
     value_on(@property, 91.days.ago.to_date)
 
     generated = I18n.with_locale(:de) { generate.first }
-    body = I18n.with_locale(:de) { Insight::BodyWriter.new(@family).write(generated) }
+    body = I18n.with_locale(:de) { Insight::BodyWriter.new.write(generated) }
 
     assert_includes generated.title, @property.name
     assert_not_equal I18n.t("insights.titles.stale_valuation", account: @property.name, locale: :en), generated.title

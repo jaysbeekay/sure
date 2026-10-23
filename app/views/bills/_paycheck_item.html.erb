@@ -8,7 +8,7 @@
 <% overdue = item.occurrence.overdue? %>
 
 <div class="flex items-baseline gap-3 py-1" data-paycheck-item>
-  <span class="w-14 shrink-0 text-xs tabular-nums <%= overdue ? "text-destructive" : "text-secondary" %>" data-paycheck-item-date><%= l(item.occurrence.due_on, format: :short) %></span>
+  <span class="w-14 shrink-0 text-xs tabular-nums <%= overdue ? "text-destructive" : "text-secondary" %>" data-paycheck-item-date><%= l(item.occurrence.effective_due_on, format: :short) %></span>
 
   <span class="min-w-0 flex-1 truncate">
     <%= link_to series.display_name, recurring_occurrence_path(item.occurrence),

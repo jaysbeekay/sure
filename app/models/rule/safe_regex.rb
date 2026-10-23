@@ -10,7 +10,9 @@
 # * patterns Postgres will not compile (`parentheses () not balanced`,
 #   `regular expression is too complex`) only fail when a query runs them, which
 #   would put a saved, active rule into a failing state on every sync. They are
-#   probed once, at save.
+#   probed once, at save. The pattern must be one the database can store:
+#   Rule::Condition leaves a null byte or malformed UTF-8 to
+#   DatabaseTextValidator and never probes it.
 #
 # Execution is bounded as well: #with_timeout runs a block under a Postgres
 # `statement_timeout` and raises TimeoutError, so a rule cannot hold a worker or

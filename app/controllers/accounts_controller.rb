@@ -121,7 +121,8 @@ class AccountsController < ApplicationController
       records: txn_entryables,
       associations: {
         transfer_as_outflow: { inflow_transaction: { entry: :account } },
-        transfer_as_inflow: { outflow_transaction: { entry: :account } }
+        # :category for the read-only category an inflow leg shows (Transaction#category_set_on_transfer_outflow?)
+        transfer_as_inflow: { outflow_transaction: [ :category, { entry: :account } ] }
       }
     ).call
 
@@ -242,8 +243,11 @@ class AccountsController < ApplicationController
       redirect_to account_path(@account), alert: t("accounts.destroy.cannot_delete_linked")
     else
       begin
-        @account.destroy_later
-        redirect_to accounts_path, notice: t("accounts.destroy.success", type: @account.accountable_type)
+        if @account.destroy_later == false
+          redirect_to accounts_path, alert: t("accounts.destroy.failed")
+        else
+          redirect_to accounts_path, notice: t("accounts.destroy.success", type: @account.accountable_type)
+        end
       rescue => e
         Rails.logger.error "Failed to schedule account #{@account.id} for deletion: #{e.message}"
         redirect_to accounts_path, alert: t("accounts.destroy.failed")
@@ -368,7 +372,7 @@ class AccountsController < ApplicationController
 
     # The accounts a provider card on this page may list. A card is admitted
     # by visible_provider_items as soon as ONE of its accounts is accessible,
-    # so it must not then render the rest (#235). Admins see every account.
+    # so it must not then render the rest (#3630). Admins see every account.
     def visible_card_accounts(item)
       return item.accounts if Current.user.admin?
 

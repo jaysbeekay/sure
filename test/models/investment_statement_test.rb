@@ -867,8 +867,10 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     totals = @statement.totals(period: period)
 
     assert_equal Money.new(0, "USD"), totals.contributions
-    assert_equal Money.new(120, "USD"), totals.dividends
-    assert_equal Money.new(120, "USD"), totals.total_income
+    # Income is signed (Portfolio::FlowClassifier): the 120 left the account,
+    # so the relabeled row nets against income rather than adding to it.
+    assert_equal Money.new(-120, "USD"), totals.dividends
+    assert_equal Money.new(-120, "USD"), totals.total_income
   end
 
   test "a sell relabeled to Interest is counted as income only, not also as a withdrawal" do
@@ -929,6 +931,40 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     assert_equal 40, @statement.total_dividends
     assert_equal 5, @statement.total_interest
+  end
+
+  test "income nets by sign, so a charge or reversal labelled as income reduces it" do
+    # Portfolio::FlowClassifier decides income by label, not sign, and says to
+    # sum signed amounts: a margin-interest charge labelled "Interest" is money
+    # out and must lower interest, not add to it.
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_income_trade(account: account, label: "Dividend", amount: 100, date: period.start_date)
+    create_income_trade(account: account, label: "Interest", amount: 50, date: period.start_date)
+    reversal = create_income_trade(account: account, label: "Dividend", amount: 30, date: period.start_date)
+    reversal.update_columns(amount: 30)
+    create_labelled_transaction(account: account, label: "Interest", amount: 10, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(70, "USD"), totals.dividends
+    assert_equal Money.new(40, "USD"), totals.interest
+    assert_equal Money.new(110, "USD"), totals.total_income
+  end
+
+  test "trades_count counts trades, not the income transactions read beside them" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
+    account = create_investment_account(balance: 500)
+
+    create_trade(account: account, qty: 2, amount: 120, date: period.start_date)
+    create_income_transaction(account: account, label: "Dividend", amount: 10, date: period.start_date)
+    create_income_transaction(account: account, label: "Interest", amount: 3, date: period.start_date)
+
+    totals = @statement.totals(period: period)
+
+    assert_equal Money.new(13, "USD"), totals.total_income
+    assert_equal 1, totals.trades_count
   end
 
   test "current_holdings memoizes so repeated dashboard-style calls issue a single query" do
@@ -1164,7 +1200,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "Totals splits income into dividends and interest by literal label; a new income label needs its own bucket there"
   end
 
-  test "totals cache key carries the v4 aggregation version" do
+  test "totals cache key carries the v5 aggregation version" do
     create_investment_account(balance: 500)
     seen_keys = []
     Rails.cache.stubs(:fetch).with { |*args| seen_keys << Array(args.first); true }.returns(
@@ -1174,7 +1210,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     @statement.totals(period: Period.current_month)
 
     assert_equal 1, seen_keys.size
-    assert_includes seen_keys.first, "totals_query/v4"
+    assert_includes seen_keys.first, "totals_query/v5"
   end
 
   test "series cache key changes when a share is revoked" do
@@ -2310,7 +2346,103 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     end
   end
 
+  test "totals cache invalidates when family currency changes" do
+    create_investment_account(balance: 500)
+    period = Period.last_30_days
+
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    dummy_result = { contributions: 0, withdrawals: 0, dividends: 0, interest: 0, fees: 0, trades_count: 0 }
+    InvestmentStatement::Totals.expects(:new).twice.returns(stub(call: dummy_result))
+
+    statement = InvestmentStatement.new(@family)
+    statement.totals(period: period)
+
+    @family.update!(currency: "EUR")
+    InvestmentStatement.new(@family.reload).totals(period: period)
+  end
+
+  # Two parcels of one security, materialised the way a sync does: 60 bought on
+  # 2024-01-10 at $12 and 40 on 2024-03-05 at $20 (blended $15.20), then 40 sold
+  # on 2024-06-01 at $25 and priced at $30 the day after. Average cost relieves
+  # the sale at the blend, so every figure below follows from $15.20, not from
+  # either parcel's own price.
+  test "investment statement figures on the two-parcel fixture" do
+    travel_to Time.zone.local(2024, 6, 2, 12) do
+      account, security, sale = materialize_two_parcel_example(first_parcel_label: "Buy")
+
+      assert_equal 12, cost_basis_on(account, security, Date.new(2024, 3, 4)), "the first parcel alone"
+      assert_equal BigDecimal("15.2"), cost_basis_on(account, security, Date.new(2024, 5, 31)), "both parcels, before the sale"
+      assert_equal BigDecimal("15.2"), cost_basis_on(account, security, Date.new(2024, 6, 1)), "the sale relieves at the blend"
+
+      row = @statement.holdings_table_rows.first
+      assert_equal 60, row.qty
+      assert_equal Money.new(BigDecimal("15.2"), "USD"), row.avg_cost
+      assert_not row.missing_cost_basis
+      # 60 x $30 = $1,800 against 60 x $15.20 = $912.
+      assert_equal Money.new(1800, "USD"), row.unrealized.current
+      assert_equal Money.new(912, "USD"), row.unrealized.previous
+      assert_equal 888, @statement.unrealized_gains
+
+      # 40 x $25 = $1,000 against 40 x $15.20 = $608.
+      gain = sale.realized_gain_loss
+      assert_equal Money.new(1000, "USD"), gain.current
+      assert_equal Money.new(608, "USD"), gain.previous
+      assert_equal Money.new(392, "USD"), gain.value
+
+      realized = @statement.realized_gains(period: Period.custom(start_date: Date.new(2024, 6, 1), end_date: Date.new(2024, 6, 30)))
+      assert_equal 1, realized.trade_count
+      assert_equal 392, realized.net
+      assert_equal({}, realized.excluded_trades)
+    end
+  end
+
+  # The same fixture with the first parcel transferred in rather than bought.
+  # Its cost is unknown, and today that makes the whole position unknown on
+  # every date it is held: the $20 parcel's own price is not applied to the
+  # transferred units, and the sale is excluded rather than measured.
+  test "investment statement figures on the two-parcel fixture with the first parcel transferred in" do
+    travel_to Time.zone.local(2024, 6, 2, 12) do
+      account, security, sale = materialize_two_parcel_example(first_parcel_label: Trade::TRANSFER_LABEL)
+
+      assert_nil cost_basis_on(account, security, Date.new(2024, 3, 4))
+      assert_nil cost_basis_on(account, security, Date.new(2024, 5, 31)), "not the $20 parcel's price"
+      assert_nil cost_basis_on(account, security, Date.new(2024, 6, 2))
+
+      row = @statement.holdings_table_rows.first
+      assert_equal 60, row.qty
+      assert_nil row.avg_cost
+      assert_nil row.unrealized
+      assert row.missing_cost_basis
+      assert_equal 0, @statement.unrealized_gains
+
+      assert_nil sale.realized_gain_loss
+      assert_equal :missing_cost_basis, sale.realized_gain_loss_unavailable_reason
+
+      realized = @statement.realized_gains(period: Period.custom(start_date: Date.new(2024, 6, 1), end_date: Date.new(2024, 6, 30)))
+      assert_equal 0, realized.trade_count
+      assert_equal({ missing_cost_basis: 1 }, realized.excluded_trades)
+    end
+  end
+
   private
+    def materialize_two_parcel_example(first_parcel_label:)
+      account = create_investment_account(balance: 1800)
+      security = create_portfolio_security
+      Security::Price.create!(security: security, date: Date.new(2024, 6, 2), price: 30, currency: "USD")
+
+      create_portfolio_trade(account: account, security: security, qty: 60, price: 12, date: Date.new(2024, 1, 10), label: first_parcel_label)
+      create_portfolio_trade(account: account, security: security, qty: 40, price: 20, date: Date.new(2024, 3, 5), label: "Buy")
+      sale = create_portfolio_trade(account: account, security: security, qty: -40, price: 25, date: Date.new(2024, 6, 1), label: "Sell")
+
+      Holding::Materializer.new(account, strategy: :forward).materialize_holdings
+
+      [ account, security, sale.entryable ]
+    end
+
+    def cost_basis_on(account, security, date)
+      account.holdings.find_by!(security: security, date: date).cost_basis
+    end
+
     def establish_family_context
       Current.session = Session.create!(user: users(:empty))
     end
