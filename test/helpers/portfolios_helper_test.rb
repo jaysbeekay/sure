@@ -17,7 +17,7 @@ class PortfoliosHelperTest < ActionView::TestCase
     assert_equal [ { "id" => "USD", "name" => "USD", "amount" => 1234.57, "currency" => "USD", "percentage" => 61.2, "color" => Category::COLORS.first } ], json
   end
 
-  # #550. Every key the registry can emit, against both signs: a performance
+  # Every key the registry can emit, against both signs: a performance
   # driver takes its direction's colour, a flow or the residue never does.
   test "driver amounts colour performance by direction and leave flows neutral" do
     %i[income fees market revaluations fx_effect].each do |key|

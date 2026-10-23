@@ -698,7 +698,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       message: "a reconciling table does not warn"
   end
 
-  # #550. A driver's colour says whether it was performance, not just which way
+  # A driver's colour says whether it was performance, not just which way
   # it pointed. Each case is the one the other branch would colour differently:
   # a gain the sign-only rule left uncoloured, a withdrawal it painted as a
   # loss, and a deposit a sign-for-everything rule would paint as a gain.
