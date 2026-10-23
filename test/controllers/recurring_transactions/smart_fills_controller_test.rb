@@ -24,7 +24,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
     assert_match I18n.t("recurring_transactions.new.smart_fill_applied"), response.body
     assert_match "Weekly gaps between charges", response.body
     assert_select "input[name=?][value=?]", "recurring_transaction[name]", "Gym Membership"
-    assert_select "input[name=?][value=?]", "recurring_transaction[amount]", "42.0"
+    assert_select "input[name=?][value=?]", "recurring_transaction[amount]", "42.00"
   end
 
   # Smart fill starts from the same prefill as the plain dialog, so the
