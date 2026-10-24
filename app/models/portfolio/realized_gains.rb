@@ -267,8 +267,13 @@ class Portfolio::RealizedGains
       Holding.preload_avg_costs(holdings)
       by_account = holdings.group_by(&:account_id)
 
+      # What each sale took from which lot, where the account sells by fifo:
+      # three queries for the whole set, none for an account sold by average.
+      lot_disposals = HoldingLotDisposal.readable_by_sale(trades)
+
       trades.each do |trade|
         trade.preloaded_holdings = by_account[trade.entry.account_id] || []
+        trade.preloaded_lot_disposals = lot_disposals[trade.entry.id]
       end
 
       # And the rates the disposals' own conversion needs, in one more query
