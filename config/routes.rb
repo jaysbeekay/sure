@@ -557,6 +557,10 @@ Rails.application.routes.draw do
       post :reset_classification
       patch :tags
     end
+
+    resources :lots, only: :update, controller: "holding_lots" do
+      post :unlock, on: :member
+    end
   end
   resources :security_classification_proposals, only: %i[index] do
     member do
