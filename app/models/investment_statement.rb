@@ -309,8 +309,11 @@ class InvestmentStatement
     holdings.each do |holding|
       next if holding.security.cash?
 
+      # A position whose provider reports fewer units than its trades bought
+      # is unknown for that reason, which says more than that it is missing.
       if holding.avg_cost.nil?
-        issues << DataQualityIssue.new(kind: :missing_cost_basis, holding: holding, security: holding.security, detail: nil)
+        kind = holding.quantity_mismatch? ? :quantity_mismatch : :missing_cost_basis
+        issues << DataQualityIssue.new(kind: kind, holding: holding, security: holding.security, detail: nil)
       end
     end
 
@@ -331,7 +334,7 @@ class InvestmentStatement
     issues.sort_by { |issue| [ DATA_QUALITY_KINDS.index(issue.kind), issue.security.ticker.to_s ] }
   end
 
-  DATA_QUALITY_KINDS = %i[missing_cost_basis stale_price provider ambiguous_constituent].freeze
+  DATA_QUALITY_KINDS = %i[missing_cost_basis quantity_mismatch stale_price provider ambiguous_constituent].freeze
 
   # Funds holding a constituent whose ticker exists on more than one exchange,
   # where the family's own positions do not say which listing is meant (#214).

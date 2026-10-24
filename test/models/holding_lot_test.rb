@@ -177,7 +177,6 @@ class HoldingLotTest < ActiveSupport::TestCase
 
       clamped = HoldingLot.opening.find_by!(security: @gapped)
       assert_equal [ 0, true ], [ clamped.qty, clamped.clamped ]
-      assert_equal 125, @account.holdings.find_by!(security: @gapped, date: d(8)).cost_basis, "the figure is today's"
       assert_equal [ @gapped.id ], HoldingLot.where(clamped: true).pluck(:security_id), "nothing flagged on the controls"
     end
   end
@@ -461,6 +460,75 @@ class HoldingLotTest < ActiveSupport::TestCase
     end
   end
 
+  # --- Clamped positions ---------------------------------------------------------
+
+  test "provider quantity below trade-derived quantity makes the position unknown" do
+    travel_to TODAY do
+      build_reverse_fixture
+      materialize(:reverse)
+
+      assert_nil @account.holdings.find_by!(security: @gapped, date: d(9)).cost_basis, "trades alone give 125"
+      assert_equal BigDecimal("102.5"), @account.holdings.find_by!(security: @opening, date: d(9)).cost_basis, "the control keeps its figure"
+    end
+  end
+
+  test "the avg-cost fallback and its batched preload answer nil for a clamped position" do
+    travel_to TODAY do
+      build_reverse_fixture
+      materialize(:reverse)
+      gapped = @account.holdings.find_by!(security: @gapped, date: d(10))
+      control = @account.holdings.find_by!(security: @opening, date: d(10))
+
+      assert_nil Holding.find(gapped.id).avg_cost, "trades alone give 125"
+      assert_not_nil Holding.find(control.id).avg_cost
+
+      preloaded = Holding.where(id: [ gapped.id, control.id ]).index_by(&:id)
+      Holding.preload_avg_costs(preloaded.values)
+      assert_nil preloaded[gapped.id].avg_cost
+      assert_equal Holding.find(control.id).avg_cost, preloaded[control.id].avg_cost
+    end
+  end
+
+  test "a clamped position raises its own data-quality entry, in place of a missing cost basis" do
+    travel_to TODAY do
+      build_reverse_fixture
+      @account.update!(owner: users(:empty))
+      materialize(:reverse)
+
+      issues = InvestmentStatement.new(@family, user: users(:empty)).data_quality_issues(as_of: TODAY.to_date)
+      by_security = issues.group_by(&:security)
+
+      assert_equal [ :quantity_mismatch ], by_security[@gapped].map(&:kind) - [ :stale_price, :provider ]
+      assert_not_includes (by_security[@opening] || []).map(&:kind), :quantity_mismatch, "the control is not flagged"
+      assert I18n.exists?("portfolios.data_quality.kinds.quantity_mismatch.title", :en)
+      assert I18n.exists?("portfolios.data_quality.kinds.quantity_mismatch.description", :en)
+      assert I18n.exists?("portfolios.data_quality.review_position", :en)
+    end
+  end
+
+  # --- The fallback reads user-set lot costs ------------------------------------
+
+  test "the avg-cost fallback counts a user-set lot cost, so a linked position resolves" do
+    travel_to TODAY do
+      setup_account
+      link_account
+      security = priced_security("LOTR", 30)
+      transfer = trade(security, 60, 30, 2, label: Trade::TRANSFER_LABEL)
+      buy = trade(security, 40, 20, 3)
+      provider_row = provider_holding(security, 100, nil)
+      materialize(:reverse)
+      assert_nil Holding.find(provider_row.id).avg_cost, "unknown before"
+
+      HoldingLot.find_by!(source_entry: transfer).set_manual_total_cost!(720)
+      assert_equal BigDecimal("15.2"), Holding.find(provider_row.id).avg_cost.amount
+      assert_equal BigDecimal("15.2"), preloaded_avg_cost(provider_row).amount
+
+      HoldingLot.find_by!(source_entry: buy).set_manual_total_cost!(600)
+      assert_equal BigDecimal("13.2"), Holding.find(provider_row.id).avg_cost.amount, "(720 + 600) / 100"
+      assert_equal BigDecimal("13.2"), preloaded_avg_cost(provider_row).amount
+    end
+  end
+
   private
     def d(day)
       Date.new(2024, 6, day)
@@ -523,6 +591,12 @@ class HoldingLotTest < ActiveSupport::TestCase
 
     def materialize(strategy, security_ids: nil)
       Holding::Materializer.new(@account.reload, strategy: strategy, security_ids: security_ids).materialize_holdings
+    end
+
+    def preloaded_avg_cost(holding)
+      fresh = Holding.find(holding.id)
+      Holding.preload_avg_costs([ fresh ])
+      fresh.avg_cost
     end
 
     def holding_qty(security, date)
