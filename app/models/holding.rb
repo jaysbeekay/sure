@@ -194,6 +194,7 @@ class Holding < ApplicationRecord
   # pre-reload cost basis back.
   def reload(*)
     remove_instance_variable(:@preloaded_avg_cost) if defined?(@preloaded_avg_cost)
+    remove_instance_variable(:@quantity_mismatch) if defined?(@quantity_mismatch)
     remove_instance_variable(:@trend) if defined?(@trend)
     remove_instance_variable(:@day_change) if defined?(@day_change)
     super
