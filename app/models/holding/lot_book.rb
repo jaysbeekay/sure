@@ -32,6 +32,10 @@
 # bought. The opening lot stays out of it, as it stays out of the pool.
 class Holding::LotBook
   Lot = Data.define(:source_id, :acquired_on, :qty, :unit_cost)
+
+  # A drift this small is the 18-place rounding of a split that does not
+  # divide evenly; anything wider is a real difference.
+  OPENING_RESIDUAL_BOUND = BigDecimal("1e-12")
   # `lot_source_id` and `unit_cost` are nil for the opening lot and for units
   # sold beyond what was held.
   Disposal = Data.define(:sale_id, :lot_source_id, :qty, :unit_cost)
@@ -121,6 +125,22 @@ class Holding::LotBook
   # An open lot a trade brought in at a cost nothing here knows.
   def unknown_cost?
     @lots.any? { |lot| lot.source_id && lot.unit_cost.nil? }
+  end
+
+  # Gives an open lot the drift between the open lots and `target`, the
+  # quantity they must add up to, when it is no more than `bound`: the opening
+  # lot, whose split round trip made it, or the last open lot once a sale has
+  # taken the opening one. The lot's quantity is restated, as #rescale_lots
+  # does, so no sale or disposal is recorded and no other lot moves; a
+  # disposal already taken from it stays as recorded, under 10^-12 apart.
+  def settle_opening(target, bound:)
+    drift = target - open_qty
+    return if drift.zero? || drift.abs > bound
+
+    index = @lots.index { |lot| lot.source_id.nil? } || (@lots.size - 1)
+    return if index.negative? || (@lots[index].qty + drift) <= 0
+
+    @lots[index] = @lots[index].with(qty: @lots[index].qty + drift)
   end
 
   def open_qty
