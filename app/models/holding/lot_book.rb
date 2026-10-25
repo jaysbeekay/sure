@@ -13,6 +13,10 @@
 # what every stored figure is computed from. A transfer-in stays outside the
 # pool; the calculators report a position holding one as unknown.
 #
+# Lot quantities are kept at the precision they are stored at, and a sale
+# beyond the open lots is a shortfall the next acquisitions fill before they
+# open a lot, so the open lots always sum to the position.
+#
 # Buys add to the running cost and quantity. Sells relieve quantity at the
 # current average cost (leaving the per-share average unchanged), and once the
 # position is fully closed the pool resets so a later repurchase starts from a
@@ -28,6 +32,8 @@ class Holding::LotBook
 
   def initialize
     @lots = []
+    @closed = []
+    @shortfall = BigDecimal("0")
     reset
   end
 
@@ -82,6 +88,7 @@ class Holding::LotBook
   # is restated the same way.
   def split(ratio)
     @total_qty = Security::Split.scale(@total_qty, ratio)
+    @shortfall = Security::Split.scale(@shortfall, ratio)
     rescale_lots(Security::Split.scale(open_qty, ratio)) do |lot|
       lot.with(
         qty: Security::Split.scale(lot.qty, ratio),
@@ -102,6 +109,11 @@ class Holding::LotBook
     @lots.sum(BigDecimal("0"), &:qty)
   end
 
+  # Every lot booked, open or closed; a closed lot is at qty 0.
+  def ledger
+    @closed + @lots
+  end
+
   private
     def reset
       @total_cost = BigDecimal("0")
@@ -110,26 +122,32 @@ class Holding::LotBook
     end
 
     def add_lot(source_id, acquired_on, qty, unit_cost)
-      @lots << Lot.new(source_id: source_id, acquired_on: acquired_on, qty: qty, unit_cost: unit_cost)
+      filled = [ qty, @shortfall ].min
+      @shortfall -= filled
+      lot = Lot.new(source_id: source_id, acquired_on: acquired_on, qty: qty - filled, unit_cost: unit_cost)
+      lot.qty.positive? ? @lots << lot : @closed << lot
     end
 
-    # Pro-rata relief across every open lot; an oversell closes them all.
+    # Pro-rata relief across every open lot; an oversell closes them all and
+    # leaves the excess as a shortfall.
     def relieve_lots(qty)
       open = open_qty
+      @shortfall += qty - open if qty > open
       return if open.zero?
 
       remaining = open - [ qty, open ].min
-      rescale_lots(remaining) { |lot| lot.with(qty: lot.qty * remaining / open) }
+      rescale_lots(remaining) { |lot| lot.with(qty: (lot.qty * remaining / open).round(Security::Split::QTY_SCALE)) }
     end
 
     # Restates each lot, then gives the last open lot whatever rounding is left,
     # so the lots always sum to exactly `target`.
     def rescale_lots(target)
-      scaled = target.zero? ? [] : @lots.map { |lot| yield lot }
-      if scaled.any?
+      scaled = @lots.map { |lot| target.zero? ? lot.with(qty: BigDecimal("0")) : yield(lot) }
+      if target.positive? && scaled.any?
         drift = target - scaled.sum(BigDecimal("0"), &:qty)
         scaled[-1] = scaled[-1].with(qty: scaled[-1].qty + drift)
       end
-      @lots = scaled.select { |lot| lot.qty.positive? }
+      @lots, closed = scaled.partition { |lot| lot.qty.positive? }
+      @closed.concat(closed.map { |lot| lot.with(qty: BigDecimal("0")) })
     end
 end
