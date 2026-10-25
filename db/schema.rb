@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -1211,7 +1211,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
     t.uuid "lot_source_entry_id"
     t.decimal "qty", precision: 34, scale: 18, null: false
     t.uuid "sale_entry_id", null: false
-    t.decimal "unit_cost", precision: 19, scale: 10
+    t.decimal "unit_cost", precision: 25, scale: 10
     t.datetime "updated_at", null: false
     t.index ["account_id"], name: "index_holding_lot_disposals_on_account_id"
     t.index ["sale_entry_id"], name: "index_holding_lot_disposals_on_sale_entry_id"
@@ -1229,7 +1229,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
     t.decimal "qty", precision: 34, scale: 18, null: false
     t.uuid "security_id", null: false
     t.uuid "source_entry_id"
-    t.decimal "unit_cost", precision: 19, scale: 10
+    t.decimal "unit_cost", precision: 25, scale: 10
     t.datetime "updated_at", null: false
     t.index ["account_id", "security_id"], name: "index_holding_lots_one_opening_lot_per_position", unique: true, where: "(source_entry_id IS NULL)"
     t.index ["account_id", "source_entry_id"], name: "index_holding_lots_on_account_id_and_source_entry_id", unique: true
