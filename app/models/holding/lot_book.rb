@@ -134,7 +134,7 @@ class Holding::LotBook
   # does, so no sale or disposal is recorded and no other lot moves; a
   # disposal already taken from it stays as recorded, under 10^-12 apart.
   def settle_opening(target, bound:)
-    drift = target - open_qty
+    drift = target.to_d - open_qty
     return if drift.zero? || drift.abs > bound
 
     index = @lots.index { |lot| lot.source_id.nil? } || (@lots.size - 1)
