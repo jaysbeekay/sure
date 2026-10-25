@@ -531,6 +531,16 @@ class HoldingLotTest < ActiveSupport::TestCase
     end
   end
 
+  test "reloading a holding forgets a preloaded quantity mismatch" do
+    holding = holdings(:one)
+    holding.preload_avg_cost(nil, quantity_mismatch: true)
+    assert holding.quantity_mismatch?, "precondition"
+
+    holding.reload
+
+    assert_not holding.quantity_mismatch?
+  end
+
   private
     def d(day)
       Date.new(2024, 6, day)
