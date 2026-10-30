@@ -27,7 +27,7 @@ class RedbarkItem::Importer
     # Unlinked accounts just need basic info (name, institution) for the setup modal.
     # `account_provider: :account` is preloaded because the loan filter in
     # import_loan_account_details reads `current_account` for every linked
-    # account, which is a query each without it (raised by cubic on #213).
+    # account, which is a query each without it.
     linked_accounts = redbark_item.linked_redbark_accounts.includes(account_provider: :account).to_a
 
     Rails.logger.info "RedbarkItem::Importer - Found #{linked_accounts.count} linked accounts to process"
@@ -203,7 +203,7 @@ class RedbarkItem::Importer
     end
 
     # Loans only, and only when there are any: `account-details` is the one
-    # endpoint that reports a rate (#142), and for every other account type it
+    # endpoint that reports a rate (we-promise/sure#3891), and for every other account type it
     # would be a request per sync for something nothing reads.
     #
     # A failure here leaves the payload untouched and the sync green, exactly as
@@ -245,8 +245,7 @@ class RedbarkItem::Importer
 
     # The batch is rejected whole when one id is stale or of the wrong
     # category, exactly as the balances batch is, so one bad account must not
-    # cost every other loan its rate. Mirrors fetch_balances_with_fallback
-    # (raised as a non-blocking observation on the #213 gate).
+    # cost every other loan its rate. Mirrors fetch_balances_with_fallback.
     def fetch_account_details_with_fallback(account_ids)
       stats["api_requests"] = stats.fetch("api_requests", 0) + 1
       redbark_provider.get_account_details(account_ids: account_ids)
@@ -327,10 +326,16 @@ class RedbarkItem::Importer
         # through the API's row ceiling on busy accounts.
         (redbark_item.last_synced_at - 7.days).to_date
       elsif redbark_account.sync_start_date.present?
-        redbark_account.sync_start_date
+        # The stored date was validated against the rolling lookback window
+        # when it was set, but time passes between then and this first real
+        # fetch (a delayed initial sync, a long-stuck job). Clamp to today's
+        # window so an expired date doesn't get sent to Redbark and rejected
+        # outright -- the user still gets as much history as is still
+        # available, instead of nothing.
+        [ redbark_account.sync_start_date, RedbarkAccount::MAX_SYNC_START_DATE_LOOKBACK_DAYS.days.ago.to_date ].max
       else
-        # First sync for this account: pull a 90 day history
-        90.days.ago.to_date
+        # First sync for this account: pull the default history window
+        RedbarkAccount::DEFAULT_INITIAL_HISTORY_DAYS.days.ago.to_date
       end
     end
 

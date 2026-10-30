@@ -164,10 +164,10 @@ class RecurringOccurrencesController < ApplicationController
     end
 
     # The names the matcher itself would recognize: the series' own name plus
-    # any alias a manual attach has taught it.
+    # any alias a manual attach or a rename has taught it. Raw rather than
+    # normalised, so a pattern never drops spacing an entry name still has.
     def matcher_name_patterns(series)
-      ([ series.name ] + Array(series.matcher_hints["name_aliases"]))
-        .compact_blank
+      series.matcher_names
         .map { |name| "%#{ActiveRecord::Base.sanitize_sql_like(name)}%" }
     end
 

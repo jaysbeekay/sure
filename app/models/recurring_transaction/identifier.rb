@@ -41,7 +41,7 @@ class RecurringTransaction
     # keeps requiring three to act on its own).
     def candidate_patterns(sign: :outflow, min_occurrences: 2)
       wanted_negative = sign == :inflow
-      existing_by_identity = family.recurring_transactions.to_a.group_by { |recurring| identity_key(recurring) }
+      existing_by_identity = series_by_identity
 
       collect_patterns(min_occurrences: min_occurrences).select do |pattern|
         next false unless pattern[:amount].negative? == wanted_negative
@@ -113,11 +113,12 @@ class RecurringTransaction
       # ended rows, so detection can never recreate a bill the user already
       # declared by hand or dismissed. Only an unclaimed pattern creates a
       # row, and it lands as `suggested`, awaiting confirmation.
-      existing_by_identity = family.recurring_transactions.to_a.group_by { |recurring| identity_key(recurring) }
+      existing_by_identity = series_by_identity
+
+      preload_series_to_refresh(recurring_patterns, existing_by_identity)
 
       recurring_patterns.each do |pattern|
-        identity = [ pattern[:merchant_id] ? [ :merchant, pattern[:merchant_id] ] : [ :name, pattern[:name] ],
-                     pattern[:currency], pattern[:account_id], nil ]
+        identity = pattern_identity(pattern)
         candidates = existing_by_identity[identity] || []
         claimed = nearest_within_tolerance(candidates, pattern[:expected_amount_avg])
 
@@ -195,9 +196,23 @@ class RecurringTransaction
       # Identity as the unique indexes see it, minus dedup_scope: several
       # series can legitimately share this key (subscription tiers), which is
       # exactly why claiming goes through amount-nearness rather than lookup.
-      def identity_key(recurring)
-        identifier = recurring.merchant_id.present? ? [ :merchant, recurring.merchant_id ] : [ :name, recurring.name ]
-        [ identifier, recurring.currency, recurring.account_id, recurring.destination_account_id ]
+      #
+      # A name-keyed series answers to every name it matches on, so a renamed
+      # bill keeps claiming the pattern it was detected from (issue #503).
+      def identity_keys(recurring)
+        identifiers = if recurring.merchant_id.present?
+          [ [ :merchant, recurring.merchant_id ] ]
+        else
+          recurring.matcher_names.map { |name| [ :name, name ] }
+        end
+
+        identifiers.map { |identifier| [ identifier, recurring.currency, recurring.account_id, recurring.destination_account_id ] }
+      end
+
+      def series_by_identity
+        family.recurring_transactions.to_a.each_with_object({}) do |recurring, index|
+          identity_keys(recurring).each { |key| (index[key] ||= []) << recurring }
+        end
       end
 
       # Shared pattern collection: groups three months of non-transfer
@@ -320,7 +335,7 @@ class RecurringTransaction
           if identifier_type == :merchant
             recurring.merchant_id == identifier_value
           else
-            recurring.merchant_id.nil? && recurring.name == identifier_value
+            recurring.merchant_id.nil? && recurring.matcher_names.include?(identifier_value)
           end
         end
       end
@@ -329,6 +344,32 @@ class RecurringTransaction
         candidates
           .select { |recurring| within_tolerance?(target_amount, recurring.amount) }
           .min_by { |recurring| (recurring.amount - target_amount).abs }
+      end
+
+      # update_claimed_series reads each series' recurrence_rules
+      # (sync_monthly_rule_day, Schedule.for) and accounts
+      # (accounts_belong_to_family on update!). Batch-load them for only the
+      # series this run will refresh -- not the manual/ended tombstones or
+      # unmatched rows that stay in existing_by_identity purely for claiming.
+      # Read-only and best-effort: a series missed here just loads lazily.
+      def preload_series_to_refresh(recurring_patterns, existing_by_identity)
+        to_refresh = recurring_patterns.filter_map do |pattern|
+          claimed = nearest_within_tolerance(existing_by_identity[pattern_identity(pattern)] || [], pattern[:expected_amount_avg])
+          claimed unless claimed.nil? || claimed.manual? || claimed.ended?
+        end.uniq
+
+        return if to_refresh.empty?
+
+        ActiveRecord::Associations::Preloader.new(
+          records: to_refresh,
+          associations: [ :recurrence_rules, :account, :destination_account ]
+        ).call
+      end
+
+      # Same shape as identity_key, built from a detected pattern.
+      def pattern_identity(pattern)
+        [ pattern[:merchant_id] ? [ :merchant, pattern[:merchant_id] ] : [ :name, pattern[:name] ],
+          pattern[:currency], pattern[:account_id], nil ]
       end
 
       # Refreshes a claimed series' cadence bookkeeping and variance band.
@@ -458,7 +499,7 @@ class RecurringTransaction
         if recurring.merchant_id.present?
           entry.read_attribute("transaction_merchant_id") == recurring.merchant_id
         else
-          entry.name == recurring.name
+          recurring.matcher_names.include?(entry.name)
         end
       end
 

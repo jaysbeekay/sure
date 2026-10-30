@@ -4,7 +4,7 @@ class IbkrItem::SyncCompleteEventTest < ActiveSupport::TestCase
   fixtures :families, :ibkr_items
 
   # The card itself is not re-rendered: it lists every account on the
-  # connection and a broadcast has no viewer to filter for (#235).
+  # connection and a broadcast has no viewer to filter for (#3630).
   test "broadcast refreshes linked accounts and the family stream, not the card" do
     ibkr_item = ibkr_items(:configured_item)
     family = ibkr_item.family

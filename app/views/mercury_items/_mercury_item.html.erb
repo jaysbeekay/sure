@@ -1,4 +1,4 @@
-<%# locals: (mercury_item:, visible_accounts: mercury_item.accounts) %>
+<%# locals: (mercury_item:, visible_accounts:) %>
 
 <%= tag.div id: dom_id(mercury_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -17,7 +17,7 @@
               <% end %>
             </div>
             <%# The institution belongs to every account on the connection, so it is
-                shown only to a viewer who can see them all (#235). %>
+                shown only to a viewer who can see them all (#3630). %>
             <% if mercury_item.accounts.any? && visible_accounts.size == mercury_item.accounts.size %>
               <p class="text-xs text-secondary">
                 <%= mercury_item.institution_summary %>

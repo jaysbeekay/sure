@@ -194,6 +194,45 @@ class RecurringTransaction::IdentifierTest < ActiveSupport::TestCase
     assert_empty @identifier.income_source_candidates
   end
 
+  # Issue #503: a declared paycheck renamed by its owner still claims its source.
+  test "income_source_candidates still skips a declared income source after it is renamed" do
+    account = @family.accounts.first
+
+    [ [ 40, 1500.0 ], [ 26, 900.0 ], [ 12, 2100.0 ] ].each do |days_ago, amount|
+      account.entries.create!(
+        date: days_ago.days.ago.to_date, amount: -amount, currency: "USD", name: "ACME PAYROLL",
+        entryable: Transaction.create!(category: categories(:food_and_drink))
+      )
+    end
+
+    income = @family.recurring_transactions.create!(
+      name: "ACME PAYROLL", account: account, amount: -1800.00, currency: "USD", bill_type: "income",
+      expected_day_of_month: 15, last_occurrence_date: 12.days.ago.to_date,
+      next_expected_date: Date.current + 2, status: "active", manual: true
+    )
+    income.update!(name: "Salary")
+
+    assert_empty @identifier.income_source_candidates
+  end
+
+  test "a renamed manual bill keeps tracking the payments under its old name" do
+    account = @family.accounts.first
+    create_name_pattern_entries(account: account, name: "LOCAL GYM", amount: 45, day: 7)
+    latest = account.entries.where(name: "LOCAL GYM").maximum(:date)
+
+    series = @family.recurring_transactions.create!(
+      name: "LOCAL GYM", account: account, amount: 45, currency: "USD",
+      expected_day_of_month: 7, last_occurrence_date: latest << 6,
+      next_expected_date: latest, status: "active", manual: true
+    )
+    series.update!(name: "Gym")
+
+    @identifier.identify_recurring_patterns
+
+    assert_equal latest, series.reload.last_occurrence_date
+    assert_equal 3, series.occurrence_count
+  end
+
   test "candidate_patterns needs only two consistent occurrences while identify still needs three" do
     account = @family.accounts.first
 
@@ -481,6 +520,44 @@ class RecurringTransaction::IdentifierTest < ActiveSupport::TestCase
     assert_empty recurring_lookup_queries
     recurring_transactions.each do |recurring|
       assert_equal 3, recurring.reload.occurrence_count
+    end
+  end
+
+  test "refreshes claimed series without per-series recurrence rule or account lookups" do
+    account = @family.accounts.first
+    names = Array.new(3) { |index| "Claimed Performance Subscription #{index}" }
+
+    names.each_with_index do |name, index|
+      create_name_pattern_entries(account: account, name: name, amount: 40 + index, day: 5)
+
+      @family.recurring_transactions.create!(
+        account: account,
+        name: name,
+        amount: 40 + index,
+        currency: "USD",
+        expected_day_of_month: 5,
+        last_occurrence_date: 4.months.ago.to_date,
+        next_expected_date: 1.month.from_now.to_date,
+        occurrence_count: 1,
+        status: "active"
+      )
+    end
+
+    queries = nil
+    assert_no_difference -> { @family.recurring_transactions.count } do
+      queries = capture_sql_queries do
+        @identifier.identify_recurring_patterns
+      end
+    end
+
+    # One batched preload is fine; a query per claimed series is the N+1.
+    rule_queries = queries.grep(/\ASELECT .*FROM "recurrence_rules"/)
+    account_queries = queries.grep(/\ASELECT "accounts"\.\* FROM "accounts" WHERE "accounts"\."id"/)
+
+    assert_operator rule_queries.size, :<=, 1, rule_queries.join(" | ")
+    assert_operator account_queries.size, :<=, 1, account_queries.join(" | ")
+    @family.recurring_transactions.where(name: names).each do |recurring|
+      assert_equal 3, recurring.occurrence_count
     end
   end
 

@@ -23,7 +23,7 @@
             </div>
             <div class="text-right text-xs text-secondary shrink-0">
               <% case kind %>
-              <% when :missing_cost_basis %>
+              <% when :missing_cost_basis, :quantity_mismatch %>
                 <% if issue.holding %>
                   <span class="mr-2"><%= issue.holding.account.name %></span>
                   <%# Setting a basis is a PATCH the drawer submits, and that
@@ -31,7 +31,8 @@
                       row still names the problem; it just does not offer an
                       action that would be refused. %>
                   <% if writable_account_ids.include?(issue.holding.account_id) %>
-                    <%= link_to t("portfolios.data_quality.set_cost_basis"), holding_path(issue.holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline" %>
+                    <%= link_to t(kind == :quantity_mismatch ? "portfolios.data_quality.review_position" : "portfolios.data_quality.set_cost_basis"),
+                          holding_path(issue.holding), data: { turbo_frame: :drawer }, class: "text-link hover:underline" %>
                   <% else %>
                     <span class="text-subdued"><%= t("portfolios.data_quality.read_only") %></span>
                   <% end %>

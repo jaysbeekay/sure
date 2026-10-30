@@ -41,8 +41,9 @@ module AccountableResource
       nil
     end || (Time.zone.today - 2.years)
     Account.transaction do
+      # A new account has no sales to restate, so it starts on the default method.
       @account = Current.family.accounts.create_and_sync(
-        account_params.except(:return_to, :opening_balance_date).merge(owner: Current.user),
+        account_params.except(:return_to, :opening_balance_date, :cost_basis_method).merge(owner: Current.user),
         opening_balance_date: opening_balance_date
       )
       @account.lock_saved_attributes!
@@ -64,12 +65,13 @@ module AccountableResource
     # usually the unsaved account with its nested accountable still attached --
     # but the opening valuation's `entries.create!` or `lock_saved_attributes!`
     # can raise too, and then it is an Entry or the accountable, neither of
-    # which the form can render. Recover the account through it, or start from
-    # a fresh one as `new` does.
+    # which the form can render. Recover the account through it, or rebuild
+    # it from what was submitted so the form comes back filled in rather
+    # than blank.
     @account = if e.record.is_a?(Account)
       e.record
     else
-      e.record.try(:account) || Current.family.accounts.build(currency: Current.family.currency, accountable: accountable_type.new)
+      e.record.try(:account) || rebuilt_account_from_submission
     end
     @error_message = e.record.errors.full_messages.join(", ").presence || e.message
     # The `new` template's method-selection branch reads `@provider_configs`,
@@ -82,7 +84,12 @@ module AccountableResource
     # Assigning a balance can fail before the normal update path assigns the
     # other submitted fields. Keep them available for the 422 form without
     # persisting them.
-    update_params = account_params.except(:return_to, :balance, :opening_balance_date)
+    update_params = account_params.except(:return_to, :balance, :opening_balance_date, :cost_basis_method)
+    # Every account type posts through here; only one with trades has lots to
+    # sell. Applied after the other fields, since the same form can change a
+    # crypto account's subtype and with it whether the account trades.
+    cost_basis_method = account_params[:cost_basis_method]
+    previous_cost_basis_method = @account.cost_basis_method
 
     # The balance change and the attribute update are one form, so they commit
     # or roll back as one. `set_current_balance` writes a valuation and the
@@ -103,7 +110,8 @@ module AccountableResource
       # Update remaining account attributes. Note: currency is intentionally allowed
       # here so all account types (depositories, credit cards, loans, etc.) can
       # have their currency changed via this shared update path.
-      unless @account.update(update_params)
+      unless @account.update(update_params) &&
+          (cost_basis_method.nil? || !@account.supports_trades? || @account.update(cost_basis_method: cost_basis_method))
         @error_message = @account.errors.full_messages.join(", ")
         raise ActiveRecord::Rollback
       end
@@ -124,10 +132,30 @@ module AccountableResource
       return
     end
 
+    # The stored figures were worked out under the old method; a sync restates
+    # them. Compared by hand: lock_saved_attributes! saves again, which clears
+    # saved_change_to_cost_basis_method?.
+    @account.sync_later if @account.cost_basis_method != previous_cost_basis_method
+
     redirect_back_or_to account_path(@account), notice: t("accounts.update.success", type: accountable_type.name.underscore.humanize)
   end
 
   private
+    # The account the 422 form renders when the exception carried none.
+    #
+    # `accountable_attributes` is defaulted the way `create_and_sync` defaults
+    # it. `accountable_type=` only writes the type column: the accountable
+    # object itself is built as a side effect of `accountable_attributes=` or
+    # of `subtype=`. A submission that names neither -- a loan form whose
+    # nested fields are all blank, say -- rebuilt an account with a nil
+    # `accountable`, and the form came back without any of the type's own
+    # inputs, which is the opposite of what this rescue exists to do.
+    def rebuilt_account_from_submission
+      attributes = account_params.except(:return_to, :opening_balance_date)
+      attributes[:accountable_attributes] ||= {}
+      Current.family.accounts.build(attributes)
+    end
+
     def set_link_options
       account_type_name = accountable_type.name
 
@@ -156,7 +184,7 @@ module AccountableResource
         :name, :balance, :subtype, :currency, :accountable_type, :return_to,
         :opening_balance_date,
         :institution_name, :institution_domain, :notes, :exclude_from_reports,
-        :enable_category_matcher,
+        :enable_category_matcher, :cost_basis_method,
         accountable_attributes: self.class.permitted_accountable_attributes
       )
     end
