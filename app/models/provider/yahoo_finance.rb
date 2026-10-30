@@ -34,6 +34,12 @@ class Provider::YahooFinance < Provider
   # Maximum lookback window for historical data (configurable)
   MAX_LOOKBACK_WINDOW = 10.years
 
+  # Returns `sector` and `industry` from its own metadata response, so the
+  # classification gate in `Security::Provided` must ask it.
+  def supplies_classification?
+    true
+  end
+
   def max_history_days
     (MAX_LOOKBACK_WINDOW / 1.day).to_i
   end
@@ -281,7 +287,9 @@ class Provider::YahooFinance < Provider
         logo_url: nil, # Yahoo doesn't provide reliable logo URLs
         description: asset_profile["longBusinessSummary"],
         kind: map_security_type(quote_type["quoteType"]),
-        exchange_operating_mic: exchange_operating_mic
+        exchange_operating_mic: exchange_operating_mic,
+        sector: asset_profile["sector"],
+        industry: asset_profile["industry"]
       )
 
       security_info
@@ -909,6 +917,15 @@ class Provider::YahooFinance < Provider
 
         results.sort_by(&:date)
       rescue Faraday::Error, JSON::ParserError => e
+        Rails.logger.warn("#{self.class.name}: fetch_chart_data failed for #{symbol}: #{e.class}: #{e.message}")
+        DebugLogEntry.capture(
+          category: "provider_chart_fetch",
+          level: "warn",
+          message: "Yahoo Finance fetch_chart_data failed",
+          source: self.class.name,
+          provider_key: "yahoo_finance",
+          metadata: { symbol: symbol, exception_class: e.class.name, exception_message: e.message }
+        )
         nil
       end
     end
@@ -920,7 +937,7 @@ class Provider::YahooFinance < Provider
           interval: retry_interval,
           interval_randomness: 0.5,
           backoff_factor: 2,
-          retry_statuses: [ 429 ],
+          retry_statuses: [ 429, 500, 502, 503, 504 ],
           exceptions: [ Faraday::ConnectionFailed, Faraday::TimeoutError ]
         })
 
@@ -1084,7 +1101,7 @@ class Provider::YahooFinance < Provider
           interval: retry_interval,
           interval_randomness: 0.5,
           backoff_factor: 2,
-          retry_statuses: [ 429 ],
+          retry_statuses: [ 429, 500, 502, 503, 504 ],
           exceptions: [ Faraday::ConnectionFailed, Faraday::TimeoutError ]
         })
 

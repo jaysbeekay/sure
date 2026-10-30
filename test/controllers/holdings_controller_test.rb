@@ -222,12 +222,24 @@ class HoldingsControllerTest < ActionDispatch::IntegrationTest
 
     # Redirects to account page holdings tab to refresh list
     assert_redirected_to account_path(@holding.account, tab: "holdings")
+    assert_equal I18n.t("holdings.unlock_cost_basis.success"), flash[:notice]
     @holding.reload
 
     # Then: lock is removed but cost_basis and source remain
     assert_not @holding.cost_basis_locked?
     assert_equal 50.0, @holding.cost_basis.to_f
     assert_equal "manual", @holding.cost_basis_source
+  end
+
+  test "reset_security restores the provider security and confirms it" do
+    @holding.account.update!(plaid_account: plaid_accounts(:one))
+    @holding.update!(security: securities(:msft), provider_security: securities(:aapl), security_locked: true)
+
+    post reset_security_holding_path(@holding)
+
+    assert_redirected_to account_path(@holding.account, tab: "holdings")
+    assert_equal I18n.t("holdings.reset_security.success"), flash[:notice]
+    assert_equal securities(:aapl), @holding.reload.security
   end
 
   test "remap_security brings offline security back online" do
@@ -275,6 +287,16 @@ class HoldingsControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to account_path(@holding.account, tab: "holdings")
     assert_equal I18n.t("holdings.sync_prices.success"), flash[:notice]
+  end
+
+  # The one caller of import_provider_details that must not ask for a
+  # classification: a manual price refresh is not a classification sync.
+  test "sync_prices does not ask for a classification" do
+    Security.any_instance.stubs(:import_provider_prices).returns([ 31, nil ])
+    Security.any_instance.expects(:import_provider_details).with(Not(has_entry(include_classification: true))).once
+    Balance::Materializer.stubs(:new).returns(stub(materialize_balances: true))
+
+    post sync_prices_holding_path(@holding)
   end
 
   test "sync_prices shows provider error inline when provider returns no prices" do
