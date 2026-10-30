@@ -20,6 +20,7 @@ class HoldingsController < ApplicationController
     # and an action deciding whether to accept it must not answer from two
     # tables.
     @can_annotate_holding = account_permission?(@holding.account, :annotate)
+    @lots = @holding.open_lots.to_a
   end
 
   # The family-scoped half of classification. Unlike the classification columns,

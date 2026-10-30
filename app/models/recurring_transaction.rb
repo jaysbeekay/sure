@@ -73,7 +73,18 @@ class RecurringTransaction < ApplicationRecord
   # post-commit regeneration consumes it.
   attr_accessor :rules_rewritten
 
+  # Set by the data importer: an export's matcher_hints are the record being
+  # restored, so a restore that changes the name is not a rename to remember.
+  attr_accessor :restoring_matcher_hints
+
+  before_update :remember_previous_name_as_alias, if: :renaming_name_keyed_series?
+
   after_commit :generate_occurrences, on: :create
+  # Ahead of regeneration: activation changes status, so both run, and with
+  # load_defaults 7.1+ these run in the order defined. An exception in one
+  # stops the rest, so a failed regeneration must not cost the bill its
+  # history; reconstruct_history! generates the upcoming rows itself.
+  after_commit :reconstruct_history_on_activation, on: :update, if: :activated_from_suggestion?
   after_commit :regenerate_future_occurrences, on: :update, if: :schedule_shape_changed?
   after_commit :pin_amount_on_dates_already_due, on: :update, if: :saved_change_to_amount?
 
@@ -139,12 +150,15 @@ class RecurringTransaction < ApplicationRecord
     name.presence || merchant&.name
   end
 
-  # Every name this series answers to, normalised: its own and the bank texts
-  # it has learned. The one place a series' names are compared, so the
-  # matcher and the covering check below cannot drift apart.
+  # Every name a merchant-less series matches on, as typed: its own and the
+  # aliases a manual attach or a rename taught it. Raw, so SQL that compares
+  # entry names can use it; known_names is the normalised set for comparing.
+  def matcher_names
+    ([ name ] + Array(matcher_hints.to_h["name_aliases"])).compact_blank.uniq
+  end
+
   def known_names
-    ([ name ] + Array(matcher_hints["name_aliases"]))
-      .compact.map { |known| RecurringTransaction::Matcher.normalize_name(known) }.to_set
+    matcher_names.map { |known| Matcher.normalize_name(known) }.to_set
   end
 
   def merchant_or_name_present
@@ -182,8 +196,82 @@ class RecurringTransaction < ApplicationRecord
     errors.add(:payment_url, :invalid_scheme) unless self.class.valid_payment_url?(payment_url)
   end
 
+  # A merchant-less series matches on its name, so renaming it would cut it off
+  # from the payments it was detected from. The old name stays on as an alias
+  # (issue #503) and shows on the bill page under "Also matches".
+  def renaming_name_keyed_series?
+    will_save_change_to_name? && !restoring_matcher_hints &&
+      merchant_id.blank? && merchant_id_in_database.blank?
+  end
+
+  # Kept as stored, not normalised: detection, the staleness check and income
+  # claiming compare names exactly, so a case-only rename needs the old spelling.
+  def remember_previous_name_as_alias
+    previous = name_in_database
+    return if previous.blank?
+
+    # The current name is not its own alias: a rename back to an earlier name
+    # takes it off the "Also matches" list until the next rename.
+    hints = matcher_hints.to_h.deep_dup
+    aliases = Array(hints["name_aliases"])
+    updated = (aliases + [ previous ]).uniq - [ name ]
+    return if updated == aliases
+
+    hints["name_aliases"] = updated
+    self.matcher_hints = hints
+  end
+
   def generate_occurrences
     OccurrenceGenerator.new(self).generate!
+  end
+
+  # Links what a bill already paid before it was a bill. One method for every
+  # route that confirms a detection -- the review strip, the pause toggle and
+  # the assistant's update_bill all land here through the status change.
+  # Generation is scoped to this series; the matcher pass inside stays
+  # family-wide on purpose (exact-tier, idempotent, and scoping it would need
+  # a parallel Matcher entry point). Returns false only when another pipeline
+  # holds the family lock.
+  def reconstruct_history!
+    return true if family.recurring_transactions_disabled?
+
+    Pipeline.with_family_lock(family_id) do
+      series_scope = family.recurring_transactions.where(id: id)
+
+      # The current cycle and the upcoming occurrences first, as Pipeline#run!
+      # does, so the history pass can match an early payment to the occurrence
+      # it was paid ahead of. Idempotent, and it no longer relies on the
+      # activation's regeneration having run. Freshly loaded, like the
+      # backfiller's, so a pause that committed since this record was read
+      # is respected.
+      series_scope.find_each { |series| OccurrenceGenerator.new(series).generate! }
+      HistoryBackfiller.new(
+        family,
+        months: Pipeline::FIRST_RUN_BACKFILL_MONTHS,
+        series_scope: series_scope
+      ).run!
+    end
+  end
+
+  # Read from the saved change rather than the current status: update_bill
+  # assigns every field and saves once, so by now the series reads active
+  # whichever route it took.
+  def activated_from_suggestion?
+    saved_change_to_status?(from: "suggested", to: "active")
+  end
+
+  # Skipping under a held lock used to leave the bill without history for
+  # good, since the live matcher never looks behind the current cycle.
+  #
+  # The activation has committed by now, so a failure here must not fail the
+  # caller's own write (a toggle, an API update, the assistant's update_bill).
+  # It is reported and handed to the job, which retries; the backfill is
+  # re-runnable by construction.
+  def reconstruct_history_on_activation
+    BackfillRecurringHistoryJob.perform_later(id) unless reconstruct_history!
+  rescue StandardError => e
+    Rails.error.report(e, handled: true, context: { recurring_transaction_id: id })
+    BackfillRecurringHistoryJob.perform_later(id)
   end
 
   # Regenerating rebuilds only scheduled, allocation-free, not-yet-due rows;
@@ -585,6 +673,8 @@ class RecurringTransaction < ApplicationRecord
       next_expected_date: next_expected,
       status: "active",
       bill_type: entry.amount.negative? ? "income" : "bill",
+      # Income stays uncategorised, as detection leaves it.
+      category_id: entry.amount.negative? ? nil : transaction.category_id,
       occurrence_count: matching_amounts.size,
       manual: true,
       expected_amount_min: expected_min,
@@ -674,8 +764,8 @@ class RecurringTransaction < ApplicationRecord
         entry.entryable.is_a?(Transaction) && entry.entryable.merchant_id == merchant_id
       end
     else
-      # Match by entry name
-      entries.where(name: name)
+      # Match by entry name, including the names it was known by before a rename
+      entries.where(name: matcher_names)
     end
 
     schedule_matched(candidates)

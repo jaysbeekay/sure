@@ -41,7 +41,7 @@ class RecurringTransaction
     # keeps requiring three to act on its own).
     def candidate_patterns(sign: :outflow, min_occurrences: 2)
       wanted_negative = sign == :inflow
-      existing_by_identity = family.recurring_transactions.to_a.group_by { |recurring| identity_key(recurring) }
+      existing_by_identity = series_by_identity
 
       collect_patterns(min_occurrences: min_occurrences).select do |pattern|
         next false unless pattern[:amount].negative? == wanted_negative
@@ -113,7 +113,7 @@ class RecurringTransaction
       # ended rows, so detection can never recreate a bill the user already
       # declared by hand or dismissed. Only an unclaimed pattern creates a
       # row, and it lands as `suggested`, awaiting confirmation.
-      existing_by_identity = family.recurring_transactions.to_a.group_by { |recurring| identity_key(recurring) }
+      existing_by_identity = series_by_identity
 
       preload_series_to_refresh(recurring_patterns, existing_by_identity)
 
@@ -189,6 +189,8 @@ class RecurringTransaction
           last_occurrence_date: last_entry.date,
           next_expected_date: recurring.schedule.next_occurrence_after(last_entry.date)
         )
+
+        fill_blank_category(recurring, modal_category_id(matching_entries))
       end
     end
 
@@ -196,9 +198,23 @@ class RecurringTransaction
       # Identity as the unique indexes see it, minus dedup_scope: several
       # series can legitimately share this key (subscription tiers), which is
       # exactly why claiming goes through amount-nearness rather than lookup.
-      def identity_key(recurring)
-        identifier = recurring.merchant_id.present? ? [ :merchant, recurring.merchant_id ] : [ :name, recurring.name ]
-        [ identifier, recurring.currency, recurring.account_id, recurring.destination_account_id ]
+      #
+      # A name-keyed series answers to every name it matches on, so a renamed
+      # bill keeps claiming the pattern it was detected from (issue #503).
+      def identity_keys(recurring)
+        identifiers = if recurring.merchant_id.present?
+          [ [ :merchant, recurring.merchant_id ] ]
+        else
+          recurring.matcher_names.map { |name| [ :name, name ] }
+        end
+
+        identifiers.map { |identifier| [ identifier, recurring.currency, recurring.account_id, recurring.destination_account_id ] }
+      end
+
+      def series_by_identity
+        family.recurring_transactions.to_a.each_with_object({}) do |recurring, index|
+          identity_keys(recurring).each { |key| (index[key] ||= []) << recurring }
+        end
       end
 
       # Shared pattern collection: groups three months of non-transfer
@@ -321,7 +337,7 @@ class RecurringTransaction
           if identifier_type == :merchant
             recurring.merchant_id == identifier_value
           else
-            recurring.merchant_id.nil? && recurring.name == identifier_value
+            recurring.merchant_id.nil? && recurring.matcher_names.include?(identifier_value)
           end
         end
       end
@@ -380,6 +396,47 @@ class RecurringTransaction
           expected_amount_max: pattern[:expected_amount_max],
           expected_amount_avg: pattern[:expected_amount_avg]
         )
+
+        if fillable_category?(recurring)
+          fill_blank_category(recurring, Classifier.classify(name: pattern[:name].to_s, entries: pattern[:entries]).category_id)
+        end
+      end
+
+      # A series' category is classified once, when detection creates it, so
+      # transactions categorised afterwards never reached it. Fill a blank one
+      # from what its transactions now carry; a category already on the series
+      # (the user's, or an earlier fill) is never overwritten, and income stays
+      # uncategorised as it is at creation.
+      #
+      # The series was loaded at the start of the run, so a category the user
+      # saved since is not on this copy. The blank check is therefore repeated
+      # in the UPDATE itself, against the row as it stands, and the write
+      # touches nothing else. It runs after the bookkeeping update! so that
+      # save never carries a category of its own.
+      def fill_blank_category(recurring, category_id)
+        return if category_id.blank? || !fillable_category?(recurring)
+
+        filled = RecurringTransaction
+          .where(id: recurring.id, category_id: nil)
+          .update_all(category_id: category_id, updated_at: Time.current)
+        return unless filled == 1
+
+        recurring.category_id = category_id
+        recurring.clear_attribute_changes([ :category_id ])
+      end
+
+      def fillable_category?(recurring)
+        recurring.category_id.blank? && !recurring.typed_income?
+      end
+
+      # The manual pass loads entries without their transactions, so the
+      # category rides along as a selected column. Ties and the "most common"
+      # rule match Classifier#modal_category_id.
+      def modal_category_id(entries)
+        entries.filter_map { |entry| entry.read_attribute("transaction_category_id") }
+               .tally
+               .max_by { |_category_id, count| count }
+               &.first
       end
 
       # Scheduling reads recurrence_rules, not expected_day_of_month, so a
@@ -451,7 +508,7 @@ class RecurringTransaction
           .joins("INNER JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'")
           .where(entries: { entryable_type: "Transaction", currency: currencies })
           .where("entries.date >= ?", lookback_date)
-          .select("entries.*, transactions.merchant_id AS transaction_merchant_id")
+          .select("entries.*, transactions.merchant_id AS transaction_merchant_id, transactions.category_id AS transaction_category_id")
           .order(date: :desc)
 
         # Legacy manual rows without account_id can match any account in the
@@ -485,7 +542,7 @@ class RecurringTransaction
         if recurring.merchant_id.present?
           entry.read_attribute("transaction_merchant_id") == recurring.merchant_id
         else
-          entry.name == recurring.name
+          recurring.matcher_names.include?(entry.name)
         end
       end
 

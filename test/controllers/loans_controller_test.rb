@@ -102,6 +102,22 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # cubic, #77: two ISO-8601 spellings of one day must not become two rows --
   # the schedule would carry a duplicate the replace-on-repeat rule is supposed
   # to prevent, and which rate wins would fall out of hash order.
+  # The rate-change rows carried `.form-field__input` -- the bare control, no
+  # border or padding -- with nothing supplying the field around it.
+  test "rate-change inputs sit inside bordered form fields" do
+    @account.accountable.update!(rate_type: "variable", variable_rate_schedule: { "2025-01-01" => 4.5 })
+
+    get edit_loan_path(@account)
+    assert_response :success
+
+    %w[effective_date rate].each do |field|
+      name = "account[accountable_attributes][rate_changes][][#{field}]"
+      # One saved row plus the <template> row the controller clones on add.
+      assert_select "[data-loan-rate-changes-target=row] input[name=?]", name, count: 2
+      assert_select "[data-loan-rate-changes-target=row] .form-field > input.form-field__input[name=?]", name, count: 2
+    end
+  end
+
   test "equivalent spellings of one effective date collapse to a single row" do
     @account.accountable.update!(rate_type: "variable")
 
