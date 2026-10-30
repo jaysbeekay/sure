@@ -224,7 +224,178 @@ class Security::LookThroughTest < ActiveSupport::TestCase
                  "an incapable provider emptied the table and stamped the emptiness as fact"
   end
 
+  # ------------------------------------- jaysbeekay/sure#542 malformed lists
+  #
+  # One row the table refuses used to raise out of `store_constituents`, roll
+  # the fund back unstamped, and stop both market data importers at that fund
+  # on every run. Each shape below raised before the fix, so the stamp and row
+  # count are the assertions that fail without it.
+
+  test "a duplicated ticker keeps its first occurrence and stores the rest" do
+    assert_difference -> { holdings_log_count }, 1 do
+      import(info(constituents: [
+        constituent("AAA", "First", 5),
+        constituent("AAA", "Second", 3),
+        constituent("BBB", "Other", 2)
+      ]))
+    end
+
+    assert_not_nil @security.reload.constituents_fetched_at, "the fund was left unstamped"
+    assert_equal %w[AAA BBB], @security.constituents.order(:ticker).pluck(:ticker)
+    assert_equal BigDecimal("5"), @security.constituents.find_by!(ticker: "AAA").weight,
+                 "the second occurrence replaced the first"
+    assert_equal "duplicate_ticker", last_holdings_log.metadata["reason"]
+  end
+
+  test "a negative weight skips that row and stores the rest" do
+    assert_difference -> { holdings_log_count }, 1 do
+      import(info(constituents: [ constituent("AAA", "Short", -1), constituent("BBB", "Other", 2) ]))
+    end
+
+    assert_not_nil @security.reload.constituents_fetched_at, "the fund was left unstamped"
+    assert_equal %w[BBB], @security.constituents.pluck(:ticker)
+    assert_equal "negative_weight", last_holdings_log.metadata["reason"]
+  end
+
+  test "a non-numeric weight skips that row and stores the rest" do
+    assert_difference -> { holdings_log_count }, 1 do
+      import(info(constituents: [ constituent("AAA", "Unknown", "n/a"), constituent("BBB", "Other", 2) ]))
+    end
+
+    assert_not_nil @security.reload.constituents_fetched_at, "the fund was left unstamped"
+    assert_equal %w[BBB], @security.constituents.pluck(:ticker)
+    assert_equal "non_numeric_weight", last_holdings_log.metadata["reason"]
+  end
+
+  test "a blank ticker skips that row and stores the rest" do
+    [ nil, "", "  " ].each do |blank|
+      @security.update_columns(constituents_fetched_at: nil)
+
+      assert_difference -> { holdings_log_count }, 1, "for ticker #{blank.inspect}" do
+        import(info(constituents: [ constituent(blank, "Nameless", 4), constituent("BBB", "Other", 2) ]))
+      end
+
+      assert_not_nil @security.reload.constituents_fetched_at, "unstamped for ticker #{blank.inspect}"
+      assert_equal %w[BBB], @security.constituents.pluck(:ticker), "for ticker #{blank.inspect}"
+      assert_equal "blank_ticker", last_holdings_log.metadata["reason"]
+    end
+  end
+
+  # `BigDecimal("NaN")` and `BigDecimal("Infinity")` do not raise, so a rescue
+  # alone let them through to `create!` (NaN fails `>= 0`) or to the column
+  # (Infinity overflows it), and either rolled the fund back unstamped.
+  test "a non-finite weight skips that row and stores the rest" do
+    [ "NaN", "Infinity", "-Infinity" ].each do |weight|
+      @security.update_columns(constituents_fetched_at: nil)
+
+      assert_difference -> { holdings_log_count }, 1, "for weight #{weight}" do
+        import(info(constituents: [ constituent("AAA", "Odd", weight), constituent("BBB", "Other", 2) ]))
+      end
+
+      assert_not_nil @security.reload.constituents_fetched_at, "unstamped for weight #{weight}"
+      assert_equal %w[BBB], @security.constituents.pluck(:ticker), "for weight #{weight}"
+      assert_equal "non_numeric_weight", last_holdings_log.metadata["reason"]
+    end
+  end
+
+  # `weight` is numeric(9,6), so 1000 passes the model and is refused by
+  # Postgres. Both sides of the boundary are pinned, and the largest value the
+  # column holds is still stored.
+  test "a weight the column cannot hold skips that row and stores the rest" do
+    [ 1000, "1e3", "999.9999995" ].each do |weight|
+      @security.update_columns(constituents_fetched_at: nil)
+
+      assert_difference -> { holdings_log_count }, 1, "for weight #{weight}" do
+        import(info(constituents: [ constituent("AAA", "Huge", weight), constituent("BBB", "Other", 2) ]))
+      end
+
+      assert_not_nil @security.reload.constituents_fetched_at, "unstamped for weight #{weight}"
+      assert_equal %w[BBB], @security.constituents.pluck(:ticker), "for weight #{weight}"
+      assert_equal "out_of_range_weight", last_holdings_log.metadata["reason"]
+    end
+
+    @security.update_columns(constituents_fetched_at: nil)
+    assert_no_difference -> { holdings_log_count } do
+      import(info(constituents: [ constituent("AAA", "Largest", "999.999999") ]))
+    end
+    assert_equal BigDecimal("999.999999"), @security.reload.constituents.find_by!(ticker: "AAA").weight
+  end
+
+  test "an entry that is not a hash skips that entry and stores the rest" do
+    assert_difference -> { holdings_log_count }, 1 do
+      import(info(constituents: [ "AAA", constituent("BBB", "Other", 2) ]))
+    end
+
+    assert_not_nil @security.reload.constituents_fetched_at, "the fund was left unstamped"
+    assert_equal %w[BBB], @security.constituents.pluck(:ticker)
+    assert_equal "malformed_entry", last_holdings_log.metadata["reason"]
+    assert_equal "AAA", last_holdings_log.metadata["entry"]
+  end
+
+  test "a padded name is stored stripped" do
+    import(info(constituents: [ constituent("AAA", "  Padded Inc  ", 5) ]))
+
+    assert_equal "Padded Inc", @security.reload.constituents.find_by!(ticker: "AAA").name
+  end
+
+  # Duplicates are compared as the uniqueness validation compares them: after
+  # the strip, and case-sensitively. `securities` compares tickers without
+  # case, so a reader resolving these rows to securities sees `AAA` and `aaa`
+  # as one instrument; merging them is that reader's decision, not storage's.
+  test "a padded ticker is stored stripped, and tickers differing in case are both kept" do
+    assert_no_difference -> { holdings_log_count } do
+      import(info(constituents: [ constituent(" AAA ", "Padded", 5), constituent("aaa", "Lower", 3) ]))
+    end
+
+    assert_equal %w[AAA aaa], @security.reload.constituents.order(:weight).reverse.map(&:ticker)
+  end
+
+  test "the skipped row is logged with the fund, its ticker and the raw entry" do
+    import(info(constituents: [ constituent("AAA", "Short", -1) ]))
+
+    log = last_holdings_log
+    assert_equal "warn", log.level
+    assert_equal @security.id, log.metadata["security_id"]
+    assert_equal @security.ticker, log.metadata["security_ticker"]
+    assert_equal "AAA", log.metadata["ticker"]
+    assert_equal({ "ticker" => "AAA", "name" => "Short", "weight" => -1 }, log.metadata["entry"])
+  end
+
+  test "a clean list writes no holdings log" do
+    assert_no_difference -> { holdings_log_count } do
+      import(info(constituents: [ constituent("AAA", "One", 5), constituent("BBB", "Two", 0) ]))
+    end
+    assert_equal 2, @security.reload.constituents.count
+  end
+
+  test "an empty list stamps, stores nothing and logs nothing" do
+    assert_no_difference -> { holdings_log_count } do
+      import(info(constituents: []))
+    end
+    assert_empty @security.reload.constituents
+    assert_not_nil @security.constituents_fetched_at
+  end
+
+  test "an incapable provider handed a malformed list writes nothing" do
+    incapable = capable_provider("incapable", constituents: false)
+    @security.stubs(:price_data_provider).returns(incapable)
+
+    assert_no_difference -> { holdings_log_count } do
+      @security.send(:store_constituents, [ constituent("AAA", "Short", -1), constituent("BBB", "Other", 2) ])
+    end
+    assert_empty @security.reload.constituents
+    assert_nil @security.constituents_fetched_at
+  end
+
   private
+    def holdings_log_count
+      DebugLogEntry.where(category: "security_holdings").count
+    end
+
+    def last_holdings_log
+      DebugLogEntry.where(category: "security_holdings").order(:created_at, :id).last
+    end
+
     def constituent(ticker, name, weight)
       { ticker: ticker, name: name, weight: weight }
     end
