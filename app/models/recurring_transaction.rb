@@ -73,6 +73,12 @@ class RecurringTransaction < ApplicationRecord
   # post-commit regeneration consumes it.
   attr_accessor :rules_rewritten
 
+  # Set by the data importer: an export's matcher_hints are the record being
+  # restored, so a restore that changes the name is not a rename to remember.
+  attr_accessor :restoring_matcher_hints
+
+  before_update :remember_previous_name_as_alias, if: :renaming_name_keyed_series?
+
   after_commit :generate_occurrences, on: :create
   # Ahead of regeneration: activation changes status, so both run, and with
   # load_defaults 7.1+ these run in the order defined. An exception in one
@@ -144,6 +150,17 @@ class RecurringTransaction < ApplicationRecord
     name.presence || merchant&.name
   end
 
+  # Every name a merchant-less series matches on, as typed: its own and the
+  # aliases a manual attach or a rename taught it. Raw, so SQL that compares
+  # entry names can use it; known_names is the normalised set for comparing.
+  def matcher_names
+    ([ name ] + Array(matcher_hints.to_h["name_aliases"])).compact_blank.uniq
+  end
+
+  def known_names
+    matcher_names.map { |known| Matcher.normalize_name(known) }.to_set
+  end
+
   def merchant_or_name_present
     if merchant_id.blank? && name.blank?
       errors.add(:base, :merchant_or_name_required)
@@ -177,6 +194,31 @@ class RecurringTransaction < ApplicationRecord
     return if payment_url.blank?
 
     errors.add(:payment_url, :invalid_scheme) unless self.class.valid_payment_url?(payment_url)
+  end
+
+  # A merchant-less series matches on its name, so renaming it would cut it off
+  # from the payments it was detected from. The old name stays on as an alias
+  # (issue #503) and shows on the bill page under "Also matches".
+  def renaming_name_keyed_series?
+    will_save_change_to_name? && !restoring_matcher_hints &&
+      merchant_id.blank? && merchant_id_in_database.blank?
+  end
+
+  # Kept as stored, not normalised: detection, the staleness check and income
+  # claiming compare names exactly, so a case-only rename needs the old spelling.
+  def remember_previous_name_as_alias
+    previous = name_in_database
+    return if previous.blank?
+
+    # The current name is not its own alias: a rename back to an earlier name
+    # takes it off the "Also matches" list until the next rename.
+    hints = matcher_hints.to_h.deep_dup
+    aliases = Array(hints["name_aliases"])
+    updated = (aliases + [ previous ]).uniq - [ name ]
+    return if updated == aliases
+
+    hints["name_aliases"] = updated
+    self.matcher_hints = hints
   end
 
   def generate_occurrences
@@ -679,8 +721,8 @@ class RecurringTransaction < ApplicationRecord
         entry.entryable.is_a?(Transaction) && entry.entryable.merchant_id == merchant_id
       end
     else
-      # Match by entry name
-      entries.where(name: name)
+      # Match by entry name, including the names it was known by before a rename
+      entries.where(name: matcher_names)
     end
 
     schedule_matched(candidates)

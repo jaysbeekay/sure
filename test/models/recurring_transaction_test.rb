@@ -1513,6 +1513,131 @@ class RecurringTransactionTest < ActiveSupport::TestCase
     assert_equal 0, series.cycles_overdue, "one day late is not one cycle missed"
   end
 
+  # A name-keyed bill matches on its name, so a rename used to cut it off from
+  # the very payments it was detected from (issue #503).
+  test "renaming a name-keyed bill keeps the old name as a match alias" do
+    series = name_keyed_series("FNB App Payment To Golf Cart J Kaiser")
+    assert_equal [], Array(series.matcher_hints["name_aliases"])
+
+    assert_no_difference [ "RecurringOccurrence.count", "Entry.count" ] do
+      series.update!(name: "Golf Cart")
+    end
+
+    assert_equal [ "FNB App Payment To Golf Cart J Kaiser" ], series.reload.matcher_hints["name_aliases"]
+  end
+
+  test "every earlier name survives repeated renames, and none is stored twice" do
+    series = name_keyed_series("FNB App Payment To Golf Cart J Kaiser")
+
+    series.update!(name: "Golf Cart")
+    series.update!(name: "Cart lease")
+    series.update!(name: "FNB App Payment To Golf Cart J Kaiser")
+    series.update!(name: "Golf Cart")
+
+    assert_equal [ "Cart lease", "FNB App Payment To Golf Cart J Kaiser" ],
+                 series.reload.matcher_hints["name_aliases"]
+  end
+
+  # The bill page lists aliases under "Also matches", so the current name must
+  # never be among them.
+  test "renaming a bill back to an earlier name drops it from its aliases" do
+    series = name_keyed_series("Golf Cart")
+
+    series.update!(name: "Cart lease")
+    assert_equal [ "Golf Cart" ], series.reload.matcher_hints["name_aliases"]
+
+    series.update!(name: "Golf Cart")
+    assert_equal [ "Cart lease" ], series.reload.matcher_hints["name_aliases"]
+  end
+
+  # Detection, the staleness check and income claiming compare stored names
+  # exactly, so even a rename that only changes case or spacing has to keep the
+  # old spelling.
+  test "a rename that only changes case or spacing keeps the old spelling" do
+    series = name_keyed_series("GOLF  CART")
+
+    series.update!(name: "golf cart")
+
+    assert_equal [ "GOLF  CART" ], series.reload.matcher_hints["name_aliases"]
+  end
+
+  test "a case-only rename keeps the bill claimed and its payments found" do
+    [ 0, 1, 2 ].each do |months_ago|
+      @account.entries.create!(
+        date: months_ago.months.ago.beginning_of_month + 10.days,
+        amount: 25.00, currency: "USD", name: "LOCAL COFFEE SHOP",
+        entryable: Transaction.new(category: categories(:food_and_drink))
+      )
+    end
+    RecurringTransaction.identify_patterns_for!(@family)
+    series = @family.recurring_transactions.sole
+    before = series.matching_transactions.size
+
+    series.update!(name: "Local Coffee Shop")
+
+    assert_no_difference "@family.recurring_transactions.count" do
+      RecurringTransaction.identify_patterns_for!(@family)
+    end
+    assert_empty RecurringTransaction::Identifier.new(@family).candidate_patterns
+    assert_equal 3, before
+    assert_equal before, series.reload.matching_transactions.size
+  end
+
+  test "renaming a merchant-keyed bill adds no alias" do
+    series = build_recurring(name: "Netflix")
+    series.save!
+
+    series.update!(name: "Movies")
+
+    assert_equal [], Array(series.reload.matcher_hints["name_aliases"])
+  end
+
+  test "creating a bill and editing other fields add no alias" do
+    series = name_keyed_series("FNB App Payment To Golf Cart J Kaiser")
+    assert_equal [], Array(series.matcher_hints["name_aliases"])
+
+    series.update!(notes: "Paid from the app")
+
+    assert_equal [], Array(series.reload.matcher_hints["name_aliases"])
+  end
+
+  test "matching_transactions still finds a renamed bill's payments under the old name" do
+    [ 0, 1, 2 ].each do |months_ago|
+      @account.entries.create!(
+        date: months_ago.months.ago.beginning_of_month + 17.days,
+        amount: 3600, currency: "USD", name: "FNB App Payment To Golf Cart J Kaiser",
+        entryable: Transaction.new
+      )
+    end
+    series = name_keyed_series("FNB App Payment To Golf Cart J Kaiser", amount: 3600, day: 18)
+    before = series.matching_transactions.size
+
+    series.update!(name: "Golf Cart")
+
+    assert_equal 3, before
+    assert_equal before, series.reload.matching_transactions.size
+  end
+
+  test "detection keeps claiming a renamed bill instead of suggesting a duplicate" do
+    [ 0, 1, 2 ].each do |months_ago|
+      @account.entries.create!(
+        date: months_ago.months.ago.beginning_of_month + 10.days,
+        amount: 25.00, currency: "USD", name: "Local Coffee Shop",
+        entryable: Transaction.new(category: categories(:food_and_drink))
+      )
+    end
+    RecurringTransaction.identify_patterns_for!(@family)
+    series = @family.recurring_transactions.sole
+
+    series.update!(name: "Coffee")
+
+    assert_no_difference "@family.recurring_transactions.count" do
+      RecurringTransaction.identify_patterns_for!(@family)
+    end
+    assert_empty RecurringTransaction::Identifier.new(@family).candidate_patterns,
+                 "the add-bill picker must not offer a pattern the renamed bill already covers"
+  end
+
   private
 
     def stale_hint_series
@@ -1524,6 +1649,14 @@ class RecurringTransactionTest < ActiveSupport::TestCase
         last_occurrence_date: stale << 1, next_expected_date: stale
       )
       series.reload
+    end
+
+    def name_keyed_series(name, amount: 3600, day: 18)
+      @family.recurring_transactions.create!(
+        name: name, merchant: nil, account: @account, amount: amount, currency: "USD",
+        expected_day_of_month: day, last_occurrence_date: Date.current,
+        next_expected_date: 1.month.from_now.to_date, status: "active"
+      )
     end
 
     def build_recurring(**overrides)
