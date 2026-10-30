@@ -142,6 +142,99 @@ class HoldingLotTest < ActiveSupport::TestCase
     assert_equal 83, holding_qty(@split, d(10)), "the split and a sale are crossed"
   end
 
+  # 10 / 1.5 rounds to 18 places and back to 10.000000000000000001; the
+  # opening lot takes that rounding, so the lots add up to the holding.
+  test "a split that does not divide evenly leaves the lots adding up to the provider's quantity" do
+    travel_to TODAY do
+      setup_account
+      link_account
+      @account.update!(cost_basis_method: "fifo")
+      security = priced_security("SPL3", 30)
+      trade(security, 2, 10, 2)
+      Security::Split.create!(security: security, ex_date: d(4), numerator: 3, denominator: 2, source: "manual")
+      @account.holdings.create!(security: security, date: d(10), qty: 10, price: 30, amount: 300, currency: "USD", account_provider: @account_provider)
+
+      materialize(:reverse)
+
+      lots = HoldingLot.where(account: @account, security: security)
+      assert_equal BigDecimal("10"), lots.sum(:qty)
+      assert_includes HoldingLot.in_partition([ @account.id ], [ security.id ]), [ @account.id, security.id ]
+      assert_equal [ BigDecimal("7"), BigDecimal("3") ], [ lots.opening.sole.qty, lots.derived.sole.qty ], "only the opening lot moved"
+    end
+  end
+
+  test "absorbing the residual records no disposal and moves no other lot under the average method" do
+    travel_to TODAY do
+      setup_account
+      link_account
+      security = priced_security("SPL4", 30)
+      trade(security, 2, 10, 2)
+      Security::Split.create!(security: security, ex_date: d(4), numerator: 3, denominator: 2, source: "manual")
+      @account.holdings.create!(security: security, date: d(10), qty: 10, price: 30, amount: 300, currency: "USD", account_provider: @account_provider)
+
+      assert_no_difference "HoldingLotDisposal.count" do
+        materialize(:reverse)
+      end
+      lots = HoldingLot.where(account: @account, security: security)
+      assert_equal BigDecimal("3"), lots.derived.sole.qty
+      assert_equal BigDecimal("10"), lots.sum(:qty)
+      assert_includes HoldingLot.in_partition([ @account.id ], [ security.id ]), [ @account.id, security.id ]
+    end
+  end
+
+  # A FIFO sale takes the opening lot first; the rounding it carried is then
+  # in the lots left, and the last of them takes it.
+  test "once a fifo sale has taken the opening lot, the last open lot takes the residual" do
+    travel_to TODAY do
+      setup_account
+      link_account
+      @account.update!(cost_basis_method: "fifo")
+      security = priced_security("SPL5", 30)
+      trade(security, 2, 10, 2)
+      Security::Split.create!(security: security, ex_date: d(4), numerator: 3, denominator: 2, source: "manual")
+      trade(security, -8, 30, 5)
+      @account.holdings.create!(security: security, date: d(10), qty: 2, price: 30, amount: 60, currency: "USD", account_provider: @account_provider)
+
+      materialize(:reverse)
+
+      assert_equal BigDecimal("2"), HoldingLot.where(account: @account, security: security).sum(:qty)
+      assert_includes HoldingLot.in_partition([ @account.id ], [ security.id ]), [ @account.id, security.id ]
+    end
+  end
+
+  # Fixtures only ever leave 10^-18; a real gap is far wider and is not
+  # rounding, so it stays for in_partition to catch.
+  test "the opening lot does not absorb a residual above the bound" do
+    book = Holding::LotBook.new
+    book.add_unknown(BigDecimal("10"))
+    book.apply(BigDecimal("10"), 2, source_id: "buy")
+
+    book.settle_opening(BigDecimal("12.000001"), bound: Holding::LotBook::OPENING_RESIDUAL_BOUND)
+    assert_equal [ BigDecimal("10"), BigDecimal("2") ], book.lots.map(&:qty), "above the bound"
+
+    book.settle_opening(BigDecimal("12.000000000001"), bound: Holding::LotBook::OPENING_RESIDUAL_BOUND)
+    assert_equal [ BigDecimal("10.000000000001"), BigDecimal("2") ], book.lots.map(&:qty), "at the bound"
+  end
+
+  # buy, sell and add_unknown all read their quantity through to_d.
+  test "the residual target is read as a decimal, as the other book entries are" do
+    book = Holding::LotBook.new
+    book.add_unknown(BigDecimal("12"))
+
+    book.settle_opening("12.000000000001", bound: Holding::LotBook::OPENING_RESIDUAL_BOUND)
+
+    assert_equal [ BigDecimal("12.000000000001") ], book.lots.map(&:qty)
+  end
+
+  test "the residual never takes a lot to nothing" do
+    book = Holding::LotBook.new
+    book.add_unknown(BigDecimal("1e-13"))
+
+    book.settle_opening(BigDecimal("0"), bound: Holding::LotBook::OPENING_RESIDUAL_BOUND)
+
+    assert_equal [ BigDecimal("1e-13") ], book.lots.map(&:qty)
+  end
+
   test "sum of open lot qty equals the provider snapshot, opening lot included" do
     travel_to TODAY do
       build_reverse_fixture
@@ -384,6 +477,56 @@ class HoldingLotTest < ActiveSupport::TestCase
 
       assert_equal merged_cost, kept.reload.unit_cost, "moved #{moved_cost.inspect} onto #{kept_cost.inspect}"
     end
+  end
+
+  # A lot with no units has no cost to disagree with, and a clamp row is
+  # exactly that.
+  test "merging an opening lot with no units leaves the target's cost" do
+    setup_account
+    old_security = priced_security("LOTZ", 30)
+    new_security = priced_security("LOTY", 30)
+    holding = @account.holdings.create!(security: old_security, date: d(10), qty: 0, price: 30, amount: 0, currency: "USD")
+    empty = opening_lot(old_security, 0)
+    empty.update!(clamped: true)
+    kept = opening_lot(new_security, 5)
+    kept.update!(unit_cost: 50)
+
+    holding.remap_security!(new_security)
+
+    assert_equal [ 5, 50 ], [ kept.reload.qty, kept.unit_cost ]
+    assert_not HoldingLot.exists?(empty.id)
+  end
+
+  # With nothing to merge into, the clamp row moves as any opening lot does.
+  # Dropping it would lose the flag that keeps the position's basis unknown.
+  test "an opening lot with no units and no target moves with its clamp" do
+    setup_account
+    old_security = priced_security("LOTZ", 30)
+    new_security = priced_security("LOTY", 30)
+    holding = @account.holdings.create!(security: old_security, date: d(10), qty: 0, price: 30, amount: 0, currency: "USD")
+    empty = opening_lot(old_security, 0)
+    empty.update!(clamped: true)
+
+    holding.remap_security!(new_security)
+
+    assert_equal [ new_security.id, true ], [ empty.reload.security_id, empty.clamped ]
+  end
+
+  # The drop is keyed on the units, not the clamp: an unclamped lot with no
+  # units is dropped as well.
+  test "an unclamped opening lot with no units is dropped, not merged" do
+    setup_account
+    old_security = priced_security("LOTZ", 30)
+    new_security = priced_security("LOTY", 30)
+    holding = @account.holdings.create!(security: old_security, date: d(10), qty: 0, price: 30, amount: 0, currency: "USD")
+    empty = opening_lot(old_security, 0)
+    kept = opening_lot(new_security, 5)
+    kept.update!(unit_cost: 50)
+
+    holding.remap_security!(new_security)
+
+    assert_equal [ 5, 50 ], [ kept.reload.qty, kept.unit_cost ]
+    assert_not HoldingLot.exists?(empty.id)
   end
 
   # --- User-set lot cost --------------------------------------------------------

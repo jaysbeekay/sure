@@ -1,6 +1,9 @@
 require "test_helper"
 
 class RecurringTransactionsControllerTest < ActionDispatch::IntegrationTest
+  include FamilyLockTestHelper
+  include ActiveJob::TestHelper
+
   setup do
     sign_in @user = users(:family_admin)
     # The declare/edit/suggestion paths sit behind the Bills preview gate.
@@ -289,6 +292,30 @@ class RecurringTransactionsControllerTest < ActionDispatch::IntegrationTest
     assert_match "184.37", response.body
   end
 
+  test "new prefills the category of the transaction it starts from" do
+    entry = accounts(:depository).entries.create!(
+      date: Date.current - 20, amount: 54.73, currency: "USD", name: "PET COVER",
+      entryable: Transaction.new(category: categories(:food_and_drink))
+    )
+
+    get new_recurring_transaction_url(entry_id: entry.id), headers: { "Turbo-Frame" => "modal" }
+
+    assert_response :success
+    assert_select "input[name=?][value=?]", "recurring_transaction[category_id]", categories(:food_and_drink).id
+  end
+
+  test "new offers no category for a paycheck" do
+    entry = accounts(:depository).entries.create!(
+      date: Date.current - 10, amount: -1840, currency: "USD", name: "ACME PAYROLL",
+      entryable: Transaction.new(category: categories(:income))
+    )
+
+    get new_recurring_transaction_url(entry_id: entry.id), headers: { "Turbo-Frame" => "modal" }
+
+    assert_response :success
+    assert_select "[name=?]", "recurring_transaction[category_id]", count: 0
+  end
+
   # Sharing is per account, so a family scope is not an access check. Prefilling
   # reads the entry's name, amount and account straight back into the form.
   test "new ignores a transaction from an account the user was never given" do
@@ -478,6 +505,50 @@ class RecurringTransactionsControllerTest < ActionDispatch::IntegrationTest
     assert_equal due.day, detection.day_of_month
     assert bill.recurring_occurrences.reload.exists?(due_on: due),
            "the declared bill's occurrence must materialize immediately"
+  end
+
+  test "create keeps the category chosen on the add form" do
+    post recurring_transactions_url, params: {
+      recurring_transaction: {
+        name: "Pet Cover", amount: "54.73", account_id: accounts(:depository).id,
+        first_due_on: (Date.current + 5).iso8601, frequency_preset: "monthly",
+        category_id: categories(:food_and_drink).id
+      }
+    }
+
+    assert_redirected_to bills_path
+    assert_equal categories(:food_and_drink), @family.recurring_transactions.order(:created_at).last.category
+  end
+
+  test "create leaves a declared paycheck uncategorised" do
+    post recurring_transactions_url, params: {
+      recurring_transaction: {
+        name: "Acme Payroll", amount: "1840", account_id: accounts(:depository).id, is_income: "1",
+        first_due_on: (Date.current + 5).iso8601, frequency_preset: "monthly",
+        category_id: categories(:income).id
+      }
+    }
+
+    bill = @family.recurring_transactions.order(:created_at).last
+    assert_equal "Acme Payroll", bill.name
+    assert bill.typed_income?
+    assert_nil bill.category_id
+  end
+
+  test "create rejects another family's category" do
+    foreign = families(:empty).categories.create!(name: "Foreign Category")
+
+    assert_no_difference "@family.recurring_transactions.count" do
+      post recurring_transactions_url, params: {
+        recurring_transaction: {
+          name: "Pet Cover", amount: "54.73", account_id: accounts(:depository).id,
+          first_due_on: (Date.current + 5).iso8601, frequency_preset: "monthly",
+          category_id: foreign.id
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
   end
 
   test "create with a non-monthly preset writes explicit rules" do
@@ -929,6 +1000,122 @@ class RecurringTransactionsControllerTest < ActionDispatch::IntegrationTest
       "confirming must close history a real entry anchors"
   end
 
+  test "confirming while a pipeline holds the family lock queues the history instead of dropping it" do
+    paid_on, suggestion, entry = suggested_bill_with_past_payment
+
+    with_family_lock_held_elsewhere(@family.id) do
+      assert_enqueued_with(job: BackfillRecurringHistoryJob, args: [ suggestion.id ]) do
+        post confirm_recurring_transaction_url(suggestion)
+      end
+    end
+
+    assert suggestion.reload.active?
+    assert_equal 0, suggestion.recurring_occurrences.paid.where(due_on: paid_on).count,
+      "nothing may run under someone else's lock"
+
+    perform_enqueued_jobs(only: BackfillRecurringHistoryJob)
+
+    assert_equal 1, suggestion.recurring_occurrences.paid.where(due_on: paid_on).count
+    assert RecurringAllocation.where(entry_id: entry.id, state: "confirmed").exists?
+  end
+
+  # The backfill prunes unpaid past rows of whatever it is scoped to, so it
+  # must stay scoped to the bill being confirmed.
+  test "confirming a detected bill leaves other bills' past rows alone" do
+    _, suggestion, = suggested_bill_with_past_payment
+    other_row = @recurring_transaction.recurring_occurrences.create!(
+      family: @family, original_due_on: 3.months.ago.to_date, due_on: 3.months.ago.to_date, currency: "USD"
+    )
+
+    post confirm_recurring_transaction_url(suggestion)
+
+    assert suggestion.reload.active?
+    assert RecurringOccurrence.exists?(other_row.id), "another bill's history is not this confirm's to prune"
+  end
+
+  test "confirming an already-active bill queues nothing" do
+    assert @recurring_transaction.active?
+
+    assert_no_enqueued_jobs(only: BackfillRecurringHistoryJob) do
+      with_family_lock_held_elsewhere(@family.id) { post confirm_recurring_transaction_url(@recurring_transaction) }
+    end
+  end
+
+  # toggle_status reaches a detected bill too: the action only asks whether the
+  # series is active, and a suggestion is not.
+  test "toggling a detected bill on links its past payments" do
+    paid_on, suggestion, entry = suggested_bill_with_past_payment
+
+    assert_difference -> { suggestion.recurring_occurrences.paid.where(due_on: paid_on).count }, 1 do
+      post toggle_status_recurring_transaction_url(suggestion)
+    end
+    assert suggestion.reload.active?
+    assert RecurringAllocation.where(entry_id: entry.id, state: "confirmed").exists?
+  end
+
+  # The status change has committed by the time the reconstruction runs, so a
+  # failure in it must not turn the user's own action into an error: it is
+  # reported and handed to the job, which retries.
+  test "toggling a detected bill on succeeds when reconstructing its history fails" do
+    _, suggestion, = suggested_bill_with_past_payment
+    RecurringTransaction::HistoryBackfiller.any_instance.stubs(:run!).raises(ActiveRecord::Deadlocked)
+    Rails.error.expects(:report).with(instance_of(ActiveRecord::Deadlocked), has_entry(handled: true))
+
+    assert_enqueued_with(job: BackfillRecurringHistoryJob, args: [ suggestion.id ]) do
+      post toggle_status_recurring_transaction_url(suggestion)
+    end
+
+    assert_redirected_to recurring_transactions_url
+    assert suggestion.reload.active?
+  end
+
+  # Activation changes status, a schedule-shaping column, so regeneration runs
+  # in the same after_commit chain. A raise there stops the callbacks after
+  # it, so the history reconstruction must not sit behind it.
+  test "toggling a detected bill on still links its past payments when regenerating its future fails" do
+    paid_on, suggestion, entry = suggested_bill_with_past_payment
+    RecurringTransaction::OccurrenceGenerator.any_instance.stubs(:regenerate_future!).raises(RuntimeError, "regeneration failed")
+
+    assert_raises(RuntimeError) { post toggle_status_recurring_transaction_url(suggestion) }
+
+    assert suggestion.reload.active?
+    assert_equal 1, suggestion.recurring_occurrences.paid.where(due_on: paid_on).count
+    assert RecurringAllocation.where(entry_id: entry.id, state: "confirmed").exists?
+  end
+
+  # The history pass matches against every open occurrence, so the upcoming
+  # one must exist by then: a payment made a couple of days early belongs to
+  # it, not to the unpaid cycle before.
+  test "toggling a detected bill on links an early payment to the upcoming occurrence" do
+    travel_to Date.new(2026, 10, 14) do
+      suggestion = @family.recurring_transactions.create!(
+        name: "CITY POWER", account: accounts(:depository), amount: 95, currency: "USD",
+        expected_day_of_month: 16, last_occurrence_date: Date.new(2026, 9, 16),
+        next_expected_date: Date.new(2026, 10, 16), status: "suggested", manual: false
+      )
+      entry = accounts(:depository).entries.create!(
+        date: Date.new(2026, 10, 14), amount: 95, currency: "USD", name: "CITY POWER",
+        entryable: Transaction.new
+      )
+
+      post toggle_status_recurring_transaction_url(suggestion)
+
+      upcoming = suggestion.recurring_occurrences.find_by!(due_on: Date.new(2026, 10, 16))
+      assert RecurringAllocation.where(recurring_occurrence: upcoming, entry_id: entry.id).exists?,
+        "the early payment belongs to the occurrence it was paid ahead of"
+    end
+  end
+
+  test "resuming a paused bill does not reconstruct its history" do
+    paid_on, suggestion, = suggested_bill_with_past_payment
+    suggestion.update_columns(status: "inactive")
+
+    assert_no_difference -> { suggestion.recurring_occurrences.where(due_on: paid_on).count } do
+      post toggle_status_recurring_transaction_url(suggestion)
+    end
+    assert suggestion.reload.active?
+  end
+
   test "confirming twice does not double anything" do
     suggestion = @family.recurring_transactions.create!(
       name: "CITY GAS", account: accounts(:depository), amount: 55, currency: "USD",
@@ -1307,5 +1494,22 @@ class RecurringTransactionsControllerTest < ActionDispatch::IntegrationTest
         notes: notes, excluded: excluded,
         entryable: Transaction.new(**transaction_attrs)
       )
+    end
+
+    # A detected bill with a payment two cycles back: before the current cycle
+    # whatever day the suite runs, so only a history pass can link it.
+    def suggested_bill_with_past_payment
+      paid_on = Date.current.beginning_of_month + 8.days - 2.months
+      suggestion = @family.recurring_transactions.create!(
+        name: "CITY WATER", account: accounts(:depository), amount: 80, currency: "USD",
+        expected_day_of_month: 9, last_occurrence_date: paid_on,
+        next_expected_date: paid_on + 2.months, status: "suggested", manual: false
+      )
+      entry = accounts(:depository).entries.create!(
+        date: paid_on, amount: 80, currency: "USD", name: "CITY WATER",
+        entryable: Transaction.new
+      )
+
+      [ paid_on, suggestion, entry ]
     end
 end

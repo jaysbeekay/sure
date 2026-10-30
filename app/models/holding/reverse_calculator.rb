@@ -205,7 +205,8 @@ class Holding::ReverseCalculator
           # Buys raise the basis; sells relieve quantity at the running average, and a
           # full liquidation resets it so a later repurchase starts from a clean basis.
           price = manual_cost || effective_trade_price(trade, date: trade_entry.date)
-          book.apply(price, trade.qty, source_id: trade_entry.id, acquired_on: trade_entry.date)
+          book.apply(price, trade.qty, source_id: trade_entry.id, acquired_on: trade_entry.date,
+            lot_source_id: trade.lot_source_entry_id)
 
           # Record the basis after each trade — including nil once a position is fully
           # closed — so cost_basis_for returns nil for the sold-out span instead of a
@@ -225,6 +226,15 @@ class Holding::ReverseCalculator
 
       # Spans still open at the last trade stay unknown through to the present.
       open_unknown_start.each { |security_id, start| @unknown_spans[security_id] << [ start, nil ] }
+
+      # Splitting the snapshot back and forward again rounds; the opening lot
+      # takes it (or the last open lot, once sold), so the lots add up to the
+      # provider's quantity.
+      snapshot.each do |security_id, qty|
+        next unless @lot_books.key?(security_id)
+
+        @lot_books[security_id].settle_opening(qty, bound: Holding::LotBook::OPENING_RESIDUAL_BOUND)
+      end
     end
 
     # Units held before the first imported trade (or, with no trades, all the
