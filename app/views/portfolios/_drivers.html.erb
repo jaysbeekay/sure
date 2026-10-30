@@ -7,11 +7,12 @@
     The contributions are already SIGNED by the registry: fees arrive negative
     even though Portfolio::Drivers reports them as a positive magnitude, because
     R7 has them reducing the change. This partial formats; it does not decide
-    which way a component points. %>
+    which way a component points. Which rows take a colour is
+    PortfoliosHelper#portfolio_driver_amount_class. %>
 <div id="portfolio-drivers" class="px-4">
   <table class="w-full text-sm">
     <tbody>
-      <tr class="border-b border-primary">
+      <tr class="border-b border-secondary">
         <td class="py-2 text-secondary"><%= t("portfolios.drivers.value_open") %></td>
         <td class="py-2 text-right tabular-nums text-primary privacy-sensitive">
           <%= format_money(Money.new(drivers[:value_open], statement.family.currency)) %>
@@ -21,13 +22,13 @@
       <% contributions.each do |key, amount| %>
         <tr data-portfolio-driver="<%= key %>">
           <td class="py-2 text-secondary"><%= t("portfolios.drivers.#{key}") %></td>
-          <td class="py-2 text-right tabular-nums privacy-sensitive <%= amount.negative? ? "text-destructive" : "text-primary" %>">
+          <td class="py-2 text-right tabular-nums privacy-sensitive <%= portfolio_driver_amount_class(key, amount) %>">
             <%= format_money(Money.new(amount, statement.family.currency)) %>
           </td>
         </tr>
       <% end %>
 
-      <tr class="border-t border-primary font-medium">
+      <tr class="border-t border-secondary font-medium">
         <td class="py-2 text-primary"><%= t("portfolios.drivers.value_close") %></td>
         <td class="py-2 text-right tabular-nums text-primary privacy-sensitive">
           <%= format_money(Money.new(drivers[:value_close], statement.family.currency)) %>

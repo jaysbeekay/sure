@@ -32,6 +32,27 @@ class Rule::ConditionRegexTest < ActiveSupport::TestCase
     end
   end
 
+  # The database driver will not send a string holding a null byte or malformed
+  # UTF-8 (ArgumentError), so probing one would raise out of validation. Such a
+  # value is DatabaseTextValidator's to report, once, and is never probed.
+  {
+    "a null byte" => "ab\u0000c",
+    "a lone null byte" => "\u0000",
+    "malformed UTF-8" => "ab\xFFc".dup.force_encoding(Encoding::UTF_8)
+  }.each do |description, pattern|
+    test "a regex with #{description} is rejected as invalid text without a probe, and nothing is saved" do
+      rule = build_rule(value: pattern)
+      Rule::SafeRegex.expects(:error_for).never
+
+      assert_no_difference [ -> { @family.rules.count }, -> { Rule::Condition.count } ] do
+        assert_not rule.save
+      end
+
+      assert_equal [ { error: :invalid } ], rule.conditions.first.errors.details[:value]
+      assert_equal [ "Value is invalid" ], rule.conditions.first.errors.full_messages
+    end
+  end
+
   test "the same pattern is accepted under the contains operator" do
     rule = build_rule(value: "(", operator: "like")
 
@@ -60,6 +81,9 @@ class Rule::ConditionRegexTest < ActiveSupport::TestCase
 
     Rule::SafeRegex.expects(:error_for).never
     rule.update!(active: true)
+    # Saving the rule leaves an unchanged condition unvalidated by itself, so the
+    # condition is also saved directly: its own validations always run.
+    rule.conditions.first.save!
 
     Rule::SafeRegex.expects(:error_for).with("^changed").returns(nil).once
     rule.conditions.first.update!(value: "^changed")

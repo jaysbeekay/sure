@@ -23,13 +23,13 @@ class RedbarkItem::SyncerTest < ActiveSupport::TestCase
   # against the date the processing was given. If those two come from separate
   # readings of the clock, a sync that fetches at 23:59 and processes at 00:00
   # discards the snapshot it has just stored, and the rate change in it is lost
-  # until the bank happens to move the rate again (found on the #213 sweep).
+  # until the bank happens to move the rate again.
   #
   # THE SYNC IS MADE TO CROSS MIDNIGHT, and that is the whole design of the
   # test. Comparing the two values alone proves nothing: two separate readings
   # of the clock return the same date on all but one run in 86,400, so a test
   # that merely compared them would pass against the very defect it names --
-  # which is what the first version of this test did (CodeRabbit, #213). The
+  # which is what the first version of this test did. The
   # clock is moved past midnight while the import is in flight, so a second
   # reading taken afterwards can only disagree with the first.
   test "the account details stamp and the processing date come from one clock" do

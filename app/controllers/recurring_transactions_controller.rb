@@ -26,7 +26,7 @@ class RecurringTransactionsController < ApplicationController
 
     # Fresh detections wait in their own review strip until confirmed; they
     # are not real bills yet and would only be noise inside the main table.
-    @suggested = scope.suggested.order(next_expected_date: :asc)
+    @suggested_income, @suggested_bills = scope.suggested.order(next_expected_date: :asc).partition(&:typed_income?)
     @recurring_transactions = scope.where.not(status: :suggested)
                                    .order(status: :asc, next_expected_date: :asc)
     @family = Current.family
@@ -36,26 +36,14 @@ class RecurringTransactionsController < ApplicationController
   # real, active bill; dismissing tombstones it as `ended`, which the
   # Identifier treats as "never suggest this again".
   def confirm
-    first_confirmation = @recurring_transaction.suggested?
+    # A just-confirmed bill shows its lived history rather than starting
+    # blank: the status change reconstructs it (RecurringTransaction#
+    # reconstruct_history_on_activation), queued when a pipeline holds the
+    # family lock. Only the change from suggested does, so a replayed POST
+    # reconstructs nothing twice.
     @recurring_transaction.update!(status: "active")
 
-    # A just-confirmed bill shows its lived history rather than starting
-    # blank. Guarded so a replayed POST does not re-run the backfill; the
-    # matcher pass inside is family-wide on purpose (exact-tier, idempotent,
-    # and scoping it would need a parallel Matcher entry point). Taken under
-    # the family lock so it cannot interleave with a running pipeline; when
-    # the lock is held the backfill is skipped and the confirm still succeeds.
-    if first_confirmation
-      RecurringTransaction::Pipeline.with_family_lock(Current.family.id) do
-        RecurringTransaction::HistoryBackfiller.new(
-          Current.family,
-          months: RecurringTransaction::Pipeline::FIRST_RUN_BACKFILL_MONTHS,
-          series_scope: Current.family.recurring_transactions.where(id: @recurring_transaction.id)
-        ).run!
-      end
-    end
-
-    flash[:notice] = t("recurring_transactions.confirmed")
+    flash[:notice] = t(@recurring_transaction.typed_income? ? "recurring_transactions.confirmed_income" : "recurring_transactions.confirmed")
     redirect_back_or_to recurring_transactions_path
   end
 
@@ -129,7 +117,8 @@ class RecurringTransactionsController < ApplicationController
     @recurring_transaction = Current.family.recurring_transactions.new(
       # Paychecks default to the most common pay cadence; bills to monthly.
       frequency_preset: income ? "biweekly" : "monthly",
-      first_due_on: Date.current
+      first_due_on: Date.current,
+      currency: Current.family.currency
     )
     @recurring_transaction.is_income = income
 
@@ -243,7 +232,12 @@ class RecurringTransactionsController < ApplicationController
     end
 
     flash[:notice] = t(income ? "recurring_transactions.deleted_income" : "recurring_transactions.deleted")
-    redirect_back_or_to bills_path
+    # Back to a visited /bills/:id would reopen, or 404 on, what was just removed.
+    if came_from?(bill_path(@recurring_transaction))
+      redirect_to bills_path
+    else
+      redirect_back_or_to bills_path
+    end
   end
 
   protected
@@ -254,6 +248,7 @@ class RecurringTransactionsController < ApplicationController
     def prefill_recurring_from_entry(entry)
       @recurring_transaction.name = entry.entryable.try(:merchant)&.name.presence || entry.name
       @recurring_transaction.amount = entry.amount.abs
+      @recurring_transaction.currency = entry.currency
       @recurring_transaction.account_id = entry.account_id
       # A negative entry is an inflow: pre-fill as income, not as a bill.
       @recurring_transaction.is_income = true if entry.amount.negative?
@@ -368,7 +363,7 @@ class RecurringTransactionsController < ApplicationController
 
     def new_recurring_transaction_params
       params.require(:recurring_transaction).permit(
-        :name, :amount, :account_id, :first_due_on, :frequency_preset,
+        :name, :amount, :currency, :account_id, :first_due_on, :frequency_preset,
         :frequency_interval, :frequency_interval_unit,
         :payment_url, :autopay, :notes, :is_income
       )
@@ -424,8 +419,13 @@ class RecurringTransactionsController < ApplicationController
 
       if attrs[:amount].present?
         magnitude = attrs[:amount].to_d.abs
-        @recurring_transaction.amount =
-          @recurring_transaction.typed_income? ? -magnitude : magnitude
+        # Checked on the input: assigning it already rounded to the column.
+        if RecurringTransaction.storable_amount?(magnitude)
+          @recurring_transaction.amount =
+            @recurring_transaction.typed_income? ? -magnitude : magnitude
+        else
+          @recurring_transaction.errors.add(:base, t("recurring_transactions.create.amount_too_precise"))
+        end
       end
 
       if attrs.key?(:account_id)

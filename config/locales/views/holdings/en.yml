@@ -31,10 +31,9 @@ en:
     cost_basis_cell:
       unknown: "--"
       set: Set
-      set_cost_basis_header: "Set cost basis for %{ticker} (%{qty} shares)"
+      set_cost_basis_header: "Set cost basis for %{ticker}"
       total_cost_basis_label: Total cost basis
-      or_per_share_label: "Or enter per share:"
-      per_share: per share
+      per_share_label: "Per share"
       cancel: Cancel
       save: Save
       overwrite_confirm_title: Overwrite cost basis?
@@ -55,6 +54,15 @@ en:
         other: "%{count} positions"
       return: Total return
       weight: Weight
+    lots:
+      title: Lots
+      opening: Held before the first trade
+      unknown: Unknown
+      total_cost_label: Total paid for this lot
+      total_cost_hint: What the whole parcel cost when you acquired it. Deleting
+        its trade removes the lot and the cost you set.
+      save: Save
+      unlock: Use the trade's price
     missing_price_tooltip:
       description: This investment has missing values and we could not calculate
         its returns or value.
