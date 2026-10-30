@@ -14,7 +14,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
   end
 
   test "applies suggested values to the form and says so" do
-    stub_provider(raw(name: "Gym Membership", amount: 42.0, frequency: "weekly", confidence: 0.9,
+    stub_provider(raw_suggestion(name: "Gym Membership", amount: 42.0, frequency: "weekly", confidence: 0.9,
                       rationale: "Weekly gaps between charges"))
 
     post smart_fill_recurring_transactions_url(entry_id: @entry.id),
@@ -31,7 +31,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
   # transaction's category reaches the form here too.
   test "keeps the category of the transaction it starts from" do
     @entry.entryable.update!(category: categories(:food_and_drink))
-    stub_provider(raw(name: "Gym Membership", amount: 42.0, frequency: "monthly", confidence: 0.9))
+    stub_provider(raw_suggestion(name: "Gym Membership", amount: 42.0, frequency: "monthly", confidence: 0.9))
 
     post smart_fill_recurring_transactions_url(entry_id: @entry.id),
          headers: { "Turbo-Frame" => "modal" }
@@ -65,7 +65,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
   end
 
   test "forbidden without AI consent" do
-    stub_provider(raw)
+    stub_provider(raw_suggestion)
     @user.update!(ai_enabled: false)
 
     post smart_fill_recurring_transactions_url(entry_id: @entry.id)
@@ -74,7 +74,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
   end
 
   test "an inaccessible entry never becomes evidence" do
-    stub_provider(raw(name: "Should not appear"))
+    stub_provider(raw_suggestion(name: "Should not appear"))
     hidden = accounts(:investment).entries.create!(
       date: Date.current, amount: 30, currency: "USD", name: "PRIVATE FEE",
       entryable: Transaction.new
@@ -93,7 +93,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
 
   private
 
-    def raw(**overrides)
+    def raw_suggestion(**overrides)
       RawSuggestion.new(**{
         name: nil, amount: nil, frequency: nil, day_of_month: nil, weekday: nil,
         month_of_year: nil, category_name: nil, bill_type: nil, autopay: nil,
