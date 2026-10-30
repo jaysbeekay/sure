@@ -97,7 +97,7 @@ class RecurringTransactions::SmartFillsControllerTest < ActionDispatch::Integrat
       expected_day_of_month: Date.current.day, last_occurrence_date: 1.month.ago.to_date,
       next_expected_date: Date.current, status: "active", manual: false, occurrence_count: 2
     )
-    stub_provider(raw(name: "Gym Membership", amount: 40.0, frequency: "monthly", confidence: 0.9))
+    stub_provider(raw_suggestion(name: "Gym Membership", amount: 40.0, frequency: "monthly", confidence: 0.9))
 
     post smart_fill_recurring_transactions_url(entry_id: @entry.id),
          headers: { "Turbo-Frame" => "modal" }
