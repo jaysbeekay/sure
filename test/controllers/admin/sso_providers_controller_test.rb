@@ -43,6 +43,43 @@ class Admin::SsoProvidersControllerTest < ActionDispatch::IntegrationTest
     assert_select "p", text: I18n.t("admin.sso_providers.edit.description", locale: :de, fallback: false, label: @provider.label)
   end
 
+  # The default trail ends on the controller's name, which is never a link, so
+  # the form pages had no way back to the providers list.
+  test "the form pages link their SSO providers crumb back to the list" do
+    get new_admin_sso_provider_path
+    assert_select "[data-breadcrumbs] a[href=?]", admin_sso_providers_path, text: I18n.t("breadcrumbs.sso_providers")
+    assert_select "[data-breadcrumbs] > span:last-child", text: I18n.t("admin.sso_providers.new.title")
+
+    get edit_admin_sso_provider_path(@provider)
+    assert_select "[data-breadcrumbs] a[href=?]", admin_sso_providers_path, text: I18n.t("breadcrumbs.sso_providers")
+    assert_select "[data-breadcrumbs] > span:last-child", text: I18n.t("admin.sso_providers.edit.title")
+  end
+
+  test "a rejected create keeps the trail back to the list" do
+    assert_no_difference "SsoProvider.count" do
+      post admin_sso_providers_path, params: { sso_provider: { strategy: "openid_connect", name: "", label: "" } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "[data-breadcrumbs] a[href=?]", admin_sso_providers_path, text: I18n.t("breadcrumbs.sso_providers")
+    assert_select "[data-breadcrumbs] > span:last-child", text: I18n.t("admin.sso_providers.new.title")
+  end
+
+  test "a rejected update keeps the trail back to the list" do
+    patch admin_sso_provider_path(@provider), params: { sso_provider: { name: "" } }
+
+    assert_response :unprocessable_entity
+    assert_select "[data-breadcrumbs] a[href=?]", admin_sso_providers_path, text: I18n.t("breadcrumbs.sso_providers")
+    assert_select "[data-breadcrumbs] > span:last-child", text: I18n.t("admin.sso_providers.edit.title")
+  end
+
+  test "the providers list itself stays the unlinked current crumb" do
+    get admin_sso_providers_path
+
+    assert_select "[data-breadcrumbs] a[href=?]", admin_sso_providers_path, count: 0
+    assert_select "[data-breadcrumbs] > span:last-child", text: I18n.t("breadcrumbs.sso_providers")
+  end
+
   test "update persists nested default role setting" do
     patch admin_sso_provider_path(@provider), params: {
       sso_provider: valid_update_params(settings: { default_role: "guest" })
