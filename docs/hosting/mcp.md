@@ -150,8 +150,11 @@ At the time of writing, `tools/list` includes:
 | `unmatch_transfer` | Unlink a confirmed or pending transfer (by either transaction's id) so a wrong match can be redone; rejects the pairing for auto-match by default. Supports `dry_run` |
 | `update_transfer` | Switch a confirmed transfer into an investment or crypto account between an investment contribution (counted as spending) and a plain transfer, e.g. when a brokerage or crypto account only converts currency. Supports `dry_run` |
 | `create_tag` / `update_tag` | Manage tags |
-| `create_category` / `update_category` | Manage categories |
+| `create_category` / `update_category` / `delete_category` | Manage categories: create, rename, recolor, move between parents, and delete (optionally moving transactions to a replacement) |
 | `update_transaction` | Edit a transaction's metadata (name, notes, category, merchant, tags) |
+| `get_transfer_match_candidates` | A transaction's current transfer (including a pending auto-match) or the transactions it could be matched with, as in the "Match transfer" dialog |
+| `match_transfer` | Match a transaction as a transfer with an existing counterpart, or create the counterpart in a target account (e.g. a manual loan). Supports `dry_run` |
+| `review_transfer` | Confirm or reject a pending auto-matched transfer |
 | `update_budget` | Update budget allocations for a month |
 | `get_rules` / `get_rule_options` | Transaction rules in readable form (ids resolved to names, latest run; paginated, with a text search), and the condition and action types a rule can use |
 | `preview_rule` | Match count and a sample of matching transactions for a saved rule or an unsaved definition, without changing anything |
@@ -184,6 +187,7 @@ permissions enforced in the web UI.
 | `create_bill` | Create a bill, subscription, installment plan or income schedule |
 | `update_bill` | Update one bill's configuration; amount changes apply from today forward |
 | `record_bill_payment` | Record a partial payment against a bill's open occurrence, or settle it in full |
+| `suggest_security_classification` | Propose an asset class, sub-class, sector and region for held securities. Records a proposal for a person to approve and changes no security; securities classified by hand or locked are skipped |
 
 Because tool calls never pass through the Bills pages' controllers, the bills
 tools re-check the family's recurring-transactions feature gate (Settings →
