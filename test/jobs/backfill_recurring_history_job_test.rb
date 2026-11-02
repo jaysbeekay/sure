@@ -1,7 +1,8 @@
 require "test_helper"
 
-# The deferred half of reconstructing a bill's history: confirm queues this
-# when a pipeline holds the family lock, rather than skipping the backfill.
+# The deferred half of reconstructing a bill's history: activating a detected
+# bill queues this when a pipeline holds the family lock, rather than skipping
+# the backfill.
 class BackfillRecurringHistoryJobTest < ActiveJob::TestCase
   include FamilyLockTestHelper
   setup do

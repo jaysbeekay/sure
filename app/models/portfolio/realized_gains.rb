@@ -216,7 +216,7 @@ class Portfolio::RealizedGains
 
       Trade
         .joins(entry: :account)
-        .where(entries: { account_id: account_ids, date: period.date_range })
+        .where(entries: { account_id: account_ids, date: period.date_range, excluded: false })
         .where("trades.qty < 0")
         # Note 1: ownership was preserved, so nothing was realised. Filtered in
         # SQL so these are never loaded; Trade#realized_gain_loss independently

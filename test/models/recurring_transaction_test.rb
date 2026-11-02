@@ -697,6 +697,18 @@ class RecurringTransactionTest < ActiveSupport::TestCase
     assert_equal renamed, @family.recurring_transactions.covering(entry)
   end
 
+  # A rename keeps the bank text as the detected name, so the bill still
+  # covers the transaction it was made from.
+  test "covering finds a renamed bill through its detected name" do
+    setup_covering_family
+    entry = create_transaction(account: @account, amount: 40, name: "CITY WATER 0042")
+    bill = covering_series(name: "CITY WATER 0042", amount: 40)
+    bill.update!(name: "Water")
+    assert_equal "CITY WATER 0042", bill.reload.matcher_hints["detected_name"], "precondition: the rename kept the detected name"
+
+    assert_equal bill, @family.recurring_transactions.covering(entry)
+  end
+
   test "covering finds an accountless bill from any account" do
     setup_covering_family
     entry = create_transaction(account: @account, amount: 100, merchant: @merchant)
@@ -813,6 +825,59 @@ class RecurringTransactionTest < ActiveSupport::TestCase
     )
 
     assert_nil RecurringTransaction.covering(entry)
+  end
+
+  # The unique indexes ignore status, so a series create_from_transaction
+  # would collide with is found whatever state it is in, even when covering
+  # (which skips ended series) does not see it. Built from a real create, so
+  # the lookup and the index cannot disagree on the key.
+  test "identity_taken_by finds the row create_from_transaction would collide with" do
+    setup_covering_family
+    [
+      create_transaction(account: @account, amount: 100, merchant: @merchant),
+      create_transaction(account: @account, amount: 40, name: "CITY WATER 0042")
+    ].each do |entry|
+      transaction = entry.entryable
+      assert_nil RecurringTransaction.identity_taken_by(transaction), "nothing holds the key yet"
+
+      created = RecurringTransaction.create_from_transaction(transaction)
+      created.update!(status: "ended")
+
+      assert_nil @family.recurring_transactions.covering(entry), "precondition: covering skips the ended series"
+      assert_equal created, RecurringTransaction.identity_taken_by(transaction)
+      assert_raises(ActiveRecord::RecordNotUnique) do
+        RecurringTransaction.transaction(requires_new: true) { RecurringTransaction.create_from_transaction(transaction) }
+      end
+    end
+  end
+
+  # dedup_scope carries the amount, so another price tier is a new key.
+  test "identity_taken_by leaves another price tier free" do
+    setup_covering_family
+    RecurringTransaction.create_from_transaction(create_transaction(account: @account, amount: 100, merchant: @merchant).entryable)
+    other_tier = create_transaction(account: @account, amount: 120, merchant: @merchant).entryable
+
+    assert_nil RecurringTransaction.identity_taken_by(other_tier)
+  end
+
+  # The matcher never pays an ordinary bill with a transfer leg, so neither
+  # does this check by name or merchant. A leg already allocated to a series
+  # is still covered by it.
+  test "covering does not match a transfer leg to a bill by identity" do
+    setup_covering_family
+    entry = create_transaction(account: @account, amount: 50, name: "Netflix")
+    bill = covering_series(name: "Netflix", amount: 50)
+    assert_equal bill, @family.recurring_transactions.covering(entry), "precondition: the ordinary charge is covered"
+
+    entry.entryable.update!(kind: "funds_movement")
+
+    assert_nil @family.recurring_transactions.covering(entry.reload)
+
+    bill.recurring_occurrences.order(:due_on).first.allocations.create!(
+      entry: entry, allocated_amount: 50, currency: "USD", source: "user_created"
+    )
+
+    assert_equal bill, @family.recurring_transactions.covering(entry)
   end
 
   # A recurring transfer is identified by its account pair, never by name, as
@@ -1833,6 +1898,52 @@ class RecurringTransactionTest < ActiveSupport::TestCase
     end
     assert_empty RecurringTransaction::Identifier.new(@family).candidate_patterns,
                  "the add-bill picker must not offer a pattern the renamed bill already covers"
+  end
+
+  test "identify_patterns_for does not re-suggest a renamed name-matched bill" do
+    [ 0, 1, 2 ].each do |months_ago|
+      @account.entries.create!(
+        date: months_ago.months.ago.beginning_of_month + 5.days,
+        amount: 9.99,
+        currency: "USD",
+        name: "STREAMCO *CHG",
+        entryable: Transaction.create!(category: categories(:food_and_drink))
+      )
+    end
+
+    assert_difference "@family.recurring_transactions.count", 1 do
+      RecurringTransaction.identify_patterns_for!(@family)
+    end
+
+    bill = @family.recurring_transactions.last
+    assert_equal "STREAMCO *CHG", bill.matcher_name
+
+    bill.update!(name: "Streaming")
+
+    assert_no_difference "@family.recurring_transactions.count" do
+      RecurringTransaction.identify_patterns_for!(@family)
+    end
+    assert_equal "STREAMCO *CHG", bill.reload.matcher_name
+  end
+
+  test "renaming a legacy bill without a stored detected name keeps its original name for matching" do
+    bill = @family.recurring_transactions.create!(
+      account: @account,
+      name: "LEGACY CO",
+      amount: 5,
+      currency: "USD",
+      expected_day_of_month: 5,
+      last_occurrence_date: Date.current,
+      next_expected_date: 1.month.from_now.to_date,
+      status: "active",
+      occurrence_count: 3,
+      bill_type: "bill",
+      manual: false
+    )
+
+    bill.update!(name: "Renamed Legacy")
+
+    assert_equal "LEGACY CO", bill.reload.matcher_name
   end
 
   private

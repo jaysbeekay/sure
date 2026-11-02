@@ -2,7 +2,7 @@ class UI::AccountPage < ApplicationComponent
   attr_reader :account, :chart_view, :chart_period, :statement_coverage, :statements, :reconciliation_statuses,
               :can_manage_statements
 
-  renders_one :activity_feed, ->(feed_data:, pagy:, search:) { UI::Account::ActivityFeed.new(feed_data: feed_data, pagy: pagy, search: search) }
+  renders_one :activity_feed, ->(feed_data:, pagy:, q:) { UI::Account::ActivityFeed.new(feed_data: feed_data, pagy: pagy, q: q) }
 
   def initialize(account:, chart_view: nil, chart_period: nil, active_tab: nil, statement_coverage: nil, statements: [],
                  reconciliation_statuses: {}, can_manage_statements: false)
@@ -46,6 +46,8 @@ class UI::AccountPage < ApplicationComponent
     base_tabs = case account.accountable_type
     when "Investment", "Crypto"
       [ :activity, :holdings ]
+    when "CreditCard"
+      [ :activity, :overview ]
     when "Property", "Vehicle"
       [ :activity, :overview ]
     when "Loan"
@@ -80,7 +82,7 @@ class UI::AccountPage < ApplicationComponent
       activity_feed
     when :holdings, :overview
       # Accountable is responsible for implementing the partial in the correct folder
-      render "#{account.accountable_type.downcase.pluralize}/tabs/#{tab}", account: account
+      render "#{accountable_view_folder}/tabs/#{tab}", account: account
     when :schedule
       render_schedule_tab
     when :extra_repayments
@@ -147,6 +149,15 @@ class UI::AccountPage < ApplicationComponent
   end
 
   private
+    # The app/views folder an accountable's own tab partials live in.
+    #
+    # Not `accountable_type.downcase.pluralize`, which reads a two-word class
+    # name as one word: "CreditCard" became `creditcards/tabs/overview` and
+    # there is no such folder.
+    def accountable_view_folder
+      account.accountable_type.underscore.pluralize
+    end
+
     # Only show the Schedule tab when the loan actually has a schedule to
     # show -- e.g. not for a loan missing a rate or term.
     def loan_tabs
