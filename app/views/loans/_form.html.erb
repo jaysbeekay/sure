@@ -66,6 +66,23 @@
       </div>
 
       <div class="flex items-center gap-2">
+        <%# How the lender measures a period against a year. The default charges
+            a flat twelfth, which is what every existing loan was built on, so
+            leaving this alone changes nothing about the schedule. %>
+        <%= loan_form.select :day_count_convention,
+                           loan_day_count_convention_options,
+                           { label: t("loans.form.day_count_convention") } %>
+      </div>
+      <p class="text-xs text-secondary"><%= t("loans.form.day_count_convention_hint") %></p>
+
+      <div class="space-y-2">
+        <%= loan_form.select :collateral_account_id,
+                  @collateral_candidates.map { |account| [ account.name, account.id ] },
+                  { label: t("loans.form.collateral_account"), include_blank: t("loans.form.collateral_account_none") } %>
+        <p class="text-sm text-secondary"><%= t("loans.form.collateral_account_hint") %></p>
+      </div>
+
+      <div class="flex items-center gap-2">
         <%# The premium many lenders quote beside the instalment. Charged
             alongside it rather than inside it, so it moves the loan's total
             cost without moving its repayment. %>

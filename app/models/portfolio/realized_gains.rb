@@ -216,7 +216,7 @@ class Portfolio::RealizedGains
 
       Trade
         .joins(entry: :account)
-        .where(entries: { account_id: account_ids, date: period.date_range })
+        .where(entries: { account_id: account_ids, date: period.date_range, excluded: false })
         .where("trades.qty < 0")
         # Note 1: ownership was preserved, so nothing was realised. Filtered in
         # SQL so these are never loaded; Trade#realized_gain_loss independently
@@ -267,8 +267,13 @@ class Portfolio::RealizedGains
       Holding.preload_avg_costs(holdings)
       by_account = holdings.group_by(&:account_id)
 
+      # What each sale took from which lot, where the account sells by fifo:
+      # three queries for the whole set, none for an account sold by average.
+      lot_disposals = HoldingLotDisposal.readable_by_sale(trades)
+
       trades.each do |trade|
         trade.preloaded_holdings = by_account[trade.entry.account_id] || []
+        trade.preloaded_lot_disposals = lot_disposals[trade.entry.id]
       end
 
       # And the rates the disposals' own conversion needs, in one more query

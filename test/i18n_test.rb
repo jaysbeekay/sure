@@ -27,6 +27,21 @@ class I18nTest < ActiveSupport::TestCase
     end
   end
 
+  # The loan chart's labels, cards, table and accessible description all read
+  # this subtree. Fallbacks would show a German user English rather than a raw
+  # key, but the rest of UI.account.chart is translated, so a missing subtree
+  # is a gap and not a choice. Placeholders are compared too: a translation
+  # that drops %{projected_payoff_date} silently loses the figure it names.
+  def test_german_loan_chart_keys_and_placeholders_match_english
+    en = loan_chart_leaves("en")
+    de = loan_chart_leaves("de")
+
+    assert_equal en.keys.sort, de.keys.sort, "UI.account.chart.loan in de.yml must carry every key en.yml does"
+    en.each do |key, value|
+      assert_equal value.scan(/%\{\w+\}/).sort, de.fetch(key).to_s.scan(/%\{\w+\}/).sort, "placeholders differ for #{key}"
+    end
+  end
+
   def test_no_missing_keys
     skip "Skipping missing keys test"
     missing_keys = @i18n.missing_keys(locales: [ :en ])
@@ -106,6 +121,49 @@ class I18nTest < ActiveSupport::TestCase
     assert_empty padded, "short_with_year pads the day for: #{padded.join(", ")}"
   end
 
+  # The bills overview's notices card heads with this. Fallbacks would show the
+  # English "Changes", so check each bills locale file without them.
+  def test_bills_notices_heading_exists_for_each_bills_locale
+    locales = Dir[File.expand_path("../config/locales/views/bills/*.yml", __dir__)].map { |file| File.basename(file, ".yml") }
+    missing = locales.sort.reject do |locale|
+      I18n.t("bills.index.notices_heading", locale: locale, fallback: false, default: nil)
+    end
+
+    assert_empty missing, "bills.index.notices_heading is missing for: #{missing.join(", ")}"
+  end
+
+  # The All bills default status option. Every bills locale must translate it,
+  # or the default filter falls back to English.
+  def test_bills_current_bills_label_exists_for_each_bills_locale
+    locales = Dir[File.expand_path("../config/locales/views/bills/*.yml", __dir__)].map { |file| File.basename(file, ".yml") }
+    missing = locales.sort.reject do |locale|
+      I18n.t("bills.all.current_bills", locale: locale, fallback: false, default: nil)
+    end
+
+    assert_empty missing, "bills.all.current_bills is missing for: #{missing.join(", ")}"
+  end
+
+  # The family setting that fills a blank transaction name and the form
+  # placeholder that explains it. Fallbacks would show English, so each locale
+  # that translates the neighbouring key must translate these too.
+  def test_auto_generate_transaction_name_keys_exist_beside_their_siblings
+    {
+      "settings.appearances.show.split_grouped_title" => %w[
+        settings.appearances.show.auto_generate_transaction_names_title
+        settings.appearances.show.auto_generate_transaction_names_description
+      ],
+      "transactions.form.description_placeholder" => %w[transactions.form.description_placeholder_optional]
+    }.each do |sibling, keys|
+      locales = I18n.available_locales.select { |locale| I18n.t(sibling, locale: locale, fallback: false, default: nil) }
+      assert_includes locales, :de
+
+      locales.each do |locale|
+        missing = keys.reject { |key| I18n.t(key, locale: locale, fallback: false, default: nil) }
+        assert_empty missing, "missing in #{locale}: #{missing.join(", ")}"
+      end
+    end
+  end
+
   def test_trade_republic_activity_labels_exist_for_each_locale
     required_labels = %w[
       contribution withdrawal interest dividend card_payment cash_withdrawal
@@ -126,6 +184,20 @@ class I18nTest < ActiveSupport::TestCase
   end
 
   private
+    # { "months_saved.one" => "...", ... } for UI.account.chart.loan in one locale.
+    def loan_chart_leaves(locale)
+      tree = YAML.load_file(Pathname.pwd.join("config/locales/views/components/#{locale}.yml"), aliases: true)
+        .dig(locale, "UI", "account", "chart", "loan") || {}
+      flatten_leaves(tree)
+    end
+
+    def flatten_leaves(tree, prefix = nil)
+      tree.each_with_object({}) do |(key, value), leaves|
+        path = [ prefix, key ].compact.join(".")
+        value.is_a?(Hash) ? leaves.merge!(flatten_leaves(value, path)) : leaves[path] = value
+      end
+    end
+
     def german_locale_paths
       @german_locale_paths ||= locale_paths.select { |path| path.basename.to_s.match?(/(^|[._-])de\.yml\z/) }
     end

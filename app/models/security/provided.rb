@@ -37,7 +37,15 @@ module Security::Provided
     # Per-provider timeout so one slow provider can't stall the entire search
     PROVIDER_SEARCH_TIMEOUT = 8.seconds
 
-    def search_provider(symbol, country_code: nil, exchange_operating_mic: nil)
+    # technical_failure is an optional callable invoked once per provider that
+    # errored/timed out (as opposed to answering with zero results). Callers
+    # that need to distinguish "provider search technically failed" from
+    # "provider search succeeded, nothing found" — e.g. Security::Resolver,
+    # which must not treat a rate-limited/timed-out search as a confirmed
+    # "no such security" — can pass a callback here instead of us changing
+    # the return type for all callers (e.g. SecuritiesController just wants
+    # the plain result array).
+    def search_provider(symbol, country_code: nil, exchange_operating_mic: nil, technical_failure: nil)
       return [] if symbol.blank?
 
       active_providers = providers.compact
@@ -70,7 +78,10 @@ module Security::Provided
       seen_keys = Set.new
 
       results_array.each_with_index do |provider_results, idx|
-        next if provider_results.nil?
+        if provider_results.nil?
+          technical_failure&.call(active_providers[idx])
+          next
+        end
 
         provider_key = provider_key_for(active_providers[idx])
 
@@ -196,14 +207,18 @@ module Security::Provided
     return nil if offline?
 
     # Make sure we have a data provider before fetching
-    return nil unless price_data_provider.present?
-    response = price_data_provider.fetch_security_price(
+    provider = price_data_provider
+    return nil unless provider.present?
+    response = provider.fetch_security_price(
       symbol: ticker,
       exchange_operating_mic: exchange_operating_mic,
       date: date
     )
 
-    return nil unless response.success? # Provider error
+    unless response.success? # Provider error
+      log_failed_price_fetch(response.error, provider)
+      return nil
+    end
 
     price = response.data
     Security::Price.find_or_create_by!(
@@ -213,6 +228,24 @@ module Security::Provided
     ) { |record| record.price = price.price } if cache
     price
   end
+
+  # Throttled so a page with many holdings missing today's price doesn't
+  # flood the debug log with one entry per request — at most one per
+  # security per day.
+  def log_failed_price_fetch(error, provider = price_data_provider)
+    cache_key = "security_price_fetch_log:#{id}:#{Date.current}"
+    return unless Rails.cache.write(cache_key, true, expires_in: 24.hours, unless_exist: true)
+
+    DebugLogEntry.capture(
+      category: "security_price_fetch",
+      level: "warn",
+      message: "find_or_fetch_price failed",
+      source: self.class.name,
+      provider: provider,
+      metadata: { security_id: id, ticker: ticker, provider_error: error&.message }
+    )
+  end
+  private :log_failed_price_fetch
 
   # `include_classification` widens the refetch gate below so a security that
   # already has a name and a logo -- which is most of them -- can still be
@@ -412,23 +445,97 @@ module Security::Provided
   # door: an incapable provider reaching here would wipe a stored set it was
   # never in a position to replace, and then stamp the emptiness as fact
   # (raised on the #212 gate review).
+  #
+  # A row the table would refuse is skipped and logged, not raised: one bad row
+  # used to roll the whole fund back unstamped and stop both market data
+  # importers at this fund on every run (jaysbeekay/sure#542).
   def store_constituents(list)
     return unless price_data_provider&.supplies_constituents?
 
+    rows, skipped = constituent_rows_from(list)
+
     transaction do
       constituents.destroy_all
-
-      Array(list).each do |entry|
-        weight = entry[:weight] || entry["weight"]
-        constituents.create!(
-          ticker: entry[:ticker] || entry["ticker"],
-          name: entry[:name] || entry["name"],
-          weight: weight.present? ? BigDecimal(weight.to_s) : nil
-        )
-      end
-
+      rows.each { |row| constituents.create!(row) }
       update_column(:constituents_fetched_at, Time.current)
     end
+
+    skipped.each { |reason, entry| log_skipped_constituent(reason, entry) }
+  end
+
+  # Splits a provider list into rows the table will accept and [reason, entry]
+  # pairs it would refuse. Tickers are compared after the strip and
+  # case-sensitively, as `validates :ticker, uniqueness:` compares them, and
+  # the first occurrence of a ticker is the one kept.
+  #
+  # A weight is checked against the column as well as the model: `BigDecimal`
+  # parses "NaN" and "Infinity" without raising, and a value the model accepts
+  # can still overflow `numeric(9,6)`, so either would have raised out of the
+  # transaction just as an invalid row did.
+  def constituent_rows_from(list)
+    seen = Set.new
+    rows = []
+    skipped = []
+
+    Array(list).each do |entry|
+      unless entry.is_a?(Hash)
+        skipped << [ "malformed_entry", entry ]
+        next
+      end
+
+      ticker = (entry[:ticker] || entry["ticker"]).to_s.strip
+      raw_weight = entry[:weight] || entry["weight"]
+      weight = begin
+        raw_weight.present? ? BigDecimal(raw_weight.to_s) : nil
+      rescue ArgumentError, TypeError
+        :non_numeric
+      end
+      weight = :non_numeric if weight.is_a?(BigDecimal) && !weight.finite?
+
+      reason = if ticker.blank? then "blank_ticker"
+      elsif weight == :non_numeric then "non_numeric_weight"
+      elsif weight&.negative? then "negative_weight"
+      elsif weight && weight.round(constituent_weight_scale) >= constituent_weight_limit then "out_of_range_weight"
+      elsif seen.include?(ticker) then "duplicate_ticker"
+      end
+
+      if reason
+        skipped << [ reason, entry ]
+      else
+        seen << ticker
+        rows << { ticker: ticker, name: (entry[:name] || entry["name"]).to_s.strip.presence, weight: weight }
+      end
+    end
+
+    [ rows, skipped ]
+  end
+
+  # The bound `numeric(precision, scale)` holds, read from the column so the two
+  # cannot drift: Postgres rounds to the scale first, so 999.9999995 overflows.
+  def constituent_weight_limit
+    column = Security::Constituent.columns_hash["weight"]
+    BigDecimal(10)**(column.precision - column.scale)
+  end
+
+  def constituent_weight_scale
+    Security::Constituent.columns_hash["weight"].scale
+  end
+
+  def log_skipped_constituent(reason, entry)
+    DebugLogEntry.capture(
+      category: "security_holdings",
+      level: "warn",
+      message: "Skipped a fund holding the provider reported in a form that cannot be stored",
+      source: "Security#store_constituents",
+      provider: price_data_provider,
+      metadata: {
+        security_id: id,
+        security_ticker: ticker,
+        ticker: entry.is_a?(Hash) ? (entry[:ticker] || entry["ticker"]) : nil,
+        reason: reason,
+        entry: entry.is_a?(Hash) ? entry.to_h : entry
+      }
+    )
   end
 
   # The fund expanded into what it actually holds, as fractions of the fund.

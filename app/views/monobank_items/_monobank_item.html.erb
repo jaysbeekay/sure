@@ -1,4 +1,4 @@
-<%# locals: (monobank_item:, visible_accounts: monobank_item.accounts) %>
+<%# locals: (monobank_item:, visible_accounts:) %>
 
 <%= tag.div id: dom_id(monobank_item) do %>
   <%= render DS::Disclosure.new(variant: :card, open: true) do |disclosure| %>
@@ -18,7 +18,7 @@
             </div>
 
             <%# The institution belongs to every account on the connection, so it is
-                shown only to a viewer who can see them all (#235). %>
+                shown only to a viewer who can see them all (#3630). %>
             <% if monobank_item.accounts.any? && visible_accounts.size == monobank_item.accounts.size %>
               <p class="text-xs text-secondary"><%= monobank_item.institution_summary %></p>
             <% end %>

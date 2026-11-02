@@ -21,10 +21,10 @@ class Family::Syncer
 
   def perform_post_sync
     family.auto_match_transfers!
+    family.backfill_provider_merchant_logos
 
     Rails.logger.info("Applying rules for family #{family.id}")
-    # One job, not one per rule: rules only have an order if they run in sequence.
-    ApplyAllRulesJob.perform_later(family, active_only: true, ignore_attribute_locks: false)
+    ApplyRulesJob.perform_later(family)
   end
 
   private

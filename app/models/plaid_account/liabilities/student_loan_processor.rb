@@ -1,6 +1,8 @@
 class PlaidAccount::Liabilities::StudentLoanProcessor
   include PlaidAccount::Liabilities::LoanTermWriter
 
+  # `as_of` is the sync's date: a variable rate change Plaid reports is dated
+  # to it.
   def initialize(plaid_account, as_of: Date.current)
     @plaid_account = plaid_account
     @as_of = as_of
@@ -51,6 +53,9 @@ class PlaidAccount::Liabilities::StudentLoanProcessor
     # origination, or before it, is nil rather than zero: a term of no months
     # is not a term, and it would make the loan look amortisable over a
     # schedule that cannot exist.
+    #
+    # RedbarkAccount::LoanDetailsProcessor#term_months_between counts a term the
+    # same way; a change to the rule here belongs there too.
     def term_months
       return nil unless origination_date && expected_payoff_date
 

@@ -19,6 +19,7 @@ en:
     category_suggestions: AI suggestions
     changelog: What's new
     chats: Chats
+    classifier: Classifier
     coinbase_items: Coinbase
     coinstats_items: CoinStats
     credit_cards: Credit cards

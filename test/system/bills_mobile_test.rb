@@ -21,6 +21,7 @@ class BillsMobileTest < ApplicationSystemTestCase
   end
 
   teardown do
+    page.driver.browser.execute_cdp("Emulation.clearDeviceMetricsOverride")
     page.driver.browser.manage.window.resize_to(1400, 1400)
   end
 
@@ -78,10 +79,18 @@ class BillsMobileTest < ApplicationSystemTestCase
       assert_no_horizontal_scroll("the #{view} view")
     end
 
-    # The bill's own page: chart, history and configuration in one column.
+    # A bill visited directly: its drawer over the overview, with the chart and
+    # the per-year totals loaded into it. Every section opened, or a closed one
+    # would hide whatever it pushes sideways.
     visit bill_url(bill)
-    assert_text bill.display_name
-    assert_no_horizontal_scroll("the bill page")
+    within("dialog[open]") do
+      assert_selector "h2", text: bill.display_name
+      scroll_to find("turbo-frame[src*='display=history']")
+      assert_text(/#{I18n.t("bills.detail.history_title")}/i)
+      all("details:not([open]) > summary").each(&:click)
+      assert_text bill.notes
+    end
+    assert_no_horizontal_scroll("the bill drawer")
 
     # The control for the reflow above: given its width back, the container
     # query must bring the table back, or the check proved only that a table
@@ -109,6 +118,63 @@ class BillsMobileTest < ApplicationSystemTestCase
       assert_selector "button[aria-label='#{I18n.t("ds.dialog.close")}']", visible: true
     end
     assert_no_horizontal_scroll("the bill drawer")
+  end
+
+  # Bill rows follow the transaction recipe: 12px padding below @lg, 16px
+  # above it. Section headings keep their own 16px inset. Review rows must
+  # still show their full text and put their buttons below it on a phone.
+  test "bill rows use responsive padding and review rows read in full on a phone" do
+    bill = @family.recurring_transactions.create!(
+      name: "Verizon Wireless", account: accounts(:depository), amount: 95, currency: "USD",
+      expected_day_of_month: Date.current.day, anchor_date: Date.current,
+      last_occurrence_date: Date.current, next_expected_date: Date.current,
+      status: "active", manual: true
+    )
+    RecurringAllocation.create!(
+      recurring_occurrence: bill.recurring_occurrences.order(:due_on).first,
+      state: :suggested, source: :auto_matched,
+      allocated_amount: 95, currency: "USD", paid_on: Date.current
+    )
+    @family.recurring_transactions.create!(
+      name: "Neighborhood Fitness Club", account: accounts(:depository), amount: 89.99, currency: "USD",
+      expected_day_of_month: Date.current.day, anchor_date: Date.current,
+      last_occurrence_date: Date.current, next_expected_date: Date.current + 1.month,
+      status: "suggested", occurrence_count: 3
+    )
+
+    # Chrome will not shrink a window below ~500px, which leaves these lists
+    # just past @md. Emulate the phone itself.
+    page.driver.browser.execute_cdp("Emulation.setDeviceMetricsOverride", width: PHONE[0], height: PHONE[1], deviceScaleFactor: 1, mobile: true)
+    visit bills_url
+    question = I18n.t("bills.index.suggestion_line", entry: I18n.t("bills.index.suggestion_unknown_entry"), bill: bill.display_name)
+    assert_text question
+    assert_text "Neighborhood Fitness Club"
+
+    assert_bill_row_padding 12
+
+    [ question, "Neighborhood Fitness Club" ].each do |text|
+      layout = page.evaluate_script(<<~JS, text)
+        ((text) => {
+          const p = [...document.querySelectorAll("#main p")].find((el) => el.textContent.trim() === text);
+          const button = p.closest(".py-3").querySelector("a, button");
+          return {
+            clipped: p.scrollWidth > p.clientWidth,
+            below: button.getBoundingClientRect().top >= p.getBoundingClientRect().bottom
+          };
+        })(arguments[0])
+      JS
+      assert_not layout["clipped"], "#{text.inspect} is truncated"
+      assert layout["below"], "the buttons for #{text.inspect} should sit under the text"
+    end
+
+    # Give the list itself enough width to cross @lg, not just the viewport.
+    page.driver.browser.execute_cdp("Emulation.clearDeviceMetricsOverride")
+    page.driver.browser.manage.window.resize_to(1920, 1400)
+    visit bills_url
+    assert_text bill.display_name
+    assert_bill_row_padding 16
+  ensure
+    page.driver.browser.execute_cdp("Emulation.clearDeviceMetricsOverride")
   end
 
   # A green overflow assertion proves nothing unless it can go red, and this
@@ -170,6 +236,60 @@ class BillsMobileTest < ApplicationSystemTestCase
     assert_no_horizontal_scroll("the payment drawer")
   end
 
+  # The fallback payment form puts two fields and a button on one row. Wrapped
+  # as form fields, each field's minimum width is its date or number input's
+  # own, so at phone width the row ran past its box and the Record payment
+  # button ended at the screen's edge. The drawer measurement above misses it:
+  # the overflow lands in the drawer's padding, not its scroll width.
+  test "the manual payment form fits its box on a phone without clipping a field" do
+    bill = @family.recurring_transactions.create!(
+      name: "CITY WATER", account: accounts(:depository), amount: 80, currency: "USD",
+      expected_day_of_month: Date.current.day, anchor_date: Date.current,
+      last_occurrence_date: Date.current, next_expected_date: Date.current,
+      status: "active", manual: true
+    )
+
+    # Chrome will not size a window below 500px, so the resize in setup
+    # leaves a 500px viewport. Emulate a real phone's width instead.
+    page.driver.browser.execute_cdp("Emulation.setDeviceMetricsOverride",
+                                    width: 390, height: 844, deviceScaleFactor: 1, mobile: true)
+    visit recurring_occurrence_url(bill.recurring_occurrences.order(:due_on).first)
+    assert_equal 390, page.evaluate_script("window.innerWidth")
+    find("summary", text: I18n.t("recurring_occurrences.show.cant_find")).click
+    assert_selector "input[name='paid_on']", visible: true
+
+    fit = page.evaluate_script(<<~JS)
+      (() => {
+        const form = document.querySelector("input[name='paid_on']").closest("form");
+        const box = form.parentElement.getBoundingClientRect();
+        const button = form.querySelector("button, [type=submit]").getBoundingClientRect();
+        // How much narrower the date input is than its own content: squeezed
+        // below its natural width it loses the year behind the picker. (A
+        // number input's natural width is its size attribute, not its value,
+        // so the amount field has no such measure.)
+        const clipped = (input) => {
+          const probe = input.cloneNode();
+          probe.style.cssText = "position:absolute;visibility:hidden;width:max-content";
+          input.after(probe);
+          const natural = probe.getBoundingClientRect().width;
+          probe.remove();
+          return natural - input.getBoundingClientRect().width;
+        };
+        return {
+          form: form.scrollWidth - form.clientWidth,
+          right: form.getBoundingClientRect().right - box.right,
+          button: button.right - box.right,
+          date: clipped(form.querySelector("input[name='paid_on']"))
+        };
+      })()
+    JS
+
+    assert_operator fit["form"], :<=, 1, "the payment form's row is wider than the form"
+    assert_operator fit["right"], :<=, 1, "the payment form runs past its box"
+    assert_operator fit["button"], :<=, 1, "Record payment runs past the form's box"
+    assert_operator fit["date"], :<=, 1, "the date input is narrower than its date"
+  end
+
   # A row's verb needs @lg of list to sit beside the bill's name. Below it the
   # subline says why the row matters, and the drawer spells the verb out.
   test "a phone row carries no verb, and tapping it opens the drawer with one" do
@@ -192,6 +312,18 @@ class BillsMobileTest < ApplicationSystemTestCase
   end
 
   private
+    def assert_bill_row_padding(expected)
+      assert_selector "[data-controller~='clickable-row'] a[data-clickable-row-target='link'][href*='display=drawer']"
+      paddings = page.evaluate_script(<<~JS)
+        [...document.querySelectorAll("a[data-clickable-row-target='link'][href*='display=drawer']")].map((link) => {
+          const row = link.closest("[data-controller~='clickable-row']");
+          const style = getComputedStyle(row);
+          return [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(parseFloat);
+        })
+      JS
+      assert_equal [ [ expected ] * 4 ], paddings.uniq, "bill rows must use #{expected}px padding on every side"
+    end
+
     # The document must never be wider than the viewport, and neither must the
     # scroll container inside it. An open drawer sits outside #main, in a scroll
     # container of its own.

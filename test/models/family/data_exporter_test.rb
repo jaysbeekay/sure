@@ -353,6 +353,44 @@ class Family::DataExporterTest < ActiveSupport::TestCase
     end
   end
 
+  test "exports a loan's collateral link with its account" do
+    property = @family.accounts.create!(name: "House", balance: 500_000, currency: "USD", accountable: Property.new)
+    loan_account = @family.accounts.create!(name: "Mortgage", balance: 400_000, currency: "USD", accountable: Loan.new)
+    loan_account.loan.update!(collateral_account: property)
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      exported = zip.read("all.ndjson").split("\n").map { |line| JSON.parse(line) }
+        .select { |line| line["type"] == "Account" && line.dig("data", "id") == loan_account.id }
+
+      assert_equal 1, exported.size
+      assert_equal property.id, exported.first.dig("data", "accountable", "collateral_account_id")
+    end
+  end
+
+  # Accounts are exported in primary-key order, which is arbitrary, and a loan's
+  # collateral is another account in the same stream. Chunked imports apply
+  # chunks in order and resolve a collateral id against what is already there, so
+  # a loan has to come after every other account or a valid export can fail.
+  test "exports loans after every other account, whatever the ids" do
+    loan_account = @family.accounts.create!(
+      id: "00000000-0000-4000-8000-000000000001", name: "Early mortgage", balance: 1, currency: "USD", accountable: Loan.new
+    )
+    asset = @family.accounts.create!(
+      id: "ffffffff-ffff-4fff-8fff-ffffffffffff", name: "Late house", balance: 1, currency: "USD", accountable: Property.new
+    )
+    loan_account.loan.update!(collateral_account: asset)
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      accounts = zip.read("all.ndjson").split("\n").map { |line| JSON.parse(line) }
+        .select { |line| line["type"] == "Account" }.map { |line| line["data"] }
+      types = accounts.map { |data| data["accountable_type"] }
+      ids = accounts.map { |data| data["id"] }
+
+      assert_equal types.sort_by { |type| type == "Loan" ? 1 : 0 }, types, "a non-loan account follows a loan"
+      assert_operator ids.index(asset.id), :<, ids.index(loan_account.id)
+    end
+  end
+
   test "generates valid NDJSON file" do
     zip_data = @exporter.generate_export
 
@@ -440,19 +478,10 @@ class Family::DataExporterTest < ActiveSupport::TestCase
       assert rule_data["data"].key?("name")
       assert rule_data["data"].key?("resource_type")
       assert rule_data["data"].key?("active")
+      assert_equal @rule.position, rule_data["data"]["position"]
+      assert_equal false, rule_data["data"]["stop_processing"]
       assert rule_data["data"].key?("conditions")
       assert rule_data["data"].key?("actions")
-    end
-  end
-
-  test "exports a rule's priority in NDJSON so the run order survives a round trip" do
-    @rule.update_columns(priority: 7)
-
-    Zip::File.open_buffer(@exporter.generate_export) do |zip|
-      rule_data = zip.read("all.ndjson").split("\n").map { |line| JSON.parse(line) }
-        .find { |line| line["type"] == "Rule" && line["data"]["name"] == "Test Rule" }
-
-      assert_equal 7, rule_data["data"]["priority"]
     end
   end
 
@@ -502,6 +531,77 @@ class Family::DataExporterTest < ActiveSupport::TestCase
       # Should export category name instead of UUID
       assert_equal "Test Category", actions[0]["value"]
       assert_equal({ "type" => "Category", "id" => @category.id, "name" => "Test Category" }, actions[0]["value_ref"])
+    end
+  end
+
+  test "split rule round-trips through NDJSON into another family" do
+    split_rule = create_split_rule!
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      rule_line = zip.read("all.ndjson").split("\n").find do |line|
+        parsed = JSON.parse(line)
+        parsed["type"] == "Rule" && parsed["data"]["name"] == split_rule.name
+      end
+
+      exported_value = JSON.parse(rule_line)["data"]["actions"].first["value"].to_json
+      refute_includes exported_value, @category.id
+      refute_includes exported_value, @tag.id
+
+      existing_category = @other_family.categories.create!(name: "Test Category", color: "#FF0000")
+
+      Family::DataImporter.new(@other_family, rule_line).import!
+
+      assert_imported_split_rule(split_rule.name, category: existing_category)
+    end
+  end
+
+  test "split rule round-trips through rules CSV into another family" do
+    split_rule = create_split_rule!
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      import = @other_family.imports.create!(type: "RuleImport", raw_file_str: zip.read("rules.csv"), col_sep: ",")
+      import.generate_rows_from_csv
+      import.send(:import!)
+
+      assert_imported_split_rule(split_rule.name, category: @other_family.categories.find_by!(name: "Test Category"))
+    end
+  end
+
+  test "split rule with quotes in its names round-trips through rules CSV" do
+    @category.update!(name: 'Kids "Fun" \\ Stuff')
+    split_rule = create_split_rule!(row_name: 'My "half"')
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      import = @other_family.imports.create!(type: "RuleImport", raw_file_str: zip.read("rules.csv"), col_sep: ",")
+      import.generate_rows_from_csv
+      import.send(:import!)
+
+      mine = imported_split_config(split_rule.name).first
+      assert_equal 'My "half"', mine["name"]
+      assert_equal @other_family.categories.find_by!(name: 'Kids "Fun" \\ Stuff').id, mine["category_id"]
+    end
+  end
+
+  test "exports a split rule whose category was deleted without the stale id" do
+    split_rule = create_split_rule!
+    @category.destroy!
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      rule_line = zip.read("all.ndjson").split("\n").find do |line|
+        parsed = JSON.parse(line)
+        parsed["type"] == "Rule" && parsed["data"]["name"] == split_rule.name
+      end
+
+      splits = JSON.parse(rule_line)["data"]["actions"].first["value"]["splits"]
+      assert_not splits.first.key?("category")
+      assert_not splits.first.key?("category_id")
+      assert_equal [ "Test Tag" ], splits.first["tags"]
+
+      Family::DataImporter.new(@other_family, rule_line).import!
+
+      split = imported_split_config(split_rule.name).first
+      assert_nil split["category_id"]
+      assert_equal [ @other_family.tags.find_by!(name: "Test Tag").id ], split["tag_ids"]
     end
   end
 
@@ -941,6 +1041,21 @@ class Family::DataExporterTest < ActiveSupport::TestCase
     end
   end
 
+  test "exports a user's choice to make an investment transfer a plain transfer" do
+    brokerage = @family.accounts.create!(name: "Brokerage", accountable: Investment.new, balance: 0, currency: "USD")
+    outflow = create_transaction_entry(@account, amount: 100, date: Date.parse("2024-01-15"), name: "To brokerage")
+    inflow = create_transaction_entry(brokerage, amount: -100, date: Date.parse("2024-01-15"), name: "From checking")
+    transfer = Transfer.create!(outflow_transaction: outflow.entryable, inflow_transaction: inflow.entryable, status: "confirmed")
+    assert transfer.update_investment_contribution!(false)
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      ndjson_records = zip.read("all.ndjson").split("\n").map { |line| JSON.parse(line) }
+      transfer_data = ndjson_records.find { |record| record["type"] == "Transfer" && record.dig("data", "id") == transfer.id }
+
+      assert_equal false, transfer_data["data"]["investment_contribution"]
+    end
+  end
+
   test "exports transfer decisions and rejected transfers in NDJSON" do
     destination_account = @family.accounts.create!(
       name: "Savings Account",
@@ -976,6 +1091,7 @@ class Family::DataExporterTest < ActiveSupport::TestCase
       assert_equal transfer_outflow.entryable.id, transfer_data["data"]["outflow_transaction_id"]
       assert_equal "confirmed", transfer_data["data"]["status"]
       assert_equal "Confirmed by user", transfer_data["data"]["notes"]
+      assert_nil transfer_data["data"]["investment_contribution"]
 
       rejected_transfer_data = ndjson_records.find { |record| record["type"] == "RejectedTransfer" && record.dig("data", "id") == rejected_transfer.id }
       assert rejected_transfer_data
@@ -1183,6 +1299,41 @@ class Family::DataExporterTest < ActiveSupport::TestCase
         currency: account.currency,
         entryable: Transaction.new(kind: "funds_movement")
       )
+    end
+
+    def create_split_rule!(row_name: "Mine")
+      merchant = @family.merchants.create!(name: "Split Merchant")
+      rule = @family.rules.build(name: "Split Rule", resource_type: "transaction", active: true)
+      rule.conditions.build(condition_type: "transaction_name", operator: "like", value: "shared")
+      rule.actions.build(
+        action_type: "split_transaction",
+        value: {
+          splits: [
+            { type: "percentage", name: row_name, share: "60", category_id: @category.id, merchant_id: merchant.id, tag_ids: [ @tag.id ] },
+            { type: "percentage", name: "Theirs", share: "40", category_id: nil, merchant_id: nil, tag_ids: [] }
+          ]
+        }.to_json
+      )
+      rule.save!
+      rule
+    end
+
+    def imported_split_config(rule_name)
+      action = @other_family.rules.find_by!(name: rule_name).actions.sole
+      assert_equal "split_transaction", action.action_type
+      JSON.parse(action.value)["splits"]
+    end
+
+    def assert_imported_split_rule(rule_name, category:)
+      mine, theirs = imported_split_config(rule_name)
+
+      assert_equal [ "percentage", "Mine", "60" ], mine.values_at("type", "name", "share")
+      assert_equal category.id, mine["category_id"]
+      assert_equal @other_family.merchants.find_by!(name: "Split Merchant").id, mine["merchant_id"]
+      assert_equal [ @other_family.tags.find_by!(name: "Test Tag").id ], mine["tag_ids"]
+      assert_nil theirs["category_id"]
+      assert_nil theirs["merchant_id"]
+      assert_equal [], theirs["tag_ids"]
     end
 
     def create_csv_export_trade!

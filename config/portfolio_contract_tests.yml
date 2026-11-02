@@ -152,6 +152,7 @@ P24:
       - dividends and interest count the transaction shapes providers write
       - totals aggregate dividend and interest income from income trades
       - totals convert foreign-currency dividends into family currency
+      - income nets by sign, so a charge or reversal labelled as income reduces it
 P25:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
@@ -164,7 +165,7 @@ P26:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - totals cache key carries the v4 aggregation version
+      - totals cache key carries the v5 aggregation version
 P27:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest

@@ -7,6 +7,17 @@ en:
       interest_rate: Interest rate
       interest_rate_placeholder: '5.25'
       initial_balance: Original loan balance
+      day_count_convention: Interest basis
+      day_count_convention_actual_365: Actual/365
+      day_count_convention_actual_actual: Actual/actual
+      day_count_convention_hint: How your lender measures each period against a year.
+      collateral_account: Secured by
+      collateral_account_none: Not secured against an asset
+      collateral_account_hint: Link a property or vehicle in the same currency. Equity appears on both accounts only when you can see every loan secured on the asset and their currencies match. Only assets visible to everyone who can access this loan can be linked.
+        Actual/365 charges by the length of the month and is standard for UK and
+        Australian mortgages. 30/360 charges a flat twelfth, the basis Sure has
+        always used.
+      day_count_convention_thirty_360: 30/360 (a flat twelfth)
       rate_type: Rate type
       term_months: Term (months)
       term_months_placeholder: '360'

@@ -71,6 +71,19 @@ class AccountShareTest < ActiveSupport::TestCase
     assert other.reload.active?, "only the unshared account's card is expired"
   end
 
+  # Only a card still in the feed is expired; one the user already
+  # acknowledged keeps that status.
+  test "removing a share leaves an acknowledged stale-valuation insight acknowledged" do
+    property = accounts(:property)
+    property.share_with!(@member, permission: "read_only")
+    nudge = stale_valuation_insight_for(property)
+    nudge.acknowledge!
+
+    property.unshare_with!(@member)
+
+    assert nudge.reload.acknowledged?
+  end
+
   test "removing a share leaves other insight types about the account alone" do
     property = accounts(:property)
     property.share_with!(@member, permission: "read_only")

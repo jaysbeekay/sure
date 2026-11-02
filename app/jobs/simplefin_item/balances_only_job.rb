@@ -27,7 +27,7 @@ class SimplefinItem::BalancesOnlyJob < ApplicationJob
     begin
       # Broadcast a refresh signal instead of rendered HTML. Each user's browser
       # re-fetches via their own authenticated request, so the manual accounts
-      # list and the SimpleFIN card are scoped to the current user (#235).
+      # list and the SimpleFIN card are scoped to the current user (#3630).
       item.family.broadcast_refresh
     rescue => e
       Rails.logger.warn("SimpleFin BalancesOnlyJob broadcast failed: #{e.class} - #{e.message}")

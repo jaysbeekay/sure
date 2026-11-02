@@ -4,7 +4,7 @@ require "turbo/broadcastable/test_helper"
 class KrakenItem::SyncCompleteEventTest < ActiveSupport::TestCase
   include Turbo::Broadcastable::TestHelper
 
-  # #235. Kraken's event never sent the family toast; it relied on replacing
+  # #3630. Kraken's event never sent the family toast; it relied on replacing
   # the card. With the card replace gone it must send the toast instead, or a
   # finished sync would leave the page stale.
   test "a sync completion sends the family toast instead of the rendered card" do

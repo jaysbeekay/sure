@@ -54,6 +54,18 @@ class Family::DataExporter
   end
 
   private
+    # Every account that is not a loan, then the loans: the only account-to-account
+    # reference is a loan's collateral. Two `find_each` passes rather than one
+    # ordered scope, as `find_each` ignores an order clause.
+    def accounts_in_dependency_order
+      scope = @family.accounts.includes(:accountable)
+
+      Enumerator.new do |yielder|
+        scope.where.not(accountable_type: "Loan").find_each { |account| yielder << account }
+        scope.where(accountable_type: "Loan").find_each { |account| yielder << account }
+      end
+    end
+
     def generate_version_txt
       <<~TEXT
         export_version: #{EXPORT_VERSION}
@@ -163,8 +175,9 @@ class Family::DataExporter
       CSV.generate do |csv|
         csv << [ "name", "resource_type", "active", "effective_date", "conditions", "actions" ]
 
-        # Only export rules belonging to this family
-        @family.rules.includes(conditions: :sub_conditions, actions: []).find_each do |rule|
+        # Only export rules belonging to this family, in run order so an
+        # import recreates them in the same order
+        @family.rules.includes(conditions: :sub_conditions, actions: []).ordered.each do |rule|
           csv << [
             rule.name,
             rule.resource_type,
@@ -243,8 +256,12 @@ class Family::DataExporter
     def generate_ndjson
       lines = []
 
-      # Export accounts with full accountable data
-      @family.accounts.includes(:accountable).find_each do |account|
+      # Export accounts with full accountable data. Loans come last: a loan can
+      # name another account as its collateral, and a chunked (session) import
+      # applies chunks in order and resolves that id against what is already
+      # there. Primary-key order is arbitrary, so without this a valid export
+      # could put a loan ahead of its asset and fail the restore.
+      accounts_in_dependency_order.each do |account|
         lines << {
           type: "Account",
           data: account.as_json(
@@ -432,6 +449,7 @@ class Family::DataExporter
             outflow_transaction_id: transfer.outflow_transaction_id,
             status: transfer.status,
             notes: transfer.notes,
+            investment_contribution: transfer.investment_contribution_choice,
             created_at: transfer.created_at,
             updated_at: transfer.updated_at
           }
@@ -451,8 +469,15 @@ class Family::DataExporter
         }.to_json
       end
 
-      # Export trades with full data
-      @family.trades.includes(:security, entry: :account).find_each do |trade|
+      # Export trades with full data. Lots are rebuilt from trades on sync, so
+      # a trade carries only what the user set on its lot: the lot's total
+      # cost, and, on a sale, the trade whose lot it names to sell from. Trades
+      # go oldest first and buys before sales on a day, so a named lot is
+      # always ahead of its sale, even when an import arrives in chunks.
+      lot_total_costs = HoldingLot.derived.joins(:account).where(accounts: { family_id: @family.id })
+        .where.not(manual_total_cost: nil).pluck(:source_entry_id, :manual_total_cost).to_h
+      @family.trades.includes(:security, :lot_source_entry, entry: :account)
+        .order("entries.date ASC, trades.qty DESC, trades.id ASC").each do |trade|
         lines << {
           type: "Trade",
           data: {
@@ -468,6 +493,8 @@ class Family::DataExporter
             price: trade.price,
             amount: trade.entry.amount,
             currency: trade.currency,
+            lot_total_cost: lot_total_costs[trade.entry.id],
+            lot_source_trade_id: trade.lot_source_entry&.entryable_id,
             created_at: trade.created_at,
             updated_at: trade.updated_at
           }
@@ -538,8 +565,8 @@ class Family::DataExporter
         }.to_json
       end
 
-      # Export rules with versioned schema
-      @family.rules.includes(conditions: :sub_conditions, actions: []).find_each do |rule|
+      # Export rules with versioned schema, in run order
+      @family.rules.includes(conditions: :sub_conditions, actions: []).ordered.each do |rule|
         lines << {
           type: "Rule",
           version: 1,
@@ -753,7 +780,8 @@ class Family::DataExporter
         resource_type: rule.resource_type,
         active: rule.active,
         effective_date: rule.effective_date&.iso8601,
-        priority: rule.priority,
+        position: rule.position,
+        stop_processing: rule.stop_processing,
         conditions: rule.conditions.where(parent_id: nil).map { |condition| serialize_condition(condition) },
         actions: rule.actions.map { |action| serialize_action(action) }
       }
@@ -829,7 +857,43 @@ class Family::DataExporter
         return resolve_multi_tag_operand(action.value)
       end
 
+      if action.action_type == "split_transaction"
+        return { value: portable_split_value(action.value), value_ref: nil }
+      end
+
       rule_operand(action.value)
+    end
+
+    # The split config is a JSON blob whose rows reference categories, merchants
+    # and tags by id. Ids only mean something inside this family, so each row
+    # carries names instead (see Rule::ActionExecutor::SplitTransaction.localize_value
+    # for the import side). Ids that no longer resolve (record deleted since the
+    # rule was saved) are dropped, matching how the executor ignores them.
+    def portable_split_value(value)
+      config = Rule::ActionExecutor::SplitTransaction.parse_config(value)
+      return value unless config
+
+      splits = config["splits"].map do |split|
+        row = split.except("category_id", "merchant_id", "tag_ids")
+        category = split_operand_record(:categories, split["category_id"])
+        merchant = split_operand_record(:merchants, split["merchant_id"])
+        tags = Array(split["tag_ids"]).filter_map { |id| split_operand_record(:tags, id) }
+
+        row["category"] = category.name if category
+        row["merchant"] = merchant.name if merchant
+        row["tags"] = tags.map(&:name) if tags.any?
+        row
+      end
+
+      # An object, not a JSON string: the CSV rule import unescapes \" inside string values,
+      # which would corrupt a nested JSON string whose names contain quotes.
+      config.merge("splits" => splits)
+    end
+
+    def split_operand_record(relation_key, id)
+      return nil unless id.is_a?(String) && uuid_like?(id)
+
+      operand_records_by_id(relation_key)[id.downcase]
     end
 
     def resolve_multi_tag_operand(value)

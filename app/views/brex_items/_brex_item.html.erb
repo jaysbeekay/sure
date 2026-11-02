@@ -1,4 +1,4 @@
-<%# locals: (brex_item:, visible_accounts: brex_item.accounts) %>
+<%# locals: (brex_item:, visible_accounts:) %>
 <% render_locals = brex_item_render_locals(
      brex_item,
      sync_stats_map: @brex_sync_stats_map,
@@ -28,7 +28,7 @@
               <% end %>
             </div>
             <%# The institution belongs to every account on the connection, so it is
-                shown only to a viewer who can see them all (#235). %>
+                shown only to a viewer who can see them all (#3630). %>
             <% if brex_item.accounts.any? && visible_accounts.size == brex_item.accounts.size %>
               <p class="text-xs text-secondary">
                 <%= brex_item.institution_summary %>

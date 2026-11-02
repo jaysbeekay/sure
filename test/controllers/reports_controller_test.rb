@@ -96,7 +96,9 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     )
     sell_trade account: account, date: date, qty: 2, price: 150, currency: "EUR"
     set_rate from: "EUR", to: "GBP", date: date, rate: 0.8
-    set_rate from: "GBP", to: "USD", date: date, rate: 0
+    # `exchange_rates` can no longer store a 0 (we-promise/sure#3790), so the
+    # statement leg is handed the rate the guard exists for directly.
+    Portfolio::RealizedGains.any_instance.stubs(:rates_by_date).returns({ date => { "GBP" => 0 } })
 
     get reports_path
     assert_response :ok
@@ -289,17 +291,18 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
                   "a disposal line was rendered for a family with nothing to show"
   end
 
-  # The Reports section controllers gained `url` and `preferenceKey` values so
-  # the portfolio hub can reuse them. Reports passes neither, so the page must
+  # The Reports section controller gained `url` and `preferenceKey` values so
+  # the portfolio hub can reuse it. Reports passes neither, so the page must
   # carry no override attributes and its endpoint must still accept the
-  # original keys; otherwise the defaults have drifted from the literals.
+  # original keys; otherwise the defaults have drifted from the literals. The
+  # sortable list (we-promise/sure#4013's shared controller) names its endpoint
+  # and key explicitly, so those are asserted as written.
   test "reports sections rely on the Stimulus defaults and still post to their own endpoint" do
     get reports_path
     assert_response :ok
 
-    assert_select "[data-controller='reports-sortable']"
-    assert_select "[data-reports-sortable-url-value]", count: 0
-    assert_select "[data-reports-sortable-preference-key-value]", count: 0
+    assert_select "[data-controller='sortable-list'][data-sortable-list-url-value=?][data-sortable-list-param-value=?]",
+                  update_preferences_reports_path, "preferences.reports_section_order"
     assert_select "[data-reports-section-url-value]", count: 0
     assert_select "[data-reports-section-preference-key-value]", count: 0
 
@@ -317,6 +320,67 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   test "index renders successfully" do
     get reports_path
     assert_response :ok
+  end
+
+  test "index sections keep data-section-key next to the sortable id" do
+    get reports_path
+    assert_response :ok
+
+    assert_select "section[data-sortable-list-id]" do |sections|
+      assert sections.any?
+      sections.each do |section|
+        assert_equal section["data-sortable-list-id"], section["data-section-key"]
+      end
+    end
+  end
+
+  test "spending vs normal is a preview section" do
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => false))
+    get reports_path
+    assert_select "section[data-section-key='spending_vs_normal']", count: 0
+
+    @user.update!(preferences: @user.preferences.merge("preview_features_enabled" => true))
+    # The treemap only draws spending inside the period, which for the current
+    # month runs up to today; fixture transactions are dated a few days ago, so
+    # on the 1st there would be nothing to draw.
+    create_transaction(date: Date.current, amount: 50, category: categories(:food_and_drink))
+    get reports_path
+    assert_response :ok
+    assert_select "section[data-section-key='spending_vs_normal']" do
+      assert_select "[data-controller='spending-treemap']"
+    end
+  end
+
+  test "the spending baseline starts at the first transaction in the user's own finances" do
+    @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => true))
+    @family.entries.where(entryable_type: "Transaction").destroy_all
+    hidden = Account.create!(family: @family, owner: users(:family_member), name: "Not shared", currency: @family.currency, balance: 0, accountable: Depository.new)
+    create_transaction(account: hidden, date: 200.days.ago.to_date, amount: 10)
+    own_first = 100.days.ago.to_date
+    create_transaction(account: accounts(:depository), date: own_first, amount: 10)
+
+    get reports_path
+
+    baseline = controller.instance_variable_get(:@spending_comparison).baseline_period
+    assert_equal own_first, baseline.start_date
+  end
+
+  # The desktop app clones these into the tray when a download such as the CSV
+  # export ends, since it has no download list of its own, and reads their data
+  # attributes for its native notification.
+  test "index provides the download toasts the desktop app shows" do
+    get reports_path
+
+    assert_response :ok
+    scope = "layouts.shared.notification_tray"
+    assert_select "template#desktop-download-complete", 1
+    assert_select "template#desktop-download-failed", 1
+    assert_select "template#desktop-download-complete[data-message=?][data-description=?]",
+      I18n.t("#{scope}.download_complete"), I18n.t("#{scope}.download_location")
+    assert_select "template#desktop-download-failed[data-message=?]", I18n.t("#{scope}.download_failed")
+    assert_includes response.body, I18n.t("#{scope}.download_complete")
+    assert_includes response.body, I18n.t("#{scope}.download_location")
+    assert_includes response.body, I18n.t("#{scope}.download_failed")
   end
 
   test "index with monthly period" do
@@ -744,15 +808,22 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     income_href = transactions_path(q: { categories: [ income_category.name ], start_date: start_date, end_date: end_date })
     uncategorized_href = transactions_path(q: { categories: [ Category.uncategorized.filter_value ], start_date: start_date, end_date: end_date })
 
-    assert_select "tr[data-category='category-#{expense_category.id}'] a[href=?]", expense_href, text: expense_category.name
-    assert_select "tr[data-category='category-#{income_category.id}'] a[href=?]", income_href, text: income_category.name
-    assert_select "tr[data-category='category-uncategorized'] a[href=?]", uncategorized_href, text: Category.uncategorized.name
+    assert_select "tr[data-category='category-#{expense_category.id}'] a[href=?]", expense_href, text: /#{Regexp.escape(expense_category.name)}/
+    assert_select "tr[data-category='category-#{income_category.id}'] a[href=?]", income_href, text: /#{Regexp.escape(income_category.name)}/
+    assert_select "tr[data-category='category-uncategorized'] a[href=?]", uncategorized_href, text: /#{Regexp.escape(Category.uncategorized.name)}/
 
-    # Hit target via stretched ::before, anchored to the category cell's flex
-    # wrapper. Deliberately NOT the <tr>: CSS 2.1 9.3.1 leaves position:relative
-    # undefined on table rows and WebKit does not implement it, so anchoring
-    # there let the overlay escape and swallow every click on the page in Safari.
-    assert_select "tr.group\\/category-row[data-category='category-#{expense_category.id}'] td div.relative a[class*='before:absolute'][class*='before:inset-0']"
+    # Full-row hit target via a normal flex <a> wrapping icon+name+count —
+    # deliberately not a `position: relative`/`absolute` stretched-link inside
+    # the <table>, which caused a WebKit scrollHeight bug (see #3093).
+    assert_select "tr[data-category='category-#{expense_category.id}'] a.flex.items-center"
+    assert_select "tr[data-category='category-#{expense_category.id}'].relative", 0
+    assert_select "tr[data-category='category-#{expense_category.id}'] a[class*='before:absolute']", 0
+
+    # Amount and percentage cells are each wrapped in their own normal-flow
+    # <a> to the same href, so the full row remains clickable without a
+    # stretched-link overlay spanning the <tr>.
+    assert_select "tr[data-category='category-#{expense_category.id}'] td:nth-child(2) a[href=?]", expense_href
+    assert_select "tr[data-category='category-#{expense_category.id}'] td:nth-child(3) a[href=?]", expense_href
   end
 
   test "index uncategorized category link stays on the stable filter value while the displayed text is localized" do
@@ -768,7 +839,7 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_response :ok
 
     href = transactions_path(q: { categories: [ Category::UNCATEGORIZED_FILTER_VALUE ], start_date: start_date, end_date: end_date })
-    assert_select "tr[data-category='category-uncategorized'] a[href=?]", href, text: localized_name
+    assert_select "tr[data-category='category-uncategorized'] a[href=?]", href, text: /#{Regexp.escape(localized_name)}/
   end
 
   test "index excludes tax-advantaged account transactions from activity breakdown" do
@@ -1018,6 +1089,188 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_select "a[href=?]", events_path, count: 0
   end
 
+  # POSTing to settings_api_keys_path is create, which needs api_key params.
+  test "google sheets instructions link to the API keys page" do
+    get google_sheets_instructions_reports_url
+
+    assert_response :success
+    assert_select "a[href=?][data-turbo-frame=_top]", settings_api_keys_path, text: I18n.t("reports.google_sheets_instructions.go_to_api_keys")
+    assert_select "form[action=?]", settings_api_keys_path, count: 0
+  end
+
+  # The rates a page of disposals needs come from one query, not one per
+  # foreign disposal. The conversion itself is covered in TradeTest, which
+  # counts the queries directly; what has to hold HERE is that the card asks
+  # for the preload at all -- the page's own rate lookups share a SQL shape
+  # with `ExchangeRate.find_or_fetch_rate`, so counting them measures the rest
+  # of the page rather than this.
+  test "the card preloads the rates its disposals need" do
+    account = @family.accounts.create!(name: "Brokerage USD", balance: 50_000,
+                                       currency: "USD", accountable: Investment.new)
+    seed_foreign_disposals(account, 3)
+
+    Trade.expects(:preload_exchange_rates).at_least_once.with do |trades|
+      trades.any? { |trade| trade.currency == "EUR" }
+    end
+
+    get reports_path
+
+    assert_response :ok
+  end
+
+  # The card was gated on `investment_accounts`, which is visible accounts
+  # only (draft and active), while its realised-gains half is measured over
+  # every account included in reports, disabled ones too. A family whose only
+  # brokerage account is closed was shown no card at all, although the period
+  # held a disposal the card would have listed.
+  test "the investment card shows a disposal from a closed account when it is the only investment account" do
+    exclude_fixture_investment_accounts
+    account, security = closed_account_with_disposal(date: Date.current.beginning_of_month)
+
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", { count: 1 },
+                  "the card must render for a family whose only investment account is closed"
+    line = css_select("[data-testid='realized-gain-line']").map(&:text).find { |text| text.include?(security.ticker) }
+    assert line, "the disposal from #{account.name} must be listed on the card"
+    assert_match "$100.00", line
+  end
+
+  # The gate widens rather than moves: an open investment account still shows
+  # the card in a period with no disposal at all.
+  test "the investment card still shows for an open investment account in a period with no disposals" do
+    period_start = 10.years.ago.to_date.beginning_of_month
+    assert_not @family.trades.joins(:entry).where(entries: { date: period_start..period_start.end_of_month }).exists?,
+               "the period must hold no trade, or this proves nothing"
+
+    get reports_path(period_type: :custom, start_date: period_start, end_date: period_start.end_of_month)
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", count: 1
+  end
+
+  test "the investment card stays hidden with no investment accounts and no disposals" do
+    exclude_fixture_investment_accounts
+
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", count: 0
+  end
+
+  # The gate is period-dependent: a disposal outside the chosen period is
+  # nothing this card would show.
+  test "the investment card stays hidden when the closed account's disposal is outside the period" do
+    exclude_fixture_investment_accounts
+    closed_account_with_disposal(date: Date.current.beginning_of_month.prev_month)
+
+    get reports_path(period_type: :custom, start_date: Date.current.beginning_of_month, end_date: Date.current)
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", count: 0
+  end
+
+  # A transfer out has a sale's negative quantity but is not a disposal; the
+  # card leaves it out, so it must not open the card either.
+  test "a transfer out of a closed account does not show the investment card" do
+    exclude_fixture_investment_accounts
+    closed_account_with_disposal(date: Date.current.beginning_of_month, label: "Transfer")
+
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", count: 0
+  end
+
+  # Another member's closed account that this user does not include in their
+  # finances is not the user's to see; it must not open the card for them.
+  test "another member's closed account with a disposal does not show the investment card" do
+    exclude_fixture_investment_accounts
+    closed_account_with_disposal(date: Date.current.beginning_of_month, owner: users(:family_member))
+
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", count: 0
+  end
+
+  # The card lists only what this user counts in their finances. When the
+  # user's own closed account opens the card, another member's account that
+  # is not shared with them must not be listed beside it.
+  test "the investment card does not list another member's unshared disposal" do
+    exclude_fixture_investment_accounts
+    date = Date.current.beginning_of_month
+    _, own = closed_account_with_disposal(date: date)
+    _, theirs = closed_account_with_disposal(date: date, owner: users(:family_member))
+
+    get reports_path
+    assert_response :ok
+
+    lines = css_select("[data-testid='realized-gain-line']").map(&:text)
+    assert lines.any? { |text| text.include?(own.ticker) }, "the user's own disposal must be listed"
+    assert lines.none? { |text| text.include?(theirs.ticker) },
+           "another member's unshared disposal must not be listed"
+  end
+
+  # The same holds when an open investment account of the user's is what
+  # shows the card, and when the other member's account is open too.
+  test "the investment card does not list another member's unshared disposal beside an open account" do
+    exclude_fixture_investment_accounts
+    date = Date.current.beginning_of_month
+    _, own = closed_account_with_disposal(date: date, close: false)
+    _, theirs = closed_account_with_disposal(date: date, owner: users(:family_member), close: false)
+
+    get reports_path
+    assert_response :ok
+
+    lines = css_select("[data-testid='realized-gain-line']").map(&:text)
+    assert lines.any? { |text| text.include?(own.ticker) }, "the user's own disposal must be listed"
+    assert lines.none? { |text| text.include?(theirs.ticker) },
+           "another member's unshared disposal must not be listed"
+  end
+
+  # A member's account shared with the user and included in their finances
+  # is the user's to see, so its disposal is listed and opens the card.
+  test "the investment card lists a disposal from a member's account shared into the user's finances" do
+    exclude_fixture_investment_accounts
+    account, theirs = closed_account_with_disposal(date: Date.current.beginning_of_month, owner: users(:family_member))
+    account.account_shares.create!(user: @user, permission: "read_only", include_in_finances: true)
+
+    get reports_path
+    assert_response :ok
+
+    lines = css_select("[data-testid='realized-gain-line']").map(&:text)
+    assert lines.any? { |text| text.include?(theirs.ticker) },
+           "a disposal from an account shared into the user's finances must be listed"
+  end
+
+  # An excluded trade is left out of reports, as investment totals leave it
+  # out; it is not a disposal for the card's gate or its list.
+  test "an excluded disposal from a closed account does not show the investment card" do
+    exclude_fixture_investment_accounts
+    closed_account_with_disposal(date: Date.current.beginning_of_month, excluded: true)
+
+    get reports_path
+    assert_response :ok
+
+    assert_select "[data-section-key='investment_performance']", count: 0
+  end
+
+  test "the investment card does not list an excluded disposal" do
+    exclude_fixture_investment_accounts
+    date = Date.current.beginning_of_month
+    _, kept = closed_account_with_disposal(date: date, close: false)
+    _, excluded = closed_account_with_disposal(date: date, close: false, excluded: true)
+
+    get reports_path
+    assert_response :ok
+
+    lines = css_select("[data-testid='realized-gain-line']").map(&:text)
+    assert lines.any? { |text| text.include?(kept.ticker) }, "the kept disposal must be listed"
+    assert lines.none? { |text| text.include?(excluded.ticker) }, "the excluded disposal must not be listed"
+  end
+
   private
     # Second investment account holding the same security as
     # accounts(:investment), so top_holdings has something to roll up.
@@ -1052,5 +1305,46 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     # The named exclusions under those cards, if any.
     def exclusion_reasons
       css_select("[data-testid='realized-exclusions'] li").map { |node| node.text.strip }
+    end
+
+    # Takes every fixture investment account out of the card's scope, so an
+    # account the test creates is the family's only one; otherwise the
+    # fixtures satisfy the visible-accounts gate on their own.
+    def exclude_fixture_investment_accounts
+      @family.accounts.where(accountable_type: %w[Investment Crypto]).update_all(exclude_from_reports: true)
+    end
+
+    # An investment account holding 5 shares at a basis of 100, with 2 sold at
+    # 150 on +date+ (a gain of $100.00), then closed.
+    # +close: false+ leaves it open; +excluded: true+ marks the sale excluded.
+    def closed_account_with_disposal(date:, label: "Sell", owner: @user, close: true, excluded: false)
+      account = @family.accounts.create!(name: "Closed brokerage", balance: 0, currency: "USD",
+                                         accountable: Investment.new, owner: owner)
+      security = Security.create!(ticker: "CLS#{SecureRandom.hex(3)}", name: "Closed Position")
+      account.holdings.create!(security: security, date: date, qty: 5, price: 150,
+                               amount: BigDecimal(750), currency: "USD", cost_basis: 100)
+      account.entries.create!(
+        date: date, name: "out #{label}", amount: -300, currency: "USD", excluded: excluded,
+        entryable: Trade.new(security: security, qty: -2, price: 150, currency: "USD",
+                             investment_activity_label: label)
+      )
+      account.disable! if close
+      [ account, security ]
+    end
+
+    # n EUR-priced disposals in a USD account, each on its own date with its
+    # own rate row, so every one needs a distinct lookup.
+    def seed_foreign_disposals(account, count)
+      base = Date.current.beginning_of_month
+
+      count.times do |i|
+        date = base + i
+        security = Security.create!(ticker: "EUX#{SecureRandom.hex(3)}", name: "Euro Listed #{i}")
+
+        ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: date, rate: 1.5)
+        account.holdings.create!(security: security, date: date, qty: 5, price: 150,
+                                 amount: BigDecimal(750), currency: "USD", cost_basis: 100)
+        create_trade(security, account: account, qty: -2, date: date, price: 150, currency: "EUR")
+      end
     end
 end

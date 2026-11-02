@@ -249,10 +249,10 @@ class Financekit::InboxTest < ActiveSupport::TestCase
     assert Financekit::Processor.new(@item).apply_next!.present?
 
     rule_jobs_before = enqueued_jobs.count { |job| job[:job] == RuleJob }
-    ordered_before = enqueued_jobs.count { |job| job[:job] == ApplyAllRulesJob }
+    ordered_before = enqueued_jobs.count { |job| job[:job] == ApplyRulesJob }
     Financekit::Downstream.new(@item, FinancekitBatch.where(id: batch.id)).perform!
 
-    assert_equal 1, enqueued_jobs.count { |job| job[:job] == ApplyAllRulesJob } - ordered_before
+    assert_equal 1, enqueued_jobs.count { |job| job[:job] == ApplyRulesJob } - ordered_before
     assert_equal rule_jobs_before, enqueued_jobs.count { |job| job[:job] == RuleJob }
   end
 
@@ -267,7 +267,7 @@ class Financekit::InboxTest < ActiveSupport::TestCase
     # Completing the batch without the health write would hide it from the
     # recovery sweep, which only looks for incomplete batches. Rolling it back
     # has to take the scheduling with it, or recovery redoes work already
-    # queued and RuleJob records a second RuleRun for the same capture.
+    # queued and a second RuleRun is recorded for the same capture.
     assert_nil batch.reload.downstream_completed_at
     assert_nil FinancekitItem.find(@item.id).last_downstream_at
     assert_equal enqueued_before, enqueued_jobs.size,

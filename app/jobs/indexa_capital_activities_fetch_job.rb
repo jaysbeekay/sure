@@ -31,7 +31,7 @@ class IndexaCapitalActivitiesFetchJob < ApplicationJob
     def broadcast_updates
       @indexa_capital_account.current_account&.broadcast_sync_complete
       # Not the rendered card, which lists every account on the connection and
-      # has no viewer to filter for here (#235); the toast re-fetches per viewer.
+      # has no viewer to filter for here (#3630); the toast re-fetches per viewer.
       @indexa_capital_account.indexa_capital_item&.family&.broadcast_sync_complete
     rescue => e
       Rails.logger.warn("IndexaCapitalActivitiesFetchJob - Broadcast failed: #{e.message}")

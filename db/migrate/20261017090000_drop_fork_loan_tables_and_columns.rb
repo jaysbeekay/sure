@@ -1,8 +1,10 @@
 # Removes the fork's own loan engine storage, which upstream's loan code does
-# not use: offset links, collateral links, saved scenarios and their extra
-# repayments, the persisted amortisation rows and the fork's bounds checks on
-# `loans`. THE DATA IN THEM IS DELETED; only the amortisation rows are derived,
-# and upstream's schedule recomputes those.
+# not use: offset links, saved scenarios and their extra repayments, the
+# persisted amortisation rows and the fork's bounds checks on `loans`. THE DATA
+# IN THEM IS DELETED; only the amortisation rows are derived, and upstream's
+# schedule recomputes those.
+#
+# `loans.collateral_account_id` is KEPT: the collateral card stays on the fork.
 #
 # `loans.day_count_convention` is KEPT, with every loan's value. Upstream's
 # loan (we-promise/sure#3639, its 20260918210000) has the same column with a
@@ -12,13 +14,6 @@
 # default for new rows. An existing loan stays on actual_365 or actual_actual.
 # A database without the column, built from migrations alone, gets it in that
 # same shape, so every database leaves here with the column upstream expects.
-#
-# It then records upstream's 20260918210000 as run. That migration adds the
-# column with no guard, so on a database that already has it, it would raise
-# PG::DuplicateColumn when it arrives. The migrator chooses what to run from
-# schema_migrations before running anything, so only a version already
-# recorded skips it. The record is accurate: the column is now exactly what
-# that migration leaves.
 #
 # Each table and column is counted before it goes, and the counts are written
 # to the migration output and the log, so an installation can see what it lost.
@@ -39,12 +34,11 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
   DAY_COUNT_DEFAULT = "thirty_360"
   FORK_DAY_COUNT_CONVENTIONS = %w[actual_365 actual_actual].freeze
   FORK_DAY_COUNT_DEFAULT = "actual_365"
-  UPSTREAM_DAY_COUNT_VERSION = "20260918210000"
 
   # What a user entered rather than what the app derived. Any of it present
   # stops the migration unless the deletion is confirmed. The amortisation rows
   # are recomputed upstream. The day-count choice is kept, so it is not here.
-  ENTERED = %w[loan_extra_repayments loan_scenarios loan_offset_accounts loans.collateral_account_id].freeze
+  ENTERED = %w[loan_extra_repayments loan_scenarios loan_offset_accounts].freeze
   CONFIRM_ENV = "FORK_LOAN_DROP_CONFIRMED"
 
   class EnteredDataPresent < StandardError; end
@@ -57,17 +51,12 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
     TABLES.each { |table| drop_table table, if_exists: true }
 
     LOAN_CHECKS.each { |name| remove_check_constraint :loans, name: name, if_exists: true }
-    # Dropping the column drops its index and foreign key with it.
-    remove_column :loans, :collateral_account_id, if_exists: true
 
     adopt_upstream_day_count
   end
 
   # The empty structure only. The rows are gone.
   def down
-    add_column :loans, :collateral_account_id, :uuid, if_not_exists: true
-    add_index :loans, :collateral_account_id, if_not_exists: true
-    add_foreign_key :loans, :accounts, column: :collateral_account_id, on_delete: :nullify, if_not_exists: true
     restore_fork_day_count
     add_check_constraint :loans, "interest_rate IS NULL OR interest_rate >= 0::numeric AND interest_rate <= 100::numeric",
                          name: "chk_loans_interest_rate_bounds", if_not_exists: true
@@ -149,12 +138,7 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
   # that is not there counts nothing and is left out. Asked of the connection
   # directly: through the migration each check would print a line of its own.
   def dropped_counts
-    counts = TABLES.select { |table| connection.table_exists?(table) }.index_with { |table| count("SELECT COUNT(*) FROM #{table}") }
-
-    if connection.column_exists?(:loans, :collateral_account_id)
-      counts["loans.collateral_account_id"] = count("SELECT COUNT(*) FROM loans WHERE collateral_account_id IS NOT NULL")
-    end
-    counts
+    TABLES.select { |table| connection.table_exists?(table) }.index_with { |table| count("SELECT COUNT(*) FROM #{table}") }
   end
 
   private
@@ -165,18 +149,11 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
       change_column_default :loans, :day_count_convention, DAY_COUNT_DEFAULT
       remove_check_constraint :loans, name: DAY_COUNT_CHECK, if_exists: true
       add_check_constraint :loans, "day_count_convention IN (#{quoted(DAY_COUNT_CONVENTIONS)})", name: DAY_COUNT_CHECK
-
-      # Already there on a database that ran upstream's migration first.
-      schema_migration.create_version(UPSTREAM_DAY_COUNT_VERSION) unless schema_migration.versions.include?(UPSTREAM_DAY_COUNT_VERSION)
     end
 
     # The fork's engine knows two conventions. A loan created on thirty_360
     # since `up` goes to the fork's default; every other choice is kept.
-    #
-    # The fork's two-value column is not what upstream's 20260918210000 leaves,
-    # so that migration no longer counts as run, whoever recorded it.
     def restore_fork_day_count
-      schema_migration.delete_version(UPSTREAM_DAY_COUNT_VERSION)
       add_column :loans, :day_count_convention, :string, default: FORK_DAY_COUNT_DEFAULT, null: false, if_not_exists: true
       remove_check_constraint :loans, name: DAY_COUNT_CHECK, if_exists: true
       execute <<~SQL.squish
@@ -186,10 +163,6 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
       change_column_default :loans, :day_count_convention, FORK_DAY_COUNT_DEFAULT
       add_check_constraint :loans, "day_count_convention::text = ANY (ARRAY['actual_365'::character varying::text, 'actual_actual'::character varying::text])",
                            name: DAY_COUNT_CHECK
-    end
-
-    def schema_migration
-      connection.pool.schema_migration
     end
 
     def quoted(values)

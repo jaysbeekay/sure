@@ -18,29 +18,11 @@ class SimplefinAccount::Liabilities::LoanProcessor
       simplefin_account.current_account
     end
 
-    # Nothing to update: SimpleFIN carries no loan metadata to read.
-    #
-    # This method used to ask whether it could ("I don't know if SimpleFin
-    # typically provide detailed loan metadata like interest rates, terms,
-    # etc."). It was answered from a real payload in jaysbeekay/sure#159 --
-    # a LoanCare mortgage, contributed by @adbsmith:
-    #
-    #   account: id, org, name, balance, currency, holdings, balance-date,
-    #            available-balance
-    #
-    # There is no `extra` field at all, and the protocol's Account object
-    # defines no interest rate, APR, term or original principal of its own
-    # (https://www.simplefin.org/protocol.html) -- `extra` is the only place
-    # one could appear, and it is optional and server-discretionary.
-    #
-    # So there is no provider-metadata path to build here. SimpleFIN users
-    # enter rate and term on the loan form.
-    #
-    # One server answering for itself is not proof that no server populates
-    # `extra`. If one ever turns up, this is the method that would read it --
-    # with a payload attached, the way jaysbeekay/sure#159 was settled.
-    #
-    # Balance normalization is handled by SimplefinAccount::Processor.process_account!
     def update_loan_attributes
+      # I don't know if SimpleFin typically provide detailed loan metadata
+      # like interest rates, terms, etc. but we can update what's available
+
+      # Balance normalization is handled by SimplefinAccount::Processor.process_account!
+      # Any other loan-specific attribute updates would go here
     end
 end

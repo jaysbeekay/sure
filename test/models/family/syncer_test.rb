@@ -2,7 +2,6 @@ require "test_helper"
 
 class Family::SyncerTest < ActiveSupport::TestCase
   include ActiveJob::TestHelper
-
   setup do
     @family = families(:dylan_family)
   end
@@ -54,36 +53,29 @@ class Family::SyncerTest < ActiveSupport::TestCase
     syncer.perform_sync(family_sync)
   end
 
-  test "only applies active rules during sync" do
-    family_sync = syncs(:family)
-
-    active_rule = @family.rules.create!(
-      resource_type: "transaction",
-      active: true,
-      actions: [ Rule::Action.new(action_type: "exclude_transaction") ]
-    )
-    disabled_rule = @family.rules.create!(
-      resource_type: "transaction",
-      active: false,
-      actions: [ Rule::Action.new(action_type: "exclude_transaction") ]
-    )
-
+  test "applies rules in one ordered run per family after sync" do
     syncer = Family::Syncer.new(@family)
 
-    # One ordered pass over the active rules, never a job per rule: rules only have
-    # an order if they run in sequence.
-    RuleJob.expects(:perform_now).with(active_rule, ignore_attribute_locks: false, execution_type: "manual").once
-    RuleJob.expects(:perform_now).with(disabled_rule, anything).never
-
-    # Mock the account and plaid item syncs to avoid side effects
-    Account.any_instance.stubs(:sync_later)
-    syncable_item_associations.each do |association|
-      association.klass.any_instance.stubs(:sync_later)
+    assert_enqueued_with(job: ApplyRulesJob, args: [ @family ]) do
+      syncer.perform_post_sync
     end
+    assert_no_enqueued_jobs(only: RuleJob)
+  end
 
-    syncer.perform_sync(family_sync)
+  # Issue #2925: merchants whose website arrived before Brandfetch was
+  # configured get their logo on the next sync.
+  test "backfills provider merchant logos after sync" do
+    @family.expects(:backfill_provider_merchant_logos).once
 
-    perform_enqueued_jobs(only: ApplyAllRulesJob) { syncer.perform_post_sync }
+    Family::Syncer.new(@family).perform_post_sync
+  end
+
+  test "a logo backfill failure does not stop rules from being applied" do
+    ProviderMerchant.stubs(:backfill_logos).raises(StandardError, "boom")
+
+    assert_enqueued_with(job: ApplyRulesJob, args: [ @family ]) do
+      Family::Syncer.new(@family).perform_post_sync
+    end
   end
 
   private

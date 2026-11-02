@@ -105,6 +105,8 @@
 
 <%= render "loans/tabs/repayment_progress", loan: account.loan, as_of: today %>
 
+<%= render UI::Account::CollateralPosition.new(account: account, viewer: Current.user) %>
+
 <div class="flex justify-center py-8">
   <%= render DS::Link.new(
     text: t(".edit_loan_details"),

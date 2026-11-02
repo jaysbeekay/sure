@@ -80,8 +80,8 @@ class Period
       date_range: -> {
         # Anchor to one month before the first real activity (a Transaction or
         # Trade), not to the oldest entry of any kind -- a stray Valuation or
-        # opening anchor dated far in the past would otherwise stretch every
-        # All chart into a long flat zero line (#300). Only a family with no
+        # opening balance dated far in the past would otherwise stretch every
+        # All chart into a long flat zero line (#4007). Only a family with no
         # transactions or trades falls back to oldest_entry_date, i.e. the
         # previous behaviour; a family that has activity never does, even when
         # that activity is today.

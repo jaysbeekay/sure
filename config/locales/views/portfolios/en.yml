@@ -57,6 +57,9 @@ en:
         missing_cost_basis:
           description: No cost basis is stored or computable for these positions, so their return cannot be shown. Set one from the position.
           title: Missing cost basis
+        quantity_mismatch:
+          description: The provider reports fewer units of these positions than their imported trades add up to, so their cost basis is left unknown rather than worked out from trades that do not match. Check the trades against the provider.
+          title: Fewer units than the trades
         ambiguous_constituent:
           description: These fund holdings share a ticker with a listing on another exchange, and your own positions do not say which one is meant. Their value still counts, but it is left unclassified rather than filed under a guess.
           title: Constituents on more than one exchange
@@ -77,6 +80,7 @@ en:
         offline: Offline security
         provider_unavailable: Assigned provider unavailable
         stale: Recent fetches failed
+      review_position: Review position
       set_cost_basis: Set cost basis
     drivers:
       composition: Accounts added or removed

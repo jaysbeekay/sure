@@ -3,7 +3,7 @@
   <% if cell.total.zero? %>
     <span class="text-subdued"><%= t("spending_narratives.heatmap.empty_cell") %></span>
   <% else %>
-    <% amount = spending_money(cell.total) %>
+    <% amount = narrative_money(cell.total) %>
     <%# Colour is a hint; the amount is always printed, and the aria-label names the day. %>
     <div class="rounded-md px-2 py-1 <%= spending_heat_class_for_level(cell.level) %>">
       <% if cell.href %>

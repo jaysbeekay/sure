@@ -57,6 +57,10 @@ class HoldingTest < ActiveSupport::TestCase
   end
 
   test "calculates average cost basis from another currency" do
+    [ 1.day.ago.to_date, Date.current ].each do |date|
+      ExchangeRate.create!(from_currency: "CAD", to_currency: "USD", date: date, rate: 1)
+    end
+
     create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date, currency: "CAD")
     create_trade(@amzn.security, account: @account, qty: 15, price: 216.00, date: Date.current, currency: "CAD")
 
@@ -77,6 +81,70 @@ class HoldingTest < ActiveSupport::TestCase
     ExchangeRate.stubs(:find_or_fetch_rate).returns(OpenStruct.new(rate: 1))
     assert_equal Money.new(expected_amzn_usd, "CAD").exchange_to("USD"), @amzn.avg_cost
     assert_equal Money.new(expected_nvda_usd, "CAD").exchange_to("USD"), @nvda.avg_cost
+  end
+
+  test "the average cost includes what the purchases cost in fees" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, fee: 10, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 15, price: 216.00, fee: 5, date: Date.current)
+
+    # (10 * 212 + 10 + 15 * 216 + 5) / 25 = 5,375 / 25
+    assert_equal Money.new(BigDecimal("215")), @amzn.avg_cost
+  end
+
+  # The fallback's COALESCE(rate, 1) counted a foreign purchase at 1:1 when its
+  # day had no rate, stating a cost that looks measured and is not.
+  test "a foreign purchase with no rate for its day makes the average cost unknown" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date, currency: "CAD")
+
+    assert_nil @amzn.avg_cost
+  end
+
+  # `exchange_rates` no longer stores a 0, but a rate written to the trade's
+  # `extra` directly still can, and the cost must not trust it either.
+  test "a foreign purchase whose stored rate cannot convert makes the average cost unknown" do
+    entry = create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date, currency: "CAD")
+    entry.entryable.update_column(:extra, (entry.entryable.extra || {}).merge("exchange_rate" => 0))
+
+    assert_nil @amzn.avg_cost
+  end
+
+  test "the fallback converts a purchase at the rate it carries when the table has none" do
+    entry = create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date, currency: "CAD")
+    entry.entryable.update!(exchange_rate: 1.25)
+
+    # 10 * 212 CAD at the trade's own 1.25 = 2,650 USD for 10 units
+    assert_equal Money.new(BigDecimal("265")), @amzn.avg_cost
+  end
+
+  # Trade#exchange_rate= stores a number, but a rate written to `extra` directly
+  # stays a string, and Trade and Money#exchange_to both accept it.
+  test "the fallback converts a purchase at a rate it carries as a string" do
+    entry = create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date, currency: "CAD")
+    entry.entryable.update_column(:extra, { "exchange_rate" => "1.25" })
+
+    assert entry.entryable.reload.valid?
+    assert_equal Money.new(BigDecimal("265")), @amzn.avg_cost
+  end
+
+  test "the fallback ignores a rate string that is not a plain decimal" do
+    entry = create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date, currency: "CAD")
+
+    [ "n/a", "1e999999" ].each do |rate|
+      entry.entryable.update_column(:extra, { "exchange_rate" => rate })
+
+      assert_nil @amzn.avg_cost, rate
+    end
+  end
+
+  # The missing-rate check rides on the totals query instead of adding a round
+  # trip to a path that exists to avoid N+1 queries.
+  test "the fallback reads the trades in two queries" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: 1.day.ago.to_date)
+    @amzn.account
+
+    queries = capture_sql_queries { @amzn.avg_cost }
+
+    assert_equal 2, queries.count { |sql| sql.include?('FROM "trades"') }
   end
 
   test "calculates total return trend" do
@@ -382,6 +450,56 @@ class HoldingTest < ActiveSupport::TestCase
 
     # No holdings should remain for the old AMZN security
     assert_equal 0, @account.holdings.where(security: amzn_security).count
+  end
+
+  # cost_basis is per share and the merged row carries both sides' units, so
+  # the merge takes the quantity-weighted mean: (5 x 100 + 10 x 40) / 15 = 60.
+  # Neither side's figure, and not their plain mean (70).
+  test "remap_security! merge pins the weighted cost basis" do
+    new_security = create_security("GOOGW", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(
+      date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500,
+      currency: "USD", cost_basis: 100
+    )
+    @amzn.update_columns(qty: 10, amount: 2160, cost_basis: 40)
+
+    assert_equal 100, existing.reload.cost_basis
+
+    @amzn.remap_security!(new_security)
+
+    existing.reload
+    assert_equal 15, existing.qty
+    assert_equal 60, existing.cost_basis
+  end
+
+  # When either side has no basis the merge keeps the row merged into as it
+  # was: a known figure is applied to every merged unit, and an unknown one
+  # stays unknown even though the moved side had a figure.
+  test "remap_security! merge with an unknown side keeps the existing basis" do
+    moved_unknown_target = create_security("GOOGU", prices: [ { date: Date.current, price: 100.00 } ])
+    known_existing = @account.holdings.create!(
+      date: @amzn.date, security: moved_unknown_target, qty: 5, price: 100, amount: 500,
+      currency: "USD", cost_basis: 100
+    )
+    @amzn.update_columns(qty: 10, amount: 2160, cost_basis: nil)
+
+    existing_unknown_target = create_security("MSFTU", prices: [ { date: Date.current, price: 100.00 } ])
+    unknown_existing = @account.holdings.create!(
+      date: @nvda.date, security: existing_unknown_target, qty: 5, price: 100, amount: 500,
+      currency: "USD", cost_basis: nil
+    )
+    @nvda.update_columns(qty: 10, amount: 1240, cost_basis: 40)
+
+    @amzn.remap_security!(moved_unknown_target)
+    @nvda.remap_security!(existing_unknown_target)
+
+    known_existing.reload
+    assert_equal 15, known_existing.qty
+    assert_equal 100, known_existing.cost_basis, "the existing figure now covers the moved units too"
+
+    unknown_existing.reload
+    assert_equal 15, unknown_existing.qty
+    assert_nil unknown_existing.cost_basis, "the moved side's 40 is dropped"
   end
 
   test "reset_security_to_provider! restores original security" do

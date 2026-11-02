@@ -28,7 +28,7 @@ class ProviderSyncSummary < ViewComponent::Base
   # @param show_account_details [Boolean] Whether the viewer may see every account on
   #   the connection. The detail lists name accounts and transactions from the last
   #   sync, so a member shared only some of them gets the counts without the names
-  #   (#235).
+  #   (#3630).
   def initialize(stats:, provider_item:, institutions_count: nil, activities_pending: false, show_account_details: true)
     @stats = stats || {}
     @provider_item = provider_item

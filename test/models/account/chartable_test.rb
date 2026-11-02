@@ -466,12 +466,14 @@ class Account::ChartableTest < ActiveSupport::TestCase
   end
 
   # #382, owner decision 2026-10-08 (reading b). A linked account's value
-  # line is trimmed to its first broker activity. The contributions line
-  # starts from the balance actually held before that day's activity
-  # (DailyReturns' value_open, 1,000 here) and counts the day's 500 deposit,
-  # so the gap between the lines is the 100 the market added, on the trim
-  # day and after. Opened at the value line's own anchor point instead, the
-  # day's whole change counted as money put in and the gap read 0.
+  # line is trimmed to its first broker activity, and #4009 resets its point
+  # there to the balance before that day's activity (0, as no opening anchor
+  # sits on that date). The contributions line starts from the balance
+  # actually held before that activity (DailyReturns' value_open, 1,000
+  # here) and counts the day's 500 deposit, so from the next point the gap
+  # between the lines is the 100 the market added on the trim day. Opened at
+  # the day's close instead, the day's whole change counted as money put in
+  # and the gap read 0.
   test "a linked account's net contributions count the anchor day's flows, not its market gain" do
     day_one = Date.new(2026, 3, 2)
     account = create_portfolio_account(family: families(:empty))
@@ -489,14 +491,15 @@ class Account::ChartableTest < ActiveSupport::TestCase
 
     assert_equal [ day_one + 2, day_one + 3 ], value.values.map(&:date), "the value line is trimmed to the first broker activity"
     assert_equal value.values.map(&:date), contributions.values.map(&:date)
-    assert_equal [ 1_600, 1_900 ], value.values.map { |v| v.value.amount }
-    assert_equal [ 1_500, 1_800 ], contributions.values.map { |v| v.value.amount }
-    assert_equal [ 100, 100 ], gaps(value, contributions), "the gap is the anchor day's market gain, not 0"
-    assert_equal 1_500, contributions.values[1].trend.previous.amount, "the trend follows the line's own opening"
+    assert_equal [ 0, 1_900 ], value.values.map { |v| v.value.amount }
+    assert_equal [ 1_000, 1_800 ], contributions.values.map { |v| v.value.amount }
+    assert_equal 100, gaps(value, contributions).last, "the gap is the anchor day's market gain, not 0"
+    assert_equal 1_000, contributions.values[1].trend.previous.amount, "the trend follows the line's own opening"
   end
 
-  # The realistic shape: no balance before the first broker activity. The
-  # line opens at the 500 deposit, not at the day's 600 close.
+  # The realistic shape: no balance before the first broker activity. Both
+  # lines open at 0, the balance before that day's activity, and the next
+  # point counts the day's 500 deposit, not its 600 close, as put in.
   test "a linked account with no history before its first activity opens at that day's flows" do
     day_one = Date.new(2026, 3, 2)
     account = create_portfolio_account(family: families(:empty))
@@ -510,13 +513,15 @@ class Account::ChartableTest < ActiveSupport::TestCase
     value = account.balance_series(period: period, interval: "1 day")
     contributions = account.balance_series(period: period, view: :net_contributions, interval: "1 day")
 
-    assert_equal [ 600, 900 ], value.values.map { |v| v.value.amount }
-    assert_equal [ 500, 800 ], contributions.values.map { |v| v.value.amount }
-    assert_equal [ 100, 100 ], gaps(value, contributions)
+    assert_equal [ 0, 900 ], value.values.map { |v| v.value.amount }
+    assert_equal [ 0, 800 ], contributions.values.map { |v| v.value.amount }
+    assert_equal [ 0, 100 ], gaps(value, contributions)
   end
 
   # An opening anchor on the first activity date sets the balance held
-  # before it. The line starts from that balance and adds the day's deposit.
+  # before it, and #4009 opens the value line there. The contributions line
+  # starts from that balance too and adds the day's deposit from the next
+  # point.
   test "a linked account opened with an anchor on its first activity date counts the anchor as held" do
     day_one = Date.new(2026, 3, 2)
     account = create_portfolio_account(family: families(:empty))
@@ -532,9 +537,35 @@ class Account::ChartableTest < ActiveSupport::TestCase
     value = account.balance_series(period: period, interval: "1 day")
     contributions = account.balance_series(period: period, view: :net_contributions, interval: "1 day")
 
-    assert_equal [ 1_600, 1_900 ], value.values.map { |v| v.value.amount }
-    assert_equal [ 1_500, 1_800 ], contributions.values.map { |v| v.value.amount }
-    assert_equal [ 100, 100 ], gaps(value, contributions)
+    assert_equal [ 1_000, 1_900 ], value.values.map { |v| v.value.amount }
+    assert_equal [ 1_000, 1_800 ], contributions.values.map { |v| v.value.amount }
+    assert_equal [ 0, 100 ], gaps(value, contributions)
+  end
+
+  # #4009's reset point can equal the day's close: here a 500 deposit is
+  # offset by a 500 market loss, so the balance before the day's activity
+  # and the close are both 1,000. The point is still the balance before the
+  # activity, so the contributions line opens at 1,000 and counts the
+  # deposit from the next point. Read by its value, the point passed for the
+  # close and the line opened at 1,500, folding the deposit into the opening.
+  test "a linked account whose reset anchor point equals the day's close still opens before the activity" do
+    day_one = Date.new(2026, 3, 2)
+    account = create_portfolio_account(family: families(:empty))
+    account.stubs(:linked?).returns(true)
+    account.set_opening_anchor_balance(balance: 1_000, date: day_one)
+    account.balances.delete_all
+    lay_balance account: account, date: day_one, opening: 1_000, closing: 1_000, cash_flow: 500, market_flow: -500
+    lay_balance account: account, date: day_one + 1, opening: 1_000, closing: 1_300, cash_flow: 300
+    provider_deposit account: account, date: day_one, amount: 500
+    deposit account: account, date: day_one + 1, amount: 300
+    period = Period.custom(start_date: day_one, end_date: day_one + 1)
+
+    value = account.balance_series(period: period, interval: "1 day")
+    contributions = account.balance_series(period: period, view: :net_contributions, interval: "1 day")
+
+    assert_equal [ 1_000, 1_300 ], value.values.map { |v| v.value.amount }
+    assert_equal [ 1_000, 1_800 ], contributions.values.map { |v| v.value.amount }
+    assert_equal [ 0, -500 ], gaps(value, contributions), "the anchor day's market loss shows from the next point"
   end
 
   # The boundary on the other side of the first-activity reset: when the
@@ -654,28 +685,34 @@ class Account::ChartableTest < ActiveSupport::TestCase
   end
 
   # value_point_before_activity? decides how the line is measured on the
-  # anchor date. It reads the value line's point against the balance query's
-  # own close for that date: a point equal to the close (here a flat day,
-  # where open and close are both 1,000) is the close, and a point on a date
-  # the query never sampled, or one whose value differs from the close, was
-  # supplied by the normalizer before the day's activity.
+  # anchor date. It follows the normalizer's own rule rather than comparing
+  # values: the point was supplied before the day's activity when the
+  # balance query never sampled that date (a prepended opening), or when the
+  # date is the first provider activity date (#4009's reset). Any other
+  # sampled point is the day's close, whatever its value.
   test "the value line's anchor point is read as before activity only when the normalizer supplied it" do
     day_one = Date.new(2026, 3, 2)
     account = create_portfolio_account(family: families(:empty))
     lay_balance account: account, date: day_one, opening: 1_000, closing: 1_000
     lay_balance account: account, date: day_one + 2, opening: 1_000, closing: 1_600, cash_flow: 500, market_flow: 100
     period = Period.custom(start_date: day_one, end_date: day_one + 2)
-    builder = account.send(:chart_series_builder, period: period, interval: "1 day")
     before_activity = ->(date, amount) do
       point = Series::Value.new(date: date, date_formatted: date.to_s, value: Money.new(amount, "USD"))
       series = Series.new(start_date: date, end_date: date, interval: "1 day", values: [ point ])
-      account.send(:value_point_before_activity?, series, builder: builder, date: date)
+      fresh = Account.find(account.id)
+      fresh.send(:value_point_before_activity?, series, builder: fresh.send(:chart_series_builder, period: period, interval: "1 day"), date: date)
     end
 
-    refute before_activity.call(day_one, 1_000), "a flat day's close is the close"
-    refute before_activity.call(day_one + 2, 1_600), "an active day's close is the close"
-    assert before_activity.call(day_one + 2, 1_000), "a point reset below the day's close was supplied"
-    assert before_activity.call(day_one + 3, 1_000), "a point on a date the query has no row for was supplied"
+    refute before_activity.call(day_one + 2, 1_600), "a sampled day with no provider activity is the close"
+    refute before_activity.call(day_one + 2, 1_000), "even when its value differs from the close"
+    assert before_activity.call(day_one + 3, 1_000), "a point on a date the query never sampled was supplied"
+
+    provider_deposit account: account, date: day_one + 2, amount: 500
+
+    assert before_activity.call(day_one + 2, 1_000), "the first provider activity date's point was reset"
+    assert before_activity.call(day_one + 2, 1_600), "even when its value equals the close"
+    refute before_activity.call(day_one, 1_000), "a sampled day before the first provider activity is the close"
+    builder = account.send(:chart_series_builder, period: period, interval: "1 day")
     refute account.send(:value_point_before_activity?, Series.new(start_date: day_one, end_date: day_one, interval: "1 day", values: []), builder: builder, date: day_one),
            "no point on the anchor date"
   end

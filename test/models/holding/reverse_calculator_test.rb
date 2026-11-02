@@ -191,12 +191,26 @@ class Holding::ReverseCalculatorTest < ActiveSupport::TestCase
     assert_in_delta 100.0, cost_basis_for(calc, security, buy_date).to_f, 1e-6
   end
 
+  # An acquisition fee is part of what the units cost, so it belongs in the
+  # basis. Providers already record it on the trade; nothing used to read it.
+  test "cost_basis_for includes the fee charged on an acquisition" do
+    security = Security.create!(ticker: "TST", name: "Test")
+    buy_date = 5.days.ago.to_date
+
+    calc = calculator_with_trades(security) do
+      create_trade(security, account: @account, qty: 10, price: 100, fee: 25, date: buy_date)
+    end
+
+    # 10 * 100 + 25 = 1,025 for 10 units
+    assert_in_delta 102.5, cost_basis_for(calc, security, buy_date).to_f, 1e-6
+  end
+
   test "cost_basis_for carries forward to dates between buys" do
     security = Security.create!(ticker: "TST", name: "Test")
     first_buy  = 10.days.ago.to_date
     second_buy = 3.days.ago.to_date
 
-    calc = calculator_with_trades(security) do
+    calc = calculator_with_trades(security, held: 15) do
       create_trade(security, account: @account, qty: 10, price: 100, date: first_buy)
       create_trade(security, account: @account, qty: 5,  price: 130, date: second_buy)
     end
@@ -214,7 +228,7 @@ class Holding::ReverseCalculatorTest < ActiveSupport::TestCase
     security = Security.create!(ticker: "TST", name: "Test")
     buy_date = 5.days.ago.to_date
 
-    calc = calculator_with_trades(security) do
+    calc = calculator_with_trades(security, held: 15) do
       create_trade(security, account: @account, qty: 10, price: 100, date: buy_date)
       create_trade(security, account: @account, qty: 5,  price: 130, date: buy_date)
     end
@@ -386,6 +400,74 @@ class Holding::ReverseCalculatorTest < ActiveSupport::TestCase
     assert_equal [ 5, 50 ], [ holdings[3.days.ago.to_date].cost_basis, holdings[2.days.ago.to_date].cost_basis ]
   end
 
+  # The walk starts at today and undoes its way back, so it reads whatever the
+  # snapshot holds as today's position. A provider snapshot is regularly older
+  # than that — a sync that failed and retried, or a provider that had not
+  # refreshed — and a split in between has already changed the count it
+  # reported. Read as current, the pre-split count became today's holding and
+  # the walk then undid the same split again on the way past.
+  test "a provider snapshot older than the split is brought forward before the walk" do
+    security = Security.create!(ticker: "STAL", name: "Stale Snapshot")
+    Security::Price.create!(security: security, date: 2.days.ago.to_date, price: 100)
+    Security::Price.create!(security: security, date: 1.day.ago.to_date, price: 50)
+    Security::Price.create!(security: security, date: Date.current, price: 50)
+
+    # An entry so the walk reaches back past the snapshot's own day; account
+    # history starts the day before the first entry.
+    @account.entries.create!(
+      name: "Opening", date: 4.days.ago.to_date, amount: 20000, currency: "USD",
+      entryable: Valuation.new(kind: "opening_anchor")
+    )
+
+    coinstats_item = @account.family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    coinstats_account = coinstats_item.coinstats_accounts.create!(name: "Provider", currency: "USD")
+    account_provider = AccountProvider.create!(account: @account, provider: coinstats_account)
+    @account.holdings.create!(
+      security: security, date: 2.days.ago.to_date, qty: 10, price: 100, amount: 1000,
+      currency: "USD", account_provider: account_provider
+    )
+
+    add_split(security, ex_date: 1.day.ago.to_date, numerator: 2, denominator: 1)
+
+    holdings = Holding::ReverseCalculator
+      .new(@account, portfolio_snapshot: Holding::PortfolioSnapshot.new(@account))
+      .calculate
+      .select { |h| h.security_id == security.id }
+      .index_by(&:date)
+
+    assert_equal 20, holdings[Date.current].qty, "the split the provider has already applied"
+    assert_equal 1000, holdings[Date.current].amount, "20 shares at the post-split price"
+    assert_equal 10, holdings[2.days.ago.to_date].qty, "the day the provider actually reported"
+  end
+
+  # An account with no entries starts yesterday, so its own history has no
+  # splits before then. A provider snapshot from ten days ago, before a split
+  # five days ago, still has to be brought through that split: the provider's
+  # 10 shares are 20 today.
+  test "a provider snapshot older than the account's history is still brought through a split" do
+    security = Security.create!(ticker: "PRE", name: "Pre-start Split")
+    Security::Price.create!(security: security, date: 1.day.ago.to_date, price: 50)
+    Security::Price.create!(security: security, date: Date.current, price: 50)
+
+    coinstats_item = @account.family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    coinstats_account = coinstats_item.coinstats_accounts.create!(name: "Provider", currency: "USD")
+    account_provider = AccountProvider.create!(account: @account, provider: coinstats_account)
+    @account.holdings.create!(
+      security: security, date: 10.days.ago.to_date, qty: 10, price: 100, amount: 1000,
+      currency: "USD", account_provider: account_provider
+    )
+    add_split(security, ex_date: 5.days.ago.to_date, numerator: 2, denominator: 1)
+    assert_equal 1.day.ago.to_date, @account.start_date, "the split is before the account's history"
+
+    holdings = Holding::ReverseCalculator
+      .new(@account, portfolio_snapshot: Holding::PortfolioSnapshot.new(@account))
+      .calculate
+      .select { |h| h.security_id == security.id }
+      .index_by(&:date)
+
+    assert_equal 20, holdings[Date.current].qty
+  end
+
   test "walking back past a 1-for-3 reverse split of one share gives exactly three" do
     security = split_security(before: 10, after: 30)
     create_trade(security, qty: 3, date: 4.days.ago.to_date, price: 10, account: @account)
@@ -446,6 +528,33 @@ class Holding::ReverseCalculatorTest < ActiveSupport::TestCase
 
       assert_in_delta 150.0, cost_basis_for(calc, security, rebuy_date).to_f, 1e-6, "#{numerator}-for-#{denominator}"
     end
+  end
+
+  # The seed walk starts from the same position as the holdings walk: the
+  # snapshot brought forward to today. Here the provider reported 10 shares the
+  # day before a 2-for-1 split, so today is 20. Read as today's count, 10 was
+  # halved back through the split to 5 and the seed came out at -5. The sale of
+  # the transferred-in units then went from 0 to -5, never crossed zero, and the
+  # rebuy stayed unknown for good.
+  test "a provider snapshot older than the split seeds the cost-basis replay from today's count" do
+    security = Security.create!(ticker: "STSD", name: "Stale Seed")
+    transfer_date = 9.days.ago.to_date
+    close_date    = 8.days.ago.to_date
+    rebuy_date    = 7.days.ago.to_date
+
+    transfer_in = create_trade(security, account: @account, qty: 5, price: 120, date: transfer_date)
+    transfer_in.entryable.update!(investment_activity_label: Trade::TRANSFER_LABEL)
+    create_trade(security, account: @account, qty: -5, price: 130, date: close_date)
+    create_trade(security, account: @account, qty: 10, price: 150, date: rebuy_date)
+    add_split(security, ex_date: 4.days.ago.to_date, numerator: 2, denominator: 1)
+
+    snapshot = OpenStruct.new(to_h: { security.id => 10 }, effective_dates: { security.id => 6.days.ago.to_date })
+    calc = Holding::ReverseCalculator.new(@account, portfolio_snapshot: snapshot)
+    calc.send(:precompute_cost_basis)
+
+    assert_nil cost_basis_for(calc, security, transfer_date)
+    assert_in_delta 150.0, cost_basis_for(calc, security, rebuy_date).to_f, 1e-6
+    assert_in_delta 75.0, cost_basis_for(calc, security, Date.current).to_f, 1e-6
   end
 
   # The provider reports nothing held today: the whole post-split position was
@@ -547,9 +656,11 @@ class Holding::ReverseCalculatorTest < ActiveSupport::TestCase
     # Brokerage Cash: $5,000
     # Holdings Value: $15,000
     # Total Balance: $20,000
-    def calculator_with_trades(security)
+    # `held` is what the provider reports; a position whose trades buy more
+    # than that is clamped, and has no cost basis.
+    def calculator_with_trades(security, held: 10)
       yield if block_given?
-      snapshot = OpenStruct.new(to_h: { security.id => 10 })
+      snapshot = OpenStruct.new(to_h: { security.id => held })
       calc = Holding::ReverseCalculator.new(@account, portfolio_snapshot: snapshot)
       calc.send(:precompute_cost_basis)
       calc

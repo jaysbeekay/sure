@@ -36,14 +36,14 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
 
     output = with_env_overrides(DropForkLoanTablesAndColumns::CONFIRM_ENV => "1") { capture_io { @migration.up }.first }
 
-    { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1, "loan_amortizations" => 2,
-      "loans.collateral_account_id" => 1 }.each do |name, rows|
+    { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1, "loan_amortizations" => 2 }.each do |name, rows|
       assert_match(/#{Regexp.escape(name)}: #{rows} rows? deleted/, output)
     end
     assert_no_match(/day_count_convention: \d+ rows? deleted/, output)
 
     DropForkLoanTablesAndColumns::TABLES.each { |table| assert_not connection.table_exists?(table), "#{table} should be gone" }
-    assert_not connection.column_exists?(:loans, :collateral_account_id)
+    assert_no_match(/collateral_account_id/, output)
+    assert_equal accounts(:property).id, Loan.find(@loan.id).collateral_account_id, "the collateral link stays"
     assert_empty loan_check_names & DropForkLoanTablesAndColumns::LOAN_CHECKS
     assert Loan.exists?(@loan.id), "the loans themselves stay"
     assert_equal "actual_actual", day_count_of(@loan), "the day-count choice is kept, not deleted"
@@ -58,11 +58,10 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
         assert_raises(DropForkLoanTablesAndColumns::EnteredDataPresent) { quietly { @migration.up } }
       end
 
-      { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1,
-        "loans.collateral_account_id" => 1 }.each do |name, rows|
+      { "loan_extra_repayments" => 1, "loan_scenarios" => 1, "loan_offset_accounts" => 1 }.each do |name, rows|
         assert_match(/#{Regexp.escape(name)}: #{rows}\b/, error.message)
       end
-      assert_no_match(/loan_amortizations|day_count_convention/, error.message)
+      assert_no_match(/loan_amortizations|day_count_convention|collateral_account_id/, error.message)
       assert_match(/#{DropForkLoanTablesAndColumns::CONFIRM_ENV}=1/, error.message)
     end
 
@@ -79,7 +78,6 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     {
       "an offset link" => "INSERT INTO loan_offset_accounts (loan_id, account_id, created_at, updated_at) " \
                           "VALUES (#{loan_id}, #{connection.quote(accounts(:depository).id)}, now(), now())",
-      "a collateral link" => "UPDATE loans SET collateral_account_id = #{connection.quote(accounts(:property).id)} WHERE id = #{loan_id}",
       "a saved scenario" => "INSERT INTO loan_scenarios (loan_id, name, slot, currency, calculator_version, created_at, updated_at) " \
                             "VALUES (#{loan_id}, 'Pay more', 0, 'USD', 1, now(), now())"
     }.each do |kind, sql|
@@ -93,11 +91,11 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
 
   # The amortisation rows were derived and upstream recomputes them, and the
   # day-count choice is kept rather than deleted. Neither is worth stopping for.
-  test "derived amortisation rows and a day-count choice alone do not stop it" do
+  test "derived amortisation rows, a day-count choice and a collateral link alone do not stop it" do
     quietly { @migration.down }
     loan_id = connection.quote(@loan.id)
     connection.execute(<<~SQL)
-      UPDATE loans SET day_count_convention = 'actual_actual' WHERE id = #{loan_id};
+      UPDATE loans SET day_count_convention = 'actual_actual', collateral_account_id = #{connection.quote(accounts(:property).id)} WHERE id = #{loan_id};
       INSERT INTO loan_amortizations (loan_id, payment_number, payment_date, payment_amount, principal_payment, interest_payment,
                                       beginning_balance, ending_balance, interest_rate, schedule_signature, created_at, updated_at)
         VALUES (#{loan_id}, 1, '2026-01-01', 100, 90, 10, 1000, 910, 5, 'sig', now(), now());
@@ -109,6 +107,7 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     assert_no_match(/day_count_convention: \d+ rows? deleted/, output)
     assert_not connection.table_exists?(:loan_amortizations)
     assert_equal "actual_actual", day_count_of(@loan)
+    assert_equal accounts(:property).id, Loan.find(@loan.id).collateral_account_id
   end
 
   # Upstream's loan (we-promise/sure#3639) reads this same column, with a third
@@ -177,41 +176,6 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     assert_equal UPSTREAM_DAY_COUNT_CHECK, day_count_check_expression
   end
 
-  # Upstream's 20260918210000 adds the column with no guard, so on a database
-  # that already has it the migrator would raise PG::DuplicateColumn once that
-  # file arrives. up leaves the column exactly as that migration would, so it
-  # records the version as run and the migrator skips it.
-  test "up records upstream's day-count migration as run" do
-    forget_upstream_day_count_version
-    assert_not upstream_day_count_recorded?, "precondition: not recorded"
-
-    quietly { @migration.up }
-
-    assert upstream_day_count_recorded?
-  end
-
-  test "up where upstream's day-count migration is already recorded does not fail" do
-    forget_upstream_day_count_version
-    connection.execute("INSERT INTO schema_migrations (version) VALUES ('#{UPSTREAM_DAY_COUNT_VERSION}')")
-
-    assert_nothing_raised { quietly { @migration.up } }
-    assert_equal 1, connection.select_value("SELECT COUNT(*) FROM schema_migrations WHERE version = '#{UPSTREAM_DAY_COUNT_VERSION}'").to_i
-  end
-
-  # down puts back the fork's two-value column, which is not what upstream's
-  # migration leaves, so that migration must no longer count as run.
-  test "down forgets upstream's day-count migration" do
-    forget_upstream_day_count_version
-    quietly { @migration.up }
-    assert upstream_day_count_recorded?, "precondition: recorded by up"
-
-    quietly { @migration.down }
-
-    assert_not upstream_day_count_recorded?
-  end
-
-  UPSTREAM_DAY_COUNT_VERSION = "20260918210000"
-
   # As upstream's schema.rb dumps it, after its 20260918210000.
   UPSTREAM_DAY_COUNT_CHECK = "day_count_convention::text = ANY (ARRAY['thirty_360'::character varying, " \
                              "'actual_365'::character varying, 'actual_actual'::character varying]::text[])"
@@ -220,14 +184,6 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
                          "'actual_actual'::character varying::text])"
 
   private
-    def upstream_day_count_recorded?
-      connection.select_value("SELECT 1 FROM schema_migrations WHERE version = '#{UPSTREAM_DAY_COUNT_VERSION}'").present?
-    end
-
-    def forget_upstream_day_count_version
-      connection.execute("DELETE FROM schema_migrations WHERE version = '#{UPSTREAM_DAY_COUNT_VERSION}'")
-    end
-
     def day_count_check_expression
       connection.check_constraints(:loans).find { |check| check.name == "chk_loans_day_count_convention" }&.expression
     end

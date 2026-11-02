@@ -8,6 +8,13 @@ en:
     period_picker:
       aria_label: "Time period: %{period}"
     account:
+      collateral_position:
+        secured_by: Secured by
+        secures: Secures
+        value: Value
+        debt: Debt secured
+        equity: Equity
+        equity_withheld: Equity is not shown because the loans secured on this asset cannot all be included for you.
       activity_feed:
         toggle_selection_checkboxes: Toggle selection
       balance_reconciliation:
@@ -75,6 +82,11 @@ en:
           aria_extra_payoff: Projected payoff with the extra repayment %{date}.
           extra: With extra repayment
           aria_actual_history_starts: Recorded balance history begins %{date}.
+          aria_interest_share: Across the first year's repayments about %{first}% of the amount paid is interest; across the final year's, about %{last}%.
+          aria_interest_share_overall: Across all the repayments about %{share}% of the amount paid is interest.
+          aria_composition: The tooltip on each scheduled payment splits it into %{principal} and %{interest}.
+          interest_share: Interest share
+          principal_share: Principal share
           projected_payoff: Projected payoff
           months_saved:
             one: "%{count} month sooner than scheduled"

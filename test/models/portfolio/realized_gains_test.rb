@@ -255,7 +255,9 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
     )
     sell_trade account: @account, date: @march, qty: 2, price: 150, currency: "EUR"
     set_rate from: "EUR", to: "GBP", date: @march, rate: 0.8
-    set_rate from: "GBP", to: "USD", date: @march, rate: 0
+    # `exchange_rates` can no longer store a 0 (we-promise/sure#3790), so the
+    # statement leg is handed the rate the guard exists for directly.
+    Portfolio::RealizedGains.any_instance.stubs(:rates_by_date).returns({ @march => { "GBP" => 0 } })
 
     assert_empty realized.buckets, "0 is not a conversion"
     assert_equal({ missing_exchange_rate: 1 }, realized.excluded_trades)

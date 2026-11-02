@@ -18,8 +18,7 @@ class RedbarkItem::Syncer
     # clock against itself. Reading `Time.current` in the import and
     # `Date.current` again in the processing gives a sync that fetches at
     # 23:59 and processes at 00:00 two different dates, and the processor then
-    # discards the snapshot this very sync just stored (raised on the #213
-    # sweep).
+    # discards the snapshot this very sync just stored.
     synced_at = Time.current
 
     # Phase 1: Import data from provider API
@@ -34,7 +33,7 @@ class RedbarkItem::Syncer
     if linked_redbark_accounts.any?
       sync.update!(status_text: I18n.t("redbark_items.sync.status.processing")) if sync.respond_to?(:status_text)
       mark_import_started(sync)
-      redbark_item.process_accounts(as_of: synced_at.to_date)
+      redbark_item.process_accounts(as_of: redbark_item.family.local_date(synced_at))
 
       # Phase 4: Schedule balance calculations
       sync.update!(status_text: I18n.t("redbark_items.sync.status.calculating")) if sync.respond_to?(:status_text)

@@ -2,6 +2,7 @@ require "test_helper"
 
 class FamilyTest < ActiveSupport::TestCase
   include SyncableInterfaceTest
+  include SqlQueryCapture
 
   def setup
     @syncable = families(:dylan_family)
@@ -15,6 +16,28 @@ class FamilyTest < ActiveSupport::TestCase
     [ 0, -5, 3651 ].each { |days| assert_not family.tap { |f| f.stale_valuation_days = days }.valid?, "#{days} should be invalid" }
     assert_not family.tap { |f| f.stale_valuation_days = 30.5 }.valid?
     assert_not family.tap { |f| f.stale_valuation_days = nil }.valid?
+  end
+
+  test "local_date is the date in the family's zone" do
+    family = families(:dylan_family)
+    evening_utc = Time.utc(2026, 1, 15, 19, 0, 0)
+
+    family.update!(timezone: "Australia/Sydney")
+    assert_equal Date.new(2026, 1, 16), family.local_date(evening_utc)
+
+    family.update!(timezone: "America/New_York")
+    assert_equal Date.new(2026, 1, 15), family.local_date(Time.utc(2026, 1, 16, 3, 0, 0))
+  end
+
+  test "local_date falls back to the app's zone for a blank or unknown zone" do
+    family = families(:dylan_family)
+    evening_utc = Time.utc(2026, 1, 15, 19, 0, 0)
+
+    family.update_column(:timezone, nil)
+    assert_equal evening_utc.in_time_zone(Time.zone).to_date, family.local_date(evening_utc)
+
+    family.update_column(:timezone, "Mars/Olympus_Mons")
+    assert_equal evening_utc.in_time_zone(Time.zone).to_date, family.local_date(evening_utc)
   end
 
   test "investment_contributions_category creates category when missing" do
@@ -148,9 +171,11 @@ class FamilyTest < ActiveSupport::TestCase
       name: "Test 2"
     )
 
+    txn2_entry_updated_at = txn2.entry.updated_at
+
     # Should merge both categories into one, keeping the oldest
     assert_difference "Category.count", -1 do
-      result = family.investment_contributions_category
+      result = travel_to(1.minute.from_now) { family.investment_contributions_category }
       assert_equal english_category.id, result.id
       assert_equal "Investment Contributions", result.name
 
@@ -158,9 +183,60 @@ class FamilyTest < ActiveSupport::TestCase
       assert_equal english_category.id, txn1.reload.category_id
       assert_equal english_category.id, txn2.reload.category_id
 
+      # Reassignment must touch entries so entry-keyed caches bust
+      # (only txn2 is reassigned — txn1 already points at the keeper)
+      assert txn2.entry.reload.updated_at > txn2_entry_updated_at
+
       # French category should be deleted
       assert_nil Category.find_by(id: french_category.id)
     end
+  end
+
+  test "investment_contributions_category merges duplicates across accounts" do
+    family = families(:dylan_family)
+    family.update!(locale: "en")
+    family.categories.where(name: [ "Investment Contributions", "Contributions aux investissements" ]).destroy_all
+
+    english_category = family.categories.create!(
+      name: "Investment Contributions",
+      color: "#0d9488",
+      lucide_icon: "trending-up"
+    )
+
+    french_category = family.categories.create!(
+      name: "Contributions aux investissements",
+      color: "#0d9488",
+      lucide_icon: "trending-up"
+    )
+
+    # Transactions on two different accounts of the same family: the
+    # transactions-through-accounts scope must reach both.
+    txn1 = Transaction.create!(category: english_category)
+    Entry.create!(
+      account: accounts(:depository),
+      entryable: txn1,
+      amount: 100,
+      currency: "USD",
+      date: Date.current,
+      name: "First account txn"
+    )
+
+    txn2 = Transaction.create!(category: french_category)
+    Entry.create!(
+      account: accounts(:credit_card),
+      entryable: txn2,
+      amount: 50,
+      currency: "USD",
+      date: Date.current,
+      name: "Second account txn"
+    )
+
+    result = family.investment_contributions_category
+
+    assert_equal english_category.id, result.id
+    assert_equal english_category.id, txn1.reload.category_id
+    assert_equal english_category.id, txn2.reload.category_id,
+      "transaction on the second account must also be reassigned to the keeper"
   end
 
   test "moniker helpers return expected singular and plural labels" do
@@ -195,6 +271,53 @@ class FamilyTest < ActiveSupport::TestCase
     older_entry.destroy!
 
     assert_not_equal before_destroy, family.reload.entries_cache_version
+  end
+
+  test "build_cache_key changes when family currency changes" do
+    family = families(:empty)
+    before = family.build_cache_key("test_key")
+    family.update!(currency: "EUR")
+    after = family.reload.build_cache_key("test_key")
+
+    assert_not_equal before, after
+  end
+
+  test "build_cache_key changes through the account deletion lifecycle and does not revert" do
+    family = families(:dylan_family)
+    newer_account = accounts(:credit_card)
+    older_account = accounts(:depository)
+
+    newer_account.touch
+    k0 = family.build_cache_key("test_key")
+
+    older_account.mark_for_deletion!
+    k1 = family.reload.build_cache_key("test_key")
+
+    older_account.destroy!
+    k2 = family.reload.build_cache_key("test_key")
+
+    assert_not_equal k0, k1
+    assert_not_equal k1, k2
+    # Regression assertion for #4200: ensure key does not revert to pre-deletion state (k0)
+    assert_not_equal k0, k2
+  end
+
+  test "build_cache_key remains unchanged when nothing relevant has changed" do
+    family = families(:dylan_family)
+    key1 = family.build_cache_key("test_key", invalidate_on_data_updates: true)
+    key2 = family.reload.build_cache_key("test_key", invalidate_on_data_updates: true)
+
+    assert_equal key1, key2
+  end
+
+  test "accounts_status_version fetches count and max updated_at in a single query" do
+    family = families(:dylan_family)
+    queries = capture_sql_queries do
+      family.accounts_status_version
+    end
+
+    account_queries = queries.grep(/FROM "accounts"/i)
+    assert_equal 1, account_queries.size, "accounts_status_version should execute only one query"
   end
 
   test "default currency comes from country ISO data" do
@@ -249,6 +372,39 @@ class FamilyTest < ActiveSupport::TestCase
     family.update!(enabled_currencies: [ "USD" ])
 
     assert_equal [ "SGD", "USD" ], family.reload.enabled_currency_codes
+  end
+
+  test "currency is saved as its ISO code" do
+    family = families(:dylan_family)
+    family.update!(currency: "eur")
+
+    assert_equal "EUR", family.reload.currency
+  end
+
+  test "an existing lowercase currency is saved as its ISO code" do
+    family = families(:dylan_family)
+    family.update_column(:currency, "eur")
+
+    family.update!(name: "Renamed family")
+
+    assert_equal "EUR", family.reload.currency
+  end
+
+  test "rejects a blank or unknown currency" do
+    family = families(:dylan_family)
+
+    [ "", nil, "XYZ" ].each do |value|
+      assert_not family.update(currency: value)
+      assert family.errors.of_kind?(:currency, :invalid)
+    end
+    assert_equal "USD", family.reload.currency
+  end
+
+  test "an existing unknown currency does not block unrelated updates" do
+    family = families(:dylan_family)
+    family.update_column(:currency, "XYZ")
+
+    assert family.update(name: "Renamed family")
   end
 
   test "empty enabled currencies keeps all currencies available" do

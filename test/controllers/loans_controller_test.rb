@@ -179,7 +179,50 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_enqueued_with(job: SyncJob)
   end
 
-  # jaysbeekay/sure#424: the opening anchor holds the original principal, so
+  # The form offers a day-count convention, and a select is worth nothing if the
+  # controller drops the value. This is the end-to-end path the model and engine
+  # tests do not cover: without `:day_count_convention` in
+  # `permitted_accountable_attributes` the parameter is filtered out, the loan
+  # keeps its old convention, and every future schedule ignores the choice.
+  test "the day-count convention chosen on create is saved" do
+    post loans_path, params: {
+      account: {
+        name: "Tracker",
+        balance: 50000,
+        currency: "USD",
+        accountable_type: "Loan",
+        accountable_attributes: {
+          subtype: "mortgage",
+          interest_rate: 5.5,
+          term_months: 60,
+          rate_type: "fixed",
+          initial_balance: 50000,
+          day_count_convention: "actual_actual"
+        }
+      }
+    }
+
+    assert_equal "actual_actual", Loan.order(:created_at).last.day_count_convention,
+                 "the controller filtered the convention out of create"
+  end
+
+  test "the day-count convention chosen on the form is saved" do
+    assert_equal "thirty_360", @account.loan.day_count_convention
+
+    patch loan_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: @account.accountable_id,
+          day_count_convention: "actual_365"
+        }
+      }
+    }
+
+    assert_equal "actual_365", @account.loan.reload.day_count_convention,
+                 "the controller filtered out the convention the user chose"
+  end
+
+  # #3383: the opening anchor holds the original principal, so
   # it belongs on the day the loan was drawn down, not on the form's separate
   # opening balance date (which defaults to today minus two years).
   test "a new loan's opening anchor is dated on its start date" do
@@ -232,6 +275,16 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal 399_600, anchor.amount
   end
 
+  # An anchor on or before Entry.min_supported_date would fail Entry's own
+  # validation and the form would re-render; the loan is created instead.
+  test "a loan started on the earliest supported entry date is created with the form's opening date" do
+    opening_balance_date = Date.current - 3.years
+    assert_difference "Account.count", 1 do
+      account = create_loan(start_date: Entry.min_supported_date, opening_balance_date: opening_balance_date)
+      assert_equal opening_balance_date, account.valuations.opening_anchor.first.entry.date
+    end
+  end
+
   test "a loan started today has its opening anchor today and no reconciliation" do
     account = create_loan(start_date: Date.current)
 
@@ -240,25 +293,6 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal Date.current, valuations.first.date
     assert_equal 400_000, valuations.first.amount
     assert_equal "opening_anchor", valuations.first.entryable.kind
-  end
-
-  # Upstream's Loan refuses a start date after today, so no anchor can be
-  # dated after today's balance.
-  test "a loan with a future start date is refused" do
-    assert_no_difference [ "Account.count", "Loan.count" ] do
-      post loans_path, params: {
-        account: {
-          name: "Mortgage", balance: 399_600, currency: "USD", accountable_type: "Loan",
-          opening_balance_date: (Date.current - 3.years).iso8601,
-          accountable_attributes: {
-            subtype: "mortgage", interest_rate: 5, term_months: 360, rate_type: "fixed",
-            initial_balance: 400_000, start_date: (Date.current + 1.month).iso8601
-          }
-        }
-      }
-    end
-
-    assert_response :unprocessable_entity
   end
 
   test "updates with loan details" do
@@ -497,7 +531,14 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_equal baseline.except(*described), with_extra.except("extra", "extra_payoff_date", *described)
     assert_equal baseline["visible"] + [ "extra" ], with_extra["visible"]
     assert_equal baseline["labels"].merge("extra" => I18n.t("UI.account.chart.loan.extra")), with_extra["labels"]
-    assert with_extra["aria_description"].start_with?(baseline["aria_description"])
+    # Sentences, not the whole string: #4387 appends the interest/principal
+    # share sentence to every description and the what-if sentence lands
+    # before it, so a start_with? over the full string fails by construction.
+    # The invariant the test means: the extra repayment adds its one sentence
+    # and every baseline sentence still appears.
+    sentences = ->(d) { d.split(/(?<=\.)\s+/) }
+    assert_equal 1, (sentences.(with_extra["aria_description"]) - sentences.(baseline["aria_description"])).size
+    assert_empty sentences.(baseline["aria_description"]) - sentences.(with_extra["aria_description"])
   end
 
   test "a loan with no schedule renders the page without a loan chart" do
@@ -941,6 +982,30 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "form[action='#{loans_path}']", count: 1
     # Rebuilt from the submission, not a blank account: what was typed comes
     # back for correction.
+    assert_select "input[name='account[name]'][value='Loan With Bad Anchor']", count: 1
+    assert_select "input[name='account[accountable_attributes][interest_rate]'][value='6']", count: 1
+  end
+
+  # The submission that trips this rescue need not carry nested attributes at
+  # all. `accountable_type=` writes only the type column, so rebuilding from
+  # such a submission left `accountable` nil and the 422 form came back
+  # without a single one of the loan's own fields -- nothing for the borrower
+  # to correct, on a form whose whole purpose here is correction.
+  test "a late create failure renders the loan's fields even when the form sent none" do
+    invalid_entry = Entry.new.tap(&:validate)
+    Account::OpeningBalanceManager.any_instance.stubs(:set_opening_balance)
+      .raises(ActiveRecord::RecordInvalid.new(invalid_entry))
+
+    assert_no_difference "Account.count" do
+      post loans_path, params: { account: {
+        name: "Loan Without Nested Attributes", balance: 50_000, currency: "USD", accountable_type: "Loan"
+      } }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "form[action='#{loans_path}']", count: 1
+    assert_select "input[name='account[name]'][value='Loan Without Nested Attributes']", count: 1
+    assert_select "input[name='account[accountable_attributes][interest_rate]']", minimum: 1
   end
 
   test "the extra repayments tab shows for a loan that can be amortized, and not otherwise" do
@@ -1123,7 +1188,7 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
   # a ghost link and Apply the primary submit.
   test "the extra repayments form ends in the design system's form actions" do
     clear_href = account_path(@account, tab: "extra_repayments")
-    form = "form[method='get'][action='#{account_path(@account)}']"
+    form = "form#extra_repayments_form[method='get']"
 
     get account_path(@account, tab: "extra_repayments")
     assert_select "#{form} button[type='submit']", count: 1 do |buttons|
@@ -1197,11 +1262,271 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # --- #129 collateral link --------------------------------------------------
+
+  test "links a loan to a property" do
+    property = accounts(:property)
+
+    assert_nil @account.loan.collateral_account_id
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: property.id } }
+    }
+
+    assert_redirected_to @account
+    assert_equal property.id, @account.loan.reload.collateral_account_id
+  end
+
+  test "an unknown collateral id is refused, not a server error, and the link is kept" do
+    property = accounts(:property)
+    @account.loan.update!(collateral_account: property)
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: SecureRandom.uuid } }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal property.id, @account.loan.reload.collateral_account_id
+  end
+
+  # The loan's own validation used to read the persisted account, so a request
+  # that changes the currency and the asset together was judged on the old one.
+  test "changing the currency and the collateral in one request is judged on the new currency" do
+    euro_property = @account.family.accounts.create!(
+      name: "Flat in Lisbon", currency: "EUR", balance: 300_000, owner: @user, accountable: Property.new
+    )
+    euro_property.auto_share_with_family!
+
+    patch loan_path(@account), params: {
+      account: { currency: "EUR", accountable_attributes: { id: @account.accountable_id, collateral_account_id: euro_property.id } }
+    }
+
+    assert_redirected_to @account
+    assert_equal "EUR", @account.reload.currency
+    assert_equal euro_property.id, @account.loan.collateral_account_id
+  end
+
+  test "changing the currency away from the collateral's in the same request is refused" do
+    property = accounts(:property)
+
+    patch loan_path(@account), params: {
+      account: { currency: "EUR", accountable_attributes: { id: @account.accountable_id, collateral_account_id: property.id } }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal "USD", @account.reload.currency
+    assert_nil @account.loan.collateral_account_id
+  end
+
+  test "a blank collateral clears the link" do
+    @account.loan.update!(collateral_account: accounts(:property))
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: "" } }
+    }
+
+    assert_nil @account.loan.reload.collateral_account_id
+  end
+
+  # Each refusal is checked against an EXISTING link: with none to begin with, a
+  # rejected update that quietly cleared the link would look the same.
+  test "refuses an account from another family and leaves the link as it was" do
+    kept = accounts(:property)
+    @account.loan.update!(collateral_account: kept)
+    foreign = families(:empty).accounts.create!(name: "Not ours", currency: "USD", balance: 1, accountable: Property.new)
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: foreign.id } }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal kept.id, @account.loan.reload.collateral_account_id
+  end
+
+  test "refuses a kind of account that cannot secure a loan and leaves the link as it was" do
+    kept = accounts(:vehicle)
+    @account.loan.update!(collateral_account: kept)
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: accounts(:depository).id } }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal kept.id, @account.loan.reload.collateral_account_id
+  end
+
+  test "a failed create re-renders the form with the collateral choices" do
+    foreign = families(:empty).accounts.create!(name: "Not ours", currency: "USD", balance: 1, accountable: Property.new)
+
+    post loans_path, params: {
+      account: {
+        name: "Secured loan", balance: 50_000, currency: "USD", accountable_type: "Loan",
+        accountable_attributes: { subtype: "mortgage", interest_rate: 5, term_months: 60, rate_type: "fixed",
+                                  initial_balance: 50_000, collateral_account_id: foreign.id }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_select "select[name='account[accountable_attributes][collateral_account_id]']" do
+      assert_select "option[value='#{accounts(:property).id}']", text: accounts(:property).name
+      assert_select "option[value='#{accounts(:vehicle).id}']", text: accounts(:vehicle).name
+      assert_select "option[value='#{foreign.id}']", count: 0
+    end
+  end
+
+  # The currency is on the same form, so the first render cannot filter by it; once
+  # a submission has named one, the re-rendered picker can.
+  test "a failed create offers only assets in the currency it was submitted with" do
+    euro = @account.family.accounts.create!(name: "Flat in Lisbon", currency: "EUR", balance: 1, owner: @user, accountable: Property.new)
+    foreign = families(:empty).accounts.create!(name: "Not ours", currency: "USD", balance: 1, accountable: Property.new)
+
+    post loans_path, params: {
+      account: {
+        name: "Secured loan", balance: 50_000, currency: "USD", accountable_type: "Loan",
+        accountable_attributes: { subtype: "mortgage", interest_rate: 5, term_months: 60, rate_type: "fixed",
+                                  initial_balance: 50_000, collateral_account_id: foreign.id }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_select "option[value='#{accounts(:property).id}']"
+    assert_select "option[value='#{euro.id}']", count: 0
+  end
+
+  test "creates a loan secured by a vehicle" do
+    vehicle = accounts(:vehicle)
+    vehicle.auto_share_with_family!
+
+    post loans_path, params: {
+      account: {
+        name: "Car loan", balance: 12_000, currency: "USD", accountable_type: "Loan",
+        accountable_attributes: { subtype: "auto", interest_rate: 6, term_months: 48, rate_type: "fixed",
+                                  initial_balance: 12_000, collateral_account_id: vehicle.id }
+      }
+    }
+
+    created = Account.order(:created_at).last.accountable
+    assert_equal vehicle.id, created.collateral_account_id
+  end
+
+  test "the form offers properties and vehicles the save would accept, and nothing else" do
+    foreign = families(:empty).accounts.create!(name: "Not ours", currency: "USD", balance: 1, accountable: Property.new)
+    euro = @account.family.accounts.create!(name: "Flat in Lisbon", currency: "EUR", balance: 1, owner: @user, accountable: Property.new)
+
+    get edit_loan_path(@account)
+
+    assert_response :success
+    assert_select "select[name='account[accountable_attributes][collateral_account_id]']" do
+      assert_select "option[value='']"
+      assert_select "option[value='#{accounts(:property).id}']", text: accounts(:property).name
+      assert_select "option[value='#{accounts(:vehicle).id}']", text: accounts(:vehicle).name
+      assert_select "option[value='#{accounts(:depository).id}']", count: 0
+      assert_select "option[value='#{foreign.id}']", count: 0
+      assert_select "option[value='#{euro.id}']", count: 0
+    end
+  end
+
+  # Open the form, change nothing, save: the link must survive even though the
+  # asset would no longer be accepted fresh.
+  test "an existing link stays selectable when the asset would no longer qualify" do
+    property = accounts(:property)
+    @account.loan.update!(collateral_account: property)
+    property.update_columns(currency: "EUR")
+
+    get edit_loan_path(@account)
+
+    assert_select "option[value='#{property.id}'][selected]"
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: property.id, interest_rate: 4.2 } }
+    }
+
+    assert_redirected_to @account
+    assert_equal property.id, @account.loan.reload.collateral_account_id
+  end
+
+  test "a viewer who cannot see the asset leaves the link alone when they save" do
+    property = accounts(:property)
+    @account.loan.update!(collateral_account: property)
+    member = users(:family_member)
+    @account.share_with!(member, permission: "full_control")
+    @account.update!(owner: @user)
+    sign_in member
+
+    assert_not Account.accessible_by(member).exists?(id: property.id), "precondition"
+
+    patch loan_path(@account), params: {
+      account: { accountable_attributes: { id: @account.accountable_id, collateral_account_id: "", interest_rate: 4.1 } }
+    }
+
+    loan = @account.loan.reload
+    assert_equal property.id, loan.collateral_account_id
+    assert_equal 4.1, loan.interest_rate
+  end
+
+  test "the loan page shows the equity in its collateral" do
+    accounts(:property).update_columns(balance: 550_000)
+    @account.update_columns(balance: 500_000)
+    @account.loan.update!(collateral_account: accounts(:property))
+
+    get account_path(@account)
+
+    assert_response :success
+    assert_select "[data-collateral-position]" do
+      assert_select "h3", text: "Secured by"
+      assert_select "a[href='#{account_path(accounts(:property))}']", text: accounts(:property).name
+      assert_select "h4", text: "Equity"
+      assert_select "p", text: "$50,000.00"
+    end
+  end
+
+  test "a switched-off loan shows no collateral section, not the asset's full value as equity" do
+    @account.loan.update!(collateral_account: accounts(:property))
+    @account.update_columns(status: "disabled")
+
+    get account_path(@account)
+
+    assert_response :success
+    assert_select "[data-collateral-position]", count: 0
+  end
+
+  test "a loan with no collateral shows no collateral section" do
+    get account_path(@account)
+
+    assert_response :success
+    assert_select "[data-collateral-position]", count: 0
+  end
+
   private
     # The query of every period link in the chart card's picker.
     def period_link_queries
       chart_card = "##{ActionView::RecordIdentifier.dom_id(@account, :chart)}"
       css_select("#{chart_card} a[href*='period=']").map { |link| Rack::Utils.parse_nested_query(URI(link["href"]).query) }
+    end
+
+    # Posts the new-loan form as a browser does: the "Opening balance date"
+    # field is always sent, defaulting to today minus two years.
+    def create_loan(start_date:, initial_balance: 400_000, opening_balance_date: Date.current - 2.years)
+      post loans_path, params: {
+        account: {
+          name: "Mortgage",
+          balance: 399_600,
+          currency: "USD",
+          accountable_type: "Loan",
+          opening_balance_date: opening_balance_date.iso8601,
+          accountable_attributes: {
+            subtype: "mortgage",
+            interest_rate: 5,
+            term_months: 360,
+            rate_type: "fixed",
+            initial_balance: initial_balance,
+            start_date: start_date&.iso8601
+          }
+        }
+      }
+      account = Account.order(:created_at).last
+      assert_redirected_to account
+      account
     end
 
     # The payment cells of the Schedule tab's table, the only table on the page.
@@ -1229,30 +1554,5 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
 
     def format_money(money)
       ApplicationController.helpers.format_money(money)
-    end
-
-    # Posts the new-loan form as a browser does: the "Opening balance date"
-    # field is always sent, defaulting to today minus two years.
-    def create_loan(start_date:, initial_balance: 400_000, opening_balance_date: Date.current - 2.years)
-      post loans_path, params: {
-        account: {
-          name: "Mortgage",
-          balance: 399_600,
-          currency: "USD",
-          accountable_type: "Loan",
-          opening_balance_date: opening_balance_date.iso8601,
-          accountable_attributes: {
-            subtype: "mortgage",
-            interest_rate: 5,
-            term_months: 360,
-            rate_type: "fixed",
-            initial_balance: initial_balance,
-            start_date: start_date&.iso8601
-          }
-        }
-      }
-      account = Account.order(:created_at).last
-      assert_redirected_to account
-      account
     end
 end

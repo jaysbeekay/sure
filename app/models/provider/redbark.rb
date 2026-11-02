@@ -71,7 +71,7 @@ class Provider::Redbark
   end
 
   # Returns product details for the given account ids: the bank's own view of
-  # the product behind the account, including its rates (#142).
+  # the product behind the account, including its rates (we-promise/sure#3891).
   #
   # Response items: { accountId, productName, depositRate, depositRates,
   # lendingRate, lendingRates, fees, features, loanDetails }. Rates are decimal

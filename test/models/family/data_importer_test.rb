@@ -1,6 +1,8 @@
 require "test_helper"
 
 class Family::DataImporterTest < ActiveSupport::TestCase
+  include EntriesTestHelper
+
   setup do
     @family = families(:empty)
   end
@@ -29,6 +31,129 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal 1500.0, account.balance.to_f
     assert_equal "USD", account.currency
     assert_equal "Depository", account.accountable_type
+  end
+
+  test "relinks a loan to the property that secured it, under the new account ids" do
+    ndjson = build_ndjson(collateral_records(collateral_ref: "old-property"))
+
+    result = Family::DataImporter.new(@family, ndjson).import!
+
+    property = result[:accounts].find { |account| account.accountable_type == "Property" }
+    loan = result[:accounts].find { |account| account.accountable_type == "Loan" }.loan
+    assert_equal property.id, loan.reload.collateral_account_id
+    assert_not_equal "old-property", loan.collateral_account_id
+  end
+
+  # Session imports arrive in chunks, and every other reference in them must
+  # already resolve (a missing one raises). A collateral id that does not would
+  # otherwise be dropped without a trace, so a loan in one chunk naming an asset
+  # in a later one would lose its link silently.
+  test "a session import raises when a loan's collateral has not been imported yet" do
+    session = @family.import_sessions.create!(expected_chunks: 2)
+    ndjson = build_ndjson(collateral_records(collateral_ref: "asset-in-a-later-chunk"))
+
+    assert_raises(Family::DataImporter::MissingReferenceError) do
+      Family::DataImporter.new(@family, ndjson, import_session: session).import!
+    end
+  end
+
+  test "a session import links a loan to an asset imported by an earlier chunk" do
+    session = @family.import_sessions.create!(expected_chunks: 2)
+    records = collateral_records(collateral_ref: "old-property")
+    Family::DataImporter.new(@family, build_ndjson([ records.last ]), import_session: session).import!
+
+    result = Family::DataImporter.new(@family, build_ndjson([ records.first ]), import_session: session).import!
+
+    loan = result[:accounts].find { |account| account.accountable_type == "Loan" }.loan
+    assert_not_nil loan.reload.collateral_account_id
+    assert_equal "House", loan.collateral_account.name
+  end
+
+  # The whole path: export a family whose loan sorts before its asset by id, then
+  # restore it with each account in a chunk of its own, in order.
+  test "an exported loan is relinked when each account arrives in its own chunk" do
+    source = Family.create!(name: "Source family")
+    loan_account = source.accounts.create!(
+      id: "00000000-0000-4000-8000-000000000001", name: "Mortgage", balance: 400_000, currency: "USD", accountable: Loan.new
+    )
+    asset = source.accounts.create!(
+      id: "ffffffff-ffff-4fff-8fff-ffffffffffff", name: "House", balance: 500_000, currency: "USD", accountable: Property.new
+    )
+    loan_account.loan.update!(collateral_account: asset)
+    ndjson = nil
+    Zip::File.open_buffer(Family::DataExporter.new(source).generate_export) { |zip| ndjson = zip.read("all.ndjson") }
+    lines = ndjson.split("\n").select { |line| JSON.parse(line)["type"] == "Account" }
+    session = @family.import_sessions.create!(expected_chunks: lines.size)
+
+    lines.each { |line| Family::DataImporter.new(@family, line, import_session: session).import! }
+
+    restored = @family.accounts.find_by!(name: "Mortgage").loan
+    assert_equal "House", restored.reload.collateral_account.name
+  end
+
+  test "leaves a loan unlinked when its collateral is not in the import" do
+    ndjson = build_ndjson(collateral_records(collateral_ref: "some-account-we-never-exported"))
+
+    result = Family::DataImporter.new(@family, ndjson).import!
+
+    loan = result[:accounts].find { |account| account.accountable_type == "Loan" }.loan
+    assert_nil loan.reload.collateral_account_id
+  end
+
+  test "a loan whose collateral the model refuses is imported unlinked and the refusal is logged" do
+    records = collateral_records(collateral_ref: "old-property")
+    records.first[:data][:currency] = "EUR"
+
+    assert_difference -> { DebugLogEntry.where(category: "import", family: @family).count }, 1 do
+      result = Family::DataImporter.new(@family, build_ndjson(records)).import!
+
+      loan = result[:accounts].find { |account| account.accountable_type == "Loan" }.loan
+      assert_nil loan.reload.collateral_account_id
+    end
+  end
+
+  test "restores the Brandfetch logo choice so no fetched icon replaces it" do
+    ndjson = build_ndjson([
+      {
+        type: "Account",
+        data: {
+          id: "old-account-1",
+          name: "Test Checking",
+          balance: "1500.00",
+          currency: "USD",
+          institution_domain: "tbank.ru",
+          logo_selection: "brandfetch",
+          accountable_type: "Depository",
+          accountable: { subtype: "checking" }
+        }
+      }
+    ])
+
+    account = Family::DataImporter.new(@family, ndjson).import![:accounts].first
+
+    assert account.reload.logo_brandfetch?
+    assert_not account.logo_auto_fetchable?
+  end
+
+  test "an unknown logo selection imports as the automatic one" do
+    ndjson = build_ndjson([
+      {
+        type: "Account",
+        data: {
+          id: "old-account-1",
+          name: "Test Checking",
+          balance: "1500.00",
+          currency: "USD",
+          logo_selection: "some-future-source",
+          accountable_type: "Depository",
+          accountable: { subtype: "checking" }
+        }
+      }
+    ])
+
+    account = Family::DataImporter.new(@family, ndjson).import![:accounts].first
+
+    assert account.reload.logo_automatic?
   end
 
   test "imports non-destructive account status from ndjson" do
@@ -1312,6 +1437,122 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert imported_holding.security_locked
   end
 
+  # Derived lots are rebuilt on every sync, so the file carries only what the
+  # user chose: a lot's cost, the lot a sale names, and the account's method.
+  test "export then import round-trips a user-set lot basis and a named lot" do
+    Family::DataImporter.new(@family, lot_export).import!
+
+    account = @family.accounts.find_by!(name: "Lot Round Trip")
+    Holding::Materializer.new(account, strategy: :forward).materialize_holdings
+    trades = lot_trades(account)
+
+    assert_equal "fifo", account.cost_basis_method
+    assert_equal trades.fetch(40), trades.fetch(-10).trade.lot_source_entry, "the sale's named lot"
+    lot = HoldingLot.find_by!(source_entry: trades.fetch(60))
+    assert_equal 600, lot.manual_total_cost
+    assert_equal 10, lot.unit_cost, "the user's 600 over 60 units, after re-materialization"
+    assert_equal [ 60, 30 ], HoldingLot.where(account: account).order(:acquired_on).pluck(:qty).map(&:to_i), "the sale took the named lot, not the oldest"
+  end
+
+  # An account that sells by average keeps a stored choice and ignores it, so
+  # an export taken after a switch still carries it.
+  test "a named lot kept through a switch to average imports without failing the import" do
+    Family::DataImporter.new(@family, lot_export(switch_to: "average")).import!
+
+    account = @family.accounts.find_by!(name: "Lot Round Trip")
+    trades = lot_trades(account)
+    assert_equal "average", account.cost_basis_method
+    assert_equal trades.fetch(40), trades.fetch(-10).trade.reload.lot_source_entry
+  end
+
+  test "a sale and the lot it names restore their link when each arrives in its own chunk" do
+    lines = lot_export.split("\n")
+    session = @family.import_sessions.create!(expected_chunks: lines.size)
+
+    lines.each { |line| Family::DataImporter.new(@family, line, import_session: session).import! }
+
+    trades = lot_trades(@family.accounts.find_by!(name: "Lot Round Trip"))
+    assert_equal trades.fetch(40), trades.fetch(-10).trade.reload.lot_source_entry
+    assert_equal 600, HoldingLot.find_by!(source_entry: trades.fetch(60)).manual_total_cost
+  end
+
+  test "an unusable lot cost or lot name is dropped and counted, and the trade still imports" do
+    # Each edit names the check that tells its drop from a clean import, where
+    # the first buy's lot carries the user's 600 and the sale names the $20 lot.
+    cases = {
+      "a non-numeric cost" => [ ->(data) { data["lot_total_cost"] = "abc" if data["lot_total_cost"] }, :no_lot_cost ],
+      "a negative cost" => [ ->(data) { data["lot_total_cost"] = "-5" if data["lot_total_cost"] }, :no_lot_cost ],
+      "a cost on a sale" => [ ->(data) { data["lot_total_cost"] = "50" if data["qty"].to_d.negative? }, :only_the_buys_lot ],
+      "an unknown named lot" => [ ->(data) { data["lot_source_trade_id"] = SecureRandom.uuid if data["lot_source_trade_id"] }, :no_choice ],
+      "a sale naming itself" => [ ->(data) { data["lot_source_trade_id"] = data["id"] if data["lot_source_trade_id"] }, :no_choice ],
+      "a sale dated before its lot" => [ ->(data) { data["date"] = 5.days.ago.to_date.iso8601 if data["lot_source_trade_id"] }, :no_choice ],
+      "a sale of another security" => [ ->(data) { data.merge!("security_id" => SecureRandom.uuid, "ticker" => "OTHER#{SecureRandom.hex(2).upcase}") if data["lot_source_trade_id"] }, :no_choice ]
+    }
+
+    cases.each do |label, (edit, check)|
+      family = Family.create!(name: "Target #{label}", currency: "USD", locale: "en", date_format: "%Y-%m-%d")
+
+      result = Family::DataImporter.new(family, edit_trades(lot_export) { |data| edit.call(data) }).import!
+
+      account = family.accounts.find_by!(name: "Lot Round Trip")
+      trades = lot_trades(account)
+      assert_equal 3, trades.size, "#{label}: a trade was lost"
+      assert_equal 1, result[:summary].dig("trades", "skipped"), label
+      case check
+      when :no_lot_cost
+        assert_equal 0, HoldingLot.where(account: account).count, "#{label}: the cost was seeded"
+      when :only_the_buys_lot
+        assert_equal [ trades.fetch(60).id ], HoldingLot.where(account: account).pluck(:source_entry_id), "#{label}: a sale got a lot"
+      when :no_choice
+        assert_nil trades.fetch(-10).trade.reload.lot_source_entry_id, "#{label}: the choice was stored"
+        assert_equal 600, HoldingLot.find_by!(source_entry: trades.fetch(60)).manual_total_cost, "#{label}: the lot's cost went with it"
+      end
+    end
+  end
+
+  # A sale the user has since marked a transfer out names no lot, as the
+  # drawer would not let it.
+  # Labels are not in the export, so only a sale the user marked a transfer
+  # out after a session's first import can meet this; the session refuses it.
+  test "a session re-import refuses a named lot on a sale marked a transfer out" do
+    session = @family.import_sessions.create!(expected_chunks: 2)
+    export = lot_export
+    Family::DataImporter.new(@family, export, import_session: session).import!
+    trades = lot_trades(@family.accounts.find_by!(name: "Lot Round Trip"))
+    sale = trades.fetch(-10).trade
+    assert_equal trades.fetch(40).id, sale.lot_source_entry_id, "precondition: the first import named the lot"
+    sale.update_columns(investment_activity_label: Trade::TRANSFER_LABEL)
+
+    assert_raises(Family::DataImporter::InvalidRecordError) do
+      Family::DataImporter.new(@family, export, import_session: session).import!
+    end
+  end
+
+  test "a session import raises on an unusable lot cost" do
+    session = @family.import_sessions.create!(expected_chunks: 1)
+
+    assert_raises(Family::DataImporter::InvalidRecordError) do
+      Family::DataImporter.new(@family, edit_trades(lot_export) { |data| data["lot_total_cost"] = "abc" if data["lot_total_cost"] }, import_session: session).import!
+    end
+  end
+
+  test "re-importing without the cost method keeps the account's own, and without a lot's cost or name clears them" do
+    session = @family.import_sessions.create!(expected_chunks: 2)
+    export = lot_export
+    Family::DataImporter.new(@family, export, import_session: session).import!
+
+    cleared = edit_trades(export) { |data| data["lot_total_cost"] = nil; data["lot_source_trade_id"] = nil }
+    cleared = cleared.split("\n").map { |line| JSON.parse(line) }.each { |record| record["data"].delete("cost_basis_method") if record["type"] == "Account" }.map(&:to_json).join("\n")
+    Family::DataImporter.new(@family, cleared, import_session: session).import!
+
+    account = @family.accounts.find_by!(name: "Lot Round Trip")
+    trades = lot_trades(account)
+    assert_equal 1, @family.accounts.where(name: "Lot Round Trip").count, "precondition: the re-import updated the account"
+    assert_equal "fifo", account.cost_basis_method
+    assert_nil HoldingLot.find_by!(source_entry: trades.fetch(60)).manual_total_cost
+    assert_nil trades.fetch(-10).trade.reload.lot_source_entry_id
+  end
+
   test "round trips raw balance history through full export" do
     source_family = Family.create!(
       name: "Source Balance Family",
@@ -1638,6 +1879,41 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal "Candidate outflow", rejected_transfer.outflow_transaction.entry.name
   end
 
+  test "restores a transfer the user made a plain transfer instead of an investment contribution" do
+    ndjson = build_ndjson([
+      { type: "Account", data: { id: "checking", name: "Checking", balance: "1000", currency: "USD", accountable_type: "Depository" } },
+      { type: "Account", data: { id: "brokerage", name: "Brokerage", balance: "2500", currency: "USD", accountable_type: "Investment" } },
+      { type: "Transaction", data: { id: "fx-outflow", account_id: "checking", date: "2024-01-15", amount: "100.00", name: "To brokerage", currency: "USD", kind: "funds_movement" } },
+      { type: "Transaction", data: { id: "fx-inflow", account_id: "brokerage", date: "2024-01-15", amount: "-100.00", name: "From checking", currency: "USD", kind: "funds_movement" } },
+      { type: "Transfer", data: { id: "transfer-1", inflow_transaction_id: "fx-inflow", outflow_transaction_id: "fx-outflow", status: "confirmed", investment_contribution: false } }
+    ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    outflow = Transaction.joins(:entry).find_by!(entries: { name: "To brokerage" })
+    assert_equal "funds_movement", outflow.kind
+    assert_nil outflow.category
+    assert outflow.locked?(:kind)
+    assert_equal false, outflow.transfer_as_outflow.investment_contribution_choice
+  end
+
+  test "imports a pending transfer without applying transfer kinds" do
+    ndjson = build_ndjson([
+      { type: "Account", data: { id: "checking", name: "Checking", balance: "1000", currency: "USD", accountable_type: "Depository" } },
+      { type: "Account", data: { id: "savings", name: "Savings", balance: "2500", currency: "USD", accountable_type: "Depository" } },
+      { type: "Transaction", data: { id: "pending-outflow", account_id: "checking", date: "2024-01-15", amount: "100.00", name: "Pending outflow", currency: "USD", kind: "standard" } },
+      { type: "Transaction", data: { id: "pending-inflow", account_id: "savings", date: "2024-01-15", amount: "-100.00", name: "Pending inflow", currency: "USD", kind: "standard" } },
+      { type: "Transfer", data: { id: "transfer-1", inflow_transaction_id: "pending-inflow", outflow_transaction_id: "pending-outflow", status: "pending" } }
+    ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    transfer = Transfer.joins(inflow_transaction: :entry).find_by!(entries: { name: "Pending inflow" })
+    assert transfer.pending?
+    assert_equal "standard", transfer.inflow_transaction.kind
+    assert_equal "standard", transfer.outflow_transaction.kind
+  end
+
   test "skips rejected transfers with missing transactions under strict import" do
     session = @family.import_sessions.create!(expected_chunks: 1)
 
@@ -1833,6 +2109,125 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal 500.0, budget_category.budgeted_spending.to_f
   end
 
+  test "reuses an untouched default budget for the same period" do
+    category = @family.categories.create!(name: "Groceries", color: "#00FF00")
+    default_budget = @family.budgets.create!(
+      start_date: Date.parse("2024-01-01"), end_date: Date.parse("2024-01-31"), currency: "USD"
+    )
+    default_budget.budget_categories.create!(category: category, budgeted_spending: 0, currency: "USD")
+
+    ndjson = build_ndjson([
+      { type: "Category", data: { id: "cat-groceries", name: "Groceries", color: "#00FF00", classification: "expense" } },
+      {
+        type: "Budget",
+        data: {
+          id: "budget-1", start_date: "2024-01-01", end_date: "2024-01-31",
+          budgeted_spending: "3000.00", expected_income: "5000.00", currency: "USD"
+        }
+      },
+      {
+        type: "BudgetCategory",
+        data: { id: "bc-1", budget_id: "budget-1", category_id: "cat-groceries", budgeted_spending: "500.00", currency: "USD" }
+      }
+    ])
+
+    assert_no_difference -> { @family.budgets.count } do
+      Family::DataImporter.new(@family, ndjson).import!
+    end
+
+    default_budget.reload
+    assert_equal 3000.0, default_budget.budgeted_spending.to_f
+    assert_equal 5000.0, default_budget.expected_income.to_f
+    assert_equal 500.0, default_budget.budget_categories.find_by!(category: category).budgeted_spending.to_f
+  end
+
+  test "does not overwrite a populated budget for the same period" do
+    @family.budgets.create!(
+      start_date: Date.parse("2024-01-01"), end_date: Date.parse("2024-01-31"),
+      budgeted_spending: 1200, expected_income: 2000, currency: "USD"
+    )
+
+    ndjson = build_ndjson([
+      {
+        type: "Budget",
+        data: {
+          id: "budget-1", start_date: "2024-01-01", end_date: "2024-01-31",
+          budgeted_spending: "3000.00", expected_income: "5000.00", currency: "USD"
+        }
+      }
+    ])
+
+    assert_raises(ActiveRecord::RecordInvalid) { Family::DataImporter.new(@family, ndjson).import! }
+    assert_equal 1200.0, @family.budgets.first.budgeted_spending.to_f
+  end
+
+  test "does not overwrite a budget the user explicitly set to zero" do
+    @family.budgets.create!(
+      start_date: Date.parse("2024-01-01"), end_date: Date.parse("2024-01-31"),
+      budgeted_spending: 0, expected_income: 0, currency: "USD"
+    )
+
+    ndjson = build_ndjson([
+      {
+        type: "Budget",
+        data: {
+          id: "budget-1", start_date: "2024-01-01", end_date: "2024-01-31",
+          budgeted_spending: "3000.00", expected_income: "5000.00", currency: "USD"
+        }
+      }
+    ])
+
+    assert_raises(ActiveRecord::RecordInvalid) { Family::DataImporter.new(@family, ndjson).import! }
+    assert_equal 0.0, @family.budgets.first.budgeted_spending.to_f
+  end
+
+  test "does not reuse the household default for an exported personal budget" do
+    default_budget = @family.budgets.create!(
+      start_date: Date.parse("2024-01-01"), end_date: Date.parse("2024-01-31"), currency: "USD"
+    )
+
+    ndjson = build_ndjson([
+      {
+        type: "Budget",
+        data: {
+          id: "budget-1", user_id: "old-user-1", start_date: "2024-01-01", end_date: "2024-01-31",
+          budgeted_spending: "3000.00", expected_income: "5000.00", currency: "USD"
+        }
+      }
+    ])
+
+    assert_raises(ActiveRecord::RecordInvalid) { Family::DataImporter.new(@family, ndjson).import! }
+    assert_nil default_budget.reload.budgeted_spending
+  end
+
+  test "imports rules in their exported run order after existing rules" do
+    existing = @family.rules.create!(resource_type: "transaction",
+      actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    rule_record = ->(name, position, stop_processing) do
+      {
+        type: "Rule",
+        version: 1,
+        data: {
+          name: name,
+          resource_type: "transaction",
+          active: true,
+          position: position,
+          stop_processing: stop_processing,
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
+          actions: [ { action_type: "exclude_transaction" } ]
+        }
+      }
+    end
+    ndjson = build_ndjson([ rule_record.call("Second", 2, false), rule_record.call("First", 1, true) ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    assert_equal [ existing.id ] + @family.rules.where(name: %w[First Second]).in_order_of(:name, %w[First Second]).pluck(:id),
+      @family.rules.ordered.pluck(:id).last(3)
+    assert @family.rules.find_by(name: "First").stop_processing
+    assert_not @family.rules.find_by(name: "Second").stop_processing
+  end
+
   test "imports rules with conditions and actions" do
     ndjson = build_ndjson([
       {
@@ -1883,90 +2278,54 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal category.id, action.value
   end
 
-  # An export written before the fork's loan tables were dropped (#475): fork
-  # main wrote each account as `as_json(include: { accountable: {} })`, loans
-  # last, so a loan carried its collateral link and day-count as keys. The
-  # collateral column is gone. The day-count column is kept, in upstream's
-  # shape, but the importer copies only a loan's subtype and locked
-  # attributes, as upstream's does, so the loan takes the default for a new one.
-  # The import must still succeed, without the link.
-  test "an export from before the loan columns were dropped still imports, without its collateral link" do
-    ndjson = build_ndjson([
-      { type: "Account", data: { id: "old-property", name: "House", balance: "500000.0", currency: "USD",
-                                 accountable_type: "Property", subtype: "single_family_home", status: "active",
-                                 accountable: { id: "old-property-detail", subtype: "single_family_home", locked_attributes: {} } } },
-      { type: "Account", data: { id: "old-loan", name: "Mortgage", balance: "400000.0", currency: "USD",
-                                 accountable_type: "Loan", subtype: "mortgage", status: "active",
-                                 accountable: { id: "old-loan-detail", subtype: "mortgage", rate_type: "fixed",
-                                                interest_rate: "6.0", term_months: 360, initial_balance: "450000.0",
-                                                start_date: "2024-01-01", variable_rate_schedule: {}, locked_attributes: {},
-                                                collateral_account_id: "old-property", day_count_convention: "actual_actual" } } }
-    ])
+  test "rejects a rule with an unknown resource type or action type" do
+    [
+      [ "account", "exclude_transaction" ],
+      [ "transaction", "garbage" ]
+    ].each do |resource_type, action_type|
+      ndjson = build_ndjson([ {
+        type: "Rule", version: 1,
+        data: { id: "unknown-type-rule", name: "Unknown type", resource_type: resource_type,
+                conditions: [ { condition_type: "transaction_name", operator: "like", value: "coffee" } ],
+                actions: [ { action_type: action_type } ] }
+      } ])
 
-    result = nil
-    assert_no_difference -> { DebugLogEntry.count } do
-      result = Family::DataImporter.new(@family, ndjson).import!
+      error = assert_raises(ActiveRecord::RecordInvalid, action_type) do
+        Family::DataImporter.new(@family, ndjson).import!
+      end
+
+      assert_match(/is not included in the list/, error.message)
+      assert_nil @family.rules.find_by(name: "Unknown type")
     end
-
-    assert_equal %w[House Mortgage], result[:accounts].map(&:name).sort
-    loan = result[:accounts].find { |account| account.name == "Mortgage" }.loan
-    assert_equal "mortgage", loan.subtype
-    assert_not loan.has_attribute?(:collateral_account_id), "the column this link lived in is gone"
-    assert_equal "thirty_360", loan.day_count_convention
   end
 
-  test "imports a rule's priority and keeps the exported run order" do
-    rule_data = ->(name, priority) {
-      data = {
-        name: name, resource_type: "transaction", active: true,
-        conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
-        actions: [ { action_type: "exclude_transaction" } ]
-      }
-      data[:priority] = priority unless priority.nil?
-      { type: "Rule", version: 1, data: data.merge(id: SecureRandom.uuid) }
-    }
+  test "rejects invalid rule references before creating related records" do
+    valid_condition = { condition_type: "transaction_name", operator: "like", value: "coffee" }
+    cases = [
+      [ { condition_type: "transaction_category", operator: "=", value: "Bad\0Category" },
+        { action_type: "exclude_transaction" }, "value" ],
+      [ valid_condition,
+        { action_type: "set_transaction_merchant", value_ref: { name: "Bad\0Merchant" } }, "value_ref" ],
+      [ valid_condition,
+        { action_type: "set_transaction_tags", value_ref: [ { name: "Safe" }, { name: "Bad\0Tag" } ] }, "value_ref" ]
+    ]
+    counts = [ @family.rules.count, @family.categories.count, @family.merchants.count, @family.tags.count ]
 
-    Family::DataImporter.new(@family, build_ndjson([ rule_data.call("Later", 9), rule_data.call("Sooner", 3) ])).import!
+    cases.each do |condition, action, field|
+      ndjson = build_ndjson([ {
+        type: "Rule", version: 1,
+        data: { name: "Invalid reference", resource_type: "transaction", conditions: [ condition ], actions: [ action ] }
+      } ])
 
-    assert_equal [ "Sooner", "Later" ], @family.rules.prioritised.pluck(:name)
-    assert_equal [ 3, 9 ], @family.rules.prioritised.pluck(:priority)
-  end
+      error = assert_raises(Family::DataImporter::InvalidRecordError) do
+        Family::DataImporter.new(@family, ndjson).import!
+      end
 
-  # An export's numbers mean "relative to each other"; into a family that already has
-  # rules they must not collide with, or jump ahead of, the rules already there.
-  test "imported priorities are placed after the rules the family already has, keeping their order" do
-    existing = @family.rules.create!(resource_type: "transaction", name: "Existing", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    existing.update_columns(priority: 50)
-    rule_data = ->(name, priority) {
-      { type: "Rule", version: 1, data: {
-        id: SecureRandom.uuid, name: name, resource_type: "transaction", active: true, priority: priority,
-        conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
-        actions: [ { action_type: "exclude_transaction" } ]
-      } }
-    }
-
-    Family::DataImporter.new(@family, build_ndjson([ rule_data.call("Later", 9), rule_data.call("Sooner", 3) ])).import!
-
-    assert_equal [ "Existing", "Sooner", "Later" ], @family.rules.prioritised.where(name: [ "Existing", "Sooner", "Later" ]).pluck(:name)
-    assert_equal [ 53, 59 ], @family.rules.where(name: [ "Sooner", "Later" ]).order(:priority).pluck(:priority)
-    assert_equal 50, existing.reload.priority
-  end
-
-  test "imports rules without a priority at the end of the run order, in file order" do
-    rule_data = ->(name) {
-      { type: "Rule", version: 1, data: {
-        id: SecureRandom.uuid, name: name, resource_type: "transaction", active: true,
-        conditions: [ { condition_type: "transaction_name", operator: "like", value: name } ],
-        actions: [ { action_type: "exclude_transaction" } ]
-      } }
-    }
-
-    existing = @family.rules.create!(resource_type: "transaction", name: "Existing", actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
-    existing.update_columns(priority: 50)
-
-    Family::DataImporter.new(@family, build_ndjson([ rule_data.call("One"), rule_data.call("Two") ])).import!
-
-    assert_equal [ "Existing", "One", "Two" ], @family.rules.prioritised.where(name: [ "Existing", "One", "Two" ]).pluck(:name)
+      assert_equal "invalid_import_record", error.code
+      assert_equal field, error.details[:field]
+      assert_equal "(invalid text)", error.details[:value]
+      assert_equal counts, [ @family.rules.count, @family.categories.count, @family.merchants.count, @family.tags.count ]
+    end
   end
 
   test "imports transaction_tag rule condition by remapping the tag name to an id" do
@@ -2408,6 +2767,124 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal weekly_tag.id, rule.actions.first.value
   end
 
+  test "rejects a split rule action with invalid text before creating related records" do
+    counts = [ @family.rules.count, @family.categories.count, @family.merchants.count, @family.tags.count ]
+
+    [ { name: "Bad\0Name" }, { category: "Bad\0Category" }, { merchant: "Bad\0Merchant" }, { tags: [ "Safe", "Bad\0Tag" ] } ].each do |bad|
+      ndjson = build_ndjson([ {
+        type: "Rule", version: 1,
+        data: {
+          name: "Invalid split", resource_type: "transaction",
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: "rent" } ],
+          actions: [ {
+            action_type: "split_transaction",
+            value: { splits: [
+              { type: "percentage", name: "A", share: "50" }.merge(bad),
+              { type: "percentage", name: "B", share: "50" }
+            ] }.to_json
+          } ]
+        }
+      } ])
+
+      error = assert_raises(Family::DataImporter::InvalidRecordError, bad.inspect) do
+        Family::DataImporter.new(@family, ndjson).import!
+      end
+
+      assert_equal "value", error.details[:field]
+      assert_equal counts, [ @family.rules.count, @family.categories.count, @family.merchants.count, @family.tags.count ]
+    end
+  end
+
+  test "imports a split rule action whose rows carry foreign ids by dropping them" do
+    foreign_category = categories(:food_and_drink)
+    own_tag = @family.tags.create!(name: "Shared")
+
+    ndjson = build_ndjson([
+      {
+        type: "Rule",
+        version: 1,
+        data: {
+          name: "Split With Foreign Ids",
+          resource_type: "transaction",
+          active: true,
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: "rent" } ],
+          actions: [
+            {
+              action_type: "split_transaction",
+              value: {
+                splits: [
+                  { type: "percentage", name: "A", share: "50", category_id: foreign_category.id, tag_ids: [ own_tag.id, SecureRandom.uuid ] },
+                  { type: "percentage", name: "B", share: "50", category: "Housing" }
+                ]
+              }.to_json
+            }
+          ]
+        }
+      }
+    ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    first, second = JSON.parse(@family.rules.find_by!(name: "Split With Foreign Ids").actions.sole.value)["splits"]
+    assert_nil first["category_id"]
+    assert_equal [ own_tag.id ], first["tag_ids"]
+    assert_equal @family.categories.find_by!(name: "Housing").id, second["category_id"]
+  end
+
+  test "remaps raw split ids from an older export through the imported records" do
+    ndjson = build_ndjson([
+      { type: "Category", data: { id: "source-category", name: "Groceries", color: "#407706" } },
+      { type: "Tag", data: { id: "source-tag", name: "Shared", color: "#00FF00" } },
+      {
+        type: "Rule",
+        version: 1,
+        data: {
+          name: "Raw Id Split",
+          resource_type: "transaction",
+          active: true,
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: "market" } ],
+          actions: [
+            {
+              action_type: "split_transaction",
+              value: {
+                splits: [
+                  { type: "percentage", name: "A", share: "50", category_id: "source-category", tag_ids: [ "source-tag" ] },
+                  { type: "percentage", name: "B", share: "50" }
+                ]
+              }.to_json
+            }
+          ]
+        }
+      }
+    ])
+
+    Family::DataImporter.new(@family, ndjson).import!
+
+    first = JSON.parse(@family.rules.find_by!(name: "Raw Id Split").actions.sole.value)["splits"].first
+    assert_equal @family.categories.find_by!(name: "Groceries").id, first["category_id"]
+    assert_equal [ @family.tags.find_by!(name: "Shared").id ], first["tag_ids"]
+  end
+
+  test "rejects a non-string split value with a validation error" do
+    ndjson = build_ndjson([
+      {
+        type: "Rule",
+        version: 1,
+        data: {
+          name: "Scalar Split",
+          resource_type: "transaction",
+          active: true,
+          conditions: [ { condition_type: "transaction_name", operator: "like", value: "x" } ],
+          actions: [ { action_type: "split_transaction", value: 5 } ]
+        }
+      }
+    ])
+
+    assert_raises(ActiveRecord::RecordInvalid) do
+      Family::DataImporter.new(@family, ndjson).import!
+    end
+  end
+
   test "preserves explicit false rule operand values" do
     importer = Family::DataImporter.new(@family, "")
 
@@ -2658,6 +3135,23 @@ class Family::DataImporterTest < ActiveSupport::TestCase
   # Everything below the series was silently absent from an export: a restored
   # bill kept its name and amount and lost its cadence, its payment history and
   # every setting that decides how it behaves.
+  # A restore writes the export's matcher_hints as they are. The rename-alias
+  # callback (issue #503) must not add the local name to them.
+  test "re-importing a bill renamed locally restores its matcher hints exactly" do
+    session = @family.import_sessions.create!(expected_chunks: 2)
+    records = bills_ndjson_records.first(2)
+    Family::DataImporter.new(@family, build_ndjson(records), import_session: session).import!
+    series = @family.recurring_transactions.sole
+    series.update!(name: "Renamed locally")
+    assert_includes series.reload.matcher_hints["name_aliases"], "Rent"
+
+    Family::DataImporter.new(@family, build_ndjson([ records.last ]), import_session: session).import!
+
+    assert_equal 1, @family.recurring_transactions.count, "the second chunk updates the restored bill"
+    assert_equal "Rent", series.reload.name
+    assert_equal [ "WATSON PROPERTY" ], series.matcher_hints["name_aliases"]
+  end
+
   test "imports the bills subsystem, reattaching payments to their transactions" do
     importer = Family::DataImporter.new(@family, build_ndjson(bills_ndjson_records))
     importer.import!
@@ -2833,8 +3327,55 @@ class Family::DataImporterTest < ActiveSupport::TestCase
 
   private
 
+    # A FIFO account's export: 60 bought at $12 with the user's cost of $600,
+    # 40 at $20, and a sale of 10 that names the $20 lot.
+    def lot_export(switch_to: nil)
+      source = Family.create!(name: "Lot Source", currency: "USD", locale: "en", date_format: "%Y-%m-%d")
+      account = source.accounts.create!(name: "Lot Round Trip", accountable: Investment.new, balance: 0, cash_balance: 0, currency: "USD")
+      account.update!(cost_basis_method: "fifo")
+      security = Security.create!(ticker: "LRT#{SecureRandom.hex(3).upcase}", name: "Lot Round Trip")
+      Security::Price.insert_all((3.days.ago.to_date..Date.current).map { |date| { security_id: security.id, date: date, price: 30, currency: "USD" } })
+      first_buy = create_trade(security, account: account, qty: 60, price: 12, date: 3.days.ago.to_date)
+      second_buy = create_trade(security, account: account, qty: 40, price: 20, date: 2.days.ago.to_date)
+      # Sold on the day the named lot was bought, which a sale may do.
+      sale = create_trade(security, account: account, qty: -10, price: 25, date: 2.days.ago.to_date)
+      sale.trade.update!(lot_source_entry: second_buy)
+      # The sale gets the lowest trade id, so an export ordered by date and id
+      # alone would write it ahead of the lot it names, bought the same day.
+      low_id = "00000000-0000-4000-8000-#{SecureRandom.hex(6)}"
+      Trade.where(id: sale.entryable_id).update_all(id: low_id)
+      sale.update_columns(entryable_id: low_id)
+      Holding::Materializer.new(account.reload, strategy: :forward).materialize_holdings
+      HoldingLot.find_by!(source_entry: first_buy).set_manual_total_cost!(600)
+      account.update!(cost_basis_method: switch_to) if switch_to
+
+      ndjson = nil
+      Zip::File.open_buffer(Family::DataExporter.new(source).generate_export) { |zip| ndjson = zip.read("all.ndjson") }
+      ndjson
+    end
+
+    def edit_trades(ndjson)
+      ndjson.split("\n").map { |line| JSON.parse(line) }.each { |record| yield record["data"] if record["type"] == "Trade" }.map(&:to_json).join("\n")
+    end
+
+    def lot_trades(account)
+      account.entries.where(entryable_type: "Trade").includes(:entryable).index_by { |entry| entry.trade.qty.to_i }
+    end
+
     def build_ndjson(records)
       records.map(&:to_json).join("\n")
+    end
+
+    # A property and a loan. The loan is listed first, as an export's account
+    # order does not guarantee the asset comes before what it secures.
+    def collateral_records(collateral_ref:)
+      [
+        { type: "Account", data: { id: "old-loan", name: "Mortgage", balance: "400000.00", currency: "USD",
+                                   accountable_type: "Loan",
+                                   accountable: { subtype: "mortgage", collateral_account_id: collateral_ref } } },
+        { type: "Account", data: { id: "old-property", name: "House", balance: "500000.00", currency: "USD",
+                                   accountable_type: "Property", accountable: { subtype: "house" } } }
+      ]
     end
 
     # A bill, one non-monthly rule, a settled occurrence, and the payment that

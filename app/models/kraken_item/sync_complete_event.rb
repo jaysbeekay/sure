@@ -9,7 +9,7 @@ class KrakenItem::SyncCompleteEvent
 
   def broadcast
     # Not the rendered card: it lists every account on the connection and a
-    # broadcast has no viewer to filter for (#235). The toast re-fetches the
+    # broadcast has no viewer to filter for (#3630). The toast re-fetches the
     # page per viewer.
     @kraken_item.family.broadcast_sync_complete
   rescue StandardError => e

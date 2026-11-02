@@ -1,0 +1,22 @@
+<section class="space-y-3 mt-4" data-collateral-position>
+  <div class="flex flex-wrap items-baseline gap-x-2 px-1">
+    <h3 class="text-sm font-medium text-primary">
+      <%= t(secured_by_loan? ? "UI.account.collateral_position.secured_by" : "UI.account.collateral_position.secures") %>
+    </h3>
+    <p class="text-sm text-secondary">
+      <% counterparts.each_with_index do |counterpart, index| %>
+        <%= ", " if index.positive? %><%= link_to counterpart.name, helpers.account_path(counterpart), class: "text-link underline underline-offset-2 hover:no-underline focus-ring" %>
+      <% end %>
+    </p>
+  </div>
+
+  <div class="grid grid-cols-3 gap-2">
+    <% cards.each do |title, content| %>
+      <%= helpers.render "accounts/summary_card", title: title, content: content %>
+    <% end %>
+  </div>
+
+  <% unless position.complete? %>
+    <p class="text-xs text-secondary px-1"><%= t("UI.account.collateral_position.equity_withheld") %></p>
+  <% end %>
+</section>

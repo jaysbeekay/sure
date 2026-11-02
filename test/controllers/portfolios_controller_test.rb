@@ -101,6 +101,22 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal "last_5_years", @user.reload.default_period
   end
 
+  # The picker used to take a row of its own between the heading and the first
+  # section, so the gap there was a picker's height plus two margins rather
+  # than the one gap the Plan page has. It shares the heading's row instead,
+  # and that row is the frame's first child so the first section follows it.
+  test "the period picker shares the heading's row, directly above the sections" do
+    get portfolio_path(period: "last_5_years")
+
+    assert_response :success
+    assert_select "turbo-frame#portfolio_sections > div:first-child > header h1",
+      text: I18n.t("portfolios.show.title")
+    assert_select "turbo-frame#portfolio_sections > div:first-child > header + div[data-controller='DS--menu']" do
+      assert_select "button[aria-label=?]", I18n.t("UI.period_picker.aria_label", period: "5Y")
+    end
+    assert_select "turbo-frame#portfolio_sections > div:first-child + div[role=list]"
+  end
+
   test "an unknown period falls back rather than erroring" do
     get portfolio_path(period: "not_a_period")
 
@@ -338,8 +354,8 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     get portfolio_path
 
     assert_response :success
-    assert_select "[data-controller~=reports-sortable][data-reports-sortable-url-value=?][data-reports-sortable-preference-key-value=?]",
-                  update_preferences_portfolio_path, "portfolio"
+    assert_select "[data-controller~=sortable-list][data-sortable-list-url-value=?][data-sortable-list-param-value=?]",
+                  update_preferences_portfolio_path, "preferences.portfolio_section_order"
     assert_select "[data-section-key=kpis][data-reports-section-url-value=?][data-reports-section-preference-key-value=?]",
                   update_preferences_portfolio_path, "portfolio"
   end
@@ -698,6 +714,39 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       message: "a reconciling table does not warn"
   end
 
+  # A driver's colour says whether it was performance, not just which way
+  # it pointed. Each case is the one the other branch would colour differently:
+  # a gain the sign-only rule left uncoloured, a withdrawal it painted as a
+  # loss, and a deposit a sign-for-everything rule would paint as a gain.
+  test "the drivers table colours performance by direction and leaves flows neutral" do
+    drivers = {
+      value_open: BigDecimal(1_000), value_close: BigDecimal(1_010),
+      change: BigDecimal(10), external_net: BigDecimal(-50), composition: BigDecimal(25),
+      income: BigDecimal(0), fees: BigDecimal(20), market: BigDecimal(80),
+      revaluations: BigDecimal(-25), fx_effect: BigDecimal(0), unexplained: BigDecimal(0)
+    }
+    Portfolio::Performance.any_instance.stubs(:drivers).returns(drivers)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "#portfolio-drivers" do
+      assert_select "[data-portfolio-driver=market] td.text-success", count: 1
+      assert_select "[data-portfolio-driver=revaluations] td.text-destructive", count: 1
+      assert_select "[data-portfolio-driver=fees] td.text-destructive", count: 1
+
+      assert_select "[data-portfolio-driver=external_net] td.text-primary", count: 1
+      assert_select "[data-portfolio-driver=external_net] td.text-destructive", count: 0,
+        message: "a withdrawal is cash leaving, not a loss"
+      assert_select "[data-portfolio-driver=composition] td.text-primary", count: 1
+      assert_select "[data-portfolio-driver=composition] td.text-success", count: 0,
+        message: "an account added is scope, not a gain"
+
+      assert_select ".border-primary", count: 0, message: "rules inside the card use the lighter divider"
+      assert_select ".border-secondary", count: 2
+    end
+  end
+
   test "the drivers table warns when the components do not reconcile" do
     drivers = {
       value_open: BigDecimal(1_000), value_close: BigDecimal(1_100),
@@ -712,6 +761,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_match I18n.t("portfolios.drivers.unreconciled_title"), response.body
     assert_select "[data-portfolio-driver=?]", "unexplained"
+    assert_select "[data-portfolio-driver=unexplained] td.text-primary", count: 1
+    assert_select "[data-portfolio-driver=unexplained] td.text-success", count: 0,
+      message: "a reconciliation gap is neither a gain nor a loss"
   end
 
   # B1 of the senior review on #121. The flatness test above grows HOLDINGS and
@@ -872,7 +924,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # constant, are what prove the count does not grow with holdings. This comment
   # said 95 until the income section (#123), but `main` already measured 97 when
   # that landed; the 95 -> 97 drift is not attributed to any change below. The
-  # figure has moved five times:
+  # figure has moved six times:
   #
   #   54 -> 61  the performance section: one Portfolio::Performance for the
   #             request, memoised on the registry, which is its only caller
@@ -888,11 +940,15 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             period's and the trailing year's. Per request: Performance#income
   #             is its own cache entry, so the comparison's six Performances do
   #             not run it (folded into the shared metrics it cost 106)
+  #  102 -> 103 upstream's cache freshness key (we-promise/sure#4235): one
+  #             MAX(exchange_rates.updated_at) per request. Its accounts read
+  #             replaces MAX(accounts.updated_at), so that one is even. CI
+  #             counts one query more than a local run (104), hence 105
   #
   # Neither rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 103
+  PORTFOLIO_QUERY_CEILING = 105
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one
