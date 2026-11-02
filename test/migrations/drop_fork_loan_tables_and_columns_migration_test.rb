@@ -164,6 +164,70 @@ class DropForkLoanTablesAndColumnsMigrationTest < ActiveSupport::TestCase
     assert_equal FORK_DAY_COUNT_CHECK, day_count_check_expression
   end
 
+  # Nothing validates these bounds after up, so a row can be out of range by the
+  # time of a rollback. It must not abort the rollback, and it isn't rewritten.
+  test "down keeps a loan saved outside the fork's bounds since up" do
+    quietly { @migration.down }
+    quietly { @migration.up }
+    @loan.update_columns(term_months: 5000, interest_rate: 150)
+
+    assert_nothing_raised { quietly { @migration.down } }
+
+    assert_equal 5000, @loan.reload.term_months
+    assert_equal 150, @loan.interest_rate
+    assert_includes loan_check_names, "chk_loans_term_months_bounds"
+    assert_includes loan_check_names, "chk_loans_interest_rate_bounds"
+  end
+
+  # Upstream's Loan refuses these on every save, and the fork's never did, so an
+  # installation has to be told which loans need correcting.
+  test "up names a loan with a rate change before its start date and keeps the rate" do
+    quietly { @migration.down }
+    @loan.update_columns(rate_type: "variable", start_date: Date.new(2024, 2, 1),
+                         variable_rate_schedule: { "2024-01-01" => "5.5", "2024-03-01" => "6.0" })
+
+    output = capture_io { @migration.up }.first
+
+    assert_match(/rate change dated before/, output)
+    assert_includes output, @loan.id
+    assert_equal({ "2024-01-01" => "5.5", "2024-03-01" => "6.0" }, @loan.reload.variable_rate_schedule)
+  end
+
+  test "up names a loan with no start date whose rate change precedes its first valuation" do
+    quietly { @migration.down }
+    account = @loan.account
+    first_valuation = account.entries.where(entryable_type: "Valuation").minimum(:date) ||
+      account.entries.create!(name: "Opening", date: Date.new(2024, 6, 1), amount: 1000, currency: account.currency,
+                              entryable: Valuation.new(kind: "opening_anchor")).date
+    @loan.update_columns(rate_type: "variable", start_date: nil,
+                         variable_rate_schedule: { (first_valuation - 1.day).iso8601 => "5.5" })
+
+    output = capture_io { @migration.up }.first
+
+    assert_includes output, @loan.id
+  end
+
+  # Upstream's check only applies to a variable loan.
+  test "up does not name a fixed loan holding an old rate change" do
+    quietly { @migration.down }
+    @loan.update_columns(rate_type: "fixed", start_date: Date.new(2024, 2, 1),
+                         variable_rate_schedule: { "2024-01-01" => "5.5" })
+
+    output = capture_io { @migration.up }.first
+
+    assert_no_match(/rate change dated before/, output)
+  end
+
+  test "up does not name a loan whose rate changes follow origination" do
+    quietly { @migration.down }
+    @loan.update_columns(rate_type: "variable", start_date: Date.new(2024, 2, 1),
+                         variable_rate_schedule: { "2024-02-01" => "5.5", "2024-03-01" => "6.0" })
+
+    output = capture_io { @migration.up }.first
+
+    assert_no_match(/rate change dated before/, output)
+  end
+
   # A database built from migrations never had any of it: up must neither raise
   # nor report anything.
   test "up on a database without the fork's structure changes nothing" do

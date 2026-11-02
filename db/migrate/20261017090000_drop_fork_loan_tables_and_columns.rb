@@ -47,6 +47,7 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
     counts = dropped_counts
     refuse_unconfirmed_deletion(counts)
     report_dropped_counts(counts)
+    report_rate_changes_before_origination
 
     TABLES.each { |table| drop_table table, if_exists: true }
 
@@ -55,13 +56,15 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
     adopt_upstream_day_count
   end
 
-  # The empty structure only. The rows are gone.
+  # The empty structure only. The rows are gone. Nothing enforces the two bounds
+  # after `up`, so a loan may be outside them by now: the checks apply to new
+  # writes and leave such a row as it is rather than abort the rollback.
   def down
     restore_fork_day_count
     add_check_constraint :loans, "interest_rate IS NULL OR interest_rate >= 0::numeric AND interest_rate <= 100::numeric",
-                         name: "chk_loans_interest_rate_bounds", if_not_exists: true
+                         name: "chk_loans_interest_rate_bounds", if_not_exists: true, validate: false
     add_check_constraint :loans, "term_months IS NULL OR term_months > 0 AND term_months <= 1200",
-                         name: "chk_loans_term_months_bounds", if_not_exists: true
+                         name: "chk_loans_term_months_bounds", if_not_exists: true, validate: false
 
     create_table :loan_amortizations, id: :uuid, if_not_exists: true do |t|
       t.integer :algorithm_version, default: 2, null: false
@@ -187,6 +190,38 @@ class DropForkLoanTablesAndColumns < ActiveRecord::Migration[8.1]
         message = "#{name}: #{rows} #{rows == 1 ? "row" : "rows"} deleted"
         say message
         Rails.logger.info("[DropForkLoanTablesAndColumns] #{message}")
+      end
+    end
+
+    # Upstream's Loan refuses a rate change dated before origination, on every
+    # save of the loan and of an account holding it; the fork's never did. The
+    # rate is the user's, so it is left for them to correct, and named here.
+    def report_rate_changes_before_origination
+      ids = loan_ids_with_rate_change_before_origination
+      return if ids.empty?
+
+      message = "#{ids.size} #{ids.size == 1 ? "loan has" : "loans have"} a rate change dated before origination, " \
+                "which now fails validation until corrected on the loan's form: #{ids.join(", ")}"
+      say message
+      Rails.logger.warn("[DropForkLoanTablesAndColumns] #{message}")
+    end
+
+    def loan_ids_with_rate_change_before_origination
+      connection.select_rows(<<~SQL.squish).filter_map do |id, schedule, origination|
+        SELECT loans.id, loans.variable_rate_schedule,
+               COALESCE(loans.start_date, (
+                 SELECT MIN(entries.date) FROM accounts
+                 JOIN entries ON entries.account_id = accounts.id AND entries.entryable_type = 'Valuation'
+                 WHERE accounts.accountable_type = 'Loan' AND accounts.accountable_id = loans.id
+               ))
+        FROM loans
+        WHERE loans.rate_type IS NOT NULL AND loans.rate_type <> 'fixed'
+          AND loans.variable_rate_schedule <> '{}'::jsonb
+      SQL
+        next if origination.blank?
+
+        dates = (schedule.is_a?(String) ? JSON.parse(schedule) : schedule).keys
+        id if dates.any? { |date| date.to_s < origination.to_s.first(10) }
       end
     end
 

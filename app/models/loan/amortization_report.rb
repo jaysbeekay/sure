@@ -6,7 +6,6 @@ class Loan::AmortizationReport
                     :interest_payment, :beginning_balance, :ending_balance, :interest_rate)
 
   # A response is computed from the loan as it stands, so it is always current.
-  # Clients of the persisted schedule also knew "stale" and "missing".
   STATUS = "current".freeze
 
   attr_reader :loan, :schedule
@@ -44,10 +43,10 @@ class Loan::AmortizationReport
     loan.variable_rate_type? && loan.variable_rate_schedule.present?
   end
 
-  def next_rate_change_date
+  def next_rate_change_date(as_of: Date.current)
     return nil unless loan.variable_rate_type?
 
-    loan.variable_rates.map { |date, _| Date.iso8601(date.to_s) }.find { |date| date > Date.current }
+    loan.variable_rates.map { |date, _| Date.iso8601(date.to_s) }.find { |date| date > as_of }
   end
 
   # Past the last payment, an empty page rather than nil.

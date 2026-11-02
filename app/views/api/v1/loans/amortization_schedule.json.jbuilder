@@ -31,7 +31,7 @@ if projection.applicable?
     json.projected_payoff_date projection.payoff_date
     json.projected_total_interest projection.total_interest.to_s
     json.months_saved projection.months_saved
-    json.interest_saved projection.interest_saved.to_s
+    json.interest_saved projection.interest_saved.amount.to_s
   end
 else
   json.payoff_projection nil

@@ -123,7 +123,9 @@ class Api::V1::LoansControllerTest < ActionDispatch::IntegrationTest
     assert projection.present?
     assert_equal "$450,000.00", projection["current_balance"]
     assert projection["months_saved"] > 0
-    assert projection["interest_saved"].delete("^0-9.").to_f > 0
+    # A plain number a client can parse, signed, not a formatted amount.
+    assert_match(/\A-?\d+(\.\d+)?\z/, projection["interest_saved"])
+    assert projection["interest_saved"].to_d > 0
   end
 
   # Upstream's projection never runs past maturity, so a loan behind its
