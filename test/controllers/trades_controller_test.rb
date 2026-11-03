@@ -551,6 +551,31 @@ class TradesControllerTest < ActionDispatch::IntegrationTest
     assert_select lot_select, count: 0
   end
 
+  test "each lot in the drawer reads the shares left on the sale's date" do
+    account, buy, sale = lot_choice_account(method: "fifo")
+    create_trade(buy.trade.security, account: account, qty: -15, price: 25, date: 2.days.ago.to_date)
+    Holding::Materializer.new(account.reload, strategy: :forward).materialize_holdings
+
+    get trade_url(sale)
+
+    # The 15 sold the day before had already left the 40 bought.
+    left = 25
+    assert_select "select[name='entry[entryable_attributes][lot_source_entry_id]'] option[value='#{buy.id}']",
+      text: /#{Regexp.escape(ApplicationController.helpers.format_quantity(left, exact: true))} of #{Regexp.escape(ApplicationController.helpers.format_quantity(buy.trade.qty, exact: true))} left/
+  end
+
+  test "a lot whose shares left can't be known reads what was bought" do
+    account, buy, sale = lot_choice_account(method: "fifo")
+    transfer_out = create_trade(buy.trade.security, account: account, qty: -5, price: 25, date: Date.current)
+    transfer_out.trade.update!(investment_activity_label: "Transfer")
+    Holding::Materializer.new(account.reload, strategy: :forward).materialize_holdings
+
+    get trade_url(sale)
+
+    assert_select "select[name='entry[entryable_attributes][lot_source_entry_id]'] option[value='#{buy.id}']",
+      text: /#{Regexp.escape(ApplicationController.helpers.format_quantity(buy.trade.qty, exact: true))} bought/
+  end
+
   test "naming a lot on a sale saves it and restates the account" do
     account, buy, sale = lot_choice_account(method: "fifo")
 

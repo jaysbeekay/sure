@@ -59,7 +59,8 @@ en:
       fee_label: Transaction fee
       lot_label: Sold from lot
       lot_oldest_first: Oldest first
-      lot_option: "%{date} · %{qty} at %{price}"
+      lot_option: "%{date} · %{left} of %{bought} left at %{price}"
+      lot_option_left_unknown: "%{date} · %{bought} bought at %{price}"
       delete_subtitle: This action cannot be undone
       delete_title: Delete Trade
       details: Details

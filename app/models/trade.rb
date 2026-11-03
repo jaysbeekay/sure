@@ -95,6 +95,44 @@ class Trade < ApplicationRecord
     before_sale.or(acquisitions.where(id: attribute_in_database(:lot_source_entry_id))).chronological
   end
 
+  # What a lot held and had left, in shares on a sale's date.
+  LotShares = Data.define(:left, :bought)
+
+  # For each of `lots` (acquisition entries, as `lot_choices` gives them), by
+  # entry id: the shares it was bought as and the shares left in it on this
+  # sale's date, both counted as shares stood on that date, so a split between
+  # is undone. A lot's stored quantity is what is left today, so what this sale
+  # and every sale replayed after it took from the lot is added back. Follows
+  # the last sync, as the stored lots do: a purchase not yet stored counts in
+  # full. A transfer out replayed after the sale takes from the lots without
+  # recording which, so then `left` is nil rather than a wrong figure.
+  def lot_shares(lots)
+    return {} if lots.empty?
+
+    ids = lots.map(&:id)
+    left_now = HoldingLot.derived.where(account_id: entry.account_id, source_entry_id: ids).pluck(:source_entry_id, :qty).to_h
+    taken_since = HoldingLotDisposal.joins(:sale_entry)
+      .where(account_id: entry.account_id, lot_source_entry_id: ids)
+      .merge(replayed_from_this_sale)
+      .pluck(:lot_source_entry_id, "entries.date", :qty)
+      .group_by(&:first)
+
+    transfer_out_since = transfers_out_replayed_after_sale?
+
+    lots.to_h do |lot|
+      bought = shares_on_sale_date(lot.trade.qty, lot.date)
+      left = if transfer_out_since
+        nil
+      elsif left_now.key?(lot.id)
+        shares_on_sale_date(left_now[lot.id], Date.current) +
+          Array(taken_since[lot.id]).sum(BigDecimal("0")) { |_id, date, qty| shares_on_sale_date(qty, date) }
+      else
+        bought
+      end
+      [ lot.id, LotShares.new(left: left, bought: bought) ]
+    end
+  end
+
   class << self
     def build_name(type, qty, ticker)
       prefix = type == "buy" ? "Buy" : "Sell"
@@ -208,13 +246,47 @@ class Trade < ApplicationRecord
 
     # Acquisitions whose lot is now empty and was emptied before this sale:
     # no sale dated on or after it took anything from the lot.
+    # A lot is still open for this sale if this sale or one replayed after it
+    # took from it. Same-day trades replay in the order they were entered, so a
+    # sale entered earlier that day had already emptied what it took.
     def lots_emptied_before_sale
       later_disposals = HoldingLotDisposal.joins(:sale_entry)
         .where(account_id: entry.account_id).where.not(lot_source_entry_id: nil)
-        .where("entries.date >= ?", entry.date)
+        .merge(replayed_from_this_sale)
       HoldingLot.derived.where(account_id: entry.account_id, qty: 0)
         .where.not(source_entry_id: later_disposals.select(:lot_source_entry_id))
         .select(:source_entry_id)
+    end
+
+    # `qty` shares counted on `on`, restated as shares on this sale's date: a
+    # split counts when its ex-date is after the earlier date and on or before
+    # the later one, as Holding::Materializer#cumulative_split_factor does.
+    def shares_on_sale_date(qty, on)
+      from, to = [ entry.date, on ].minmax
+      factor = security_splits.select { |split| split.ex_date > from && split.ex_date <= to }
+        .reduce(Rational(1)) { |product, split| product * split.ratio }
+      return qty.to_d if factor == 1
+
+      on > entry.date ? Security::Split.unscale(qty, factor) : Security::Split.scale(qty, factor)
+    end
+
+    def security_splits
+      @security_splits ||= Security::Split.where(security_id: security_id).to_a
+    end
+
+    # Entries the replay applies at or after this sale: Holding::PortfolioCache
+    # orders a day's trades by created_at and then by id, as Entry.chronological
+    # does.
+    def replayed_from_this_sale
+      Entry.where("(entries.date, entries.created_at, entries.id) >= (:date, :created_at, :id)",
+                  date: entry.date, created_at: entry.created_at || Time.current,
+                  id: entry.id || "00000000-0000-0000-0000-000000000000")
+    end
+
+    def transfers_out_replayed_after_sale?
+      entry.account.entries.where(entryable_type: "Trade")
+        .where(entryable_id: Trade.where(security_id: security_id, investment_activity_label: INTERNAL_MOVEMENT_LABELS).where("qty < 0").select(:id))
+        .merge(replayed_from_this_sale).where.not(id: entry.id).exists?
     end
 
     def exchange_rate_must_be_valid

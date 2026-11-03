@@ -338,6 +338,158 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
+  # The picker shows what was left in each lot when the sale happened, which
+  # is what the choice is about, not what the lot was bought as.
+  test "each lot offered shows the shares left in it on the sale's date" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("LEFT", 30)
+      buy = trade(security, 100, 10, 1)
+      first = trade(security, -60, 12, 5)
+      second = trade(security, -30, 12, 5)
+      later = trade(security, -5, 12, 8)
+      entered_in_order(buy, first, second, later)
+      materialize(:forward)
+
+      assert_equal({ buy.id => 100 }, shares_left(first))
+      assert_equal({ buy.id => 40 }, shares_left(second))
+      assert_equal({ buy.id => 10 }, shares_left(later))
+    end
+  end
+
+  # Same day, entered first: the replay applies it first, so what it emptied
+  # was already gone when the later one sold.
+  test "a lot an earlier sale on the same day emptied is not offered" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("SAME", 30)
+      first_lot = trade(security, 100, 10, 1)
+      second_lot = trade(security, 50, 11, 2)
+      emptying = trade(security, -100, 12, 5)
+      later_same_day = trade(security, -20, 12, 5)
+      entered_in_order(first_lot, second_lot, emptying, later_same_day)
+      materialize(:forward)
+
+      assert_includes Trade.find(emptying.entryable_id).lot_choices.to_a, first_lot, "the sale that emptied it chose from it"
+      assert_equal [ second_lot ], Trade.find(later_same_day.entryable_id).lot_choices.to_a
+      assert_not Trade.find(later_same_day.entryable_id).update(lot_source_entry: first_lot), "a crafted submit naming it"
+    end
+  end
+
+  # Shares are counted as they stood on the sale's date: a split since then
+  # is undone for the figure, and a later sale's shares are restated back.
+  test "a split after the sale is undone in the shares left" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("SPLT", 30)
+      buy = trade(security, 10, 10, 1)
+      before_split = trade(security, -4, 12, 3)
+      Security::Split.create!(security: security, ex_date: d(5), numerator: 2, denominator: 1, source: "manual")
+      after_split = trade(security, -2, 12, 7)
+      entered_in_order(buy, before_split, after_split)
+      materialize(:forward)
+
+      assert_equal({ buy.id => 10 }, shares_left(before_split))
+      assert_equal({ buy.id => 12 }, shares_left(after_split))
+
+      bought = Trade.find(after_split.entryable_id).then { |sale| sale.lot_shares(sale.lot_choices.to_a).fetch(buy.id).bought }
+      assert_equal 20, bought, "the 10 bought, as shares after the split"
+    end
+  end
+
+  # A split takes effect at the open of its ex-date, so a sale that day is
+  # already in the new shares and nothing is undone for it.
+  test "a split on the sale's own date counts the lot in the new shares" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("SPLD", 30)
+      buy = trade(security, 10, 10, 1)
+      Security::Split.create!(security: security, ex_date: d(3), numerator: 2, denominator: 1, source: "manual")
+      sale = trade(security, -4, 12, 3)
+      entered_in_order(buy, sale)
+      materialize(:forward)
+
+      shares = Trade.find(sale.entryable_id).then { |t| t.lot_shares(t.lot_choices.to_a).fetch(buy.id) }
+      assert_equal 20, shares.left
+      assert_equal 20, shares.bought
+    end
+  end
+
+  # Same date and same created_at: the replay falls back to id, so the lower
+  # id went first and emptied the lot.
+  test "a same-day sale entered at the same moment is ordered by id" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("TIES", 30)
+      first_lot = trade(security, 100, 10, 1)
+      second_lot = trade(security, 50, 11, 2)
+      emptying = trade(security, -100, 12, 5)
+      later = trade(security, -20, 12, 5)
+      entered_in_order(first_lot, second_lot, emptying)
+      later.update_columns(created_at: emptying.reload.created_at)
+      low, high = [ "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002" ]
+      Entry.where(id: emptying.id).update_all(id: low)
+      Entry.where(id: later.id).update_all(id: high)
+      materialize(:forward)
+
+      later_trade = Entry.find(high).trade
+      assert_equal [ second_lot ], later_trade.lot_choices.to_a
+      assert_equal({ first_lot.id => 100, second_lot.id => 50 }, shares_left(Entry.find(low)))
+    end
+  end
+
+  # A transfer out takes from the lots without recording which, so what was
+  # left on an earlier sale's date can't be read back: no figure is better
+  # than a wrong one.
+  test "a transfer out after the sale leaves the shares left unknown" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("XFER", 30)
+      buy = trade(security, 100, 10, 1)
+      sale = trade(security, -10, 12, 5)
+      transfer_out = trade(security, -50, 30, 8)
+      transfer_out.trade.update!(investment_activity_label: "Transfer")
+      entered_in_order(buy, sale, transfer_out)
+      materialize(:forward)
+
+      shares = Trade.find(sale.entryable_id).then { |t| t.lot_shares(t.lot_choices.to_a).fetch(buy.id) }
+      assert_nil shares.left
+      assert_equal 100, shares.bought
+    end
+  end
+
+  test "a transfer out before the sale is already in the stored lot" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("XFRB", 30)
+      buy = trade(security, 100, 10, 1)
+      transfer_out = trade(security, -50, 30, 3)
+      transfer_out.trade.update!(investment_activity_label: "Transfer")
+      sale = trade(security, -10, 12, 5)
+      entered_in_order(buy, transfer_out, sale)
+      materialize(:forward)
+
+      assert_equal({ buy.id => 50 }, shares_left(sale))
+    end
+  end
+
+  # Nothing stored yet for a sale or a purchase entered since the last sync:
+  # the lot's stored figure stands, and an unsynced purchase counts in full.
+  test "shares left follow the last sync for entries made since" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("SYNC", 30)
+      buy = trade(security, 100, 10, 1)
+      sold = trade(security, -60, 12, 3)
+      entered_in_order(buy, sold)
+      materialize(:forward)
+      unsynced_buy = trade(security, 30, 11, 4)
+      unsynced_sale = trade(security, -10, 12, 6)
+
+      assert_equal({ buy.id => 40, unsynced_buy.id => 30 }, shares_left(unsynced_sale))
+    end
+  end
+
   # An opening lot has no acquisition, and an empty one (a clamp records
   # one) must not empty the list with it.
   test "an empty opening lot leaves the sale's choices alone" do
@@ -699,6 +851,11 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     # and the replay would order them by id; set the order they were entered.
     def entered_in_order(*entries)
       entries.each_with_index { |entry, index| entry.update_columns(created_at: TODAY + index.seconds) }
+    end
+
+    def shares_left(sale)
+      trade = Trade.find(sale.entryable_id)
+      trade.lot_shares(trade.lot_choices.to_a).transform_values { |shares| shares.left.to_d }
     end
 
     def name_lot(sale, lot)
