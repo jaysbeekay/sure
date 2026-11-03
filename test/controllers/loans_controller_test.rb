@@ -422,6 +422,18 @@ class LoansControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-loan-rate-changes-fixed-type-value='fixed']", count: 1
   end
 
+  # Each hint sits under its own field: the interest-basis explanation belongs
+  # to the basis select, not to the collateral picker after it.
+  test "the interest-basis and collateral hints each describe their own field" do
+    get edit_loan_path(@account)
+
+    assert_response :success
+    basis_hint = css_select("p").map(&:text).find { |text| text.start_with?("How your lender measures") }
+    collateral_hint = css_select("p").map(&:text).find { |text| text.start_with?("Link a property or vehicle") }
+    assert_includes basis_hint, "Actual/365 charges by the length of the month"
+    assert_not_includes collateral_hint, "Actual/365"
+  end
+
   # A term the simulator will not walk leaves the loan without a schedule
   # (see Loan#amortizable?). The model stays tolerant because a provider writes
   # this column too; the form is where a person typing it is told the limit.
