@@ -253,9 +253,33 @@ class Trade < ApplicationRecord
       later_disposals = HoldingLotDisposal.joins(:sale_entry)
         .where(account_id: entry.account_id).where.not(lot_source_entry_id: nil)
         .merge(replayed_from_this_sale)
-      HoldingLot.derived.where(account_id: entry.account_id, qty: 0)
+      emptied = HoldingLot.derived.where(account_id: entry.account_id, qty: 0)
         .where.not(source_entry_id: later_disposals.select(:lot_source_entry_id))
-        .select(:source_entry_id)
+      return emptied.select(:source_entry_id) unless transfers_out_replayed_after_sale?
+
+      used_up_by_earlier_sales(emptied.where.not(source_entry_id: nil).pluck(:source_entry_id))
+    end
+
+    # A transfer out replayed after the sale records no lot, so a lot stored
+    # empty may still have been open on the sale's date. Of `lot_ids`, only the
+    # ones the sales before this one used up, by their recorded disposals, are
+    # certainly empty. The rest stay on offer with their shares left unknown;
+    # if an earlier transfer out emptied one, naming it changes nothing, since
+    # Holding::LotBook sells oldest first when a named lot is no longer open.
+    def used_up_by_earlier_sales(lot_ids)
+      return [] if lot_ids.empty?
+
+      taken = HoldingLotDisposal.joins(:sale_entry)
+        .where(account_id: entry.account_id, lot_source_entry_id: lot_ids)
+        .pluck(:lot_source_entry_id, "entries.date", :qty)
+        .group_by(&:first)
+      Entry.where(id: lot_ids, entryable_type: "Trade")
+        .joins("INNER JOIN trades ON trades.id = entries.entryable_id")
+        .pluck(:id, :date, "trades.qty")
+        .filter_map do |id, date, qty|
+          used = Array(taken[id]).sum(BigDecimal("0")) { |_id, on, taken_qty| shares_on_sale_date(taken_qty, on) }
+          id if used >= shares_on_sale_date(qty, date) - Holding::LotBook::OPENING_RESIDUAL_BOUND
+        end
     end
 
     # `qty` shares counted on `on`, restated as shares on this sale's date: a

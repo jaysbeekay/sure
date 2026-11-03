@@ -473,6 +473,67 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
+  # A lot stored empty might have been emptied by a transfer out after the
+  # sale, which records no lot, so it was open on the sale's date.
+  test "a lot a later transfer out emptied is still offered, with its shares left unknown" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("XFRE", 30)
+      first = trade(security, 100, 10, 1)
+      second = trade(security, 50, 11, 2)
+      sale = trade(security, -30, 12, 5)
+      transfer_out = trade(security, -120, 30, 8)
+      transfer_out.trade.update!(investment_activity_label: "Transfer")
+      entered_in_order(first, second, sale, transfer_out)
+      materialize(:forward)
+
+      assert_equal 0, HoldingLot.derived.find_by!(source_entry_id: second.id).qty, "precondition: the transfer emptied it"
+      trade = Trade.find(sale.entryable_id)
+      assert_equal [ first, second ], trade.lot_choices.to_a
+      assert_equal Trade::LotShares.new(left: nil, bought: 50), trade.lot_shares([ second ]).fetch(second.id)
+    end
+  end
+
+  test "a lot earlier sales emptied stays hidden when a transfer out follows the sale" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("XFRH", 30)
+      first = trade(security, 50, 10, 1)
+      early_sale = trade(security, -50, 12, 2)
+      Security::Split.create!(security: security, ex_date: d(3), numerator: 2, denominator: 1, source: "manual")
+      second = trade(security, 50, 11, 4)
+      sale = trade(security, -10, 12, 5)
+      transfer_out = trade(security, -40, 30, 8)
+      transfer_out.trade.update!(investment_activity_label: "Transfer")
+      entered_in_order(first, early_sale, second, sale, transfer_out)
+      materialize(:forward)
+
+      assert_equal [ second ], Trade.find(sale.entryable_id).lot_choices.to_a
+    end
+  end
+
+  # Earlier sales took 60 of the 100 shares the first lot stood at after its
+  # split, so it was open on the sale's date and the transfer emptied it.
+  test "a lot earlier sales only partly used is offered when a transfer out follows" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("XFRP", 30)
+      first = trade(security, 50, 10, 1)
+      second = trade(security, 50, 11, 2)
+      Security::Split.create!(security: security, ex_date: d(3), numerator: 2, denominator: 1, source: "manual")
+      early_sale = trade(security, -60, 12, 4)
+      sale = trade(security, -10, 12, 6)
+      transfer_out = trade(security, -130, 30, 8)
+      transfer_out.trade.update!(investment_activity_label: "Transfer")
+      entered_in_order(first, second, early_sale, sale, transfer_out)
+      name_lot(sale, second)
+      materialize(:forward)
+
+      assert_equal 0, HoldingLot.derived.find_by!(source_entry_id: first.id).qty, "precondition: the transfer emptied it"
+      assert_equal [ first, second ], Trade.find(sale.entryable_id).lot_choices.to_a
+    end
+  end
+
   # Nothing stored yet for a sale or a purchase entered since the last sync:
   # the lot's stored figure stands, and an unsynced purchase counts in full.
   test "shares left follow the last sync for entries made since" do
