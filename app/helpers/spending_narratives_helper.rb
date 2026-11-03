@@ -60,7 +60,7 @@ module SpendingNarrativesHelper
     end
   end
 
-  def spending_money(amount)
+  def narrative_money(amount)
     Money.new(amount, Current.family.currency).format
   end
 
@@ -104,7 +104,7 @@ module SpendingNarrativesHelper
   # "+$200.00 (+25%)", "+$200.00 (new)" for a category with no prior spend.
   def spending_change_label(mover)
     sign = mover.delta.positive? ? "+" : "−"
-    amount = "#{sign}#{spending_money(mover.delta.abs)}"
+    amount = "#{sign}#{narrative_money(mover.delta.abs)}"
     pct = mover.change_pct
     detail = pct.nil? ? t("spending_narratives.movers.new") : "#{pct.positive? ? "+" : "−"}#{pct.abs}%"
 

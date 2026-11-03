@@ -109,7 +109,7 @@ module Admin
       end
 
       # The form pages sit under the providers list, so the trail links back
-      # to it instead of ending on its name.
+      # to it and ends on the form's own title.
       def set_form_breadcrumbs(action)
         @breadcrumbs = [
           [ t("breadcrumbs.home"), root_path ],

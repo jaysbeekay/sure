@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_31_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -113,6 +113,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.string "institution_domain"
     t.string "institution_name"
     t.jsonb "locked_attributes", default: {}
+    t.string "logo_selection", default: "automatic", null: false
     t.string "name"
     t.text "notes"
     t.uuid "owner_id"
@@ -135,7 +136,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.index ["plaid_account_id"], name: "index_accounts_on_plaid_account_id"
     t.index ["simplefin_account_id"], name: "index_accounts_on_simplefin_account_id"
     t.index ["status"], name: "index_accounts_on_status"
-    t.check_constraint "cost_basis_method::text = ANY (ARRAY['average'::character varying, 'fifo'::character varying]::text[])", name: "accounts_cost_basis_method_known"
+    t.check_constraint "cost_basis_method::text = ANY (ARRAY['average'::character varying::text, 'fifo'::character varying::text])", name: "accounts_cost_basis_method_known"
   end
 
   create_table "active_storage_attachments", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -575,11 +576,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.decimal "apr", precision: 10, scale: 2
     t.decimal "available_credit", precision: 10, scale: 2
     t.datetime "created_at", null: false
+    t.integer "due_day"
     t.date "expiration_date"
     t.jsonb "locked_attributes", default: {}
     t.decimal "minimum_payment", precision: 10, scale: 2
+    t.integer "statement_close_day"
     t.string "subtype"
     t.datetime "updated_at", null: false
+    t.check_constraint "due_day >= 1 AND due_day <= 31", name: "chk_credit_cards_due_day"
+    t.check_constraint "statement_close_day >= 1 AND statement_close_day <= 31", name: "chk_credit_cards_statement_close_day"
   end
 
   create_table "cryptos", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -826,7 +831,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.index ["event_id", "transaction_id"], name: "index_event_transactions_on_event_and_transaction", unique: true
     t.index ["event_id"], name: "index_event_transactions_on_event_id"
     t.index ["transaction_id"], name: "index_event_transactions_on_transaction_id"
-    t.check_constraint "inclusion::text = ANY (ARRAY['included'::character varying, 'excluded'::character varying]::text[])", name: "chk_event_transactions_inclusion"
+    t.check_constraint "inclusion::text = ANY (ARRAY['included'::character varying::text, 'excluded'::character varying::text])", name: "chk_event_transactions_inclusion"
   end
 
   create_table "events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -867,7 +872,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
   create_table "families", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.jsonb "ai_prompt_overrides", default: {}, null: false
     t.string "assistant_type", default: "builtin", null: false
+    t.boolean "auto_generate_transaction_names", default: false, null: false
+    t.boolean "auto_match_transfers_disabled", default: false, null: false
     t.boolean "auto_sync_on_login", default: true, null: false
+    t.jsonb "bayes_settings", default: {}, null: false
     t.string "bills_feed_token"
     t.boolean "categories_locked", default: false, null: false
     t.decimal "categorization_confidence_threshold", precision: 3, scale: 2, default: "0.7", null: false
@@ -1751,6 +1759,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.datetime "created_at", null: false
     t.string "currency"
     t.decimal "current_balance", precision: 19, scale: 4
+    t.datetime "history_synced_from"
     t.boolean "holdings_supported", default: true, null: false
     t.jsonb "institution_metadata"
     t.uuid "lunchflow_item_id", null: false
@@ -1759,6 +1768,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.jsonb "raw_holdings_payload"
     t.jsonb "raw_payload"
     t.jsonb "raw_transactions_payload"
+    t.datetime "transactions_synced_through"
     t.boolean "treat_balance_as_available_credit", default: false, null: false
     t.datetime "updated_at", null: false
     t.index ["account_id"], name: "index_lunchflow_accounts_on_account_id"
@@ -2105,7 +2115,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.datetime "updated_at", null: false
     t.integer "year_built"
     t.index ["avm_last_synced_on"], name: "index_properties_on_avm_provider_sync", order: "NULLS FIRST", where: "(avm_provider IS NOT NULL)"
-    t.check_constraint "avm_provider IS NULL OR (avm_provider::text = ANY (ARRAY['rentcast'::character varying, 'realie'::character varying, 'chimnie'::character varying]::text[]))", name: "properties_avm_provider_check"
+    t.check_constraint "avm_provider IS NULL OR (avm_provider::text = ANY (ARRAY['rentcast'::character varying::text, 'realie'::character varying::text, 'chimnie'::character varying::text]))", name: "properties_avm_provider_check"
   end
 
   create_table "provider_request_counts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -2410,8 +2420,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.index ["retirement_plan_id"], name: "index_retirement_plan_streams_on_retirement_plan_id"
     t.check_constraint "annual_amount > 0::numeric", name: "chk_retirement_plan_streams_amount"
     t.check_constraint "end_year IS NULL OR start_year IS NULL OR end_year >= start_year", name: "chk_retirement_plan_streams_years"
-    t.check_constraint "kind::text = ANY (ARRAY['expense'::character varying, 'income'::character varying, 'one_off'::character varying]::text[])", name: "chk_retirement_plan_streams_kind"
-    t.check_constraint "source::text = ANY (ARRAY['seeded_living_costs'::character varying, 'seeded_loan'::character varying, 'manual'::character varying]::text[])", name: "chk_retirement_plan_streams_source"
+    t.check_constraint "kind::text = ANY (ARRAY['expense'::character varying::text, 'income'::character varying::text, 'one_off'::character varying::text])", name: "chk_retirement_plan_streams_kind"
+    t.check_constraint "source::text = ANY (ARRAY['seeded_living_costs'::character varying::text, 'seeded_loan'::character varying::text, 'manual'::character varying::text])", name: "chk_retirement_plan_streams_source"
   end
 
   create_table "retirement_plans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -2434,7 +2444,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.check_constraint "end_age >= 50 AND end_age <= 120", name: "chk_retirement_plans_end_age"
     t.check_constraint "expected_annual_return > '-1'::integer::numeric AND expected_annual_return <= 1::numeric", name: "chk_retirement_plans_expected_annual_return"
     t.check_constraint "inflation_rate > '-1'::integer::numeric AND inflation_rate <= 1::numeric", name: "chk_retirement_plans_inflation_rate"
-    t.check_constraint "mode::text = ANY (ARRAY['traditional'::character varying, 'fire'::character varying]::text[])", name: "chk_retirement_plans_mode"
+    t.check_constraint "mode::text = ANY (ARRAY['traditional'::character varying::text, 'fire'::character varying::text])", name: "chk_retirement_plans_mode"
     t.check_constraint "return_volatility >= 0::numeric AND return_volatility <= 1::numeric", name: "chk_retirement_plans_return_volatility"
     t.check_constraint "safe_withdrawal_rate > 0::numeric AND safe_withdrawal_rate <= 1::numeric", name: "chk_retirement_plans_safe_withdrawal_rate"
     t.check_constraint "savings_rate IS NULL OR savings_rate >= 0::numeric AND savings_rate <= 1::numeric", name: "chk_retirement_plans_savings_rate"
@@ -2601,6 +2611,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.uuid "user_id", null: false
     t.index ["active_impersonator_session_id"], name: "index_sessions_on_active_impersonator_session_id"
     t.index ["ip_address_digest"], name: "index_sessions_on_ip_address_digest"
+    t.index ["updated_at"], name: "index_sessions_on_updated_at"
     t.index ["user_id"], name: "index_sessions_on_user_id"
   end
 
@@ -3029,6 +3040,54 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
     t.check_constraint "amount >= 0::numeric", name: "check_transfer_amount_non_negative"
   end
 
+  create_table "truelayer_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "account_id"
+    t.string "account_kind", default: "account", null: false
+    t.string "account_type"
+    t.datetime "created_at", null: false
+    t.string "currency"
+    t.decimal "current_balance", precision: 19, scale: 4
+    t.jsonb "institution_metadata"
+    t.string "name"
+    t.string "provider"
+    t.jsonb "raw_payload"
+    t.jsonb "raw_transactions_payload"
+    t.uuid "truelayer_item_id", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_truelayer_accounts_on_account_id"
+    t.index ["truelayer_item_id", "account_id"], name: "index_truelayer_accounts_on_truelayer_item_id_and_account_id", unique: true, where: "(account_id IS NOT NULL)"
+    t.index ["truelayer_item_id"], name: "index_truelayer_accounts_on_truelayer_item_id"
+  end
+
+  create_table "truelayer_items", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.text "access_token"
+    t.datetime "access_token_expires_at"
+    t.string "client_id"
+    t.text "client_secret"
+    t.datetime "consent_expires_at"
+    t.datetime "created_at", null: false
+    t.uuid "family_id", null: false
+    t.datetime "history_backfilled_at"
+    t.string "institution_color"
+    t.string "institution_domain"
+    t.string "institution_id"
+    t.string "institution_name"
+    t.string "institution_url"
+    t.datetime "last_authorized_at"
+    t.string "name"
+    t.boolean "pending_account_setup", default: false
+    t.jsonb "raw_institution_payload"
+    t.jsonb "raw_payload"
+    t.string "reauth_reason"
+    t.text "refresh_token"
+    t.boolean "scheduled_for_deletion", default: false
+    t.string "status", default: "good"
+    t.datetime "sync_start_date"
+    t.datetime "updated_at", null: false
+    t.index ["family_id"], name: "index_truelayer_items_on_family_id"
+    t.index ["status"], name: "index_truelayer_items_on_status"
+  end
+
   create_table "up_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "account_id"
     t.string "account_status"
@@ -3391,6 +3450,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_090000) do
   add_foreign_key "transactions", "transfers"
   add_foreign_key "transfers", "transactions", column: "inflow_transaction_id", on_delete: :cascade
   add_foreign_key "transfers", "transactions", column: "outflow_transaction_id", on_delete: :cascade
+  add_foreign_key "truelayer_accounts", "truelayer_items"
+  add_foreign_key "truelayer_items", "families"
   add_foreign_key "up_accounts", "up_items"
   add_foreign_key "up_items", "families"
   add_foreign_key "users", "accounts", column: "default_account_id", on_delete: :nullify

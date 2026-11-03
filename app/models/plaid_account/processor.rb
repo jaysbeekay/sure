@@ -5,8 +5,8 @@ class PlaidAccount::Processor
 
   attr_reader :plaid_account, :as_of
 
-  # `as_of` is the sync's date. Only the loan processors read it, to date a
-  # rate change (#223).
+  # `as_of` is the sync's date. Only the loan liability processors read it, to
+  # date a variable rate change.
   def initialize(plaid_account, as_of: Date.current)
     @plaid_account = plaid_account
     @as_of = as_of

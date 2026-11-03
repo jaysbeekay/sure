@@ -44,6 +44,17 @@ class Portfolio::RealizedGainsTest < ActiveSupport::TestCase
                  "a movement that realised nothing is not a disposal this class failed to measure"
   end
 
+  # `entries.excluded` is nullable and Entry#excluded? reads NULL as live, as
+  # Portfolio::ReturnScope does: only a sale marked excluded is left out.
+  test "an excluded sale is left out, and one whose excluded flag is NULL is counted" do
+    holding_snapshot account: @account, date: @march, qty: 5, price: 150, cost_basis: 100
+    sell_trade(account: @account, date: @march, qty: 2, price: 150).update_columns(excluded: true)
+    sell_trade(account: @account, date: @april, qty: 1, price: 130).update_columns(excluded: nil)
+
+    assert_equal BigDecimal(30), realized.net, "only the NULL-flagged April sale counts"
+    assert_equal 1, realized.trade_count
+  end
+
   # A realised gain is locked at the moment of sale. Today's rate is deliberately
   # different and much larger: if it were used, the figure would be 300, not 150.
   test "a foreign currency sale converts at its own trade date" do

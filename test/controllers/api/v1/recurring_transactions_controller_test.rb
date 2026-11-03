@@ -330,6 +330,7 @@ class Api::V1::RecurringTransactionsControllerTest < ActionDispatch::Integration
     assert_equal 16, response_data["expected_day_of_month"]
   end
 
+  # The API writes "active" onto any writable series, a detected one included.
   test "should link a detected bill's past payments when activating it" do
     paid_on = Date.current.beginning_of_month + 8.days - 2.months
     suggestion = @family.recurring_transactions.create!(
