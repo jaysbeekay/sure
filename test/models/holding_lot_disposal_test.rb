@@ -458,6 +458,28 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
+  # Only a movement out takes from the lots unrecorded. A transfer in after the
+  # sale adds a lot of its own and leaves the earlier lots as the sales left
+  # them, so the figure stays readable and a used-up lot stays hidden.
+  test "a transfer in after the sale keeps the shares left and the used-up lot hidden" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("XFRI", 30)
+      first = trade(security, 50, 10, 1)
+      early_sale = trade(security, -50, 12, 2)
+      second = trade(security, 50, 11, 4)
+      sale = trade(security, -10, 12, 5)
+      transfer_in = trade(security, 20, 30, 8)
+      transfer_in.trade.update!(investment_activity_label: "Transfer")
+      entered_in_order(first, early_sale, second, sale, transfer_in)
+      materialize(:forward)
+
+      trade = Trade.find(sale.entryable_id)
+      assert_equal [ second ], trade.lot_choices.to_a
+      assert_equal Trade::LotShares.new(left: 50, bought: 50), trade.lot_shares([ second ]).fetch(second.id)
+    end
+  end
+
   test "a transfer out before the sale is already in the stored lot" do
     travel_to TODAY do
       setup_account(method: "fifo")
