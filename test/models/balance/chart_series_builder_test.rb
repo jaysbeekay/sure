@@ -555,6 +555,18 @@ class Balance::ChartSeriesBuilderTest < ActiveSupport::TestCase
     assert_equal "USD", series.values.last.value.currency.iso_code
   end
 
+  # The contributions line is drawn beside the value line, so its dates print
+  # in the family's chosen format, as the balance and gains series do.
+  test "net contributions dates follow the family's date format" do
+    account = lay_contributions_example
+    account.family.update!(date_format: "%d/%m/%Y")
+    Current.stubs(:family).returns(account.family)
+
+    series = contributions_builder(account, start_date: @day_one - 2).net_contributions_series
+
+    assert_equal series.values.map { |v| v.date.strftime("%d/%m/%Y") }, series.values.map(&:date_formatted)
+  end
+
   test "a withdrawal lowers net contributions by its amount on its date" do
     account = lay_contributions_example
 
