@@ -19,15 +19,15 @@
         <div class="space-y-1">
           <p class="text-sm text-secondary privacy-sensitive">
             <%= t(".pace.summary",
-                  spent: spending_money(@pace.spent),
-                  budgeted: spending_money(@pace.budgeted),
+                  spent: narrative_money(@pace.spent),
+                  budgeted: narrative_money(@pace.budgeted),
                   spent_pct: @pace.spent_percent,
                   elapsed_pct: @pace.elapsed_percent) %>
           </p>
           <p class="text-sm text-primary privacy-sensitive">
             <%= t(".pace.outlook.#{status}",
-                  projected: spending_money(@pace.projected_spend),
-                  over_by: spending_money([ @pace.spent - @pace.budgeted, 0 ].max)) %>
+                  projected: narrative_money(@pace.projected_spend),
+                  over_by: narrative_money([ @pace.spent - @pace.budgeted, 0 ].max)) %>
           </p>
         </div>
         <span data-testid="pace-status">
@@ -76,8 +76,8 @@
           <% href = spending_category_path(mover.category, @narrative.period) %>
           <%= href ? link_to(mover.category.name, href, class: "text-primary hover:underline") : mover.category.name %>
         <% end %>
-        <% table.with_column(t(".movers.current"), numeric: true, class: "privacy-sensitive") { |mover| spending_money(mover.current) } %>
-        <% table.with_column(t(".movers.previous"), numeric: true, class: "privacy-sensitive text-secondary") { |mover| spending_money(mover.previous) } %>
+        <% table.with_column(t(".movers.current"), numeric: true, class: "privacy-sensitive") { |mover| narrative_money(mover.current) } %>
+        <% table.with_column(t(".movers.previous"), numeric: true, class: "privacy-sensitive text-secondary") { |mover| narrative_money(mover.previous) } %>
         <% table.with_column(t(".movers.change"), numeric: true, class: "privacy-sensitive") { |mover| spending_change_label(mover) } %>
       <% end %>
     <% else %>
@@ -96,7 +96,7 @@
     <% else %>
       <p class="text-sm text-secondary">
         <%= t(".heatmap.total_line") %>
-        <span class="font-medium text-primary privacy-sensitive" data-testid="heatmap-total"><%= spending_money(@heatmap.total) %></span>
+        <span class="font-medium text-primary privacy-sensitive" data-testid="heatmap-total"><%= narrative_money(@heatmap.total) %></span>
       </p>
       <%= render DS::Table.new(rows: spending_heatmap_rows(@heatmap), label: t(".heatmap.title")) do |table| %>
         <% table.with_column(t(".heatmap.week"), row_header: true) do |row| %>
@@ -106,7 +106,7 @@
           <% table.with_column(day_name, numeric: true) { |row| render "spending_narratives/heat_cell", cell: row.cells[weekday] } %>
         <% end %>
         <% table.with_column(t(".heatmap.total"), numeric: true) do |row| %>
-          <span class="privacy-sensitive font-medium"><%= spending_money(row.total.total) %></span>
+          <span class="privacy-sensitive font-medium"><%= narrative_money(row.total.total) %></span>
         <% end %>
       <% end %>
     <% end %>

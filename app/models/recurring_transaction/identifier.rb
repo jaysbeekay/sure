@@ -398,7 +398,8 @@ class RecurringTransaction
         )
 
         if fillable_category?(recurring)
-          fill_blank_category(recurring, Classifier.classify(name: pattern[:name].to_s, entries: pattern[:entries]).category_id)
+          classification = Classifier.classify(name: pattern[:name] || pattern[:entries].first.name, entries: pattern[:entries])
+          fill_blank_category(recurring, classification.category_id)
         end
       end
 
@@ -413,8 +414,13 @@ class RecurringTransaction
       # in the UPDATE itself, against the row as it stands, and the write
       # touches nothing else. It runs after the bookkeeping update! so that
       # save never carries a category of its own.
+      #
+      # update_all also skips category_belongs_to_family, and a transaction's
+      # category_id carries no ownership check of its own, so the id is
+      # checked against the family here.
       def fill_blank_category(recurring, category_id)
         return if category_id.blank? || !fillable_category?(recurring)
+        return unless family.categories.exists?(id: category_id)
 
         filled = RecurringTransaction
           .where(id: recurring.id, category_id: nil)
@@ -480,7 +486,8 @@ class RecurringTransaction
             bill_type: income ? "income" : classification.bill_type,
             category_id: income ? nil : classification.category_id,
             autopay: income ? false : classification.autopay,
-            manual: false
+            manual: false,
+        matcher_hints: pattern[:name] ? { "detected_name" => pattern[:name] } : {}
           )
         )
       end

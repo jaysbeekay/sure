@@ -37,8 +37,15 @@ module PlaidAccount::Liabilities::LoanTermWriter
       # (#223): overwriting the base rate re-prices every period before the
       # change. The other terms go first, so a payload that reclassifies the
       # loan is applied before its rate is judged.
+      #
+      # Not from an import that stopped for a fresh login: PlaidItem::Importer
+      # swallows ITEM_LOGIN_REQUIRED and the sync still processes, so this
+      # payload is the previous sync's, and its rate is not a change the bank
+      # reported on `as_of`.
       rate = present[:interest_rate]
       if rate && variable_after_write?(loan, present)
+        return write_enriched(loan, present.except(:interest_rate)) if plaid_account.plaid_item.requires_update?
+
         write_terms_then_rate(loan, present.except(:interest_rate), rate)
       else
         write_enriched(loan, present)
