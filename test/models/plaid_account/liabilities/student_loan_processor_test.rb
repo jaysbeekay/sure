@@ -170,6 +170,35 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     assert_equal 15000, loan.initial_balance
   end
 
+  # End to end: what the processor writes has to be what the loan then measures
+  # itself against. The account carries a balance part way through the term --
+  # which is all an import ever sees -- and the figures on the overview read the
+  # origination principal the payload sent, not that balance.
+  test "an imported loan measures its figures against the principal Plaid sent" do
+    @plaid_account.update!(raw_liabilities_payload: {
+      student: {
+        interest_rate_percentage: 5.0,
+        origination_principal_amount: 20_000,
+        origination_date: 5.years.ago.to_date,
+        expected_payoff_date: 5.years.from_now.to_date
+      }
+    })
+    account = @plaid_account.current_account
+    account.update!(balance: 10_000)
+    account.entries.create!(
+      name: "Starting balance", amount: 10_000, currency: account.currency,
+      date: 5.years.ago.to_date, entryable: Valuation.new(kind: "opening_anchor")
+    )
+
+    PlaidAccount::Liabilities::StudentLoanProcessor.new(@plaid_account).process
+
+    loan = account.reload.loan
+
+    assert_equal 20_000, loan.initial_balance
+    assert_equal 20_000, loan.original_balance.amount, "the overview reads the origination principal"
+    assert_in_delta 0.5, loan.balance_paid_ratio, 0.0001
+  end
+
   test "does nothing when loan data absent" do
     @plaid_account.update!(raw_liabilities_payload: {})
 
@@ -183,10 +212,8 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     assert_nil loan.term_months
   end
 
-  # ------------------------------------------------------------------- #158
-
-  # Row 6, and the worst of the set: this processor sent `rate_type: "fixed"` on
-  # EVERY sync, so a loan the user marked variable reverted each time.
+  # This processor sends rate_type "fixed" on every sync, so a loan the user
+  # marked variable reverted each time.
   test "a locked rate type is not forced back to fixed" do
     loan = loan_with(rate_type: "variable", interest_rate: 5.0)
     loan.lock_attr!(:rate_type)
@@ -197,8 +224,7 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     assert_equal "variable", loan.reload.rate_type, "Plaid forced a locked rate type back to fixed"
   end
 
-  # Row 7. Locked and unlocked attributes in one payload: the locks hold and
-  # the rest is still written, so the fix is not "refuse the whole write".
+  # Locks hold per attribute: the unlocked terms in the same payload still land.
   test "locked terms hold while the unlocked ones are still written" do
     loan = loan_with(initial_balance: 50_000, term_months: 120, interest_rate: 5.0)
     loan.lock_attr!(:initial_balance)
@@ -218,8 +244,7 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     assert_equal 6.5, loan.interest_rate.to_f, "the unlocked rate was not written"
   end
 
-  # Row 8. `term_months` is nil without BOTH dates, and nil must not blank a
-  # stored term.
+  # term_months is nil without both dates, and nil must not blank a stored term.
   test "a payload missing a payoff date leaves the stored term alone" do
     loan = loan_with(term_months: 120, interest_rate: 5.0)
     payload("interest_rate_percentage" => 5.0, "origination_date" => "2020-01-01")
@@ -229,7 +254,6 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     assert_equal 120, loan.reload.term_months, "an incomplete pair of dates blanked the stored term"
   end
 
-  # Row 9.
   test "a payload without a rate leaves the stored rate alone" do
     loan = loan_with(interest_rate: 4.5)
     payload("origination_principal_amount" => 90_000)
@@ -240,10 +264,10 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     assert_equal 90_000, loan.initial_balance.to_i
   end
 
-  # #223. The processor still sends rate_type "fixed", but a user's lock on
-  # 'variable' holds, and the loan's rate change is then dated.
+  # The processor still sends rate_type "fixed", but a user's lock on
+  # "variable" holds, and the loan's rate change is then dated.
   test "a student loan the user locked as variable has its rate change dated" do
-    loan = loan_with(interest_rate: 4.5, rate_type: "variable")
+    loan = loan_with(interest_rate: 4.5, rate_type: "variable", start_date: Date.new(2020, 1, 1))
     loan.lock_attr!(:rate_type)
     payload("interest_rate_percentage" => 5.2)
 
@@ -252,7 +276,8 @@ class PlaidAccount::Liabilities::StudentLoanProcessorTest < ActiveSupport::TestC
     loan.reload
     assert_equal "variable", loan.rate_type
     assert_equal 4.5, loan.interest_rate.to_f
-    assert_equal({ "2026-01-15" => 5.2 }, loan.variable_rate_schedule)
+    assert_equal [ "2026-01-15" ], loan.variable_rate_schedule.keys
+    assert_equal BigDecimal("5.2"), BigDecimal(loan.variable_rate_schedule["2026-01-15"].to_s)
   end
 
   private

@@ -9,9 +9,8 @@ require "ripper"
 # The contract table is where a decision about what a figure *means* is
 # written down. A row that cites a test which has been renamed or deleted is
 # a decision with no evidence, and nothing else notices: the test suite is
-# green, the document reads as authoritative. This check closes that gap the
-# way the loan contract does (loans:verify_contract_coverage): the document
-# and config/portfolio_contract_tests.yml must agree on which test class
+# green, the document reads as authoritative. This check closes that gap: the
+# document and config/portfolio_contract_tests.yml must agree on which test class
 # demonstrates each row, and every named test must be declared in the file
 # the manifest points at.
 #

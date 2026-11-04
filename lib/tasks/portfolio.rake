@@ -1,8 +1,7 @@
 namespace :portfolio do
   # Both portfolio contracts, in one task, because a contract is only worth
   # writing if it cannot quietly lose its evidence: a row naming a test that no
-  # longer exists reads exactly like a row that is covered. Same gate
-  # `loans:verify_contract_coverage` gives the amortisation contract.
+  # longer exists reads exactly like a row that is covered.
   #
   # Two readers because the documents cite evidence differently -- the
   # methodology quotes test sentences against a manifest, the returns contract

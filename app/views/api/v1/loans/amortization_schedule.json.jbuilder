@@ -7,25 +7,17 @@ json.loan do
   json.term_months loan.term_months
   json.original_balance loan.original_balance.to_s
   json.currency loan.account.currency
-  json.next_rate_change_date loan.next_rate_change_date
+  json.next_rate_change_date report.next_rate_change_date
 end
 
-# Summary fields are derived from the persisted amortizations table, not the
-# in-memory calculator -- a "current" response should cost roughly one
-# indexed lookup plus a couple of aggregate queries bounded by the loan's
-# term, never a full re-run of the amortization math.
-first_payment = total_count.positive? ? loan.amortizations.ordered.first : nil
-last_payment = total_count.positive? ? loan.amortizations.ordered.last : nil
-total_interest = total_count.positive? ? loan.amortizations.sum(:interest_payment) : nil
-
 json.schedule do
-  json.status status
-  json.monthly_payment first_payment&.payment_amount&.to_s
-  json.total_interest total_interest&.to_s
-  json.total_cost total_interest ? (loan.original_balance.amount + total_interest).to_s : nil
-  json.payoff_date last_payment&.payment_date
-  json.payment_count total_count
-  json.has_rate_changes loan.amortization_schedule.has_rate_changes?
+  json.status report.status
+  json.monthly_payment report.monthly_payment&.amount&.to_s
+  json.total_interest report.total_interest&.amount&.to_s
+  json.total_cost report.total_cost&.amount&.to_s
+  json.payoff_date report.payoff_date
+  json.payment_count report.total_count
+  json.has_rate_changes report.has_rate_changes?
 end
 
 # Actual-balance-based projection: how the payoff shifts if the current
@@ -39,7 +31,7 @@ if projection.applicable?
     json.projected_payoff_date projection.payoff_date
     json.projected_total_interest projection.total_interest.to_s
     json.months_saved projection.months_saved
-    json.interest_saved projection.interest_saved.to_s
+    json.interest_saved projection.interest_saved.amount.to_s
   end
 else
   json.payoff_projection nil
@@ -48,7 +40,7 @@ end
 json.pagination do
   json.limit limit
   json.offset offset
-  json.total_count total_count
+  json.total_count report.total_count
 end
 
 json.payments do

@@ -1,16 +1,25 @@
 class Loan
-  # Immutable result returned by Loan::Simulator. The simulator is deliberately
-  # independent of persistence; callers may use this for a live projection or
-  # materialise the payment rows through an explicit write path.
+  # Immutable result of one Loan::Simulator run.
+  #
+  # The simulator is deliberately independent of persistence: this is what a
+  # live schedule -- and later a payoff projection -- reads from, rather than
+  # each caller deciding for itself what a run produced.
+  #
+  # A run does not always clear the balance. It does whenever the simulator
+  # sizes its own payment, but a caller can impose one it did not choose -- a
+  # projection holds the CONTRACTED repayment against today's balance -- and
+  # against a balance that has grown, the contracted repayment may not be
+  # enough. That leaves a balloon, and #payoff_date refuses to give a date for
+  # a loan that was never paid off.
   class SimulationResult
-    attr_reader :payments, :balloon_amount, :total_interest, :total_cost
+    attr_reader :payments, :balloon_amount, :total_interest
 
-    def initialize(payments:, converged:, balloon_amount:, currency_precision:)
-      @payments = deep_freeze(payments)
+    def initialize(payments:, currency_precision:, converged: true, balloon_amount: BigDecimal("0"))
       @converged = converged
-      @balloon_amount = balloon_amount.round(currency_precision).freeze
-      @total_interest = @payments.sum { |payment| payment[:interest_payment] }.round(currency_precision).freeze
-      @total_cost = (@payments.sum { |payment| payment[:payment_amount] } + @balloon_amount).round(currency_precision).freeze
+      @balloon_amount = BigDecimal(balloon_amount.to_s).round(currency_precision).freeze
+      @payments = deep_freeze(payments)
+      @total_interest = @payments.sum(BigDecimal("0")) { |p| p[:interest_payment] }
+        .round(currency_precision).freeze
       freeze
     end
 
@@ -18,8 +27,11 @@ class Loan
       @converged
     end
 
+    # nil for a run that ended with a balance outstanding. A balloon quoted as
+    # a payoff date is the reading that costs someone money.
     def payoff_date
       return nil unless converged?
+
       payments.last&.fetch(:payment_date)
     end
 
@@ -27,24 +39,12 @@ class Loan
       payments.length
     end
 
-    def compare_to(other)
-      {
-        payment_count: payment_count - other.payment_count,
-        total_interest: total_interest - other.total_interest,
-        total_cost: total_cost - other.total_cost
-      }.freeze
-    end
-
     private
-
       def deep_freeze(value)
         case value
-        when Array
-          value.map { |item| deep_freeze(item) }.freeze
-        when Hash
-          value.transform_values { |item| deep_freeze(item) }.freeze
-        else
-          value.freeze
+        when Array then value.map { |item| deep_freeze(item) }.freeze
+        when Hash  then value.transform_values { |item| deep_freeze(item) }.freeze
+        else value.freeze
         end
       end
   end

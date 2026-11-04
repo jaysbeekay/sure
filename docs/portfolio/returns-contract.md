@@ -5,7 +5,7 @@ issue #121 (the performance engine). It is normative for `Portfolio::DailyReturn
 `Portfolio::Performance`, `Portfolio::Drivers` and `Portfolio::FlowClassifier`; implementation
 must not silently choose a different interpretation.
 
-Modelled on `docs/loans/calculation-contract.md`, and enforced the same way:
+It is enforced:
 `bin/rails portfolio:verify_contract_coverage` fails when a row below names a test that does not
 exist, so a row cannot quietly lose its evidence.
 

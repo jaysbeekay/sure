@@ -7,13 +7,6 @@ class Account < ApplicationRecord
   before_destroy :cleanup_transfers
 
   after_destroy_commit :move_account_statements_to_inbox
-  # A loan offset link must keep both sides in one currency (#328). The form,
-  # a model call and provider syncs all change currency through a save, so a
-  # hook here sees every route. after_update, not after_commit: the account
-  # form saves again in the same transaction (`lock_saved_attributes!`), and by
-  # commit `saved_change_to_currency?` describes that later save. Inside the
-  # transaction, a rollback takes the removal back with the currency change.
-  after_update :invalidate_loan_offset_links_on_currency_change, if: :saved_change_to_currency?
 
   validates :name, :balance, :currency, presence: true
   validate :owner_belongs_to_family, if: -> { owner_id.present? && family_id.present? }
@@ -40,7 +33,6 @@ class Account < ApplicationRecord
   has_many :goal_accounts, dependent: :destroy
   has_many :goals, through: :goal_accounts
   has_many :goal_pledges, dependent: :destroy
-  has_many :loan_offset_accounts, dependent: :destroy
   # Inverse for recurring transfers where this account is the destination.
   # Account#recurring_transactions only matches account_id; without this
   # association, destroying the destination account would hit the FK
@@ -277,7 +269,6 @@ class Account < ApplicationRecord
       # and would convert to a very present-looking 0.
       raw_initial_balance = attributes.dig(:accountable_attributes, :initial_balance)
       initial_balance = raw_initial_balance.to_d if raw_initial_balance.present?
-      today = Date.current
 
       transaction do
         account.save!
@@ -286,16 +277,12 @@ class Account < ApplicationRecord
         # down, so that is where its opening anchor belongs. The form always
         # sends an opening balance date (defaulting to two years ago), so the
         # server cannot tell a deliberate one from the default: the loan's
-        # start date wins. A future start date is ignored, since an anchor
-        # after today would leave no balance for today (the fork's Loan does not
-        # yet validate start_date as on or before today, as upstream's does).
-        # Entry rejects a date on or before Entry.min_supported_date, so a loan
-        # started that long ago keeps the form's date; its schedule still uses
-        # start_date.
+        # start date wins. Loan validates start_date as on or before today, so
+        # the anchor never lands after the reconciliation below. Entry rejects
+        # a date on or before Entry.min_supported_date, so a loan started that
+        # long ago keeps the form's date; its schedule still uses start_date.
         loan_start_date = account.accountable.start_date if initial_balance && account.loan?
-        if loan_start_date && loan_start_date <= today && loan_start_date > Entry.min_supported_date
-          opening_balance_date = loan_start_date
-        end
+        opening_balance_date = loan_start_date if loan_start_date && loan_start_date > Entry.min_supported_date
 
         manager = Account::OpeningBalanceManager.new(account)
         result = manager.set_opening_balance(
@@ -314,7 +301,7 @@ class Account < ApplicationRecord
         # is user-supplied and may be today, and a same-day reconciliation
         # would be matched to the opening anchor by date and overwrite it.
         # On its own date the opening balance wins.
-        if initial_balance && initial_balance != account.balance && manager.opening_date < today
+        if initial_balance && initial_balance != account.balance && manager.opening_date < Date.current
           # An explicit reconciliation, not CurrentBalanceManager: for cash
           # accounts its transaction-adjustment strategy computes a zero delta
           # here (account.balance already holds the entered value) and would
@@ -322,7 +309,7 @@ class Account < ApplicationRecord
           # for the first sync.
           reconciliation = Account::ReconciliationManager.new(account).reconcile_balance(
             balance: account.balance,
-            date: today
+            date: Date.current
           )
           raise reconciliation.error_message unless reconciliation.success?
         end
@@ -998,10 +985,6 @@ class Account < ApplicationRecord
 
     def capture_account_statement_ids_to_move
       @statement_ids_to_move = account_statements.ids
-    end
-
-    def invalidate_loan_offset_links_on_currency_change
-      LoanOffsetAccount.invalidate_for_currency_change!(self)
     end
 
     def move_account_statements_to_inbox

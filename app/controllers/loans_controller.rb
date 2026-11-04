@@ -1,20 +1,13 @@
 class LoansController < ApplicationController
   include AccountableResource
 
-  before_action :set_offset_accounts, only: %i[new create edit update]
   before_action :protect_inaccessible_collateral, only: :update
   before_action :set_collateral_candidates, only: %i[new create edit update]
 
-  # `variable_rate_schedule` is deliberately absent: it is a jsonb column the
-  # calculation reads, and permitting it would allow arbitrary JSON to be
-  # written straight into it. The form submits `rate_changes` as structured
-  # {effective_date, rate} rows and `Loan` assembles the column from them
-  # (#14, risk R13).
   permitted_accountable_attributes(
-    :id, :subtype, :rate_type, :interest_rate, :term_months, :initial_balance,
-    :day_count_convention, :start_date, :collateral_account_id,
-    { offset_account_ids: [] },
-    { rate_changes: [ :effective_date, :rate, :_destroy ] }
+    :id, :subtype, :rate_type, :interest_rate, :term_months, :initial_balance, :start_date,
+    :down_payment, :insurance_rate, :insurance_rate_type, :day_count_convention, :collateral_account_id,
+    { rate_changes: [ :effective_date, :rate ] }
   )
 
   private
@@ -47,14 +40,5 @@ class LoansController < ApplicationController
         candidates = [ current, *candidates ]
       end
       @collateral_candidates = candidates
-    end
-
-    def set_offset_accounts
-      loan = @account&.accountable || Loan.new
-      offset_ids_submitted = params.dig(:account, :accountable_attributes)&.key?(:offset_account_ids)
-      if loan.persisted? && !offset_ids_submitted
-        loan.offset_account_ids ||= loan.loan_offset_accounts.pluck(:account_id)
-      end
-      @offset_accounts = LoanOffsetAccount.eligible_accounts_for(loan, viewer: Current.user)
     end
 end

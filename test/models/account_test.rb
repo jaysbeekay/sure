@@ -444,6 +444,32 @@ class AccountTest < ActiveSupport::TestCase
     assert_equal start_date, account.valuations.opening_anchor.first.entry.date
   end
 
+  # The anchor is dated on the start date only because Loan rejects a future
+  # one: an anchor after today would skip today's reconciliation and leave the
+  # account with no balance for today.
+  test "create_and_sync rejects a loan with a future start date and writes no anchor" do
+    Account.any_instance.stubs(:sync_later)
+
+    assert_no_difference [ "Account.count", "Entry.count" ] do
+      assert_raises ActiveRecord::RecordInvalid do
+        Account.create_and_sync(
+          {
+            family: @family,
+            owner: @admin,
+            name: "Mortgage",
+            balance: 399_600,
+            currency: "USD",
+            accountable_type: "Loan",
+            accountable_attributes: { initial_balance: 400_000, start_date: Date.current + 1.month,
+                                      rate_type: "fixed", interest_rate: 5, term_months: 360 }
+          },
+          skip_initial_sync: true,
+          opening_balance_date: Date.current - 3.years
+        )
+      end
+    end
+  end
+
   test "create_and_sync keeps a depository account's opening balance date" do
     Account.any_instance.stubs(:sync_later)
     opening_balance_date = Date.new(2020, 1, 15)

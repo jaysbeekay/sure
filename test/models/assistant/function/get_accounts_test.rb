@@ -117,7 +117,7 @@ class Assistant::Function::GetAccountsTest < ActiveSupport::TestCase
     assert_equal "variable", terms[:rate_type]
     assert_equal 5.0, terms[:interest_rate].to_f
     assert_equal 3.5, terms[:base_interest_rate].to_f
-    assert_equal loan.reload.current_minimum_payment(as_of: Date.current).amount, terms[:monthly_payment]
+    assert_equal loan.reload.amortization_schedule.payment_in_force(Date.current).amount, terms[:monthly_payment]
     assert_operator terms[:monthly_payment], :>, base_payment, "the repayment is resized at the higher rate"
     assert terms[:monthly_payment_formatted].present?
   end

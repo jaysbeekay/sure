@@ -8,30 +8,23 @@ class Api::V1::LoansController < Api::V1::BaseController
 
   # GET /api/v1/loans/:id/amortization_schedule
   # Returns the amortization schedule for a loan with pagination support.
-  # Strictly read-only: a read-scoped credential must never trigger a write,
-  # so this never calls Loan#ensure_amortization_schedule_current! (which can
-  # delete/insert rows). It reads whatever is persisted, reports whether that
-  # matches the loan's current inputs via `status`, and enqueues a background
-  # rebuild when it doesn't -- the next request (from anyone) picks up the
-  # fresh schedule once the job has run.
+  # Strictly read-only: the schedule is computed for the response and nothing is
+  # stored, so a read-scoped credential never writes and `status` is always
+  # "current".
   def amortization_schedule
     unless @loan.amortizable?
       return render json: { error: "not_amortizable", message: "Loan is not amortizable" }, status: :unprocessable_entity
     end
 
-    status = amortization_schedule_status
-    LoanAmortizationRebuildJob.perform_later(@loan.id) unless status == "current"
-
     limit = safe_per_page_param
     offset = (safe_page_param - 1) * limit
+    report = Loan::AmortizationReport.new(@loan)
 
     render :amortization_schedule, locals: {
       loan: @loan,
-      status: status,
-      schedule: @loan.amortization_schedule,
+      report: report,
       projection: @loan.payoff_projection,
-      payments: @loan.amortizations.ordered.offset(offset).limit(limit),
-      total_count: @loan.amortizations.count,
+      payments: report.rows(offset: offset, limit: limit),
       limit: limit,
       offset: offset
     }
@@ -40,11 +33,6 @@ class Api::V1::LoansController < Api::V1::BaseController
   end
 
   private
-
-    def amortization_schedule_status
-      return "current" if @loan.schedule_current?
-      @loan.amortizations.exists? ? "stale" : "missing"
-    end
 
     # Load and authorize the loan in one scoped lookup so an inaccessible
     # loan is indistinguishable from a nonexistent one -- an unscoped find

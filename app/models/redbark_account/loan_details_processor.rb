@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Reads a loan's rate from what the bank reported, and records a change in the
-# one place a loan's rates live: `loans.variable_rate_schedule` (#142, phase 1).
+# one place a loan's rates live: `loans.variable_rate_schedule` (we-promise/sure#3891).
 #
 # THE DATE IS THE DAY IT WAS SEEN, and that is a limitation rather than a
 # choice. `GET /v1/account-details` reports the rate in force right now and
@@ -37,8 +37,7 @@ class RedbarkAccount::LoanDetailsProcessor
     # one. Acting on it can record a change that never happened: the fetch
     # fails, the stored snapshot still holds last week's rate, the user has
     # since corrected the loan by hand, and the stale figure is written back
-    # over their correction as though the bank had just reported it (raised by
-    # cubic on #213).
+    # over their correction as though the bank had just reported it.
     #
     # Keyed to the sync's own date rather than to a duration, because `as_of`
     # is the only notion of "now" this class is allowed. RedbarkItem::Syncer
@@ -53,7 +52,9 @@ class RedbarkAccount::LoanDetailsProcessor
       fetched_at = redbark_account.account_details_fetched_at
       return false if fetched_at.blank?
 
-      fetched_at.to_date == as_of.to_date
+      # In the family's zone, as the syncer derives `as_of`; the stamp itself
+      # reads back in the app's zone.
+      redbark_account.redbark_item.family.local_date(fetched_at) == as_of.to_date
     end
 
     def account
@@ -112,12 +113,19 @@ class RedbarkAccount::LoanDetailsProcessor
       return nil if value.blank?
 
       decimal = BigDecimal(value.to_s)
-      # THREE decimal places, because that is what the loan stores:
-      # Loan#quantize_variable_rate_schedule rounds every value it keeps to 3.
-      # Comparing a 4-decimal reading against a 3-decimal stored rate makes an
-      # unchanged rate look changed, and records a new row on EVERY sync
-      # (raised by cubic on #213).
-      (decimal * 100).round(3)
+      # THREE decimal places, so a rate reads the same on every sync and what
+      # is stored is what is compared. A bank reporting 0.064994 one sync and
+      # 0.064996 the next would otherwise record a new row each time for a
+      # movement of a hundredth of a basis point.
+      rate = decimal * 100
+      # The loan form caps a rate at Loan::MAX_INTEREST_RATE, and the model does
+      # not check a schedule written any other way. A bank reporting 150% has
+      # sent something other than a rate. Checked before rounding, which would
+      # otherwise carry -0.0004% or 100.0004% onto the bound.
+      return rate.round(3) if rate.between?(0, Loan::MAX_INTEREST_RATE)
+
+      capture("Redbark reported a rate outside 0..#{Loan::MAX_INTEREST_RATE}%; ignoring it", value: value.to_s)
+      nil
     rescue ArgumentError, TypeError
       capture("Redbark reported an unparseable rate", value: value.to_s)
       nil
@@ -141,8 +149,10 @@ class RedbarkAccount::LoanDetailsProcessor
         return
       end
 
-      # First sighting, unchanged rate and the dated change are
-      # the loan's rules, shared with Plaid (#223).
+      # First sighting, unchanged rate and dated change are the loan's rules,
+      # shared with Plaid. A first sighting that is locked or refused leaves
+      # the rate blank, so the next sync is a first sighting again rather than
+      # a change dated on a day nothing moved.
       write(loan.variable_rate_update_for(reported_rate, as_of: as_of))
     end
 
@@ -190,24 +200,20 @@ class RedbarkAccount::LoanDetailsProcessor
       months = ((to.year - from.year) * 12) + (to.month - from.month)
       # An end date before the origination day in its month has not reached the
       # anniversary, so that month is not complete (as in
-      # PlaidAccount::Liabilities::StudentLoanProcessor#term_months). Counting
-      # the calendar month alone overstated the term by one (#303).
+      # PlaidAccount::Liabilities::StudentLoanProcessor#term_months).
       months -= 1 if from + months.months > to
-      months.positive? ? months : nil
+      return nil unless months.positive?
+
+      # The longest term the loan form accepts. A bank reporting an end date
+      # centuries out is reporting a placeholder, and a term of 13,200 months
+      # is not something to store as though it were the loan's.
+      months <= Loan::Simulator::MAX_PERIODS ? months : nil
     end
 
-    # A date is a four-digit CE year. `Date.parse` accepts years the database
-    # date column cannot hold ("10000000-01-01", "-4800-01-01"), and writing one
-    # raised PG::DatetimeFieldOverflow out of `enrich_attributes`, which -- terms
-    # being written before the rate -- stops the rate being applied (#303).
     def parse_date(value)
       return nil if value.blank?
 
-      date = Date.parse(value.to_s)
-      return date if date.year.between?(1, 9999)
-
-      capture("Redbark reported a date outside years 1 to 9999; ignoring it", value: value.to_s)
-      nil
+      Date.parse(value.to_s)
     rescue Date::Error
       capture("Redbark reported an unparseable date", value: value.to_s)
       nil
@@ -217,30 +223,12 @@ class RedbarkAccount::LoanDetailsProcessor
       return nil if value.blank?
 
       amount = BigDecimal(value.to_s)
-      # A principal is judged AS THE COLUMN WILL STORE IT: rounded to its scale,
-      # positive, and within its precision. `BigDecimal` accepts "0", a negative,
-      # "NaN" and "Infinity"; the first three were stored, and `Infinity` -- like
-      # any figure past numeric(19,4), or one that rounds out of range -- raised
-      # numeric overflow out of `enrich_attributes`, which stops the rate being
-      # applied because terms are written before it. A figure that rounds to
-      # zero at the column's scale (0.00001) was stored as 0.0 (#303).
-      stored = amount.finite? ? amount.round(principal_type.scale) : nil
-      return stored if stored&.positive? && stored <= principal_limit
-
-      capture("Redbark reported a principal the loan cannot hold; ignoring it", value: value.to_s)
-      nil
+      # Only a positive finite figure is a principal: Loan#original_balance
+      # reads a zero or negative one as unrecorded, so storing it would show the
+      # form a balance the loan itself ignores.
+      amount if amount.finite? && amount.positive?
     rescue ArgumentError, TypeError
       nil
-    end
-
-    def principal_type
-      Loan.type_for_attribute("initial_balance")
-    end
-
-    # The largest figure the column holds, derived from it rather than written
-    # out: 10^(precision - scale) less one unit at the column's scale.
-    def principal_limit
-      BigDecimal(10)**(principal_type.precision - principal_type.scale) - BigDecimal(10)**-principal_type.scale
     end
 
     # Every write goes through Enrichable: it skips locked attributes, records
@@ -256,7 +244,13 @@ class RedbarkAccount::LoanDetailsProcessor
     def write(attrs)
       return if attrs.blank?
 
-      loan.enrich_attributes(attrs, source: SOURCE)
+      # Enrichable logs the DataEnrichment before it saves, and a refused save
+      # does not roll that row back. The outer transaction does, so provenance
+      # never says Redbark supplied a value the loan rejected.
+      ActiveRecord::Base.transaction do
+        loan.enrich_attributes(attrs, source: SOURCE)
+        raise ActiveRecord::Rollback if loan.errors.any?
+      end
       return if loan.errors.empty?
 
       capture(
@@ -278,7 +272,7 @@ class RedbarkAccount::LoanDetailsProcessor
       # Clearing the errors matters on its own: `enrich_attributes` returns
       # early without saving when every attribute is locked or unchanged, so a
       # later no-op write would find these errors still sitting there and
-      # report a refusal that did not happen (raised by CodeRabbit on #213).
+      # report a refusal that did not happen.
       loan.restore_attributes(attrs.keys.map(&:to_s))
       loan.errors.clear
     end
@@ -293,6 +287,5 @@ class RedbarkAccount::LoanDetailsProcessor
         family: redbark_account.redbark_item&.family,
         metadata: metadata.merge(redbark_account_id: redbark_account.id)
       )
-      Rails.logger.warn "RedbarkAccount::LoanDetailsProcessor - #{message}"
     end
 end

@@ -1,6 +1,8 @@
 class PlaidAccount::Liabilities::StudentLoanProcessor
   include PlaidAccount::Liabilities::LoanTermWriter
 
+  # `as_of` is the sync's date: a variable rate change Plaid reports is dated
+  # to it.
   def initialize(plaid_account, as_of: Date.current)
     @plaid_account = plaid_account
     @as_of = as_of

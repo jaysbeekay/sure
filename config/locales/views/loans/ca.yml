@@ -27,14 +27,24 @@ ca:
       start_date_hint: Quan es va desemborsar el préstec. Deixa-ho en blanc per utilitzar la data d'obertura del compte.
     new:
       title: Introdueix les dades del préstec
+    overview:
+      interest_rate: Tipus d'interès
+      monthly_payment: Quota mensual
+      not_applicable: N/A
+      original_principal: Capital original
+      remaining_principal: Capital pendent
+      term: Termini
+      type: Tipus
+      unknown: Desconegut
+      original_payoff_date: Data de venciment original
     tabs:
       overview:
         edit_loan_details: Edita els detalls del préstec
-        current_interest_rate: Tipus d'interès
-        current_monthly_payment: Quota mensual
+        interest_rate: Tipus d'interès
+        monthly_payment: Quota mensual
         not_applicable: No aplicable
-        original_loan_balance: Saldo inicial del préstec
-        remaining_principal: Principal pendent
+        original_principal: Capital original
+        remaining_principal: Capital pendent
         term: Termini
         type: Tipus
         unknown: Desconegut

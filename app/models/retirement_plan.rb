@@ -311,7 +311,10 @@ class RetirementPlan < ApplicationRecord
         projection = Loan::PayoffProjection.new(account.accountable, as_of: as_of)
         next unless projection.applicable? && projection.payoff_date
 
-        annual = projection.monthly_payment.exchange_to(user.family.currency, date: as_of).amount * 12
+        # The projection's first period pays the repayment in force: for a
+        # variable loan, the one its current rate produced.
+        payment = Money.new(projection.payments.first[:payment_amount], projection.currency)
+        annual = payment.exchange_to(user.family.currency, date: as_of).amount * 12
         streams.create!(kind: "expense", source: "seeded_loan", indexed: false, account: account,
                         name: account.name, annual_amount: annual, end_year: projection.payoff_date.year)
       rescue Money::ConversionError

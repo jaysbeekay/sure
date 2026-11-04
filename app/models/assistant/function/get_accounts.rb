@@ -145,7 +145,7 @@ class Assistant::Function::GetAccounts < Assistant::Function
     def payment_in_force(loan, as_of_date)
       return loan.monthly_payment unless loan.variable_rate_type?
 
-      loan.current_minimum_payment(as_of: as_of_date)
+      loan.amortization_schedule&.payment_in_force(as_of_date)
     end
 
     def credit_card_terms(credit_card)

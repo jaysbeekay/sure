@@ -71,7 +71,6 @@ class Demo::GeneratorTest < ActiveSupport::TestCase
   end
 
   test "sample data generates loan payments before its transaction commits" do
-    skip "Fork keeps its own demo loans (#184; generator.rb taken fork-side in #232/#272): they carry no terms and pay flat figures, so there is no schedule to match. Kept, not dropped, pending the owner's call on porting upstream's schedule-driven demo loans."
     generator = Demo::Generator.new(seed: 42)
     stub_non_loan_activity(generator)
     @family.expects(:sync_later)
@@ -82,7 +81,6 @@ class Demo::GeneratorTest < ActiveSupport::TestCase
   end
 
   test "default demo generates loan payments inside a refresh transaction" do
-    skip "Fork keeps its own demo loans (#184; generator.rb taken fork-side in #232/#272): they carry no terms and pay flat figures, so there is no schedule to match. Kept, not dropped, pending the owner's call on porting upstream's schedule-driven demo loans."
     generator = Demo::Generator.new(seed: 42)
     generator.stubs(:create_family_and_users!).returns(@family)
     generator.stubs(:create_monitoring_api_key!)
@@ -141,6 +139,102 @@ class Demo::GeneratorTest < ActiveSupport::TestCase
     assert_difference "@family.goals.count", 9 do
       Demo::Generator.new.send(:generate_goals!, @family)
     end
+  end
+
+  # The demo family's loans were bare Loan.new records -- no rate, no term, and
+  # the mortgage's principal a transaction rather than an opening valuation --
+  # so none of them had a schedule to show. The mortgage is adjustable with
+  # recorded changes, so the demo shows a schedule re-amortising; the other two
+  # are fixed.
+  test "demo loans carry the terms and principal a schedule is built from" do
+    @family.update!(currency: "USD")
+    generator = Demo::Generator.new(seed: 42)
+    generator.send(:create_realistic_categories!, @family)
+    generator.send(:create_realistic_accounts!, @family)
+    generator.send(:generate_major_purchases!)
+
+    mortgage = @family.accounts.find_by!(name: "Home Mortgage").loan
+    assert mortgage.variable_rate_type?, "the demo mortgage should be adjustable"
+    assert_equal BigDecimal("320000"), mortgage.original_balance.amount
+    assert_equal mortgage.start_date, mortgage.origination_date
+    assert mortgage.amortization_schedule.re_amortising?,
+      "a recorded rate change must move the demo mortgage's repayment"
+
+    # The leverage card reads the loan's down payment; the cash-flow history
+    # records the deposit as a transaction. The two must be the same figure.
+    checking = generator.instance_variable_get(:@chase_checking)
+    deposit = checking.entries.find_by!(name: "Home Down Payment")
+    assert_equal deposit.amount, mortgage.down_payment,
+      "the mortgage's down payment must match the deposit the demo records"
+
+    [ "Car Loan", "Student Loan" ].each do |name|
+      loan = @family.accounts.find_by!(name: name).loan
+      assert_not loan.variable_rate_type?, "#{name} should be fixed"
+      assert loan.amortization_schedule&.payments&.any?, "#{name} should have a schedule"
+    end
+  end
+
+  # Owner review of #3474: the demo loans' figures must add up. Each loan pays
+  # its own schedule's principal and interest and nothing else moves its
+  # balance, so today it owes what its schedule says -- except the student
+  # loan, which made one extra payment (2,000, a year ago) and so is ahead of
+  # its schedule for a real reason.
+  test "demo loans owe what their own schedules say, the student loan ahead by its extra payment" do
+    @family.update!(currency: "USD")
+    generator = Demo::Generator.new(seed: 42)
+    generator.send(:create_realistic_categories!, @family)
+    generator.send(:create_realistic_accounts!, @family)
+    generator.send(:generate_housing_transactions!)
+    generator.send(:generate_transportation_transactions!)
+    generator.send(:generate_major_purchases!)
+    generator.send(:generate_loan_payments!)
+    checking = generator.instance_variable_get(:@chase_checking)
+    today = Date.current
+
+    { "Home Mortgage" => 0, "Car Loan" => 0, "Student Loan" => 2_000 }.each do |name, extra|
+      account = @family.accounts.find_by!(name: name)
+      Sync.create!(syncable: account).perform
+      due = account.reload.loan.amortization_schedule.payments.select { |payment| payment.date <= today }
+      assert due.any?, "#{name} must have payments due, or this asserts nothing"
+      assert_in_delta due.last.ending_balance.amount - extra, account.balance, 0.01,
+        "#{name} must owe its schedule's balance today#{" less its extra payment" if extra.positive?}"
+    end
+
+    student = @family.accounts.find_by!(name: "Student Loan").loan
+    due = student.amortization_schedule.payments.select { |payment| payment.date <= today }
+    booked_interest = checking.entries.where(name: "Student Loan Payment Interest").sum(:amount)
+    assert_in_delta due.sum { |payment| payment.interest.amount }, booked_interest, 0.01,
+      "the interest booked must be the schedule's interest, not a flat figure"
+  end
+
+  # What the chart says about the demo loans follows
+  # from their balances. The mortgage and the car loan sit on their schedules,
+  # so each pays off on time; the student loan is ahead by its extra payment,
+  # so it pays off early. None of them is quoted early while it is not ahead.
+  test "demo loans project payoffs that match their balances" do
+    @family.update!(currency: "USD")
+    generator = Demo::Generator.new(seed: 42)
+    generator.send(:create_realistic_categories!, @family)
+    generator.send(:create_realistic_accounts!, @family)
+    generator.send(:generate_housing_transactions!)
+    generator.send(:generate_transportation_transactions!)
+    generator.send(:generate_major_purchases!)
+    generator.send(:generate_loan_payments!)
+    today = Date.current
+
+    projections = [ "Home Mortgage", "Car Loan", "Student Loan" ].to_h do |name|
+      account = @family.accounts.find_by!(name: name)
+      Sync.create!(syncable: account).perform
+      [ name, account.reload.loan.payoff_projection(as_of: today) ]
+    end
+
+    [ "Home Mortgage", "Car Loan" ].each do |name|
+      assert projections[name].converged?, "#{name} is on schedule, so its projection must clear the balance"
+      assert_equal 0, projections[name].months_saved, "#{name} is on schedule, so it must pay off on time"
+    end
+    assert projections["Student Loan"].converged?, "the student loan's projection must clear the balance"
+    assert_operator projections["Student Loan"].months_saved, :>, 0,
+      "the extra payment must bring the student loan's payoff forward"
   end
 
   private

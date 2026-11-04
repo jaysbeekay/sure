@@ -2038,8 +2038,8 @@ RSpec.configure do |config|
                 properties: {
                   status: {
                     type: :string,
-                    enum: %w[current stale missing],
-                    description: 'Freshness of the persisted schedule relative to the loan\'s current inputs. "current" means the payments below reflect the loan as it stands now. "stale" means the loan changed since these payments were built and a rebuild has been enqueued -- the payments shown are the last successfully built schedule. "missing" means no schedule has ever been built yet; a rebuild has been enqueued and the payments array is empty. This endpoint never rebuilds synchronously, so a read-scoped API key can never trigger a write.'
+                    enum: %w[current],
+                    description: 'Always current: the schedule is computed from the loan for each response, and nothing is stored.'
                   },
                   monthly_payment: { type: :string, nullable: true },
                   total_interest: { type: :string, nullable: true },

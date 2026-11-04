@@ -1,48 +1,60 @@
 import { Controller } from "@hotwired/stimulus";
 
-// Repeatable {effective date, rate} rows for a variable-rate loan.
+// Add and remove rate-change rows, and show the section only for a loan whose
+// rate can actually move.
 //
-// The rows are plain inputs submitted as `rate_changes` and assembled into the
-// schedule server-side -- the jsonb column is not mass-assignable, so there is
-// nothing here that constructs JSON.
+// Rows are plain inputs named as an array, so the form submits and the server
+// reads them with no JavaScript at all — this controller saves a round trip
+// per row and keeps the section honest about whether it applies.
 //
-// Removal marks a hidden `_destroy` field and hides the row rather than
-// detaching it, so a row removed by mistake is still in the DOM for the server
-// to ignore, and the indices of the remaining rows do not shift under the user.
+// Hidden means DISABLED, not merely invisible. A disabled input is not
+// submitted, so a fixed-rate loan sends no `rate_changes` key at all and its
+// recorded changes are retained rather than cleared. The server renders the
+// section already hidden and disabled for a fixed loan, retained rows
+// included, so this holds without JavaScript too; `toggle()` only follows the
+// select from there. Switching to variable enables the retained rows, and the
+// next save resubmits them rather than the bare sentinel that would clear them.
 export default class extends Controller {
-  static targets = ["rows", "template", "row"];
+  static targets = ["rows", "template", "empty", "section", "rateType"];
+  // The one rate type that cannot move. Anything else non-blank is variable,
+  // the same reading as Loan#variable_rate_type?, so a provider-written value
+  // such as "arm" keeps its editor rather than being hidden by a list the
+  // form never offered it in.
+  static values = { fixedType: String };
 
-  // Clones the <template> element's content rather than parsing its innerHTML.
-  // Nothing here is user input, but building DOM from a string is the shape of
-  // an injection bug, and cloneNode is what <template> is for.
+  connect() {
+    this.toggle();
+  }
+
   add(event) {
     event.preventDefault();
-
-    const row = this.templateTarget.content.cloneNode(true);
-    const suffix = Date.now().toString();
-
-    row.querySelectorAll("[id], [for]").forEach((element) => {
-      if (element.id) element.id = element.id.replace("NEW_RECORD", suffix);
-      const target = element.getAttribute("for");
-      if (target)
-        element.setAttribute("for", target.replace("NEW_RECORD", suffix));
-    });
-
+    const row = this.templateTarget.content.firstElementChild.cloneNode(true);
     this.rowsTarget.appendChild(row);
+    row.querySelector("input[type='date']")?.focus();
+    this.#sync();
   }
 
   remove(event) {
     event.preventDefault();
-    const row = event.target.closest("[data-loan-rate-changes-target='row']");
-    if (!row) return;
+    event.target.closest("[data-rate-change-row]")?.remove();
+    this.#sync();
+  }
 
-    row.querySelector("input[name*='_destroy']").value = "1";
-    row.classList.add("hidden");
-    // Removed rows must not carry values the server would otherwise assemble.
-    row
-      .querySelectorAll("input[type='date'], input[type='number']")
-      .forEach((input) => {
-        input.value = "";
-      });
+  toggle() {
+    const rateType = this.rateTypeTarget?.value ?? "";
+    const applies = rateType !== "" && rateType !== this.fixedTypeValue;
+    this.sectionTarget.hidden = !applies;
+    for (const el of this.sectionTarget.querySelectorAll(
+      "input, select, button",
+    )) {
+      el.disabled = !applies;
+    }
+    this.#sync();
+  }
+
+  #sync() {
+    if (this.hasEmptyTarget) {
+      this.emptyTarget.hidden = this.rowsTarget.children.length > 0;
+    }
   }
 }

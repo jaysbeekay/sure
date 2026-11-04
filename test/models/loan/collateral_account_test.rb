@@ -12,7 +12,7 @@ class Loan::CollateralAccountTest < ActiveSupport::TestCase
     candidates = Account.where(family: family, accountable_type: %w[Property Vehicle]).count
     assert_operator candidates, :>, 1, "precondition: more than one candidate to judge"
 
-    Loan.any_instance.expects(:collateral_viewers).once.returns(@loan.account.family.users.to_a)
+    Loan.expects(:viewers_of).once.returns(@loan.account.family.users.to_a)
 
     Loan.collateral_candidates_for(@loan, viewer: users(:family_admin))
   end

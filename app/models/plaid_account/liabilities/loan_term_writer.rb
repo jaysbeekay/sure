@@ -1,139 +1,122 @@
 # The one write path for a loan's terms from a Plaid payload, shared by the
-# mortgage and student-loan processors (#158).
+# mortgage and student-loan processors.
 #
-# Both used to call `loan.update!` straight from the payload, which had three
-# consequences and no way to tell them apart:
+# Both used to call `loan.update!` straight from the payload, which:
 #
-# - A value the user corrected on the loan form is LOCKED by
-#   `Account#lock_saved_attributes!`, and `update!` overwrote it on the very
-#   next sync. The student-loan processor sent `rate_type: "fixed"` every time,
-#   so a loan the user marked variable reverted on each sync.
-# - Nothing recorded that the provider was the author, so a later writer had no
-#   way to know whose value it was looking at.
-# - A payload that OMITS a field sent `nil`, which blanked the stored value. A
-#   mortgage without a `percentage` erased the rate the user had typed in.
+# - overwrote a value the user corrected on the loan form, which
+#   `Account#lock_saved_attributes!` had locked;
+# - recorded no provenance, so nothing said the value was Plaid's;
+# - blanked a stored value whenever the payload omitted the field, because
+#   the omission arrived as nil.
 #
-# `Enrichable#enrich_attributes` answers the first two: it skips locked
-# attributes and records a `DataEnrichment` per attribute it writes. The third
-# is `compact` below -- an omitted value is not a value. A variable loan's rate
-# change is dated rather than overwritten (#223), using the sync's `as_of`,
-# which each including processor supplies.
+# `Enrichable#enrich_attributes` answers the first two, as it already does for
+# `RedbarkAccount::LoanDetailsProcessor#write`; `compact` answers the third.
+#
+# A variable loan's new rate is a row in `variable_rate_schedule` dated to the
+# sync's `as_of`, which each including processor supplies, rather than a new
+# base rate (Loan#variable_rate_update_for).
 module PlaidAccount::Liabilities::LoanTermWriter
   extend ActiveSupport::Concern
 
   private
-    # `compact`, NOT `compact_blank`. A rate of exactly `0` is a real figure --
-    # an interest-free loan is a thing a provider reports -- and `compact_blank`
-    # would drop it along with the nils. The distinction being drawn is
-    # "the payload did not say" versus "the payload said zero".
+    # Only nil means "the payload did not say". A rate of exactly 0 is a real
+    # figure for an interest-free loan and is written like any other.
     def write_loan_terms(**attrs)
-      loan = account.loan
-      return if loan.blank?
+      loan = account&.loan
+      return if loan.nil?
 
       present = attrs.compact
       return if present.empty?
 
-      # A variable loan's new rate is a dated schedule row, not a new base rate
-      # (#223): overwriting the base rate re-prices every period before the
-      # change. The other terms go first, so a payload that reclassifies the
-      # loan is applied before its rate is judged.
-      #
-      # Not from an import that stopped for a fresh login: PlaidItem::Importer
-      # swallows ITEM_LOGIN_REQUIRED and the sync still processes, so this
-      # payload is the previous sync's, and its rate is not a change the bank
-      # reported on `as_of`.
+      terms = present.except(:interest_rate)
       rate = present[:interest_rate]
-      if rate && variable_after_write?(loan, present)
-        return write_enriched(loan, present.except(:interest_rate)) if plaid_account.plaid_item.requires_update?
 
-        write_terms_then_rate(loan, present.except(:interest_rate), rate)
-      else
-        write_enriched(loan, present)
-      end
-    end
-
-    # Two saves, because the rate is judged against the loan the terms
-    # produce. They still land together or not at all, as the single save
-    # before #223 did: split, a reclassification to variable could commit while
-    # the rate that came with it was refused (CodeRabbit, #247).
-    #
-    # The refusal is reported after the rollback, not inside it, or the log
-    # entry would be rolled back with the terms.
-    def write_terms_then_rate(loan, terms, rate)
+      # Two saves: the other terms first, so a payload that reclassifies the
+      # loan is applied before its rate is judged, then the rate. They land
+      # together or not at all, as the single save did.
+      #
+      # Enrichable logs the DataEnrichment before it saves, and a refused save
+      # does not roll that row back. This transaction does, so provenance never
+      # says Plaid supplied a value the loan rejected. `requires_new`, so the
+      # rollback holds even when a caller has a transaction open.
       refusal = nil
       loan.transaction(requires_new: true) do
-        refusal = enrich(loan, terms) || enrich(loan, loan.variable_rate_update_for(rate, as_of: as_of))
+        refusal = enrich(loan, terms) || (rate.nil? ? nil : enrich(loan, rate_update(loan, rate)))
         raise ActiveRecord::Rollback if refusal
       end
       return if refusal.nil?
 
-      # The rolled-back first save left its values on the in-memory loan.
+      # A refusal leaves the rejected values assigned and the errors populated
+      # on the in-memory loan, and a rolled-back first save leaves its values
+      # there too. Left in place, the next write in the same sync is refused
+      # for them, and a later no-op write reports them again.
       loan.reload
-      report_refusal(*refusal)
-    end
-
-    # Whether the loan will be variable once this payload's `rate_type` is
-    # applied. A locked `rate_type` is the user's and is not replaced.
-    def variable_after_write?(loan, present)
-      applied = present.key?(:rate_type) && !loan.locked?(:rate_type)
-      rate_type = applied ? present[:rate_type] : loan.rate_type
-      Loan::VARIABLE_RATE_TYPES.include?(rate_type.to_s)
-    end
-
-    def write_enriched(loan, present)
-      refusal = enrich(loan, present)
-      report_refusal(*refusal) if refusal
-    end
-
-    # Writes through Enrichable and returns nil, or `[attributes, messages]`
-    # when the model refused them.
-    def enrich(loan, present)
-      return nil if present.blank?
-
-      loan.enrich_attributes(present, source: "plaid")
-      return nil if loan.errors.empty?
-
-      messages = loan.errors.full_messages
-
-      # Put the loan back the way it was found. `enrich_attributes` assigns and
-      # then calls `save`; a refusal leaves the REJECTED VALUES on the in-memory
-      # loan with its errors populated, so anything reading it later in the same
-      # sync sees a figure the model would not store. Clearing the errors
-      # matters separately: `enrich_attributes` returns early without saving
-      # when every attribute is locked or unchanged, so a later write in the
-      # same pass would find these errors sitting there and report a refusal
-      # that never happened.
-      #
-      # The same fix `RedbarkAccount::LoanDetailsProcessor#write` carries -- it
-      # was raised there first and should have been carried across with the
-      # pattern rather than waiting to be raised again here (cubic, #222).
-      loan.restore_attributes(present.keys.map(&:to_s))
       loan.errors.clear
-      [ present, messages ]
+
+      # Logged after the rollback so the entry is not rolled back with it.
+      report_refusal(loan, present.keys.map(&:to_s), refusal)
     end
 
-    # `enrich_attributes` calls `save`, not `save!`, so an invalid value
-    # returns false rather than raising. On `main` the `update!` raised into
-    # `PlaidAccount::Processor#process_liabilities`'s `rescue`, which reported
-    # it; without this the failure would become silent, which is a worse
-    # outcome than the one being fixed.
+    # A fixed loan's rate is its base rate, as before. A variable loan's is
+    # decided by the loan: a first sighting sets the base rate, an unchanged
+    # rate writes nothing, a change is a row dated `as_of`.
     #
-    # `false` alone is not a failure -- Enrichable also returns it when every
-    # attribute was locked or unchanged, which are the ordinary quiet paths.
-    # Only a populated `errors` distinguishes a refusal (see #enrich).
-    def report_refusal(present, messages)
+    # Not from an import that stopped for a fresh login: PlaidItem::Importer
+    # swallows ITEM_LOGIN_REQUIRED and marks the item, and the sync still
+    # processes, so this payload is the previous sync's. Its rate is not a
+    # change the bank reported on `as_of`, and dating it would route around a
+    # base rate the user has since corrected and locked. The status means
+    # "this import" because PlaidItem::Importer#import puts it back to good
+    # after a fetch that succeeds.
+    #
+    # The guard sits after the fixed branch on purpose: a stale fixed rate is
+    # the value the last sync already wrote, and a user's correction to it is
+    # locked, so rewriting it changes nothing. Only the variable path would
+    # turn the stale rate into a new dated row.
+    def rate_update(loan, rate)
+      return { interest_rate: rate } unless loan.variable_rate_type?
+      return nil if plaid_account.plaid_item.requires_update?
+
+      loan.variable_rate_update_for(rate, as_of: as_of)
+    end
+
+    # Writes through Enrichable and returns nil, or the model's error messages
+    # when it refused them. `false` from Enrichable alone is not a refusal: it
+    # also means every attribute was locked or unchanged.
+    def enrich(loan, attrs)
+      return nil if attrs.blank?
+
+      loan.enrich_attributes(attrs, source: "plaid")
+      loan.errors.empty? ? nil : loan.errors.full_messages
+    end
+
+    # `enrich_attributes` saves with `save`, so a refusal returns false where
+    # `update!` raised into PlaidAccount::Processor#process_liabilities's
+    # rescue, which sent it to Sentry. Both are kept: the debug log for support,
+    # filtered by the connection, and Sentry so a refusal that recurs every
+    # sync still shows in error monitoring. The errors are passed in because
+    # the loan has been reloaded by the time this runs.
+    def report_refusal(loan, attributes, errors)
+      message = "Plaid loan terms refused by the model"
+
       DebugLogEntry.capture(
         category: "provider_sync",
         level: "warn",
-        message: "Plaid loan terms refused by the model",
+        message: message,
         source: self.class.name,
         provider_key: "plaid",
         account: account,
+        account_provider: plaid_account.account_provider,
         metadata: {
           plaid_account_id: plaid_account.id,
-          attributes: present.keys.map(&:to_s),
-          errors: messages
+          attributes: attributes,
+          errors: errors
         }
       )
+
+      Sentry.capture_message(message, level: :warning) do |scope|
+        scope.set_tags(plaid_account_id: plaid_account.id)
+        scope.set_context("plaid_loan_terms", { loan_id: loan.id, attributes: attributes, errors: errors })
+      end
     end
 end
