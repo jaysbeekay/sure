@@ -31,6 +31,27 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_nil @user.reload.preferences["portfolio_section_order"]
   end
 
+  # A valid key is the one Periodable#set_period writes as the user's default,
+  # so the gate has to turn the request away before that callback runs.
+  test "a request the gate turns away does not save its period as the user's default" do
+    disable_preview(@user)
+    @user.update!(default_period: "last_30_days")
+
+    get portfolio_path(period: "last_365_days")
+
+    assert_redirected_to root_path
+    assert_equal "last_30_days", @user.reload.default_period
+  end
+
+  test "a preview user's period pick is still saved as their default" do
+    @user.update!(default_period: "last_30_days")
+
+    get portfolio_path(period: "last_365_days")
+
+    assert_response :success
+    assert_equal "last_365_days", @user.reload.default_period
+  end
+
   # The KPI row reads the family's income totals. Those used a ::boolean cast
   # on provider pending flags, so one flag PostgreSQL cannot parse raised out
   # of the aggregation and took the whole page down with it.
@@ -843,6 +864,55 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal InvestmentStatement.new(@family, user: @user).investment_accounts.count, css_select("#portfolio-accounts a").size
   end
 
+  # Each card's logo falls back to its provider's, read through
+  # AccountProvider#provider, so the provider records are loaded with the
+  # accounts rather than once per card.
+  test "the accounts grid loads provider-linked accounts without a query per card" do
+    link_investment_account(0)
+    one = provider_queries { get portfolio_path }
+
+    link_investment_account(1)
+    link_investment_account(2)
+    three = provider_queries { get portfolio_path }
+
+    assert_response :success
+    assert_select "#portfolio-accounts a", minimum: 3
+    assert_equal one, three, "loading the linked accounts' providers grew with the number of cards"
+  end
+
+  # Created out of name order, so the order they were stored in is not the
+  # order the cards must show.
+  test "the accounts grid lists its cards in name order" do
+    @family.accounts.create!(name: "Zz brokerage", balance: 100, currency: "USD", accountable: Investment.new, owner: @user)
+    @family.accounts.create!(name: "Aa brokerage", balance: 100, currency: "USD", accountable: Investment.new, owner: @user)
+
+    get portfolio_path
+
+    assert_response :success
+    names = css_select("#portfolio-accounts a p.font-medium.text-sm").map { |node| node.text.strip }
+    assert_includes names, "Aa brokerage"
+    assert_includes names, "Zz brokerage"
+    assert_equal names.sort, names
+  end
+
+  # The page column narrows when the sidebars open while the screen stays
+  # wide, so the grid follows the page's container width, not the viewport.
+  # Both sides are asserted, so a half-migrated grid fails.
+  test "the accounts grid is laid out by container width, not screen width" do
+    get portfolio_path
+
+    assert_response :success
+    grid = css_select("#portfolio-accounts").first
+    assert grid, "the accounts grid did not render"
+    classes = grid["class"].split
+
+    assert_includes classes, "@2xl:grid-cols-2"
+    assert_includes classes, "@4xl:grid-cols-3"
+    assert_empty classes.grep(/\A(sm|md|lg|xl|2xl):grid-cols-/), "the grid still uses screen breakpoints: #{grid["class"]}"
+    assert grid.ancestors.any? { |node| node["class"].to_s.split.include?("@container") },
+      "no @container ancestor for the container breakpoints to measure"
+  end
+
   test "allocation donut carries the grouping's segments and switches grouping through links" do
     statement = InvestmentStatement.new(@family, user: @user)
 
@@ -1008,6 +1078,22 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   private
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
+    end
+
+    def disable_preview(user)
+      user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => false))
+    end
+
+    def link_investment_account(index)
+      account = @family.accounts.create!(name: "Linked brokerage #{index}", balance: 1_000, currency: "USD",
+                                         accountable: Investment.new, owner: @user)
+      provider = LunchflowAccount.create!(lunchflow_item: lunchflow_items(:one), account_id: "lf_portfolio_#{index}",
+                                          name: account.name, currency: "USD")
+      AccountProvider.create!(account: account, provider: provider)
+    end
+
+    def provider_queries(&block)
+      capture_sql_queries(&block).count { |sql| sql.include?(%(FROM "lunchflow_accounts")) }
     end
 
     # The investment fixtures carry holdings but no balance history, and a

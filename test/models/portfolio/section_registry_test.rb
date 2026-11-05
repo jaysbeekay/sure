@@ -570,7 +570,47 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
                  "two Marches in one chart have to be told apart"
   end
 
+  # The accounts section is rendered from the locals the registry builds, so
+  # loading its accounts and rendering every card -- logo included -- costs
+  # the same however many provider-linked accounts there are.
+  test "the accounts section's query count does not grow with provider-linked accounts" do
+    link_investment_account(0)
+    one = accounts_section_queries
+
+    link_investment_account(1)
+    link_investment_account(2)
+    three = accounts_section_queries
+
+    assert_equal one[:cards] + 2, three[:cards], "the two new linked accounts did not render as cards"
+    assert_equal one[:queries], three[:queries],
+      "the accounts section's queries grew with the number of linked accounts"
+  end
+
   private
+    def link_investment_account(index)
+      account = @family.accounts.create!(name: "Linked brokerage #{index}", balance: 1_000, currency: "USD",
+                                         accountable: Investment.new, owner: @user)
+      provider = LunchflowAccount.create!(lunchflow_item: lunchflow_items(:one), account_id: "lf_registry_#{index}",
+                                          name: account.name, currency: "USD")
+      AccountProvider.create!(account: account, provider: provider)
+    end
+
+    # A fresh statement and registry per measurement, so nothing memoised by
+    # an earlier one is carried over. The capture covers the partial's render:
+    # an association the registry did not preload is read lazily per card, so
+    # that is where a per-card query lands.
+    def accounts_section_queries
+      @statement = InvestmentStatement.new(@family, user: @user)
+      section = registry.sections.find { |s| s[:key] == "accounts" }
+      html = nil
+
+      queries = capture_sql_queries do
+        html = ApplicationController.render(partial: section[:partial], locals: section[:locals])
+      end
+
+      { queries: queries.size, cards: Nokogiri::HTML.fragment(html).css("#portfolio-accounts a").size }
+    end
+
     def bars
       registry.sections.find { |section| section[:key] == "realized_gains" }[:locals][:bars]
     end
