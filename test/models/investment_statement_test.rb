@@ -1859,6 +1859,135 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 1000, children["cash"].amount.amount
   end
 
+  # The bottom level under Cash lists the account cash its parent counts, as ONE
+  # position: two accounts' cash is one exposure, not two rows at half weight.
+  # Asked with and without a parent, because Cash is reached both from
+  # Liquidity (asset class first) and directly (sub-class first).
+  test "two accounts' cash is one position under Cash" do
+    create_investment_account(balance: 1000, cash_balance: 1000)
+    create_investment_account(balance: 500, cash_balance: 500)
+
+    [ false, true ].each do |look_through|
+      [ nil, "liquidity" ].each do |parent|
+        rows = @statement.allocation_children("asset_sub_class", "cash", look_through: look_through, parent: parent)
+
+        assert_equal [ "cash" ], rows.map(&:id),
+                     "look_through=#{look_through} parent=#{parent.inspect}: account cash was not one position"
+        assert_equal 1500, rows.first.amount.amount,
+                     "look_through=#{look_through} parent=#{parent.inspect}: the position was not both accounts' cash"
+        assert_equal I18n.t("models.investment_statement.cash"), rows.first.name
+      end
+    end
+  end
+
+  # The parent counts each account's cash only where it is positive, so the
+  # child does too: +1,000 and -500 is 1,000 at both levels, not a netted 500.
+  test "negative account cash is left out below as above" do
+    create_investment_account(balance: 1000, cash_balance: 1000)
+    create_investment_account(balance: 0, cash_balance: -500)
+
+    [ false, true ].each do |look_through|
+      parent = @statement.allocation_children("asset_class", "liquidity", look_through: look_through).find { |r| r.id == "cash" }
+      rows = @statement.allocation_children("asset_sub_class", "cash", look_through: look_through, parent: "liquidity")
+
+      assert_equal 1000, parent.amount.amount, "look_through=#{look_through}: precondition, the parent counts positive cash only"
+      assert_equal [ 1000 ], rows.map { |r| r.amount.amount },
+                   "look_through=#{look_through}: the child cash row disagreed with its parent"
+    end
+  end
+
+  # Account cash sits on Liquidity/Cash only. Opening another asset class's
+  # sub-class that happens to share no name with it must not pick it up.
+  test "account cash is not listed under a cash sub-class reached from another asset class" do
+    create_investment_account(balance: 1000, cash_balance: 1000)
+
+    [ false, true ].each do |look_through|
+      assert_empty @statement.allocation_children("asset_sub_class", "cash", look_through: look_through, parent: "equity"),
+                   "look_through=#{look_through}: account cash was filed under equity"
+      assert_empty @statement.allocation_children("asset_sub_class", "stock", look_through: look_through, parent: "liquidity"),
+                   "look_through=#{look_through}: account cash was listed outside the cash sub-class"
+    end
+  end
+
+  # One security held in a USD and a EUR account is one position of its whole
+  # family-currency value, as `allocation` and `top_holdings` already report it.
+  test "a security held in two accounts and two currencies is one row of the summed value" do
+    usd = create_investment_account(balance: 1000, cash_balance: 0, currency: "USD")
+    eur = create_investment_account(balance: 1000, cash_balance: 0, currency: "EUR")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+    etf = create_classified_security(asset_class: "equity", asset_sub_class: "etf")
+    Holding.create!(account: usd, security: etf, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+    Holding.create!(account: eur, security: etf, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "EUR")
+
+    [ false, true ].each do |look_through|
+      rows = @statement.allocation_children("asset_sub_class", "etf", look_through: look_through, parent: "equity")
+
+      assert_equal [ etf.id ], rows.map(&:id), "look_through=#{look_through}: the security was listed once per account"
+      assert_in_delta 2100, rows.first.amount.amount, 0.0001,
+                      "look_through=#{look_through}: 1,000 USD plus 1,000 EUR at 1.1 is 2,100"
+      assert_in_delta 100, rows.first.weight, 0.01
+    end
+  end
+
+  # At every level, each bucket's children add up to the bucket. Asserted from
+  # both entry points of the ladder, on a portfolio with every kind of row the
+  # bottom level can hold: account cash in several accounts (one negative), a
+  # cash security, and one security across two accounts.
+  test "every allocation level sums to the bucket above it" do
+    first = create_investment_account(balance: 3000, cash_balance: 700)
+    second = create_investment_account(balance: 1000, cash_balance: 300)
+    create_investment_account(balance: 0, cash_balance: -200)
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    bond = create_classified_security(asset_class: "fixed_income", asset_sub_class: "bond")
+    cash_security = Security.create!(ticker: "CASH-EUR-#{SecureRandom.hex(3)}", kind: "cash", offline: true)
+    Holding.create!(account: first, security: stock, date: Date.current, qty: 1, price: 1200, amount: 1200, currency: "USD")
+    Holding.create!(account: second, security: stock, date: Date.current, qty: 1, price: 400, amount: 400, currency: "USD")
+    Holding.create!(account: first, security: bond, date: Date.current, qty: 1, price: 800, amount: 800, currency: "USD")
+    Holding.create!(account: first, security: cash_security, date: Date.current, qty: 1, price: 300, amount: 300, currency: "USD")
+
+    [ false, true ].each do |look_through|
+      @statement.allocation_by("asset_class", look_through: look_through).each do |klass|
+        subs = @statement.allocation_children("asset_class", klass.id, look_through: look_through)
+        assert_in_delta klass.amount.amount, subs.sum { |s| s.amount.amount }, 0.0001,
+                        "look_through=#{look_through}: #{klass.id}'s sub-classes did not sum to it"
+
+        subs.each do |sub|
+          positions = @statement.allocation_children("asset_sub_class", sub.id, look_through: look_through, parent: klass.id)
+          assert_in_delta sub.amount.amount, positions.sum { |p| p.amount.amount }, 0.0001,
+                          "look_through=#{look_through}: #{klass.id}/#{sub.id}'s positions did not sum to it"
+          assert_equal positions.map(&:id).uniq, positions.map(&:id),
+                       "look_through=#{look_through}: #{klass.id}/#{sub.id} listed a position twice"
+        end
+      end
+
+      @statement.allocation_by("asset_sub_class", look_through: look_through).each do |sub|
+        positions = @statement.allocation_children("asset_sub_class", sub.id, look_through: look_through)
+        assert_in_delta sub.amount.amount, positions.sum { |p| p.amount.amount }, 0.0001,
+                        "look_through=#{look_through}: #{sub.id}'s positions did not sum to it from the sub-class grouping"
+      end
+    end
+  end
+
+  # Negative control: with no account cash and each security in one account,
+  # the bottom level is the holdings as they are, row for row.
+  test "a portfolio with no account cash and one holding per security lists its holdings unchanged" do
+    account = create_investment_account(balance: 3000, cash_balance: 0)
+    big = create_classified_security(name: "Big", asset_class: "equity", asset_sub_class: "stock")
+    small = create_classified_security(name: "Small", asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: big, date: Date.current, qty: 1, price: 2000, amount: 2000, currency: "USD")
+    Holding.create!(account: account, security: small, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    [ false, true ].each do |look_through|
+      rows = @statement.allocation_children("asset_sub_class", "stock", look_through: look_through, parent: "equity")
+
+      assert_equal [ [ big.id, "Big", 2000, BigDecimal("66.67") ], [ small.id, "Small", 1000, BigDecimal("33.33") ] ],
+                   rows.map { |r| [ r.id, r.name, r.amount.amount, r.weight ] },
+                   "look_through=#{look_through}"
+      assert_empty @statement.allocation_children("asset_sub_class", "cash", look_through: look_through, parent: "liquidity"),
+                   "look_through=#{look_through}: a cash position appeared with no cash to show"
+    end
+  end
+
   # A sector has no sub-sector here, and inventing one would be a different
   # chart. These render flat.
   test "the groupings that do not nest return no children" do

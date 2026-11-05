@@ -1380,7 +1380,13 @@ class InvestmentStatement
     # ticker collapse into one row, because the exposure is one exposure however
     # many wrappers it arrives through -- which is the most useful thing this
     # level says.
+    #
+    # Both branches list one row per security, summed in the family currency,
+    # and both add the account cash the parent counts (`account_cash_rows`), so
+    # at every level a bucket's positions sum to the bucket.
     def allocation_holdings_within(column, bucket, cash_bucket = nil, look_through: false, parent: nil)
+      cash_rows = account_cash_rows(bucket, cash_bucket, parent)
+
       if look_through
         grouped = Hash.new(0)
         # Two name sources, resolved in a fixed order rather than by whichever
@@ -1402,15 +1408,36 @@ class InvestmentStatement
           end
         end
         return build_segments(
-          grouped.map { |id, value| [ id, direct_names[id] || constituent_names[id], value ] }
+          grouped.map { |id, value| [ id, direct_names[id] || constituent_names[id], value ] } + cash_rows
         )
       end
 
-      rows = holdings_classified_as(column, bucket, cash_bucket, parent: parent).map do |holding|
-        [ holding.security_id, holding.security.name.presence || holding.security.ticker,
-          convert_to_family_currency(holding.amount, holding.currency) ]
+      # One row per security: `current_holdings` has a row per account, so a
+      # security held in several accounts, in any currencies, is summed here.
+      grouped = Hash.new(0)
+      names = {}
+      holdings_classified_as(column, bucket, cash_bucket, parent: parent).each do |holding|
+        grouped[holding.security_id] += convert_to_family_currency(holding.amount, holding.currency)
+        names[holding.security_id] ||= holding.security.name.presence || holding.security.ticker
       end
-      build_segments(rows)
+      build_segments(grouped.map { |id, value| [ id, names[id], value ] } + cash_rows)
+    end
+
+    # Account cash as a position of the cash bucket: ONE row, the sum over
+    # accounts of each account's cash in the family currency where it is
+    # positive -- the rule `allocation_sub_classes_within` and
+    # `allocation_by_classification` count it by. It belongs to Liquidity/Cash
+    # only, so any other bucket, or a cash sub-class reached from another asset
+    # class, gets none. Identified and named as `allocation`'s own cash row.
+    def account_cash_rows(bucket, cash_bucket, parent)
+      return [] unless cash_bucket.present? && bucket == cash_bucket
+      return [] unless parent.nil? || parent == "liquidity"
+
+      total = investment_accounts.sum do |account|
+        cash = account.cash_balance.to_d
+        cash.positive? ? convert_to_family_currency(cash, account.currency) : 0
+      end
+      [ [ "cash", I18n.t("models.investment_statement.cash"), total ] ]
     end
 
     # One rule for which bucket a holding falls in, shared by the grouping, the
