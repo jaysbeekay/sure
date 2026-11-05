@@ -1880,6 +1880,24 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     end
   end
 
+  # Cash held in another currency converts into the family currency at every
+  # level that counts it: 1,000 EUR at 1.1 is 1,100 USD in Liquidity and in the
+  # Cash position below it, not 1,000.
+  test "account cash in another currency converts at every level" do
+    create_investment_account(balance: 1000, cash_balance: 1000, currency: "EUR")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+
+    [ false, true ].each do |look_through|
+      liquidity = @statement.allocation_by("asset_class", look_through: look_through).find { |s| s.id == "liquidity" }
+      cash_sub = @statement.allocation_children("asset_class", "liquidity", look_through: look_through).find { |s| s.id == "cash" }
+      position = @statement.allocation_children("asset_sub_class", "cash", look_through: look_through, parent: "liquidity").sole
+
+      [ liquidity, cash_sub, position ].each_with_index do |segment, level|
+        assert_equal 1100, segment.amount.amount, "look_through=#{look_through} level #{level}: EUR cash was not converted"
+      end
+    end
+  end
+
   # The parent counts each account's cash only where it is positive, so the
   # child does too: +1,000 and -500 is 1,000 at both levels, not a netted 500.
   test "negative account cash is left out below as above" do
