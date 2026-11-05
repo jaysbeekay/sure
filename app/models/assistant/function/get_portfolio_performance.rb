@@ -100,6 +100,10 @@ class Assistant::Function::GetPortfolioPerformance < Assistant::Function
     def drivers(values)
       return nil if values.blank?
 
-      values.to_h.transform_values { |amount| money(amount) }
+      # Every driver is an amount except suppressed_days, a count of days left
+      # out of the series, which is passed through as a number.
+      values = values.to_h
+      values.except(:suppressed_days).transform_values { |amount| money(amount) }
+        .merge(values.slice(:suppressed_days))
     end
 end

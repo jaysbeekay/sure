@@ -33,6 +33,9 @@ class Assistant::Function::PortfolioToolsTest < ActiveSupport::TestCase
     assert result[:available]
     assert_equal expected.time_weighted_return.to_d.round(6).to_f, result[:time_weighted_return][:value]
     assert_equal expected.drivers.to_h[:value_close].to_d.round(2).to_f, result[:drivers][:value_close][:amount]
+    # A count of days, not money: formatted as an amount it read "$0.00".
+    assert_equal expected.drivers.to_h[:suppressed_days], result[:drivers][:suppressed_days]
+    assert_kind_of Integer, result[:drivers][:suppressed_days]
     assert_equal expected.rate_missing?, result[:rate_missing]
   end
 
