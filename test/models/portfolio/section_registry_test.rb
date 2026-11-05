@@ -571,8 +571,10 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
   end
 
   # The accounts section is rendered from the locals the registry builds, so
-  # loading its accounts and rendering every card -- logo included -- costs
-  # the same however many provider-linked accounts there are.
+  # rendering every card -- logo included -- runs no query per card: the count
+  # is the same however many provider-linked accounts there are. The accounts
+  # load itself happens when the sections are built, before the capture; the
+  # controller test's full-request count covers it.
   test "the accounts section's query count does not grow with provider-linked accounts" do
     link_investment_account(0)
     one = accounts_section_queries
