@@ -25,8 +25,9 @@ class Assistant::Function::GetPortfolioPerformance < Assistant::Function
           return is reported rather than one converted at a guessed rate;
         - return_scopes lists each account with history in the period, the return
           methods its records support, and withheld_because when one is not. One
-          account that cannot support a method withholds that figure for the whole
-          portfolio.
+          account that cannot support the money-weighted method withholds that
+          figure for the whole portfolio; the time-weighted figures are withheld
+          only when no account holds a balance on two days of the period.
         Say why a figure is missing instead of treating it as 0.
       INSTRUCTIONS
     end
@@ -88,8 +89,8 @@ class Assistant::Function::GetPortfolioPerformance < Assistant::Function
 
     def withheld_because(scope)
       if scope.insufficient?
-        "Fewer than two days of balance history in the period, so the account has no return; " \
-          "it withholds the portfolio's time-weighted and money-weighted figures."
+        "Fewer than two days of balance history in the period, so the account has no return of its own; " \
+          "it withholds the portfolio's money-weighted figure. The portfolio's time-weighted figure still counts it from the day it appears."
       elsif scope.valuation_tracked?
         "Valued by valuations, with no record of money paid in or out, so its time-weighted figure " \
           "is a value return and it has no money-weighted return; it withholds the portfolio's money-weighted figure."

@@ -249,6 +249,9 @@ class Assistant::Function::PortfolioToolsTest < ActiveSupport::TestCase
     assert_match(/money-weighted/, scopes[valued.id][:withheld_because])
   end
 
+  # The account itself supports no return, but it no longer blanks the
+  # portfolio's time-weighted figure (R15 as amended): its arrival is priced as
+  # a composition flow, and the shared brokerage holds a balance on two days.
   test "an account with one day of history is named as withholding every return" do
     newcomer = create_portfolio_account(family: @family, name: "New account", balance: 300)
     newcomer.update!(owner: @admin)
@@ -257,10 +260,14 @@ class Assistant::Function::PortfolioToolsTest < ActiveSupport::TestCase
     result = call(Assistant::Function::GetPortfolioPerformance, { "period" => "last_30_days" })
     scope = result[:return_scopes].find { |row| row[:account_id] == newcomer.id }
 
-    assert_nil result[:time_weighted_return], "the fixture really withholds the time-weighted return"
+    assert_not_nil result[:time_weighted_return], "a one-day account must not withhold the portfolio's time-weighted return"
+    assert_nil result[:money_weighted_return], "the one-day account still withholds the money-weighted return"
     assert_equal "insufficient", scope[:tracking]
     assert_equal false, scope[:time_weighted_return]
     assert_match(/two days/, scope[:withheld_because])
+    assert_match(/money-weighted/, scope[:withheld_because])
+    assert_no_match(/withholds the portfolio's time-weighted/, scope[:withheld_because],
+      "the reason must not claim the time-weighted figure the tool just reported is withheld")
   end
 
   # The money-weighted figure is expressed over the whole period, so the tool
