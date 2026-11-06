@@ -269,6 +269,22 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
   end
 
+  test "data quality rows name the account, open the drawer, and date a stale price" do
+    holding = add_unpriced_holding("NOPX")
+    dated = Security.create!(ticker: "OLDP", name: "Old price")
+    Holding.create!(account: accounts(:investment), security: dated, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    priced_on = 20.days.ago.to_date
+    Security::Price.create!(security: dated, date: priced_on, price: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] li", text: /NOPX.*#{Regexp.escape(accounts(:investment).name)}/m
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?][data-turbo-frame=drawer]", holding_path(holding)
+    assert_select "[data-portfolio-issue-kind='stale_price'] li",
+      text: /OLDP.*#{Regexp.escape(I18n.t("portfolios.data_quality.last_priced", date: I18n.l(priced_on, format: :long)))}/m
+  end
+
   # Not stubbed: with nothing held there is nothing to check, so the section
   # goes while the accounts section, read from the same accounts, stays.
   test "data quality is absent when nothing held needs checking" do
