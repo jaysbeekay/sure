@@ -91,10 +91,10 @@ class InvestmentStatement::AllocationTagsAndLookThroughTest < ActiveSupport::Tes
 
     assert_equal first_amount, second_amount, "the split was not even"
     # Compared against another grouping rather than against `portfolio_value`:
-    # the fixture family carries balances the grouping walk legitimately does not
-    # reach, so the two are not the same number here. #194's own invariant test
-    # builds its accounts for that reason. What must hold is that tag measures
-    # the same portfolio the other groupings do.
+    # every grouping sums to the holdings plus each account's positive cash
+    # (balance less holdings), which is `portfolio_value` only while no
+    # account's balance is below its holdings. What must hold is that tag
+    # measures the same portfolio the other groupings do.
     assert_in_delta @statement.allocation_by("sector").sum { |s| s.amount.amount }.to_f,
                     segments.sum { |s| s.amount.amount }.to_f, 0.01,
                     "a multi-tagged holding was counted under every tag, overrunning the portfolio"
