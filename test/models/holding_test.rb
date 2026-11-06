@@ -147,6 +147,119 @@ class HoldingTest < ActiveSupport::TestCase
     assert_equal 2, queries.count { |sql| sql.include?('FROM "trades"') }
   end
 
+  test "a preload drops the trend built on the cost it replaces" do
+    create_trade(@amzn.security, account: @account, qty: 15, price: 200.00, date: Date.current)
+    assert_equal Money.new(15 * 200), @amzn.trend.previous, "the trend must be built from the fallback before the preload"
+
+    create_trade(@amzn.security, account: @account, qty: 15, price: 100.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+
+    assert_equal Money.new(150), @amzn.avg_cost
+    assert_equal Money.new(15 * 150), @amzn.trend.previous
+  end
+
+  # The batch reads the stored rows, so for a holding that is unsaved or has
+  # unsaved changes it would answer for another holding -- or for none.
+  test "the batch leaves unsaved and changed holdings to their own attributes" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 100.00, date: Date.current)
+    @amzn.date = 1.day.ago.to_date # stored as today, where the average is 150
+    create_trade(@nvda.security, account: @account, qty: 10, price: 120.00, date: Date.current)
+    unsaved = @account.holdings.new(date: Date.current, security: @nvda.security, qty: 1, price: 124, amount: 124, currency: "USD")
+
+    Holding.preload_avg_costs([ @amzn, unsaved ])
+
+    assert_equal Money.new(200), @amzn.avg_cost
+    assert_equal BigDecimal("120"), unsaved.avg_cost&.amount
+  end
+
+  # Holding.preload_avg_costs exists to answer, for many holdings at once,
+  # what each one's #avg_cost answers. Each case is a rule the two paths must
+  # share; the expected column pins #avg_cost itself, so a rule dropped from
+  # both paths at once still fails.
+  test "the batch gives every holding the average cost its own fallback gives" do
+    day = 1.day.ago.to_date
+    cases = {}
+    position = ->(name) do
+      security = Security.create!(ticker: "P#{name.upcase}", name: name.to_s)
+      cases[name] = @account.holdings.create!(security: security, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD")
+      security
+    end
+
+    create_trade(position.(:fee), account: @account, qty: 10, price: 100, fee: 5, date: day)
+    create_trade(position.(:missing_rate), account: @account, qty: 10, price: 100, date: day, currency: "CAD")
+    create_trade(position.(:sweep_in), account: @account, qty: 10, price: 100, date: day)
+      .entryable.update!(investment_activity_label: "Sweep In")
+    create_trade(position.(:plain_buy), account: @account, qty: 10, price: 100, date: day)
+
+    lot_security = position.(:costed_lot)
+    create_trade(lot_security, account: @account, qty: 5, price: 100, date: day)
+    sweep = create_trade(lot_security, account: @account, qty: 5, price: 100, date: day)
+    sweep.entryable.update!(investment_activity_label: "Sweep In")
+    HoldingLot.create!(account: @account, security: lot_security, source_entry: sweep, qty: 5,
+                       currency: "USD", acquired_on: day, manual_total_cost: 400)
+
+    create_trade(position.(:zero_rate), account: @account, qty: 10, price: 100, date: day, currency: "CAD")
+      .entryable.update_column(:extra, { "exchange_rate" => 0 })
+    create_trade(position.(:carried_rate), account: @account, qty: 10, price: 100, date: day, currency: "CAD")
+      .entryable.update!(exchange_rate: 1.25)
+    assert_not ExchangeRate.exists?(from_currency: "CAD"), "a table rate would hide the trade's own"
+
+    expected = {
+      fee: BigDecimal("100.5"),     # (10 * 100 + 5) / 10
+      missing_rate: nil,            # CAD with no rate: unknown, never 1:1
+      sweep_in: nil,                # an internal movement with no lot
+      plain_buy: BigDecimal("100"),
+      costed_lot: BigDecimal("90"), # (5 * 100 + the lot's 400) / 10
+      zero_rate: nil,               # a rate of 0 converts nothing
+      carried_rate: BigDecimal("125") # 100 CAD at the trade's 1.25
+    }
+
+    batch = Holding.where(id: cases.values.map(&:id)).to_a
+    Holding.preload_avg_costs(batch)
+    preloaded = batch.index_by(&:id).transform_values { |holding| holding.avg_cost&.amount }
+
+    batched = cases.transform_values { |holding| preloaded.fetch(holding.id) }
+    own = cases.transform_values { |holding| holding.reload.avg_cost&.amount }
+
+    assert_equal expected, own, "#avg_cost moved"
+    assert_equal own, batched, "the batch disagrees with #avg_cost"
+  end
+
+  # The batch is one query however many holdings it answers for, as before
+  # the rules above joined it: they ride on that query.
+  test "the batch reads every average-cost holding in one query" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, fee: 2, date: 1.day.ago.to_date)
+    create_trade(@nvda.security, account: @account, qty: 10, price: 120.00, date: 1.day.ago.to_date, currency: "CAD")
+    batch = Holding.where(id: [ @amzn.id, @nvda.id ]).to_a
+
+    queries = capture_sql_queries { Holding.preload_avg_costs(batch) }
+
+    assert_equal 1, queries.size, queries.join("\n")
+  end
+
+  # A preloaded cost answers for the attributes it was computed from. Once the
+  # holding changes, the holding's own attributes decide again.
+  test "a holding changed after the preload reads its own cost, not the preloaded one" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 100.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+    assert_equal Money.new(150), @amzn.avg_cost, "the preload answers for today's date"
+
+    @amzn.date = 1.day.ago.to_date
+
+    assert_equal Money.new(200), @amzn.avg_cost
+  end
+
+  test "a holding changed after the preload drops the preload's quantity mismatch" do
+    @amzn.preload_avg_cost(Money.new(150), quantity_mismatch: true)
+    assert @amzn.quantity_mismatch?, "the preload's flag stands while the holding is unchanged"
+
+    @amzn.qty += 1
+
+    assert_not @amzn.quantity_mismatch?
+  end
+
   test "calculates total return trend" do
     @amzn.stubs(:avg_cost).returns(Money.new(214.00))
     @nvda.stubs(:avg_cost).returns(Money.new(126.00))

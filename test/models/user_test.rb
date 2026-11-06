@@ -874,6 +874,25 @@ class UserTest < ActiveSupport::TestCase
     assert_raises(ArgumentError) { @user.update_section_preferences("settings", order: []) }
   end
 
+  # Safe navigation skips its arguments when the receiver is nil, so the
+  # namespace check has to run before preferences is read.
+  test "section preferences reject an unknown namespace when preferences is nil" do
+    @user.preferences = nil
+
+    assert_raises(ArgumentError) { @user.section_order("dashboard") }
+    assert_raises(ArgumentError) { @user.section_collapsed?("dashboard", "net_worth") }
+    assert_not @user.section_collapsed?("reports", "net_worth")
+  end
+
+  # The portfolio hub is a namespace too, so validating the namespace first
+  # must leave its reads answering rather than raising.
+  test "section preferences still answer for the portfolio namespace when preferences is nil" do
+    @user.preferences = nil
+
+    assert_not @user.section_collapsed?("portfolio", "kpis")
+    assert_equal Portfolio::SectionRegistry::KEYS, @user.section_order("portfolio")
+  end
+
   test "handles missing nested keys in preferences for collapsed sections" do
     @user.update!(preferences: { "section_order" => %w[cashflow] })
 
