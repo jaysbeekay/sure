@@ -1025,6 +1025,24 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_instance_of Portfolio::ReturnScope, scopes.fetch(account.id)
   end
 
+  # The per-account scopes must be resolved over the same days as the
+  # aggregate, which stops reading a disabled account at its cut-off. Without
+  # the cut-off the scope would count the rows after it too.
+  test "return_scopes counts a disabled account's balance days only up to its cut-off" do
+    account = create_investment_account(balance: 1000)
+    (1..6).each { |days_ago| create_balance(account, date: days_ago.days.ago.to_date, amount: 1000) }
+    account.update!(status: "disabled", disabled_at: 3.days.ago)
+    period = Period.last_30_days
+    cutoff = 4.days.ago.to_date
+
+    uncut = Portfolio::ReturnScope.new(account: account, period: period).balance_days
+    scope = @statement.return_scopes(period: period).fetch(account.id)
+
+    assert_equal 6, uncut, "the fixture must hold rows on both sides of the cut-off"
+    assert_equal account.balances.where(date: period.start_date..cutoff).count, scope.balance_days
+    assert_operator scope.balance_days, :<, uncut
+  end
+
   test "contributions and withdrawals are the cash the trade entry records" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
     account = create_investment_account(balance: 500)
