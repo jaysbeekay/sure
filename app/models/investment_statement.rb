@@ -165,10 +165,12 @@ class InvestmentStatement
   # Holdings the user should look at before trusting the figures: no cost
   # basis anywhere (Holding#avg_cost is nil: nothing stored and nothing the
   # trades can compute, by the same rules the holdings tab applies), a price
-  # older than STALE_PRICE_AFTER_DAYS or no price at all, or a provider link
-  # that is not healthy. Cash securities are never flagged. The cost bases
-  # come from the batched preload and the price dates from one query, so
-  # the list is bounded regardless of the number of holdings.
+  # dated more than STALE_PRICE_AFTER_DAYS before as_of or no price on or
+  # before it, or a provider link that is not healthy. Cash securities are
+  # never flagged. Issues sort by kind, ticker, security and account, so ties
+  # keep their order between requests. The cost bases come from the batched
+  # preload and the price dates from one query, so the list is bounded
+  # regardless of the number of holdings.
   STALE_PRICE_AFTER_DAYS = 5
 
   def data_quality_issues(as_of: Date.current)
@@ -188,7 +190,7 @@ class InvestmentStatement
     holdings.map(&:security).uniq.each do |security|
       next if security.cash?
 
-      latest = latest_price_dates[security.id]
+      latest = latest_price_dates(as_of)[security.id]
       if latest.nil? || latest < as_of - STALE_PRICE_AFTER_DAYS
         issues << DataQualityIssue.new(kind: :stale_price, holding: nil, security: security, detail: latest)
       end
@@ -197,7 +199,9 @@ class InvestmentStatement
       issues << DataQualityIssue.new(kind: :provider, holding: nil, security: security, detail: status) unless status == :ok
     end
 
-    issues.sort_by { |issue| [ DATA_QUALITY_KINDS.index(issue.kind), issue.security.ticker.to_s ] }
+    issues.sort_by do |issue|
+      [ DATA_QUALITY_KINDS.index(issue.kind), issue.security.ticker.to_s, issue.security.id.to_s, issue.holding&.account_id.to_s ]
+    end
   end
 
   DATA_QUALITY_KINDS = %i[missing_cost_basis stale_price provider].freeze
@@ -582,9 +586,13 @@ class InvestmentStatement
         .sort_by { |_, value, _| -value }
     end
 
-    def latest_price_dates
-      @latest_price_dates ||= Security::Price
+    # Latest price date per held security on or before as_of, so a price
+    # recorded after as_of cannot make a past check look fresh.
+    def latest_price_dates(as_of)
+      @latest_price_dates ||= {}
+      @latest_price_dates[as_of] ||= Security::Price
         .where(security_id: current_holdings.map(&:security_id).uniq)
+        .where(date: ..as_of)
         .group(:security_id)
         .maximum(:date)
     end
