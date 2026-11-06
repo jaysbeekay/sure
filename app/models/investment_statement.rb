@@ -167,22 +167,29 @@ class InvestmentStatement
     )
   end
 
+  # How many investment accounts #period_return_trend leaves out because a
+  # balance of theirs has no rate to the family currency. Zero when everything
+  # converts, which is the ordinary case.
+  def period_return_unconvertible_count(period: Period.current_month)
+    period_return_unconvertible_account_ids(period).length
+  end
+
+  # Balances are never converted at parity. An account with a balance in a
+  # currency that has no rate to the family currency is left out of both legs,
+  # so the figure covers the remaining accounts and the numerator and
+  # denominator span the same set. #period_return_unconvertible_count says how
+  # many were left out, so a caller can show the figure as partial.
   def period_return_trend(period: Period.current_month)
     currency = family.currency
-    account_ids = investment_account_ids
+    account_ids = investment_account_ids - period_return_unconvertible_account_ids(period)
     return nil if account_ids.empty?
 
     absolute_return = ActiveRecord::Base.connection.select_value(
       ActiveRecord::Base.sanitize_sql_array([
         <<~SQL.squish,
-          SELECT COALESCE(SUM(b.net_market_flows * COALESCE(er.rate, 1)), 0)
+          SELECT COALESCE(SUM(b.net_market_flows * (#{exchange_rate_lookup('b.currency', 'b.date')})), 0)
           FROM balances b
           JOIN accounts a ON a.id = b.account_id
-          LEFT JOIN exchange_rates er ON (
-            er.date = b.date
-            AND er.from_currency = b.currency
-            AND er.to_currency = :currency
-          )
           WHERE a.id IN (:account_ids)
             AND a.family_id = :family_id
             AND a.status IN ('draft', 'active')
@@ -207,14 +214,9 @@ class InvestmentStatement
     start_value = ActiveRecord::Base.connection.select_value(
       ActiveRecord::Base.sanitize_sql_array([
         <<~SQL.squish,
-          SELECT COALESCE(SUM(b.end_balance * COALESCE(er.rate, 1)), 0)
+          SELECT COALESCE(SUM(b.end_balance * (#{exchange_rate_lookup('b.currency', ':period_start')})), 0)
           FROM accounts a
           INNER JOIN balances b ON b.account_id = a.id
-          LEFT JOIN exchange_rates er ON (
-            er.date = :period_start
-            AND er.from_currency = b.currency
-            AND er.to_currency = :currency
-          )
           INNER JOIN (
             SELECT b2.account_id, MAX(b2.date) AS max_date
             FROM balances b2
@@ -501,6 +503,59 @@ class InvestmentStatement
         current: Money.new(currents.sum, family.currency),
         previous: Money.new(previouses.sum, family.currency)
       )
+    end
+
+    # The most recent rate on or before the date, else the earliest rate after
+    # it, else NULL. Never 1. The identity shortcut keeps a family's own
+    # currency off `exchange_rates` entirely.
+    def exchange_rate_lookup(currency_expression, date_expression)
+      <<~SQL.squish
+        CASE
+          WHEN #{currency_expression} = :currency THEN 1::numeric
+          ELSE COALESCE(
+            (SELECT r.rate FROM exchange_rates r
+              WHERE r.from_currency = #{currency_expression}
+                AND r.to_currency = :currency
+                AND r.date <= #{date_expression}
+              ORDER BY r.date DESC LIMIT 1),
+            (SELECT r.rate FROM exchange_rates r
+              WHERE r.from_currency = #{currency_expression}
+                AND r.to_currency = :currency
+                AND r.date > #{date_expression}
+              ORDER BY r.date ASC LIMIT 1)
+          )
+        END
+      SQL
+    end
+
+    # Accounts with a balance row, up to the period end, in a currency that has
+    # no rate to the family currency on any date. Any rate at all resolves,
+    # because the lookup above falls back to the earliest later rate.
+    #
+    # Judged per account, not per row: the flows leg reads in-period rows and
+    # the start-value leg reads the last row before the period, so dropping
+    # rows alone could keep a start value while discarding its flows.
+    #
+    # Deliberately wider than the rows the two legs read, so an account that
+    # held an unconvertible currency in an earlier period is also left out.
+    def period_return_unconvertible_account_ids(period)
+      @period_return_unconvertible ||= {}
+      @period_return_unconvertible[period.date_range] ||= begin
+        rows = Balance
+          .where(account_id: investment_account_ids)
+          .where("balances.date <= ?", period.date_range.end)
+          .where.not(currency: family.currency)
+          .distinct
+          .pluck(:account_id, :currency)
+
+        convertible = ExchangeRate
+          .where(from_currency: rows.map(&:last).uniq, to_currency: family.currency)
+          .distinct
+          .pluck(:from_currency)
+          .to_set
+
+        rows.reject { |_, currency| convertible.include?(currency) }.map(&:first).uniq
+      end
     end
 
     def investment_account_ids
