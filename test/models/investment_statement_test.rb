@@ -1252,6 +1252,51 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_not_equal gains_before, gains_after, "a cost-basis edit must not keep serving the gains built before it"
   end
 
+  # A series cached under one history trim must not be served under another:
+  # the trim decides the series' first point, and nothing else in the key
+  # moves when only the trim does.
+  test "every series cache key changes with the history trim, and the series is trimmed by it" do
+    create_investment_account(balance: 1000)
+    period = Period.last_30_days
+    kinds = %i[value holdings_value gains]
+
+    earliest = kinds.index_with { |kind| InvestmentStatement.new(@family).send(:series_cache_key, kind, period) }
+    common_statement = InvestmentStatement.new(@family)
+    common_statement.stubs(:series_history_start).returns(:common)
+    common = kinds.index_with { |kind| common_statement.send(:series_cache_key, kind, period) }
+
+    kinds.each { |kind| assert_not_equal earliest[kind], common[kind], "#{kind} key must carry the trim" }
+
+    Balance::LinkedInvestmentSeriesNormalizer.expects(:trim_to_supported_history)
+      .with(anything, has_entries(history_start: :common)).returns(:trimmed)
+    Rails.cache.stubs(:fetch).yields
+    common_statement.send(:fetch_series, :value, period) { |builder| builder.balance_series }
+  end
+
+  # AccountsController#unlink clears holdings.account_provider_id with
+  # update_all and destroys the account_providers rows. For a link held only
+  # there, no account column changes, so neither accounts.updated_at nor any
+  # holding timestamp moves -- yet the trim reads that column.
+  test "every series cache key changes when a provider is unlinked" do
+    account = create_investment_account(balance: 1000)
+    coinstats_item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: coinstats_item.coinstats_accounts.create!(name: "Brokerage", currency: "USD"))
+    Holding.create!(account: account, account_provider: provider, security: Security.create!(ticker: "LNK", name: "Linked"),
+                    date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    period = Period.last_30_days
+    kinds = %i[value holdings_value gains]
+
+    before = kinds.index_with { |kind| InvestmentStatement.new(@family).send(:series_cache_key, kind, period) }
+    travel 1.second do
+      Holding.where(account_provider_id: provider.id).update_all(account_provider_id: nil)
+      account.account_providers.reload.destroy_all
+      account.update!(plaid_account_id: nil, simplefin_account_id: nil)
+    end
+    after = kinds.index_with { |kind| InvestmentStatement.new(@family.reload).send(:series_cache_key, kind, period) }
+
+    kinds.each { |kind| assert_not_equal before[kind], after[kind], "#{kind} key must move on unlink" }
+  end
+
   test "gains series cache key changes when a holding is deleted" do
     account = create_investment_account(balance: 1000)
     security = Security.create!(ticker: "AAPL", name: "Apple")

@@ -674,9 +674,15 @@ class InvestmentStatement
         Balance::LinkedInvestmentSeriesNormalizer.trim_to_supported_history(
           yield(series_builder(period)),
           account_ids: historical_scope.account_ids,
-          history_start: :earliest
+          history_start: series_history_start
         )
       end
+    end
+
+    # The trim fetch_series applies, read by its cache key too, so a series
+    # cached under one trim is never served under another.
+    def series_history_start
+      :earliest
     end
 
     def series_builder(period)
@@ -703,9 +709,12 @@ class InvestmentStatement
     #   history start (P30), which provider holdings' dates and securities
     #   decide, so deleting or remapping a holding can move the value and
     #   holdings-value charts' first date without a sync.
+    # - the history trim (every kind): it decides the series' first point, and
+    #   nothing else in the key moves when only the trim does.
     def series_cache_key(kind, period)
       key = [
         "investment_statement_#{kind}_series",
+        "start-#{series_history_start}",
         user&.id,
         shares_version,
         holdings_version,
@@ -730,10 +739,18 @@ class InvestmentStatement
     # Count plus latest timestamp over the holdings the series can read, so a
     # cost-basis edit, unlock or remap (rows rewritten in place) and a
     # deletion (a row gone, timestamps unchanged) each move every series key.
+    # Plus the count of provider-linked rows, which the history trim reads:
+    # unlinking a provider clears holdings.account_provider_id with
+    # update_all, which moves neither the count nor a timestamp, and for a
+    # link held only in account_providers no account column changes either.
     def holdings_version
       @holdings_version ||= begin
-        holdings = Holding.where(account_id: historical_scope.account_ids)
-        "#{holdings.count}-#{holdings.maximum(:updated_at)&.to_f || 0}"
+        count, linked, latest = Holding.where(account_id: historical_scope.account_ids).pick(
+          Arel.sql("count(*)"),
+          Arel.sql("count(account_provider_id)"),
+          Arel.sql("max(updated_at)")
+        )
+        "#{count}-#{linked}-#{latest&.to_f || 0}"
       end
     end
 
