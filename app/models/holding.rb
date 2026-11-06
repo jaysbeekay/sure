@@ -84,9 +84,11 @@ class Holding < ApplicationRecord
   # few more queries for all of them together.
   # The SQL mirrors #calculate_avg_cost line for line; the parity test in
   # InvestmentStatementTest holds them together. Nothing extra is read
-  # unless a holding is in a fifo account.
+  # unless a holding is in a fifo account. Holdings with unsaved changes,
+  # unsaved ones included, are skipped: the query reads the stored row, which
+  # is not what they hold.
   def self.preload_avg_costs(holdings)
-    pending = holdings.reject { |holding| stored_cost_basis?(holding) }
+    pending = holdings.reject { |holding| stored_cost_basis?(holding) || holding.changed? }
     return if pending.empty?
 
     rows = ActiveRecord::Base.connection.select_all(
@@ -198,9 +200,11 @@ class Holding < ApplicationRecord
     @quantity_mismatch || false
   end
 
+  # Replacing the cost replaces the #trend derived from it.
   def preload_avg_cost(value, quantity_mismatch: false)
     @quantity_mismatch = quantity_mismatch
     @preloaded_avg_cost = value
+    remove_instance_variable(:@trend) if defined?(@trend)
   end
 
   # A reload replaces the attributes, so an answer computed from the old ones
