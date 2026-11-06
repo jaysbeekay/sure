@@ -25,4 +25,19 @@ class PortfoliosTest < ApplicationSystemTestCase
   ensure
     ActionController::Base.allow_forgery_protection = original
   end
+
+  # A pick re-renders the sections frame with the new period: the picker's own
+  # label is inside the frame, so it changes only if the frame was replaced.
+  test "picking a period re-renders the sections for that period" do
+    @user.update!(default_period: "last_30_days")
+    visit portfolio_path
+
+    find("button[aria-label='#{I18n.t("UI.period_picker.aria_label", period: "30D")}']").click
+    click_link "5Y"
+
+    assert_selector "button[aria-label='#{I18n.t("UI.period_picker.aria_label", period: "5Y")}']"
+    assert_selector "turbo-frame#portfolio_sections section[data-section-key='kpis']"
+    assert_selector "turbo-frame#portfolio_sections section[data-section-key='value_chart']"
+    assert_equal "last_5_years", @user.reload.default_period
+  end
 end

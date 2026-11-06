@@ -17,7 +17,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[accounts].freeze
+  KEYS = %w[kpis value_chart accounts].freeze
 
   attr_reader :statement, :period, :as_of, :user, :extra_sections
 
@@ -58,6 +58,22 @@ class Portfolio::SectionRegistry
     def built_in_sections
       [
         {
+          key: "kpis",
+          title: "portfolios.sections.kpis",
+          partial: "portfolios/kpi_row",
+          locals: shared_locals.merge(kpis: kpis),
+          visible: true,
+          collapsible: true
+        },
+        {
+          key: "value_chart",
+          title: "portfolios.sections.value_chart",
+          partial: "portfolios/value_chart",
+          locals: shared_locals.merge(series: statement.value_series(period: period)),
+          visible: true,
+          collapsible: true
+        },
+        {
           key: "accounts",
           title: "portfolios.sections.accounts",
           partial: "portfolios/accounts",
@@ -66,6 +82,20 @@ class Portfolio::SectionRegistry
           collapsible: true
         }
       ]
+    end
+
+    # The six KPI figures, read from the statement here so the partial only
+    # formats them.
+    def kpis
+      @kpis ||= {
+        value: statement.portfolio_value_money,
+        day_change: statement.day_change,
+        unrealized: statement.unrealized_gains_trend,
+        period_return: statement.period_return_trend(period: period),
+        period_return_unconvertible: statement.period_return_unconvertible_count(period: period),
+        net_contributions: statement.net_contributions(period: period),
+        income: statement.totals(period: period).total_income
+      }
     end
 
     # The accounts the cards show, in name order, with every record the logo
