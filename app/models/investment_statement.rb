@@ -173,8 +173,9 @@ class InvestmentStatement
   # blank and flags the row. Holding#avg_cost would fall back to a trades
   # query per position, which is what a table of every holding must avoid.
   #
-  # sort: one of HOLDINGS_SORT_KEYS; dir: "asc" or "desc". Anything else is
-  # the default (value desc), so the query string cannot raise.
+  # sort: one of HOLDINGS_SORT_KEYS; dir: "asc" or "desc". Each falls back on
+  # its own -- an unknown sort to "value", an unknown dir to "desc" -- so the
+  # query string cannot raise and a valid half of it is kept.
   HOLDINGS_SORT_KEYS = %w[value weight return day_change name].freeze
   HOLDINGS_SORT_DIRECTIONS = %w[asc desc].freeze
 
@@ -529,9 +530,9 @@ class InvestmentStatement
     @historical_scope ||= HistoricalScope.new(family, user: user)
   end
 
-  # The snapshot before each current holding, keyed by [account_id,
-  # security_id]: the latest row for the same account, security and currency
-  # dated before the current row, which is what Holding#day_change compares
+  # The snapshot before each current holding, keyed by the current holding's
+  # id: the latest row for the same account, security and currency dated
+  # before the current row, which is what Holding#day_change compares
   # against. One query for every holding rather than one per holding, so a
   # page that lists every position does not issue a query per row. Memoized
   # like current_holdings.
@@ -540,21 +541,24 @@ class InvestmentStatement
       current_ids = current_holdings.map(&:id)
 
       if current_ids.any?
-        Holding
-          .joins(ActiveRecord::Base.sanitize_sql_array([
-            <<~SQL.squish,
-              JOIN holdings current_holdings
-                ON current_holdings.id IN (:current_ids)
-                AND current_holdings.account_id = holdings.account_id
-                AND current_holdings.security_id = holdings.security_id
-                AND current_holdings.currency = holdings.currency
-                AND holdings.date < current_holdings.date
-            SQL
-            { current_ids: current_ids }
-          ]))
-          .select("DISTINCT ON (holdings.account_id, holdings.security_id) holdings.*")
-          .order(Arel.sql("holdings.account_id, holdings.security_id, holdings.date DESC"))
-          .index_by { |holding| [ holding.account_id, holding.security_id ] }
+        # Keyed by the current holding, not by account and security: a provider
+        # can report one security in two currencies, and each current row has
+        # its own previous snapshot in its own currency.
+        Holding.find_by_sql([ <<~SQL.squish, { current_ids: current_ids } ]).index_by(&:current_holding_id)
+          SELECT prior.*, current_holdings.id AS current_holding_id
+          FROM holdings current_holdings
+          JOIN LATERAL (
+            SELECT holdings.*
+            FROM holdings
+            WHERE holdings.account_id = current_holdings.account_id
+              AND holdings.security_id = current_holdings.security_id
+              AND holdings.currency = current_holdings.currency
+              AND holdings.date < current_holdings.date
+            ORDER BY holdings.date DESC
+            LIMIT 1
+          ) prior ON TRUE
+          WHERE current_holdings.id IN (:current_ids)
+        SQL
       else
         {}
       end
@@ -567,7 +571,7 @@ class InvestmentStatement
   def holding_day_change(holding)
     return nil unless holding.amount_money
 
-    previous = previous_holdings[[ holding.account_id, holding.security_id ]]
+    previous = previous_holdings[holding.id]
     return nil unless previous&.amount_money
 
     Trend.new(current: holding.amount_money, previous: previous.amount_money)

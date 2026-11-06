@@ -1410,14 +1410,15 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     @statement.current_holdings.to_a
     queries = capture_sql_queries { @statement.previous_holdings; @statement.day_change }
-    holdings_queries = queries.grep(/FROM "holdings"/)
+    holdings_queries = queries.grep(/FROM "?holdings"?\b/)
 
     assert_equal 1, holdings_queries.size, "previous snapshots must come from one query, not one per holding"
 
     previous = @statement.previous_holdings
+    current = @statement.current_holdings.index_by { |holding| [ holding.account_id, holding.security_id ] }
     assert_equal 3, previous.size
-    assert_equal 1.day.ago.to_date, previous[[ ira.id, aapl.id ]].date
-    assert_nil previous[[ taxable.id, only_today.id ]]
+    assert_equal 1.day.ago.to_date, previous[current[[ ira.id, aapl.id ]].id].date
+    assert_nil previous[current[[ taxable.id, only_today.id ]].id]
 
     # Same answer as the per-holding lookup, summed in family currency:
     # today 19 * 120 = 2280 vs yesterday 19 * 110 = 2090.
@@ -1504,6 +1505,8 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal %w[BBB CCC AAA], @statement.holdings_table_rows(sort: "return", dir: "desc").map(&:ticker)
     assert_equal %w[CCC BBB AAA], @statement.holdings_table_rows(sort: "return", dir: "asc").map(&:ticker)
     assert_equal %w[CCC AAA BBB], @statement.holdings_table_rows(sort: "drop table", dir: "sideways").map(&:ticker), "unknown keys fall back to the default"
+    assert_equal %w[BBB AAA CCC], @statement.holdings_table_rows(sort: "drop table", dir: "asc").map(&:ticker), "an unknown sort keeps a valid dir"
+    assert_equal %w[CCC BBB AAA], @statement.holdings_table_rows(sort: "name", dir: "sideways").map(&:ticker), "an unknown dir keeps a valid sort"
   end
 
   test "holdings_table_rows issues no query per holding" do
@@ -1517,8 +1520,34 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
     queries = capture_sql_queries { @statement.holdings_table_rows(sort: "day_change", dir: "desc") }
 
-    assert_equal 1, queries.grep(/FROM "holdings"/).size, "only the previous-snapshot query may run"
+    assert_equal 1, queries.grep(/FROM "?holdings"?\b/).size, "only the previous-snapshot query may run"
     assert_empty queries.grep(/FROM "trades"|FROM "security_prices"/), "no cost-basis fallback or price lookups per row"
+  end
+
+  # A provider can report one security in two currencies in the same account on
+  # the same day, and both rows are current. Each compares against its own
+  # currency's previous snapshot, as Holding#day_change does.
+  test "a security held in two currencies in one account keeps a day change per currency" do
+    account = create_investment_account(balance: 10_000)
+    security = Security.create!(ticker: "DUAL", name: "Dual listed")
+    # The USD snapshot is older than the CAD one, so a lookup that ignored
+    # currency would hand the USD row the newer CAD snapshot.
+    { "USD" => [ 100, 130, 2 ], "CAD" => [ 200, 210, 1 ] }.each do |currency, (before, now, days_ago)|
+      Holding.create!(account: account, security: security, date: days_ago.days.ago.to_date, qty: 1, price: before, amount: before, currency: currency)
+      Holding.create!(account: account, security: security, date: Date.current, qty: 1, price: now, amount: now, currency: currency)
+    end
+    current = Holding.where(account: account, date: Date.current).order(:currency).to_a
+    @statement.stubs(:current_holdings).returns(current)
+
+    changes = current.to_h { |holding| [ holding.currency, @statement.holding_day_change(holding) ] }
+
+    assert_equal Money.new(100, "USD"), changes["USD"].previous
+    assert_equal Money.new(30, "USD"), changes["USD"].value
+    assert_equal Money.new(200, "CAD"), changes["CAD"].previous
+    assert_equal Money.new(10, "CAD"), changes["CAD"].value
+    current.each do |holding|
+      assert_equal holding.day_change.value, @statement.holding_day_change(holding).value, "#{holding.currency} must match Holding#day_change"
+    end
   end
 
   test "allocation_by groups the portfolio by account, currency and kind with weights summing to 100" do
