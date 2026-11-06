@@ -429,12 +429,8 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 1, @statement.period_return_unconvertible_count(period: period)
   end
 
-  # Why the account is dropped whole rather than leaving the SQL to return NULL
-  # per row. The two legs select different rows: the flows leg takes every row
-  # in the period, the start-value leg takes the last row BEFORE it. An account
-  # that changed currency has an anchor that converts and in-period rows that
-  # do not, so row-level NULL would count its start value and silently discard
-  # the flows measured against it -- understating the return with no disclosure.
+  # Row-level NULLs would keep the converting start value and discard the
+  # in-period flows measured against it.
   test "an account whose rows are only partly convertible is dropped whole" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
     account = create_investment_account(balance: 5000)
@@ -492,10 +488,6 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 3000, @statement.period_return_trend(period: period).previous.amount
   end
 
-  # The behavioural half of the guard below. The regex catches one spelling;
-  # this catches the effect however it is spelled -- `1::numeric`, a CASE with
-  # an ELSE 1, different whitespace. If a parity default returns in any form,
-  # the unconvertible account stops being excluded and this fails.
   test "an unconvertible account is excluded however a parity default might be spelled" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
     usd = create_investment_account(balance: 10_500)
@@ -513,14 +505,25 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 1, @statement.period_return_unconvertible_count(period: period)
   end
 
-  # Scoped to the SQL conversions. `convert_to_family_currency` still falls
-  # back to a rate of 1 in Ruby, through `ExchangeRate.rates_for`, and this
-  # test does not cover it.
-  test "no COALESCE parity conversion survives in this model's SQL" do
-    source = File.read(Rails.root.join("app/models/investment_statement.rb"))
+  test "an account that held an unconvertible currency in an earlier period is left out" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    usd = create_investment_account(balance: 10_500)
+    switched = create_investment_account(balance: 5000)
+    switched.balances.create!(date: period.date_range.begin - 60.days, balance: 3000,
+                              currency: "EUR", start_non_cash_balance: 3000, net_market_flows: 0)
 
-    assert_no_match(/COALESCE\(\s*\w+\.rate\s*,\s*1\s*\)/, source,
-                    "a COALESCE(<alias>.rate, 1) parity conversion is back")
+    [ usd, switched ].each do |account|
+      account.balances.create!(date: period.date_range.begin - 1.day, balance: 10_000,
+                               currency: "USD", start_non_cash_balance: 10_000, net_market_flows: 0)
+      account.balances.create!(date: period.date_range.end, balance: 10_000,
+                               currency: "USD", start_non_cash_balance: 10_000, net_market_flows: 500)
+    end
+
+    trend = @statement.period_return_trend(period: period)
+
+    assert_equal 10_000, trend.previous.amount, "the account with an earlier EUR row was included"
+    assert_equal 10_500, trend.current.amount
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
   end
 
   test "period_return_trend returns nil when no balance data in period" do

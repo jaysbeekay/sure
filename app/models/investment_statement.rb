@@ -174,13 +174,11 @@ class InvestmentStatement
     period_return_unconvertible_account_ids(period).length
   end
 
-  # A figure whose inputs cannot all be converted is withheld, never converted
-  # at parity. An account whose balance currency has no rate to the family
-  # currency ANYWHERE is dropped from both legs -- the flows and the start
-  # value -- so the numerator and the denominator are measured over the same
-  # set. Dropping it from one alone would report a return on a basis that does
-  # not include it. #period_return_unconvertible_count says how many were
-  # dropped, so a caller can show the figure as partial.
+  # Balances are never converted at parity. An account with a balance in a
+  # currency that has no rate to the family currency is left out of both legs,
+  # so the figure covers the remaining accounts and the numerator and
+  # denominator span the same set. #period_return_unconvertible_count says how
+  # many were left out, so a caller can show the figure as partial.
   def period_return_trend(period: Period.current_month)
     currency = family.currency
     account_ids = investment_account_ids - period_return_unconvertible_account_ids(period)
@@ -402,27 +400,16 @@ class InvestmentStatement
       SQL
     end
 
-    # Accounts #period_return_trend cannot include, because a balance row of
-    # theirs is denominated in a currency with no rate to the family currency
-    # at all.
+    # Accounts with a balance row, up to the period end, in a currency that has
+    # no rate to the family currency on any date. Any rate at all resolves,
+    # because the lookup above falls back to the earliest later rate.
     #
-    # "At all" is the right test, not "on that date": the lookup above falls
-    # back to the earliest rate AFTER the date, so a pair with any rate row
-    # anywhere resolves. A pair with none can never resolve, on any date.
+    # Judged per account, not per row: the flows leg reads in-period rows and
+    # the start-value leg reads the last row before the period, so dropping
+    # rows alone could keep a start value while discarding its flows.
     #
-    # Judged per ACCOUNT rather than per row, because the two legs select rows
-    # differently -- the flows leg takes every row in the period, the start
-    # value leg takes the last row before it. Dropping rows independently would
-    # let an account contribute flows without contributing the start value they
-    # are measured against.
-    #
-    # The row set is deliberately WIDER than the rows those two legs read: every
-    # balance up to the period end, not just the in-period rows plus the last
-    # pre-period one. An account that held an unconvertible currency years ago
-    # is therefore excluded even though both legs could convert everything they
-    # actually read, and #period_return_unconvertible_count counts it. That is
-    # the conservative side to err on: a balance the account still carries
-    # forward is exactly the kind of row that looks irrelevant until it is not.
+    # Deliberately wider than the rows the two legs read, so an account that
+    # held an unconvertible currency in an earlier period is also left out.
     def period_return_unconvertible_account_ids(period)
       @period_return_unconvertible ||= {}
       @period_return_unconvertible[period.date_range] ||= begin
