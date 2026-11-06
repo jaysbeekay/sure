@@ -17,7 +17,7 @@ class Portfolio::SectionRegistry
   # The built-in section keys, in declaration order. The preferences
   # endpoint accepts only these, so a saved order or collapsed set cannot
   # carry arbitrary strings into the user's preferences.
-  KEYS = %w[accounts].freeze
+  KEYS = %w[accounts data_quality].freeze
 
   attr_reader :statement, :period, :as_of, :user, :extra_sections
 
@@ -64,8 +64,33 @@ class Portfolio::SectionRegistry
           locals: shared_locals.merge(accounts: accounts_for_cards),
           visible: statement.investment_accounts.any?,
           collapsible: true
+        },
+        # Hidden when there is nothing to fix: an empty "data quality" section
+        # would read as a problem in itself.
+        {
+          key: "data_quality",
+          title: "portfolios.sections.data_quality",
+          partial: "portfolios/data_quality",
+          locals: shared_locals.merge(issues: data_quality_issues, writable_account_ids: writable_account_ids),
+          visible: data_quality_issues.any?,
+          collapsible: true
         }
       ]
+    end
+
+    def data_quality_issues
+      @data_quality_issues ||= statement.data_quality_issues(as_of: as_of)
+    end
+
+    # The accounts the user may write to, for the data-quality rows that
+    # offer the cost-basis drawer: one query here rather than a permission
+    # lookup per row, and none when there is nothing to list.
+    def writable_account_ids
+      @writable_account_ids ||= if user && data_quality_issues.any?
+        statement.family.accounts.writable_by(user).pluck(:id).to_set
+      else
+        Set.new
+      end
     end
 
     # The accounts the cards show, in name order, with every record the logo

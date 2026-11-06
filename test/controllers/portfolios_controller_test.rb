@@ -43,12 +43,14 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal "last_30_days", @user.reload.default_period
   end
 
-  test "renders the hub and the accounts section" do
+  # Data quality is present because the fixture security has no price rows
+  # (stale by definition).
+  test "renders the hub, the accounts section and data quality" do
     get portfolio_path
 
     assert_response :success
     assert_select "h1", text: I18n.t("portfolios.show.title")
-    assert_equal %w[accounts], css_select("[data-section-key]").map { |node| node["data-section-key"] }
+    assert_equal %w[accounts data_quality], css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "header + div[role=list]"
   end
 
@@ -229,6 +231,75 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_equal one, three, "loading the linked accounts' providers grew with the number of cards"
   end
 
+  test "data quality lists the reasons and hides itself when there is nothing to fix" do
+    unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
+    offline = Security.create!(ticker: "OFFL", name: "Offline", offline: true)
+    holding = Holding.create!(account: accounts(:investment), security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    Holding.create!(account: accounts(:investment), security: offline, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    Security::Price.create!(security: offline, date: Date.current, price: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(holding), text: I18n.t("portfolios.data_quality.set_cost_basis")
+    assert_select "[data-portfolio-issue-kind='stale_price'] li", text: /NOPX/
+    assert_select "[data-portfolio-issue-kind='stale_price'] li", text: /#{I18n.t("portfolios.data_quality.never_priced")}/
+    assert_select "[data-portfolio-issue-kind='provider'] li", text: /OFFL.*#{I18n.t("portfolios.data_quality.provider_statuses.offline")}/m
+
+    InvestmentStatement.any_instance.stubs(:data_quality_issues).returns([])
+    get portfolio_path
+    assert_response :success
+    assert_select "[data-section-key='data_quality']", count: 0
+  end
+
+  test "data quality offers the cost-basis drawer only where the user may write" do
+    other = users(:family_member)
+    shared = @family.accounts.create!(name: "Read-only broker", balance: 500, cash_balance: 0, currency: "USD", accountable: Investment.new, owner: other)
+    shared.share_with!(@user, permission: "read_only", include_in_finances: true)
+    unpriced = Security.create!(ticker: "NOPX", name: "Unpriced")
+    read_only_holding = Holding.create!(account: shared, security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    own_holding = Holding.create!(account: accounts(:investment), security: unpriced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(own_holding)
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] a[href=?]", holding_path(read_only_holding), count: 0,
+      message: "a read-only share cannot PATCH the holding, so it must not be offered the drawer"
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis']", text: /#{I18n.t("portfolios.data_quality.read_only")}/
+  end
+
+  # Not stubbed: with nothing held there is nothing to check, so the section
+  # goes while the accounts section, read from the same accounts, stays.
+  test "data quality is absent when nothing held needs checking" do
+    get portfolio_path
+    assert_response :success
+    assert_select "[data-section-key='data_quality']", count: 1
+
+    Holding.where(account_id: @family.accounts.select(:id)).delete_all
+
+    get portfolio_path
+    assert_response :success
+    assert_select "[data-section-key='accounts']", count: 1
+    assert_select "[data-section-key='data_quality']", count: 0
+    assert_select "#portfolio-data-quality", count: 0
+  end
+
+  # Each row reads its holding's account and security, which the statement
+  # preloads, and the writable accounts are one query for the whole list.
+  test "data quality rows add no query per holding" do
+    add_unpriced_holding("NOPA")
+    one = capture_sql_queries { get portfolio_path }.size
+
+    add_unpriced_holding("NOPB")
+    add_unpriced_holding("NOPC")
+    three = capture_sql_queries { get portfolio_path }.size
+
+    assert_response :success
+    assert_select "[data-portfolio-issue-kind='missing_cost_basis'] li", minimum: 3
+    assert_equal one, three, "rendering the data quality rows grew with the number of holdings"
+  end
+
   private
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
@@ -244,6 +315,11 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       provider = LunchflowAccount.create!(lunchflow_item: lunchflow_items(:one), account_id: "lf_portfolio_#{index}",
                                           name: account.name, currency: "USD")
       AccountProvider.create!(account: account, provider: provider)
+    end
+
+    def add_unpriced_holding(ticker)
+      security = Security.create!(ticker: ticker, name: "Unpriced #{ticker}")
+      Holding.create!(account: accounts(:investment), security: security, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
     end
 
     def provider_queries(&block)
