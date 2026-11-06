@@ -987,9 +987,9 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       @statement.day_change
     end
 
-    holdings_queries = queries.grep(/DISTINCT ON \(holdings\.account_id, holdings\.security_id\) holdings\.id/)
+    holdings_queries = queries.grep(/MAX\(provider_holdings\.updated_at::date\)/)
     assert_equal 1, holdings_queries.size,
-      "current_holdings should only run its DISTINCT ON query once per instance, not once per caller"
+      "current_holdings should only run its holdings query once per instance, not once per caller"
   end
 
   test "current_holdings memoizes the empty (no investment accounts) case too" do
@@ -1254,6 +1254,51 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     # so every key carries the holdings version, and a manual cost-basis
     # edit, rare and made by hand, costs the value charts one cache miss.
     assert_not_equal gains_before, gains_after, "a cost-basis edit must not keep serving the gains built before it"
+  end
+
+  # A series cached under one history trim must not be served under another:
+  # the trim decides the series' first point, and nothing else in the key
+  # moves when only the trim does.
+  test "every series cache key changes with the history trim, and the series is trimmed by it" do
+    create_investment_account(balance: 1000)
+    period = Period.last_30_days
+    kinds = %i[value holdings_value gains]
+
+    earliest = kinds.index_with { |kind| InvestmentStatement.new(@family).send(:series_cache_key, kind, period) }
+    common_statement = InvestmentStatement.new(@family)
+    common_statement.stubs(:series_history_start).returns(:common)
+    common = kinds.index_with { |kind| common_statement.send(:series_cache_key, kind, period) }
+
+    kinds.each { |kind| assert_not_equal earliest[kind], common[kind], "#{kind} key must carry the trim" }
+
+    Balance::LinkedInvestmentSeriesNormalizer.expects(:trim_to_supported_history)
+      .with(anything, has_entries(history_start: :common)).returns(:trimmed)
+    Rails.cache.stubs(:fetch).yields
+    common_statement.send(:fetch_series, :value, period) { |builder| builder.balance_series }
+  end
+
+  # AccountsController#unlink clears holdings.account_provider_id with
+  # update_all and destroys the account_providers rows. For a link held only
+  # there, no account column changes, so neither accounts.updated_at nor any
+  # holding timestamp moves -- yet the trim reads that column.
+  test "every series cache key changes when a provider is unlinked" do
+    account = create_investment_account(balance: 1000)
+    coinstats_item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: coinstats_item.coinstats_accounts.create!(name: "Brokerage", currency: "USD"))
+    Holding.create!(account: account, account_provider: provider, security: Security.create!(ticker: "LNK", name: "Linked"),
+                    date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    period = Period.last_30_days
+    kinds = %i[value holdings_value gains]
+
+    before = kinds.index_with { |kind| InvestmentStatement.new(@family).send(:series_cache_key, kind, period) }
+    travel 1.second do
+      Holding.where(account_provider_id: provider.id).update_all(account_provider_id: nil)
+      account.account_providers.reload.destroy_all
+      account.update!(plaid_account_id: nil, simplefin_account_id: nil)
+    end
+    after = kinds.index_with { |kind| InvestmentStatement.new(@family.reload).send(:series_cache_key, kind, period) }
+
+    kinds.each { |kind| assert_not_equal before[kind], after[kind], "#{kind} key must move on unlink" }
   end
 
   test "gains series cache key changes when a holding is deleted" do
@@ -1615,18 +1660,26 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
   # A provider can report one security in two currencies in the same account on
   # the same day, and both rows are current. Each compares against its own
-  # currency's previous snapshot, as Holding#day_change does.
+  # currency's previous snapshot, as Holding#day_change does, and the portfolio
+  # day change counts both. Read through the real current_holdings, not a stub:
+  # selecting one row per account and security would drop a currency before
+  # any snapshot is looked up.
   test "a security held in two currencies in one account keeps a day change per currency" do
     account = create_investment_account(balance: 10_000)
+    coinstats_item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: coinstats_item.coinstats_accounts.create!(name: "Brokerage", currency: "USD"))
     security = Security.create!(ticker: "DUAL", name: "Dual listed")
+    ExchangeRate.create!(from_currency: "CAD", to_currency: "USD", date: Date.current, rate: 0.5)
     # The USD snapshot is older than the CAD one, so a lookup that ignored
     # currency would hand the USD row the newer CAD snapshot.
     { "USD" => [ 100, 130, 2 ], "CAD" => [ 200, 210, 1 ] }.each do |currency, (before, now, days_ago)|
-      Holding.create!(account: account, security: security, date: days_ago.days.ago.to_date, qty: 1, price: before, amount: before, currency: currency)
-      Holding.create!(account: account, security: security, date: Date.current, qty: 1, price: now, amount: now, currency: currency)
+      Holding.create!(account: account, account_provider: provider, security: security, date: days_ago.days.ago.to_date, qty: 1, price: before, amount: before, currency: currency)
+        .update_columns(updated_at: days_ago.days.ago) # imported that day, not today
+      Holding.create!(account: account, account_provider: provider, security: security, date: Date.current, qty: 1, price: now, amount: now, currency: currency)
     end
-    current = Holding.where(account: account, date: Date.current).order(:currency).to_a
-    @statement.stubs(:current_holdings).returns(current)
+
+    current = @statement.current_holdings.sort_by(&:currency)
+    assert_equal %w[CAD USD], current.map(&:currency), "both currencies' rows are current"
 
     changes = current.to_h { |holding| [ holding.currency, @statement.holding_day_change(holding) ] }
 
@@ -1637,6 +1690,10 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     current.each do |holding|
       assert_equal holding.day_change.value, @statement.holding_day_change(holding).value, "#{holding.currency} must match Holding#day_change"
     end
+
+    # 130 + 210 CAD at 0.5 against 100 + 200 CAD at 0.5
+    assert_equal Money.new(235), @statement.day_change.current
+    assert_equal Money.new(200), @statement.day_change.previous
   end
 
   test "allocation_by groups the portfolio by account, currency and kind with weights summing to 100" do

@@ -61,7 +61,9 @@ class Holding < ApplicationRecord
     # them in one query and hand each its answer (InvestmentStatement does),
     # so a page that lists every position does not run calculate_avg_cost's
     # two queries per holding. nil is a valid preloaded answer: "unknown".
-    return @preloaded_avg_cost if defined?(@preloaded_avg_cost)
+    # It answers for the attributes it was computed from, so a holding
+    # changed since then computes its own.
+    return @preloaded_avg_cost if defined?(@preloaded_avg_cost) && !changed?
 
     # Fallback to calculation for holdings without pre-computed cost_basis
     calculate_avg_cost
@@ -236,9 +238,10 @@ class Holding < ApplicationRecord
   private_class_method :stored_cost_basis?
 
   # Whether the batched preload found the provider holding fewer units than
-  # the trades bought; false where it did not look (a stored basis).
+  # the trades bought; false where it did not look (a stored basis), and for
+  # a holding changed since the preload, whose #avg_cost no longer reads it.
   def quantity_mismatch?
-    @quantity_mismatch || false
+    (@quantity_mismatch && !changed?) || false
   end
 
   # Replacing the cost replaces the #trend derived from it.
