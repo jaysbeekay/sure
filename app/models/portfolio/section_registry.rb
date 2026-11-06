@@ -182,7 +182,7 @@ class Portfolio::SectionRegistry
           key: "accounts",
           title: "portfolios.sections.accounts",
           partial: "portfolios/accounts",
-          locals: shared_locals,
+          locals: shared_locals.merge(accounts: accounts_for_cards),
           visible: statement.investment_accounts.any?,
           collapsible: true
         },
@@ -739,5 +739,17 @@ class Portfolio::SectionRegistry
 
     def shared_locals
       { statement: statement, period: period, as_of: as_of }
+    end
+
+    # One card per investment account the user may count, in name order. The
+    # logo partial reads the attached logo, the accountable's colour and
+    # Account#logo_url, which goes through #linked? (the provider links, the
+    # Plaid account and the SimpleFIN account) and falls back to the first
+    # link's provider record. All of them are loaded here rather than once
+    # per card.
+    def accounts_for_cards
+      statement.investment_accounts.with_attached_logo
+        .includes(:accountable, :plaid_account, :simplefin_account, account_providers: :provider)
+        .alphabetically.to_a
     end
 end

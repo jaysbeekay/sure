@@ -1,7 +1,9 @@
 class PortfoliosController < ApplicationController
-  include Periodable
-
+  # Registered before Periodable's set_period, so a request the gate turns
+  # away never saves its `period` param as the user's default.
   before_action :require_preview_features!
+
+  include Periodable
 
   def show
     # `as_of` is captured once and passed down, so the sections that take a
