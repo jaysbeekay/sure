@@ -54,4 +54,21 @@ class PortfoliosTest < ApplicationSystemTestCase
     assert_selector "#portfolio-holdings th[aria-sort='descending'] a[href*='sort=name']"
     assert_equal %w[ZZZ AAPL], all("#portfolio-holdings tr[data-portfolio-holding]").map { |row| row["data-portfolio-holding"] }
   end
+
+  test "an asset class reveals and hides what it is made of" do
+    share = Security.create!(ticker: "SHR8", name: "A share", asset_class: "equity", asset_sub_class: "stock", offline: true)
+    Holding.create!(account: accounts(:investment), security: share, date: Date.current, qty: 1, price: 500, amount: 500, currency: "USD")
+
+    visit portfolio_path(by: "asset_class")
+    toggle = find("[data-portfolio-segment='equity'] button[aria-controls]")
+    assert_no_selector "#portfolio-allocation-table-equity", visible: true
+
+    toggle.click
+    assert_selector "#portfolio-allocation-table-equity [data-portfolio-child='stock']", visible: true
+    assert_equal "true", toggle["aria-expanded"]
+
+    toggle.click
+    assert_no_selector "#portfolio-allocation-table-equity", visible: true
+    assert_equal "false", toggle["aria-expanded"]
+  end
 end
