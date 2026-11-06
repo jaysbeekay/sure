@@ -739,17 +739,13 @@ class InvestmentStatement
     # Count plus latest timestamp over the holdings the series can read, so a
     # cost-basis edit, unlock or remap (rows rewritten in place) and a
     # deletion (a row gone, timestamps unchanged) each move every series key.
-    # Plus the count of provider-linked rows, which the history trim reads:
-    # unlinking a provider clears holdings.account_provider_id with
-    # update_all, which moves neither the count nor a timestamp, and for a
-    # link held only in account_providers no account column changes either.
     def holdings_version
       @holdings_version ||= begin
-        count, linked, latest = Holding.where(account_id: historical_scope.account_ids).pick(
-          Arel.sql("count(*)"),
-          Arel.sql("count(account_provider_id)"),
-          Arel.sql("max(updated_at)")
-        )
+        # The provider-linked count covers an unlink, which clears
+        # account_provider_id with update_all and leaves updated_at alone,
+        # yet moves the supported-history trim that reads that column.
+        count, linked, latest = Holding.where(account_id: historical_scope.account_ids)
+          .pick(Arel.sql("COUNT(*), COUNT(account_provider_id), MAX(updated_at)"))
         "#{count}-#{linked}-#{latest&.to_f || 0}"
       end
     end
