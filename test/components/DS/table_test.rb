@@ -123,7 +123,7 @@ class DS::TableTest < ViewComponent::TestCase
   test "renders a hidden detail row after each row the row_detail proc answers for" do
     detail = ->(row) { "Paid monthly" if row[:name] == "Rent" }
     render_inline(DS::Table.new(rows: ROWS, id: "bills", row_detail: detail)) do |table|
-      table.with_column("Name") { |row, index| %(<button aria-controls="#{table.row_detail_id(index)}">#{row[:name]}</button>).html_safe }
+      table.with_column("Name") { |row, index| ApplicationController.helpers.tag.button(row[:name], aria: { controls: table.row_detail_id(index) }) }
       table.with_column("Amount", numeric: true) { |row| row[:amount] }
     end
 
@@ -138,6 +138,16 @@ class DS::TableTest < ViewComponent::TestCase
 
     assert_selector "tbody tr", count: 2
     assert_no_selector "tbody tr[hidden]", visible: :all
+  end
+
+  # Detail ids are prefixed with the table's id; two tables without one would
+  # hand out the same ids and a toggle would open the other table's row.
+  test "requires an id when given a row_detail proc" do
+    error = assert_raises(ArgumentError) { DS::Table.new(rows: ROWS, row_detail: ->(_row) { "x" }) }
+    assert_match "id:", error.message
+
+    assert_nothing_raised { DS::Table.new(rows: ROWS, id: "bills", row_detail: ->(_row) { "x" }) }
+    assert_nothing_raised { DS::Table.new(rows: ROWS) }
   end
 
   private
