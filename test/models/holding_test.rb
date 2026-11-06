@@ -242,6 +242,41 @@ class HoldingTest < ActiveSupport::TestCase
     assert_not_equal trend_before.value, @amzn.trend.value
   end
 
+  test "a preload drops the trend built on the cost it replaces" do
+    create_trade(@amzn.security, account: @account, qty: 15, price: 200.00, date: Date.current)
+    assert_equal Money.new(15 * 200), @amzn.trend.previous, "the trend must be built from the fallback before the preload"
+
+    create_trade(@amzn.security, account: @account, qty: 15, price: 100.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+
+    assert_equal Money.new(150), @amzn.avg_cost
+    assert_equal Money.new(15 * 150), @amzn.trend.previous
+  end
+
+  test "a reload drops the memoized day change" do
+    assert_equal Money.new(15 * 216), @amzn.day_change.current
+    Holding.where(id: @amzn.id).update_all(amount: 4000)
+
+    @amzn.reload
+
+    assert_equal Money.new(4000), @amzn.day_change.current
+  end
+
+  # The batch reads the stored rows, so for a holding that is unsaved or has
+  # unsaved changes it would answer for another holding -- or for none.
+  test "the batch leaves unsaved and changed holdings to their own attributes" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 100.00, date: Date.current)
+    @amzn.date = 1.day.ago.to_date # stored as today, where the average is 150
+    create_trade(@nvda.security, account: @account, qty: 10, price: 120.00, date: Date.current)
+    unsaved = @account.holdings.new(date: Date.current, security: @nvda.security, qty: 1, price: 124, amount: 124, currency: "USD")
+
+    Holding.preload_avg_costs([ @amzn, unsaved ])
+
+    assert_equal Money.new(200), @amzn.avg_cost
+    assert_equal BigDecimal("120"), unsaved.avg_cost&.amount
+  end
+
   test "calculates total return trend" do
     @amzn.stubs(:avg_cost).returns(Money.new(214.00))
     @nvda.stubs(:avg_cost).returns(Money.new(126.00))

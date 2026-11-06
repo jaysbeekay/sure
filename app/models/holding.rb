@@ -91,9 +91,10 @@ class Holding < ApplicationRecord
   # (.avg_cost_rates_join, .avg_cost_totals_sql, .avg_cost_from_totals), so
   # the batch cannot answer differently from the holding on its own. Holdings
   # with a stored cost basis are skipped, since #avg_cost never reaches the
-  # fallback for them.
+  # fallback for them. So are holdings with unsaved changes, unsaved ones
+  # included: the query reads the stored row, which is not what they hold.
   def self.preload_avg_costs(holdings)
-    pending = holdings.reject(&:known_cost_basis)
+    pending = holdings.reject { |holding| holding.known_cost_basis || holding.changed? }
     return if pending.empty?
 
     rows = Holding.where(id: pending.map(&:id))
@@ -162,15 +163,19 @@ class Holding < ApplicationRecord
     Money.new(total_cost / total_qty, currency)
   end
 
+  # Replacing the cost replaces the #trend derived from it.
   def preload_avg_cost(value)
     @preloaded_avg_cost = value
+    remove_instance_variable(:@trend) if defined?(@trend)
   end
 
   # A reload replaces the attributes, so an answer computed from the old ones
-  # must go with them -- including #trend, which is derived from avg_cost.
+  # must go with them -- including #trend, which is derived from avg_cost,
+  # and #day_change, which is derived from amount and date.
   def reload(*)
     remove_instance_variable(:@preloaded_avg_cost) if defined?(@preloaded_avg_cost)
     remove_instance_variable(:@trend) if defined?(@trend)
+    remove_instance_variable(:@day_change) if defined?(@day_change)
     super
   end
 
