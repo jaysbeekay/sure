@@ -70,25 +70,10 @@ class InvestmentStatement
   # and day_change each call this, so an unmemoized version ran the same
   # DISTINCT ON query up to 5x per dashboard/report request.
   def current_holdings
-    @current_holdings ||= begin
-      account_ids = investment_account_ids
-
-      if account_ids.any?
-        # Get the latest holding for each security per account
-        Holding
-          .where(account_id: account_ids)
-          .where.not(qty: 0)
-          .where(
-            id: Holding
-              .where(account_id: account_ids)
-              .select("DISTINCT ON (holdings.account_id, holdings.security_id) holdings.id")
-              .order(Arel.sql("holdings.account_id, holdings.security_id, holdings.date DESC"))
-          )
-          .includes(:security, :account)
-      else
-        Holding.none
-      end
-    end
+    @current_holdings ||= Holding::CurrentForInvestmentAccounts
+      .new(investment_account_ids)
+      .relation
+      .includes(:security, :account)
   end
 
   # current_holdings as an Array, with the average-cost fallback for every
@@ -356,11 +341,12 @@ class InvestmentStatement
 
     # By SECURITY, not by holding, and `holding: nil` -- the same shape the
     # `stale_price` and `provider` kinds above already use, and for the same
-    # reason. `current_holdings` returns a row per (account, security), so a
-    # family holding one fund in two accounts got two identical rows naming the
-    # same fund and the same tickers. The ambiguity is a property of the fund's
-    # constituents, resolved once for the whole portfolio; it has nothing to do
-    # with which account the position sits in (CodeRabbit, #220).
+    # reason. `current_holdings` returns at least a row per account and
+    # security, so a family holding one fund in two accounts got two identical
+    # rows naming the same fund and the same tickers. The ambiguity is a
+    # property of the fund's constituents, resolved once for the whole
+    # portfolio; it has nothing to do with which account the position sits in
+    # (CodeRabbit, #220).
     current_holdings.map(&:security).uniq.filter_map do |security|
       weights = constituent_weights_for(security)
       next if weights.empty?
@@ -1523,9 +1509,10 @@ class InvestmentStatement
     # the weight denominator a real ceiling -- with a negative row in the sum,
     # holdings_total falls below the largest row and its weight goes over 100.
     #
-    # The filter is per row, not on the netted total: current_holdings is
-    # DISTINCT ON (account_id, security_id), so one security held in two
-    # accounts yields two rows, and a negative row in one would otherwise net
+    # The filter is per row, not on the netted total: current_holdings has a
+    # row per account and security (and per currency on a provider's import
+    # day), so one security held in two accounts yields two rows, and a
+    # negative row in one would otherwise net
     # against the good row in the other. The filtered rows are returned so
     # the trend excludes the bad row too.
     #
