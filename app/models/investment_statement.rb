@@ -926,10 +926,7 @@ class InvestmentStatement
     def allocation_by_currency
       grouped = Hash.new(0)
       allocatable_holdings.each { |holding| grouped[holding.currency] += convert_to_family_currency(holding.amount, holding.currency) }
-      investment_accounts.each do |account|
-        cash = account.cash_balance.to_d
-        grouped[account.currency] += convert_to_family_currency(cash, account.currency) if cash.positive?
-      end
+      positive_account_cash.each { |account, value| grouped[account.currency] += value }
       build_segments(grouped.map { |currency, value| [ currency, currency, value ] })
     end
 
@@ -946,10 +943,7 @@ class InvestmentStatement
         end
         grouped[kind] += convert_to_family_currency(holding.amount, holding.currency)
       end
-      investment_accounts.each do |account|
-        cash = account.cash_balance.to_d
-        grouped["cash"] += convert_to_family_currency(cash, account.currency) if cash.positive?
-      end
+      grouped["cash"] += account_cash_total if account_cash_total.positive?
       build_segments(grouped.map { |kind, value| [ kind, kind, value ] })
     end
 
@@ -1049,12 +1043,7 @@ class InvestmentStatement
         end
       end
 
-      investment_accounts.each do |account|
-        cash = account.cash_balance.to_d
-        next unless cash.positive?
-
-        grouped[cash_bucket || UNCLASSIFIED] += convert_to_family_currency(cash, account.currency)
-      end
+      grouped[cash_bucket || UNCLASSIFIED] += account_cash_total if account_cash_total.positive?
 
       build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
     end
@@ -1332,12 +1321,7 @@ class InvestmentStatement
         end
       end
 
-      investment_accounts.each do |account|
-        cash = account.cash_balance.to_d
-        next unless cash.positive?
-
-        grouped[UNCLASSIFIED] += convert_to_family_currency(cash, account.currency)
-      end
+      grouped[UNCLASSIFIED] += account_cash_total if account_cash_total.positive?
 
       build_segments(grouped.map { |key, value| [ key, names[key], value ] })
     end
@@ -1361,12 +1345,7 @@ class InvestmentStatement
         end
       end
 
-      if asset_class == "liquidity"
-        investment_accounts.each do |account|
-          cash = account.cash_balance.to_d
-          grouped["cash"] += convert_to_family_currency(cash, account.currency) if cash.positive?
-        end
-      end
+      grouped["cash"] += account_cash_total if asset_class == "liquidity" && account_cash_total.positive?
 
       build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
     end
@@ -1380,7 +1359,13 @@ class InvestmentStatement
     # ticker collapse into one row, because the exposure is one exposure however
     # many wrappers it arrives through -- which is the most useful thing this
     # level says.
+    #
+    # Both branches list one row per security, summed in the family currency,
+    # and both add the account cash the parent counts (`account_cash_rows`), so
+    # at every level a bucket's positions sum to the bucket.
     def allocation_holdings_within(column, bucket, cash_bucket = nil, look_through: false, parent: nil)
+      cash_rows = account_cash_rows(bucket, cash_bucket, parent)
+
       if look_through
         grouped = Hash.new(0)
         # Two name sources, resolved in a fixed order rather than by whichever
@@ -1402,15 +1387,47 @@ class InvestmentStatement
           end
         end
         return build_segments(
-          grouped.map { |id, value| [ id, direct_names[id] || constituent_names[id], value ] }
+          grouped.map { |id, value| [ id, direct_names[id] || constituent_names[id], value ] } + cash_rows
         )
       end
 
-      rows = holdings_classified_as(column, bucket, cash_bucket, parent: parent).map do |holding|
-        [ holding.security_id, holding.security.name.presence || holding.security.ticker,
-          convert_to_family_currency(holding.amount, holding.currency) ]
+      # One row per security: `current_holdings` has a row per account, so a
+      # security held in several accounts, in any currencies, is summed here.
+      grouped = Hash.new(0)
+      names = {}
+      holdings_classified_as(column, bucket, cash_bucket, parent: parent).each do |holding|
+        grouped[holding.security_id] += convert_to_family_currency(holding.amount, holding.currency)
+        names[holding.security_id] ||= holding.security.name.presence || holding.security.ticker
       end
-      build_segments(rows)
+      build_segments(grouped.map { |id, value| [ id, names[id], value ] } + cash_rows)
+    end
+
+    # Account cash as a position of the cash bucket: ONE row, the sum over
+    # accounts of each account's cash in the family currency where it is
+    # positive -- the rule `allocation_sub_classes_within` and
+    # `allocation_by_classification` count it by. It belongs to Liquidity/Cash
+    # only, so any other bucket, or a cash sub-class reached from another asset
+    # class, gets none. Identified and named as `allocation`'s own cash row.
+    def account_cash_rows(bucket, cash_bucket, parent)
+      return [] unless cash_bucket.present? && bucket == cash_bucket
+      return [] unless parent.nil? || parent == "liquidity"
+
+      [ [ "cash", I18n.t("models.investment_statement.cash"), account_cash_total ] ]
+    end
+
+    # Each investment account whose cash balance is positive, with that cash in
+    # the family currency. Every allocation level counts account cash through
+    # this one rule -- positive balances only, converted per account -- so a
+    # parent bucket and the positions below it cannot disagree about it.
+    def positive_account_cash
+      @positive_account_cash ||= investment_accounts.filter_map do |account|
+        cash = account.cash_balance.to_d
+        [ account, convert_to_family_currency(cash, account.currency) ] if cash.positive?
+      end
+    end
+
+    def account_cash_total
+      positive_account_cash.sum { |_, value| value }
     end
 
     # One rule for which bucket a holding falls in, shared by the grouping, the
