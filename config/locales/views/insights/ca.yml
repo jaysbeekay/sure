@@ -34,6 +34,7 @@ ca:
       budget_at_risk: Pressupost
       budget_on_track: Pressupost
       maintained_goal_depleted: Reserva
+      spending_pace: "Ritme de despesa"
     meta:
       next_n_days:
         one: Pròxim dia
@@ -54,6 +55,7 @@ ca:
       idle_days:
         one: inactiu %{count} dia
         other: inactiu %{count} dies
+      over_budget: "per sobre del pressupost"
     actions:
       spending_anomaly: Veure les transaccions de %{category}
       cash_flow_warning: Revisa les transaccions recurrents
@@ -81,6 +83,9 @@ ca:
         one: Una categoria del teu pressupost requereix atenció
         other: '%{count} categories del teu pressupost requereixen atenció'
       budget_on_track: El teu pressupost va bé
+      spending_pace:
+        approaching: "La teva despesa va per davant del ritme del pressupost"
+        over: "Has superat el pressupost aquest mes"
     templates:
       spending_anomaly:
         above: Al ritme actual gastaràs %{projected_spend} en %{category} aquest mes, un %{deviation_pct}% més que la teva mitjana mensual recent de %{baseline_spend}.
@@ -100,3 +105,6 @@ ca:
         over: '%{categories} han superat el pressupost aquest mes. Fins ara has fet servir el %{budget_spent_pct}% del teu pressupost total.'
         near: '%{categories} són a prop del seu límit aquest mes. Fins ara has fet servir el %{budget_spent_pct}% del teu pressupost total.'
       budget_on_track: Has gastat %{spent} dels %{budgeted} pressupostats (%{budget_spent_pct}%) i tot és dins del límit.
+      spending_pace:
+        approaching: "Has gastat el %{spent_pct}% del teu pressupost de %{budgeted} amb el %{elapsed_pct}% del mes transcorregut. A aquest ritme gastaries uns %{projected_spend}."
+        over: "Has gastat %{spent} davant d'un pressupost de %{budgeted}, és a dir, %{over_by} per sobre."
