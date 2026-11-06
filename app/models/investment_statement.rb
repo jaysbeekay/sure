@@ -1281,7 +1281,7 @@ class InvestmentStatement
     # the segments sum to more than the portfolio, and this section renders as a
     # donut: segments that overrun the total draw a chart that is simply wrong,
     # and `allocation_by` is covered by an invariant test asserting every grouping
-    # adds up to `portfolio_value`.
+    # adds up to the same total: holdings plus each account's positive cash.
     #
     # So a multi-tagged holding is SPLIT evenly across its tags. "Half in pension,
     # half in tech bet" is an answer a reader can act on; a donut summing to 140%
