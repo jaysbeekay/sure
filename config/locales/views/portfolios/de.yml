@@ -1,0 +1,82 @@
+---
+de:
+  portfolios:
+    allocation:
+      grouping_aria_label: Allokation gruppieren nach
+      groupings:
+        account: Konto
+        asset_class: Anlageklasse
+        asset_sub_class: Unterklasse
+        currency: Währung
+        kind: Art
+        region: Region
+        sector: Sektor
+        security: Wertpapier
+      asset_classes:
+        alternative_investment: Alternative Anlagen
+        commodity: Rohstoffe
+        equity: Aktien
+        fixed_income: Anleihen
+        liquidity: Liquidität
+        real_estate: Immobilien
+      asset_sub_classes:
+        bond: Anleihe
+        cash: Bargeld
+        collectible: Sammlerstück
+        commodity: Rohstoff
+        cryptocurrency: Kryptowährung
+        etf: ETF
+        loan: Darlehen
+        mutual_fund: Investmentfonds
+        precious_metal: Edelmetall
+        private_equity: Private Equity
+        real_estate: Immobilien
+        stock: Aktie
+      regions:
+        asia_pacific: Asien-Pazifik
+        europe: Europa
+        latin_america: Lateinamerika
+        middle_east_africa: Naher Osten & Afrika
+        north_america: Nordamerika
+      unclassified: Nicht klassifiziert
+      kinds:
+        cash: Bargeld
+        crypto: Krypto
+        standard: Wertpapiere
+      toggle: Zusammensetzung von %{name} ein- oder ausblenden
+      total: Gesamt
+      value: Wert
+      weight: Gewichtung
+    empty_state:
+      add_account: Anlagekonto hinzufügen
+      description: Verbinde oder ergänze ein Depot-, Vorsorge- oder Krypto-Konto, dann erscheint es hier mit seinem Saldo.
+      title: Noch keine Anlagekonten
+    holdings:
+      columns:
+        account: Konto
+        accounts: Konten
+        avg_cost: Ø Kosten
+        cost_basis: Kostenbasis
+        day_change: Tag
+        qty: Menge
+        security: Wertpapier
+        unrealized: Unrealisierter G/V
+        value: Wert
+        weight: Gewichtung
+      label: Bestände
+      missing_cost_basis: Keine Kostenbasis
+      missing_cost_basis_hint: Mindestens eine Position hat keine bekannte Kostenbasis. Durchschnittskosten und Rendite berücksichtigen nur Positionen mit bekannter Kostenbasis.
+      no_cost_basis: keine Kostenbasis
+      open_position: Öffnen
+      position_missing_cost_basis_hint: Diese Position hat keine bekannte Kostenbasis, daher hat sie keine Durchschnittskosten und fließt nicht in die Rendite der Zeile ein.
+      positions_caption: Positionen in %{ticker} nach Konto
+      toggle_positions: Positionen in %{ticker} anzeigen
+    sections:
+      accounts: Konten
+      allocation: Aufteilung
+      holdings: Bestände
+    show:
+      section_aria: "Abschnitt %{title}. Drücke Enter oder Leertaste, um ihn zum Umsortieren zu greifen, dann bewege ihn mit den Pfeiltasten."
+      sections_aria: Portfolio-Abschnitte
+      subtitle: Was du über deine Anlagekonten hinweg hältst, was jedes Konto wert ist und wie sich das Portfolio verteilt.
+      title: Portfolio

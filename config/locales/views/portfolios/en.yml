@@ -1,0 +1,82 @@
+---
+en:
+  portfolios:
+    allocation:
+      grouping_aria_label: Group allocation by
+      groupings:
+        account: Account
+        asset_class: Asset class
+        asset_sub_class: Sub-class
+        currency: Currency
+        kind: Kind
+        region: Region
+        sector: Sector
+        security: Security
+      asset_classes:
+        alternative_investment: Alternative
+        commodity: Commodity
+        equity: Equity
+        fixed_income: Fixed income
+        liquidity: Liquidity
+        real_estate: Real estate
+      asset_sub_classes:
+        bond: Bond
+        cash: Cash
+        collectible: Collectible
+        commodity: Commodity
+        cryptocurrency: Cryptocurrency
+        etf: ETF
+        loan: Loan
+        mutual_fund: Mutual fund
+        precious_metal: Precious metal
+        private_equity: Private equity
+        real_estate: Real estate
+        stock: Stock
+      regions:
+        asia_pacific: Asia-Pacific
+        europe: Europe
+        latin_america: Latin America
+        middle_east_africa: Middle East & Africa
+        north_america: North America
+      unclassified: Unclassified
+      kinds:
+        cash: Cash
+        crypto: Crypto
+        standard: Securities
+      toggle: Show or hide what %{name} is made of
+      total: Total
+      value: Value
+      weight: Weight
+    empty_state:
+      add_account: Add an investment account
+      description: Connect or add a brokerage, retirement or crypto account and it will be listed here with its balance.
+      title: No investment accounts yet
+    holdings:
+      columns:
+        account: Account
+        accounts: Accounts
+        avg_cost: Avg cost
+        cost_basis: Cost basis
+        day_change: Day
+        qty: Qty
+        security: Security
+        unrealized: Unrealised P&L
+        value: Value
+        weight: Weight
+      label: Holdings
+      missing_cost_basis: No cost basis
+      missing_cost_basis_hint: At least one position has no known cost basis. The average cost and return cover only the positions that have one.
+      no_cost_basis: no cost basis
+      open_position: Open
+      position_missing_cost_basis_hint: This position has no known cost basis, so it has no average cost and is left out of the row's return.
+      positions_caption: Positions in %{ticker} by account
+      toggle_positions: Show positions in %{ticker}
+    sections:
+      accounts: Accounts
+      allocation: Allocation
+      holdings: Holdings
+    show:
+      section_aria: "%{title} section. Press Enter or Space to grab for reordering, then use arrow keys to move."
+      sections_aria: Portfolio sections
+      subtitle: What you hold across your investment accounts, what each account is worth, and how the portfolio is spread.
+      title: Portfolio
