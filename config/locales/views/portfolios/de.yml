@@ -1,0 +1,53 @@
+---
+de:
+  portfolios:
+    empty_state:
+      add_account: Anlagekonto hinzufügen
+      description: Verbinde oder ergänze ein Depot-, Vorsorge- oder Krypto-Konto, dann erscheint es hier mit seinem Saldo.
+      title: Noch keine Anlagekonten
+    index_chart:
+      explainer: Zu Beginn des Zeitraums auf 100 normiert, ohne den Effekt von Ein- und Auszahlungen. Ein Stand von 121 bedeutet 21% Rendite.
+    kpi_row:
+      as_of: Stand %{date}
+      day_change: Tagesveränderung
+      income: Erträge
+      income_hint: Dividenden und Zinsen
+      net_contributions: Nettoeinzahlungen
+      no_data: Nicht genug Daten
+      period_return: Rendite im Zeitraum
+      period_return_unconvertible:
+        one: 1 Konto ohne Wechselkurs ausgeschlossen
+        other: "%{count} Konten ohne Wechselkurs ausgeschlossen"
+      unrealized_pnl: Nicht realisiertes Ergebnis
+      value: Wert
+    performance:
+      annualized_hint: Auf ein volles Jahr hochgerechnet, bezogen auf Kalendertage; bei Zeiträumen unter einem Jahr nicht ausgewiesen.
+      annualized_mwr: Annualisiert, geldgewichtet
+      annualized_twr: Annualisiert, zeitgewichtet
+      incomplete_title: Einige Kennzahlen konnten nicht berechnet werden
+      max_drawdown: Maximaler Rückgang
+      max_drawdown_hint: Größter Rückgang vom Hoch zum Tief innerhalb des Zeitraums.
+      mwr: Geldgewichtete Rendite (Zeitraum)
+      mwr_hint: 'Geldgewichtet, über den Zeitraum. Sie berücksichtigt, wann Geld angelegt wurde: Mittel, die erst im Verlauf hinzukamen, werden auf den gesamten Zeitraum bezogen — deshalb kann diese Zahl von der Haltedauer-Rendite deines Brokers abweichen.'
+      rate_missing: Für einen Teil dieses Zeitraums fehlte ein Wechselkurs. Betroffene Kennzahlen werden zurückgehalten statt zum Kurs 1 umgerechnet.
+      suppressed_days:
+        one: Ein Tag wurde als Nullrendite gezählt, weil er nicht ermittelt werden konnte.
+        other: "%{count} Tage wurden als Nullrendite gezählt, weil sie nicht ermittelt werden konnten."
+      twr: Zeitgewichtete Rendite
+      twr_hint: Was die Anlagen erwirtschaftet haben, ohne den Effekt deiner Einzahlungen. Täglich, nach Gebühren, wobei jede Einzahlung ab dem Beginn ihres Tages zählt.
+      volatility: Volatilität
+      volatility_hint: Annualisierte Standardabweichung der Tagesrenditen, bezogen auf Kalendertage statt Handelstage.
+    sections:
+      accounts: Konten
+      index_chart: Rendite-Index
+      kpis: Überblick
+      performance: Wertentwicklung
+      value_chart: Portfoliowert
+    show:
+      section_aria: "Abschnitt %{title}. Drücke Enter oder Leertaste, um ihn zum Umsortieren zu greifen, dann bewege ihn mit den Pfeiltasten."
+      sections_aria: Portfolio-Abschnitte
+      subtitle: Deine Anlagekonten und was jedes davon wert ist.
+      title: Portfolio
+    value_chart:
+      as_of: Stand %{date}
+      no_data: Nicht genug Daten für ein Diagramm in diesem Zeitraum.
