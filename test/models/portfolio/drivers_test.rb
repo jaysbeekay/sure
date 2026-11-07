@@ -10,7 +10,7 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
     @day_two = Date.new(2026, 3, 3)
   end
 
-  # Contract R7. The fee is already inside the return, because it reduced the
+  # The fee is already inside the return, because it reduced the
   # closing balance on the day it was charged. Reporting it separately is what
   # lets a user see what it cost them without it being counted twice.
   test "fees reduce the return and are reported separately" do
@@ -26,7 +26,7 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
     assert drivers.reconciles?
   end
 
-  # Contract R10. This is the defect the drivers table would otherwise ship
+  # This is the defect the drivers table would otherwise ship
   # with. Balance::BaseCalculator#market_value_change_on_date returns 0 unless
   # the account is :investment AND the day carries no valuation, and the forward
   # calculator skips it outright on a valuation day -- so a manually valued
@@ -46,7 +46,7 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
     assert drivers.reconciles?
   end
 
-  # Contract R11. The local balance never moves; the rate does. Attributing that
+  # The local balance never moves; the rate does. Attributing that
   # to the market would say the holdings gained when they did not.
   test "fx effect carries a rate only move and market stays zero" do
     eur = create_portfolio_account(family: @family, currency: "EUR")
@@ -63,7 +63,7 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
     assert drivers.reconciles?
   end
 
-  # Contract R12. The whole table is worthless if the parts do not add up to the
+  # The whole table is worthless if the parts do not add up to the
   # whole, and each account shape composes its change differently.
   test "drivers reconcile to the period change for every account shape" do
     # 1. Trade-tracked, single currency: market flow plus income, a fee and a deposit.
@@ -103,14 +103,14 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
   end
 
   # Regression, and the reason `reconciles?` is worth asserting at all. When
-  # fx_effect was defined as the residual of R12's own equation, this returned
+  # fx_effect is defined as the residual of the reconciliation, this returns
   # true for any input whatsoever: every component could be zero while the value
-  # moved, and the books still "balanced". Now fx_effect is measured from the
+  # moved, and the books still "balanced". fx_effect is measured from the
   # rate change, so an unexplained move is reported as one.
   #
-  # The fixture used to be an arriving account. Under Option A (#121) an arrival
-  # is described by the composition driver, so it no longer proves anything
-  # here. This one cannot be: the account is present from the period's first
+  # The fixture is not an arriving account: an arrival is described by the
+  # composition driver, so it would prove nothing here. This one cannot be
+  # described: the account is present from the period's first
   # day, and its day-two row opens at 1,200 after day one closed at 1,000 -- a
   # 200 jump that no driver, composition included, describes.
   test "reconciles is falsifiable and reports an unexplained move" do
@@ -125,7 +125,7 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
     refute drivers.reconciles?, "a move nothing describes is not explained, and must not be dressed up as one"
   end
 
-  # Option A. An arriving account's opening position is described by the
+  # An arriving account's opening position is described by the
   # composition driver, so the books balance without anything left over.
   test "composition changes reconcile through the composition driver, leaving nothing unexplained" do
     lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_000
@@ -149,6 +149,42 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
 
     assert_equal BigDecimal("0"), drivers.unexplained
     assert drivers.reconciles?
+    assert drivers.complete?, "no day was suppressed, so the drivers describe every day"
+    assert_equal 0, drivers.to_h[:suppressed_days]
+  end
+
+  # The contract over a suppressed journal day, pinned because neither
+  # `unexplained` nor `reconciles?` can say anything about it.
+  #
+  # The journal has no holding row for its date, so `journal_holdings.currency`
+  # is NULL: DailyReturns cannot value it and suppresses the day, but no rate is
+  # missing either, so `rate_missing?` is not set and Portfolio::Performance
+  # withholds nothing. The journal is therefore NOT an external flow, and its
+  # 500 stays where the balance row booked it, in market. The identity still
+  # holds -- unexplained is 0 and the period reconciles -- while the drivers
+  # report a 500 market gain the holdings never earned.
+  #
+  # So the drivers say so themselves: `complete?` is false and `to_h` carries
+  # the suppressed day count, which a caller presenting them must read.
+  test "a suppressed journal day still reconciles, so the drivers say a day was suppressed" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, market_flow: 500
+    security_journal account: @account, date: @day_two, qty: 5
+
+    drivers = drivers_for
+    day = drivers.rows.last
+
+    assert day.suppressed, "the fixture must be a suppressed journal day"
+    assert_not drivers.daily_returns.rate_missing?, "and one no missing rate accounts for"
+
+    assert_equal BigDecimal("0"), drivers.external_net, "an unvalued journal is not a flow"
+    assert_equal BigDecimal("500"), drivers.market, "its value stays in market"
+    assert_equal BigDecimal("0"), drivers.unexplained, "the identity holds over the rows as recorded"
+    assert drivers.reconciles?, "so reconciling says nothing about the suppressed day"
+
+    assert_not drivers.complete?
+    assert_equal [ @day_two ], drivers.suppressed_dates
+    assert_equal 1, drivers.to_h[:suppressed_days]
   end
 
   test "an empty scope reports zeroes rather than raising" do
@@ -156,6 +192,15 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
 
     assert_equal BigDecimal("0"), drivers.change
     assert drivers.reconciles?
+  end
+
+  # One minor unit of slack and no more. Converting entry flows and balance
+  # rows by different paths leaves sub-cent dust in a multi-currency family,
+  # which must not read as a failure to reconcile; a cent and a half must.
+  test "reconciles allows a residual of up to one minor unit" do
+    assert drivers_with_residual(BigDecimal("0.004")).reconciles?
+    assert drivers_with_residual(BigDecimal("0.01")).reconciles?, "the boundary itself reconciles"
+    refute drivers_with_residual(BigDecimal("0.015")).reconciles?
   end
 
   private
@@ -167,5 +212,14 @@ class Portfolio::DriversTest < ActiveSupport::TestCase
           period: Period.custom(start_date: @day_one, end_date: @day_two)
         )
       )
+    end
+
+    def drivers_with_residual(residual)
+      row = Portfolio::DailyReturns::Row.new(
+        date: @day_one, value_open: BigDecimal("1000"), value_close: BigDecimal("1000") + residual,
+        external_flow: 0, composition_flow: 0, income: 0, fees: 0, market: 0,
+        revaluations: 0, fx_effect: 0, rate_missing: false, suppressed: false
+      )
+      Portfolio::Drivers.new(Struct.new(:rows).new([ row ]))
     end
 end
