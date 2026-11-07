@@ -167,22 +167,29 @@ class InvestmentStatement
     )
   end
 
+  # How many investment accounts #period_return_trend leaves out because a
+  # balance of theirs has no rate to the family currency. Zero when everything
+  # converts, which is the ordinary case.
+  def period_return_unconvertible_count(period: Period.current_month)
+    period_return_unconvertible_account_ids(period).length
+  end
+
+  # Balances are never converted at parity. An account with a balance in a
+  # currency that has no rate to the family currency is left out of both legs,
+  # so the figure covers the remaining accounts and the numerator and
+  # denominator span the same set. #period_return_unconvertible_count says how
+  # many were left out, so a caller can show the figure as partial.
   def period_return_trend(period: Period.current_month)
     currency = family.currency
-    account_ids = investment_account_ids
+    account_ids = investment_account_ids - period_return_unconvertible_account_ids(period)
     return nil if account_ids.empty?
 
     absolute_return = ActiveRecord::Base.connection.select_value(
       ActiveRecord::Base.sanitize_sql_array([
         <<~SQL.squish,
-          SELECT COALESCE(SUM(b.net_market_flows * COALESCE(er.rate, 1)), 0)
+          SELECT COALESCE(SUM(b.net_market_flows * (#{exchange_rate_lookup('b.currency', 'b.date')})), 0)
           FROM balances b
           JOIN accounts a ON a.id = b.account_id
-          LEFT JOIN exchange_rates er ON (
-            er.date = b.date
-            AND er.from_currency = b.currency
-            AND er.to_currency = :currency
-          )
           WHERE a.id IN (:account_ids)
             AND a.family_id = :family_id
             AND a.status IN ('draft', 'active')
@@ -207,14 +214,9 @@ class InvestmentStatement
     start_value = ActiveRecord::Base.connection.select_value(
       ActiveRecord::Base.sanitize_sql_array([
         <<~SQL.squish,
-          SELECT COALESCE(SUM(b.end_balance * COALESCE(er.rate, 1)), 0)
+          SELECT COALESCE(SUM(b.end_balance * (#{exchange_rate_lookup('b.currency', ':period_start')})), 0)
           FROM accounts a
           INNER JOIN balances b ON b.account_id = a.id
-          LEFT JOIN exchange_rates er ON (
-            er.date = :period_start
-            AND er.from_currency = b.currency
-            AND er.to_currency = :currency
-          )
           INNER JOIN (
             SELECT b2.account_id, MAX(b2.date) AS max_date
             FROM balances b2
@@ -236,6 +238,30 @@ class InvestmentStatement
       current: Money.new(start_value + absolute_return, currency),
       previous: Money.new(start_value, currency)
     )
+  end
+
+  # Portfolio value (cash + holdings) over the period, in family currency.
+  #
+  # Charted from the *historical* account scope, so a disabled broker keeps its
+  # history up to its cut-off date. The last point therefore diverges from
+  # #portfolio_value (visible accounts only) whenever a disabled account still
+  # carries a non-zero balance. See HistoricalScope for the rationale.
+  def value_series(period: Period.last_30_days)
+    fetch_series(:value, period) { |builder| builder.balance_series }
+  end
+
+  # Holdings-only value (portfolio value minus cash) over the period.
+  def holdings_value_series(period: Period.last_30_days)
+    fetch_series(:holdings_value, period) { |builder| builder.holdings_balance_series }
+  end
+
+  # Unrealized gains (market value minus cost basis) over the period.
+  def gains_series(period: Period.last_30_days)
+    fetch_series(:gains, period) { |builder| builder.gains_series }
+  end
+
+  def historical_scope
+    @historical_scope ||= HistoricalScope.new(family, user: user)
   end
 
   # Day change across portfolio, summed in family currency
@@ -269,6 +295,110 @@ class InvestmentStatement
   end
 
   private
+    # Two layers of caching, mirroring BalanceSheet::NetWorthSeriesBuilder:
+    # Rails.cache across requests, plus a per-instance memo so a single
+    # dashboard render that asks for the same series twice runs one query.
+    #
+    # Every series is trimmed to the first date any linked account in the
+    # scope has history for: the balance rows before a broker's first snapshot
+    # are zeros, and charting them shows a portfolio that appears from nothing
+    # on the day the connection was made. The earliest start, not the common
+    # one, so linking a new broker does not erase the history of an older
+    # one, open or closed.
+    def fetch_series(kind, period)
+      @series_cache ||= {}
+      @series_cache[[ kind, period.start_date, period.end_date ]] ||= Rails.cache.fetch(series_cache_key(kind, period)) do
+        Balance::LinkedInvestmentSeriesNormalizer.trim_to_supported_history(
+          yield(series_builder(period)),
+          account_ids: historical_scope.account_ids,
+          history_start: series_history_start
+        )
+      end
+    end
+
+    # The trim fetch_series applies, read by its cache key too, so a series
+    # cached under one trim is never served under another.
+    def series_history_start
+      :earliest
+    end
+
+    def series_builder(period)
+      Balance::ChartSeriesBuilder.new(
+        account_ids: historical_scope.account_ids,
+        account_active_until_dates: historical_scope.active_until_dates,
+        currency: family.currency,
+        period: period,
+        favorable_direction: "up"
+      )
+    end
+
+    # Beyond the family key (sync time and accounts.updated_at), the key
+    # carries a version for each table the series reads that can change
+    # without a sync or an account write:
+    #
+    # - shares (every kind): revoking a share deletes a row, which changes
+    #   neither maximum(:updated_at) nor accounts.updated_at, and a key built
+    #   from those alone would keep serving a series that still counts the
+    #   revoked account.
+    # - holdings (every kind): the gains series reads holdings.cost_basis,
+    #   which a manual cost-basis edit, an unlock or a security remap
+    #   rewrites in place. Every series is also trimmed to the supported
+    #   history start, which provider holdings' dates and securities
+    #   decide, so deleting or remapping a holding can move the value and
+    #   holdings-value charts' first date without a sync.
+    # - the family currency (every kind): every series is converted to it,
+    #   and a profile currency change neither syncs nor writes an account.
+    # - the accounts version (every kind): deleting an account with no
+    #   holdings that was not the most recently updated one leaves
+    #   maximum(:updated_at), the sync time and the holdings version where
+    #   they were before its deletion was scheduled; only the count moves.
+    # - the history trim (every kind): it decides the series' first point, and
+    #   nothing else in the key moves when only the trim does.
+    def series_cache_key(kind, period)
+      key = [
+        "investment_statement_#{kind}_series",
+        "start-#{series_history_start}",
+        user&.id,
+        family.currency,
+        accounts_version,
+        shares_version,
+        holdings_version,
+        period.start_date,
+        period.end_date
+      ].compact.join("_")
+
+      family.build_cache_key(key, invalidate_on_data_updates: true)
+    end
+
+    # Memoized: one instance builds a key per series kind it is asked for,
+    # and the versions need not be re-queried between them.
+    def accounts_version
+      @accounts_version ||= family.accounts_status_version
+    end
+
+    def shares_version
+      return nil unless user
+
+      @shares_version ||= begin
+        shares = AccountShare.where(user: user)
+        "#{shares.count}-#{shares.maximum(:updated_at)&.to_f || 0}"
+      end
+    end
+
+    # Count plus latest timestamp over the holdings the series can read, so a
+    # cost-basis edit, unlock or remap (rows rewritten in place) and a
+    # deletion (a row gone, timestamps unchanged) each move every series key.
+    def holdings_version
+      @holdings_version ||= begin
+        # The provider-linked count covers an unlink, which clears
+        # account_provider_id with update_all and leaves updated_at alone,
+        # yet moves the supported-history trim that reads that column.
+        count, linked, latest = Holding.where(account_id: historical_scope.account_ids)
+          .pick(Arel.sql("COUNT(*), COUNT(account_provider_id), MAX(updated_at)"))
+        "#{count}-#{linked}-#{latest&.to_f || 0}"
+      end
+    end
+
     # Today's rates for every currency present on the family's investment
     # accounts and their holdings. Mirrors BalanceSheet::AccountTotals#exchange_rates.
     def exchange_rates
@@ -373,6 +503,59 @@ class InvestmentStatement
         current: Money.new(currents.sum, family.currency),
         previous: Money.new(previouses.sum, family.currency)
       )
+    end
+
+    # The most recent rate on or before the date, else the earliest rate after
+    # it, else NULL. Never 1. The identity shortcut keeps a family's own
+    # currency off `exchange_rates` entirely.
+    def exchange_rate_lookup(currency_expression, date_expression)
+      <<~SQL.squish
+        CASE
+          WHEN #{currency_expression} = :currency THEN 1::numeric
+          ELSE COALESCE(
+            (SELECT r.rate FROM exchange_rates r
+              WHERE r.from_currency = #{currency_expression}
+                AND r.to_currency = :currency
+                AND r.date <= #{date_expression}
+              ORDER BY r.date DESC LIMIT 1),
+            (SELECT r.rate FROM exchange_rates r
+              WHERE r.from_currency = #{currency_expression}
+                AND r.to_currency = :currency
+                AND r.date > #{date_expression}
+              ORDER BY r.date ASC LIMIT 1)
+          )
+        END
+      SQL
+    end
+
+    # Accounts with a balance row, up to the period end, in a currency that has
+    # no rate to the family currency on any date. Any rate at all resolves,
+    # because the lookup above falls back to the earliest later rate.
+    #
+    # Judged per account, not per row: the flows leg reads in-period rows and
+    # the start-value leg reads the last row before the period, so dropping
+    # rows alone could keep a start value while discarding its flows.
+    #
+    # Deliberately wider than the rows the two legs read, so an account that
+    # held an unconvertible currency in an earlier period is also left out.
+    def period_return_unconvertible_account_ids(period)
+      @period_return_unconvertible ||= {}
+      @period_return_unconvertible[period.date_range] ||= begin
+        rows = Balance
+          .where(account_id: investment_account_ids)
+          .where("balances.date <= ?", period.date_range.end)
+          .where.not(currency: family.currency)
+          .distinct
+          .pluck(:account_id, :currency)
+
+        convertible = ExchangeRate
+          .where(from_currency: rows.map(&:last).uniq, to_currency: family.currency)
+          .distinct
+          .pluck(:from_currency)
+          .to_set
+
+        rows.reject { |_, currency| convertible.include?(currency) }.map(&:first).uniq
+      end
     end
 
     def investment_account_ids
