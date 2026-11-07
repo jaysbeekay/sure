@@ -488,6 +488,49 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 3000, @statement.period_return_trend(period: period).previous.amount
   end
 
+  # Back-filling takes the nearest later rate, not the latest one.
+  test "of several later rates, the earliest is used" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current + 5, rate: 3)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current + 10, rate: 7)
+
+    assert_equal 3000, @statement.period_return_trend(period: period).previous.amount
+  end
+
+  # exchange_rates is shared by every family, so a closer rate from the same
+  # currency to another target must not be picked, on either side of the date.
+  test "a closer rate to another currency is not used" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: period.date_range.begin - 30, rate: 2)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "AUD", date: period.date_range.begin - 2, rate: 9)
+    gbp = create_investment_account(balance: 5000, currency: "GBP")
+    gbp.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "GBP", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "GBP", to_currency: "USD", date: Date.current + 10, rate: 3)
+    ExchangeRate.create!(from_currency: "GBP", to_currency: "AUD", date: Date.current + 5, rate: 9)
+
+    assert_equal 0, @statement.period_return_unconvertible_count(period: period)
+    assert_equal 5000, @statement.period_return_trend(period: period).previous.amount,
+                 "1000 EUR at 2 plus 1000 GBP at 3; an AUD rate was picked instead"
+  end
+
+  test "a currency with rates only to another currency is still unconvertible" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "AUD", date: period.date_range.begin, rate: 9)
+
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
+    assert_nil @statement.period_return_trend(period: period)
+  end
+
   test "an unconvertible account is excluded however a parity default might be spelled" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
     usd = create_investment_account(balance: 10_500)
