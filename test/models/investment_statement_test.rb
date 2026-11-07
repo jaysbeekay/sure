@@ -1685,6 +1685,24 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     end
   end
 
+  # The residual subtracts the allocatable holdings, not every current row: a
+  # corrupt -500 row left in would raise the account's cash from 1,000 to 1,500
+  # and every grouping's total from 2,000 to 2,500.
+  test "a corrupt negative holding does not inflate the account's cash" do
+    account = create_investment_account(balance: 2000, cash_balance: 0)
+    good = create_classified_security(ticker: "POS646", asset_class: "equity", asset_sub_class: "stock")
+    bad = create_classified_security(ticker: "NEG646", asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: good, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+    corrupt = Holding.create!(account: account, security: bad, date: Date.current, qty: 1, price: 500, amount: 500, currency: "USD")
+    corrupt.update_columns(amount: -500)
+
+    assert_equal 1000, @statement.send(:account_cash_total)
+    assert_equal 1000, @statement.allocation_by("security").find { |s| s.id == "cash" }&.amount&.amount
+    assert_equal 2000, @statement.allocation_by("currency").sum { |s| s.amount.amount }
+    assert_equal 2000, @statement.allocation_by("account").sole.amount.amount
+    assert_every_grouping_and_level_sums_to 2000
+  end
+
   # The control: balances equal holdings plus cash_balance everywhere, so
   # balance less holdings and cash_balance are the same figure and every
   # grouping, weight and top_holdings weight is what either source gives.
