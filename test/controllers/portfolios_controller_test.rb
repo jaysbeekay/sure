@@ -1,0 +1,544 @@
+require "test_helper"
+
+class PortfoliosControllerTest < ActionDispatch::IntegrationTest
+  include SqlQueryCapture
+
+  setup do
+    @user = users(:family_admin)
+    @family = @user.family
+    enable_preview(@user)
+    sign_in @user
+    ensure_tailwind_build
+  end
+
+  test "redirects users without preview access to the dashboard" do
+    disable_preview(@user)
+
+    get portfolio_path
+
+    assert_redirected_to root_path
+    assert_equal I18n.t("preview.not_enabled"), flash[:alert]
+  end
+
+  # The class-level gate covers every action, so the one endpoint that writes
+  # cannot save preferences for a page its caller is not allowed to see.
+  test "preference writes are preview-gated like the page" do
+    disable_preview(@user)
+
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[accounts] } },
+      as: :json
+
+    assert_redirected_to root_path
+    assert_nil @user.reload.preferences["portfolio_section_order"]
+  end
+
+  test "an allocation grouping link is preview-gated like the page" do
+    disable_preview(@user)
+
+    get portfolio_path(by: "kind")
+
+    assert_redirected_to root_path
+    assert_equal I18n.t("preview.not_enabled"), flash[:alert]
+  end
+
+  test "a request the gate turns away does not save its period as the user's default" do
+    disable_preview(@user)
+    @user.update!(default_period: "last_30_days")
+
+    get portfolio_path(period: "last_5_years")
+
+    assert_redirected_to root_path
+    assert_equal "last_30_days", @user.reload.default_period
+  end
+
+  # The fixture family holds AAPL in accounts(:investment), so every section
+  # has something to show.
+  test "renders the hub with its holdings, accounts and allocation sections" do
+    get portfolio_path
+
+    assert_response :success
+    assert_select "h1", text: I18n.t("portfolios.show.title")
+    assert_equal %w[holdings accounts allocation], css_select("[data-section-key]").map { |node| node["data-section-key"] }
+    assert_select "header + div[role=list]"
+  end
+
+  # No section reads the period yet, so the page offers no control that
+  # would change nothing.
+  test "the page carries no period picker" do
+    get portfolio_path(period: "last_5_years")
+
+    assert_response :success
+    assert_select "button[aria-label=?]", I18n.t("UI.period_picker.aria_label", period: "5Y"), count: 0
+    assert_select "a[href^=?]", "#{portfolio_path}?period=", count: 0
+  end
+
+  test "an unknown period falls back rather than erroring" do
+    get portfolio_path(period: "not_a_period")
+
+    assert_response :success
+  end
+
+  test "shows an empty state with an add-account link when the family has no investment accounts" do
+    user = users(:empty)
+    enable_preview(user)
+    sign_in user
+    assert_empty InvestmentStatement.new(user.family, user: user).investment_accounts
+
+    get portfolio_path
+
+    assert_response :success
+    assert_match I18n.t("portfolios.empty_state.title"), response.body
+    assert_select "a[href=?]", new_account_path
+    assert_select "[data-section-key]", count: 0
+  end
+
+  test "saves the section order and collapsed set under the portfolio namespace only" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[accounts], portfolio_collapsed_sections: { accounts: true } } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_equal %w[accounts], @user.preferences["portfolio_section_order"]
+    assert @user.section_collapsed?("portfolio", "accounts")
+    assert_nil @user.preferences["reports_section_order"]
+    assert_nil @user.preferences["reports_collapsed_sections"]
+  end
+
+  test "drops preference keys that are not the portfolio's own" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { reports_section_order: %w[x] } },
+      as: :json
+
+    assert_response :ok
+    assert_nil @user.reload.preferences["reports_section_order"]
+  end
+
+  # `kpis` is a key not in Portfolio::SectionRegistry::KEYS, and is dropped
+  # like any other unknown key.
+  test "drops section keys the registry does not know, in both shapes" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[kpis nonsense accounts], portfolio_collapsed_sections: { accounts: true, kpis: true, nonsense: true } } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_equal %w[accounts], @user.preferences["portfolio_section_order"]
+    assert_equal({ "accounts" => true }, @user.preferences["portfolio_collapsed_sections"],
+      "an unknown key must not be written into the user's preferences")
+  end
+
+  test "stores the holdings section in the saved order and collapsed set" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[accounts holdings], portfolio_collapsed_sections: { holdings: true } } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_equal %w[accounts holdings], @user.preferences["portfolio_section_order"]
+    assert_equal({ "holdings" => true }, @user.preferences["portfolio_collapsed_sections"])
+
+    # allocation is not in the saved order, so it is appended after it.
+    get portfolio_path
+    assert_equal %w[accounts holdings allocation], css_select("[data-section-key]").map { |node| node["data-section-key"] }
+    assert_select "[data-section-key=holdings][data-reports-section-collapsed-value=?]", "true"
+  end
+
+  test "a preferences body that is not an object is refused and writes nothing" do
+    before = @user.reload.preferences.dup
+
+    patch update_preferences_portfolio_path, params: { preferences: "foo" }
+
+    assert_response :bad_request
+    assert_equal before, @user.reload.preferences
+  end
+
+  test "deduplicates the saved order, first occurrence winning" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[accounts accounts] } },
+      as: :json
+
+    assert_response :ok
+    assert_equal %w[accounts], @user.reload.preferences["portfolio_section_order"]
+  end
+
+  test "a collapsed payload that is not an object is dropped rather than raised on" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_collapsed_sections: "true", portfolio_section_order: %w[accounts] } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_nil @user.preferences["portfolio_collapsed_sections"]
+    assert_equal %w[accounts], @user.preferences["portfolio_section_order"]
+  end
+
+  test "renders sections collapsed where the user left them" do
+    get portfolio_path
+    assert_select "[data-section-key=accounts][data-reports-section-collapsed-value=?]", "false"
+    assert_select "[data-section-key=accounts] > details[open] > summary"
+
+    @user.update_section_preferences("portfolio", collapsed: { "accounts" => true })
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=accounts][data-reports-section-collapsed-value=?]", "true"
+    assert_select "[data-section-key=accounts] > details:not([open]) > summary"
+  end
+
+  test "the sortable container posts to the portfolio endpoint under its own namespace" do
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-controller~=sortable-list][data-sortable-list-url-value=?][data-sortable-list-param-value=?]",
+                  update_preferences_portfolio_path, "preferences.portfolio_section_order"
+    assert_select "[data-section-key=accounts][data-reports-section-url-value=?][data-reports-section-preference-key-value=?]",
+                  update_preferences_portfolio_path, "portfolio"
+  end
+
+  test "the nav shows Portfolio on desktop only, and never without the preview flag" do
+    get portfolio_path
+
+    assert_response :success
+    assert_select "ul li a[href=?]", portfolio_path, minimum: 1
+    assert_select "nav[data-viewport-target=bottomNav] a[href=?]", portfolio_path, count: 0
+
+    disable_preview(@user)
+    get root_path
+
+    assert_response :success
+    assert_select "a[href=?]", portfolio_path, count: 0
+  end
+
+  # Portfolio is the only desktop-only entry, so every other item still
+  # reaches both bars: the mobile bar is the desktop rail without Portfolio,
+  # plus the mobile-only Assistant.
+  test "every other nav item still renders in both bars" do
+    get root_path
+    assert_response :success
+
+    desktop = css_select("ul li a").map { |link| link["href"] }
+    mobile = css_select("nav[data-viewport-target=bottomNav] a").map { |link| link["href"] }
+
+    assert_includes desktop, portfolio_path
+    assert_equal desktop - [ portfolio_path ], mobile - [ chats_path ]
+    assert_includes mobile, chats_path if @family.assistant_enabled?
+  end
+
+  test "accounts grid links every countable investment account to its holdings tab and skips excluded shares" do
+    other = users(:family_member)
+    shared = @family.accounts.create!(name: "Shared brokerage", balance: 500, currency: "USD", accountable: Investment.new, owner: other)
+    shared.share_with!(@user, permission: "read_only", include_in_finances: false)
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "#portfolio-accounts a[href=?]", account_path(accounts(:investment), tab: "holdings")
+    assert_select "#portfolio-accounts a[href=?]", account_path(shared, tab: "holdings"), count: 0
+    assert_equal InvestmentStatement.new(@family, user: @user).investment_accounts.count, css_select("#portfolio-accounts a").size
+    # The cards sit in a narrow grid cell, so they truncate and show focus.
+    assert_select "#portfolio-accounts a.focus-ring p.truncate", minimum: 2
+  end
+
+  # Each card's logo falls back to its provider's, read through
+  # AccountProvider#provider, so the provider records are loaded with the
+  # accounts rather than once per card.
+  test "the accounts grid loads provider-linked accounts without a query per card" do
+    link_investment_account(0)
+    one = provider_queries { get portfolio_path }
+
+    link_investment_account(1)
+    link_investment_account(2)
+    three = provider_queries { get portfolio_path }
+
+    assert_response :success
+    assert_select "#portfolio-accounts a", minimum: 3
+    assert_equal one, three, "loading the linked accounts' providers grew with the number of cards"
+  end
+
+  test "holdings table renders one row per security with its per-account positions" do
+    second = create_second_aapl_account(qty: 20, price: 215)
+    statement = InvestmentStatement.new(@family, user: @user)
+    row = statement.holdings_table_rows.find { |r| r.ticker == "AAPL" }
+    assert_equal 2, row.positions.size, "fixture must hold AAPL in two accounts"
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL']", count: 1
+    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL'] [data-portfolio-value]", text: ApplicationController.helpers.format_money(row.amount_money)
+    toggle = css_select("#portfolio-holdings tr[data-portfolio-holding='AAPL'] button[aria-expanded='false'][aria-controls]").first
+    assert toggle, "the summary row must carry a collapsed toggle"
+    detail = css_select("#portfolio-holdings tr##{toggle["aria-controls"]}[hidden]").first
+    assert detail, "the toggle must point at the hidden detail row"
+    positions = css_select(detail, "[data-portfolio-positions='AAPL'] a[href^='/holdings/']")
+    assert_equal 2, positions.size
+    assert_includes positions.map { |a| a["href"] }, holding_path(second.holdings.first)
+  end
+
+  test "holdings table sorts through links that flip the active column's direction" do
+    zzz = Security.create!(ticker: "ZZZ", name: "Zeta")
+    Holding.create!(account: accounts(:investment), security: zzz, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+
+    get portfolio_path(sort: "name", dir: "asc")
+    assert_response :success
+
+    assert_equal %w[AAPL ZZZ], css_select("#portfolio-holdings tr[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
+    assert_select "#portfolio-holdings th[aria-sort='ascending'] a[href=?]", "#{portfolio_path}?dir=desc&sort=name"
+    assert_select "#portfolio-holdings th a[href=?]", "#{portfolio_path}?dir=desc&sort=value"
+    assert_select "#portfolio-holdings th[aria-sort]", count: 1
+
+    get portfolio_path(sort: "value", dir: "asc")
+    assert_equal %w[ZZZ AAPL], css_select("#portfolio-holdings tr[data-portfolio-holding]").map { |n| n["data-portfolio-holding"] }
+    assert_select "#portfolio-holdings th[aria-sort='ascending'] a[href=?]", "#{portfolio_path}?dir=desc&sort=value"
+  end
+
+  # Anything outside the statement's whitelists falls back to the default
+  # sort, value descending, and never reaches a link.
+  test "holdings sort params are whitelisted before they reach the sort links" do
+    get portfolio_path(sort: "drop table", dir: "sideways")
+    assert_response :success
+
+    assert_select "#portfolio-holdings th[aria-sort='descending'] a[href=?]", "#{portfolio_path}?dir=asc&sort=value"
+    assert_select "#portfolio-holdings th[aria-sort]", count: 1
+    assert_select "#portfolio-holdings a[href*=?]", "drop", count: 0
+    assert_select "#portfolio-holdings a[href*=?]", "sideways", count: 0
+  end
+
+  test "holdings table flags a row whose position has no cost basis" do
+    priced = Security.create!(ticker: "BASIS", name: "With basis")
+    Holding.create!(account: accounts(:investment), security: priced, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    # Neither a stored basis nor a buy trade to compute one from, so
+    # Holding#avg_cost is nil and the row is flagged. AAPL is deliberately
+    # not the example: it has a fixture trade, so its basis is computable
+    # even though nothing is stored on the holding.
+    unknown = Security.create!(ticker: "NOBASIS", name: "Without basis")
+    Holding.create!(account: accounts(:investment), security: unknown, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+    # One security, a known basis in one account and none in another: the row
+    # warns, yet still shows the average cost of the position that has one.
+    partial = Security.create!(ticker: "PARTIAL", name: "Partly known basis")
+    second_broker = accounts(:investment).family.accounts.create!(name: "Second broker", balance: 10, cash_balance: 0, currency: "USD", accountable: Investment.new)
+    Holding.create!(account: accounts(:investment), security: partial, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD", cost_basis: 8, cost_basis_locked: true)
+    Holding.create!(account: second_broker, security: partial, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    row_hint = I18n.t("portfolios.holdings.missing_cost_basis_hint")
+    position_hint = I18n.t("portfolios.holdings.position_missing_cost_basis_hint")
+    eight = Regexp.escape(ApplicationController.helpers.format_money(Money.new(8, "USD")))
+
+    assert_select "tr[data-portfolio-holding='NOBASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
+    assert_select "tr[data-portfolio-holding='NOBASIS'] span[title=?]", row_hint
+    assert_select "[data-portfolio-positions='NOBASIS'] span[title=?]", position_hint, text: "—"
+    assert_select "tr[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0,
+      message: "AAPL's basis is computable from its trade, so the row must not warn"
+    assert_select "tr[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
+    assert_select "tr[data-portfolio-holding='BASIS']", text: /#{eight}/
+
+    assert_select "tr[data-portfolio-holding='PARTIAL'] span[title=?]", row_hint
+    assert_select "tr[data-portfolio-holding='PARTIAL']", text: /#{eight}/,
+      message: "a partly known basis still shows the average cost the row hint describes"
+    assert_select "[data-portfolio-positions='PARTIAL'] span[title=?]", position_hint, count: 1
+    # AAPL stores no basis but has a buy trade, so its position shows the
+    # computed average cost rather than the missing-basis dash.
+    aapl_cost = statement_avg_cost("AAPL")
+    assert_select "[data-portfolio-positions='AAPL'] span[title=?]", position_hint, count: 0
+    assert_select "[data-portfolio-positions='AAPL'] td", text: ApplicationController.helpers.format_money(aapl_cost)
+  end
+
+  test "the page's query count is bounded and does not grow with holdings" do
+    build_portfolio(accounts: 10, securities: 6)
+    baseline = capture_sql_queries { get portfolio_path }
+    assert_response :success
+
+    # Measured: 42 queries for this page (layout included) with the holdings
+    # and accounts sections, 10 accounts and 60 holdings, none of them per
+    # holding. The ceiling is that figure plus a little headroom, not a
+    # guess; the assertion below is the one that matters.
+    assert_operator baseline.size, :<=, PORTFOLIO_QUERY_CEILING, "GET /portfolio issued #{baseline.size} queries"
+
+    build_portfolio(accounts: 10, securities: 2, existing_accounts: @family.accounts.where("name LIKE 'Bulk %'").to_a)
+    grown = capture_sql_queries { get portfolio_path }
+    assert_response :success
+
+    assert_equal baseline.size, grown.size, "adding 20 holdings changed the query count:\n#{(grown - baseline).join("\n")}"
+  end
+
+  PORTFOLIO_QUERY_CEILING = 50
+
+  test "stores the allocation section in the saved order and collapsed set" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[allocation accounts], portfolio_collapsed_sections: { allocation: true } } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_equal %w[allocation accounts], @user.preferences["portfolio_section_order"]
+    assert @user.section_collapsed?("portfolio", "allocation")
+  end
+
+  test "allocation donut carries the grouping's segments and switches grouping through links" do
+    statement = InvestmentStatement.new(@family, user: @user)
+
+    get portfolio_path
+    assert_response :success
+
+    mount = css_select("#portfolio-allocation [data-controller='donut-chart']").first
+    segments = JSON.parse(mount["data-donut-chart-segments-value"])
+    assert_equal statement.allocation_by(nil).map(&:id), segments.map { |s| s["id"] }
+    assert_in_delta 100.0, segments.sum { |s| s["percentage"] }, 0.2
+    assert segments.all? { |s| s["color"].match?(/\A#\h{6}\z/) }
+    assert_select "#portfolio-allocation a[aria-current='true'][href=?]", "#{portfolio_path}?by=security"
+
+    get portfolio_path(by: "kind")
+    assert_response :success
+
+    assert_select "#portfolio-allocation a[aria-current='true'][href=?]", "#{portfolio_path}?by=kind"
+    assert_select "#portfolio-allocation a[href=?]", "#{portfolio_path}?by=currency"
+    assert_select "#portfolio-allocation [data-portfolio-allocation='kind'] [data-portfolio-segment='standard']",
+                  text: I18n.t("portfolios.allocation.kinds.standard")
+  end
+
+  # The picker offers what the statement can group by, and nothing else: no
+  # tag and no look-through.
+  test "the grouping picker lists exactly the statement's groupings" do
+    get portfolio_path
+    assert_response :success
+
+    hrefs = css_select("#portfolio-allocation [role=group] a").map { |a| a["href"] }
+    assert_equal InvestmentStatement::ALLOCATION_GROUPINGS.map { |by| "#{portfolio_path}?by=#{by}" }, hrefs
+    assert_select "#portfolio-allocation a[href*=?]", "look_through", count: 0
+    assert_select "#portfolio-allocation a[href*=?]", "by=tag", count: 0
+  end
+
+  # The controller whitelists against ALLOCATION_GROUPINGS. A 200 alone proves
+  # nothing: a grouping dropped from the constant falls back to the default
+  # with the same 200, so assert the grouping the page actually rendered.
+  test "every grouping renders, and is actually the grouping asked for" do
+    InvestmentStatement::ALLOCATION_GROUPINGS.each do |grouping|
+      get portfolio_path(by: grouping)
+      assert_response :success, "?by=#{grouping} did not render"
+      assert_select %([data-portfolio-allocation="#{grouping}"]), { count: 1 },
+                    "?by=#{grouping} fell back to the default grouping"
+    end
+  end
+
+  test "an unknown grouping falls back to the default rather than erroring" do
+    get portfolio_path(by: "drop table")
+
+    assert_response :success
+    assert_select %([data-portfolio-allocation="security"]), count: 1
+    assert_select "#portfolio-allocation a[href*=?]", "drop", count: 0
+  end
+
+  # The fallback is labelled `security`, so its rows must be the per-security
+  # allocation, not whatever allocation_by's else branch happens to return.
+  test "the default grouping lists one row per security plus cash" do
+    expected = InvestmentStatement.new(@family, user: @user).allocation.map { |row| row.cash? ? "cash" : row.security.id }
+    assert_operator expected.size, :>=, 2
+
+    get portfolio_path
+    assert_response :success
+
+    rows = css_select("#portfolio-allocation-table [data-portfolio-segment]").map { |node| node["data-portfolio-segment"] }
+    assert_equal expected, rows
+  end
+
+  # Rendered through the controller because the partial stitches the levels
+  # together: it asks for each level's children, and the bottom level only
+  # stays inside its own asset class if the asset class is passed down. Each
+  # level's table is named by the path it was opened along.
+  test "an asset class opens onto its sub-classes, and a sub-class onto its positions" do
+    account = accounts(:investment)
+    share = Security.create!(ticker: "SHR9", name: "A share", asset_class: "equity", asset_sub_class: "stock", offline: true)
+    bond = Security.create!(ticker: "BND9", name: "A bond", asset_class: "fixed_income", offline: true)
+    stray = Security.create!(ticker: "UEQ9", name: "Unfiled share", asset_class: "equity", offline: true)
+    Holding.create!(account: account, security: share, date: Date.current, qty: 1, price: 600, amount: 600, currency: "USD")
+    Holding.create!(account: account, security: bond, date: Date.current, qty: 1, price: 400, amount: 400, currency: "USD")
+    Holding.create!(account: account, security: stray, date: Date.current, qty: 1, price: 100, amount: 100, currency: "USD")
+
+    get portfolio_path(by: "asset_class")
+    assert_response :success
+
+    root = "#portfolio-allocation-table"
+    assert_select "#{root} [data-portfolio-segment='equity'] [aria-controls]", count: 1
+    assert_select "#{root}-equity [data-portfolio-child='stock'] [aria-controls]", count: 1
+    assert_select "#{root}-equity #{root}-equity-stock [data-portfolio-grandchild='#{share.id}']", { count: 1, text: /A share/ }
+    # `unclassified` is a sub-class of both equity and fixed income here; each
+    # opens onto its own class's position only.
+    assert_select "#{root}-equity #{root}-equity-unclassified [data-portfolio-grandchild='#{stray.id}']", count: 1
+    assert_select "#{root}-equity [data-portfolio-grandchild='#{bond.id}']", count: 0
+    assert_select "#{root}-fixed_income #{root}-fixed_income-unclassified [data-portfolio-grandchild='#{bond.id}']", { count: 1, text: /A bond/ }
+    assert_select "#{root}-fixed_income [data-portfolio-grandchild='#{stray.id}']", count: 0
+    # A position is the bottom: it has no toggle of its own.
+    assert_select "[data-portfolio-grandchild] [aria-controls]", count: 0
+    # The detail rows start hidden; the toggle reveals them.
+    assert_select "tr[hidden] #{root}-equity", count: 1
+  end
+
+  # Only the asset-class ladder nests; a flat grouping renders no disclosure.
+  test "a grouping that does not nest renders its rows without a disclosure" do
+    get portfolio_path(by: "currency")
+    assert_response :success
+
+    assert_select "#portfolio-allocation [data-portfolio-segment]", minimum: 1
+    assert_select "#portfolio-allocation [data-controller='row-expander']", count: 0
+    assert_select "#portfolio-allocation tr[hidden]", count: 0
+  end
+
+  private
+    def enable_preview(user)
+      user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
+    end
+
+    def disable_preview(user)
+      user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => false))
+    end
+
+    def link_investment_account(index)
+      account = @family.accounts.create!(name: "Linked brokerage #{index}", balance: 1_000, currency: "USD",
+                                         accountable: Investment.new, owner: @user)
+      provider = LunchflowAccount.create!(lunchflow_item: lunchflow_items(:one), account_id: "lf_portfolio_#{index}",
+                                          name: account.name, currency: "USD")
+      AccountProvider.create!(account: account, provider: provider)
+    end
+
+    def provider_queries(&block)
+      capture_sql_queries(&block).count { |sql| sql.include?(%(FROM "lunchflow_accounts")) }
+    end
+
+    def statement_avg_cost(ticker)
+      row = InvestmentStatement.new(@family, user: @user).holdings_table_rows.find { |r| r.ticker == ticker }
+      assert_nil row.positions.sole.cost_basis, "the premise: #{ticker} stores no cost basis"
+      row.positions.sole.avg_cost
+    end
+
+    def create_second_aapl_account(qty:, price:)
+      account = @family.accounts.create!(owner: @user, name: "Second Brokerage", balance: qty * price, cash_balance: 0, currency: "USD", accountable: Investment.new)
+      Holding.create!(account: account, security: securities(:aapl), date: Date.current, qty: qty, price: price, amount: qty * price, currency: "USD")
+      account
+    end
+
+    # `accounts` investment accounts each holding `securities` securities,
+    # with a previous-day snapshot per position so day change has work to do.
+    # Every other security has no stored cost basis, the shape a synced
+    # brokerage produces, so a view that reached for Holding#avg_cost (and
+    # its per-holding trades query) would show up in the count.
+    def build_portfolio(accounts:, securities:, existing_accounts: nil)
+      accounts = existing_accounts || Array.new(accounts) do |i|
+        @family.accounts.create!(owner: @user, name: "Bulk #{i}", balance: 1000 * securities, cash_balance: 50, currency: "USD", accountable: Investment.new)
+      end
+      securities = Array.new(securities) do |i|
+        Security.create!(ticker: "B#{SecureRandom.hex(3).upcase}#{i}", name: "Bulk security #{i}")
+      end
+      accounts.each do |account|
+        securities.each_with_index do |security, index|
+          basis = index.even? ? { cost_basis: 90, cost_basis_locked: true } : {}
+          Holding.create!(account: account, security: security, date: 1.day.ago.to_date, qty: 10, price: 95, amount: 950, currency: "USD", **basis)
+          Holding.create!(account: account, security: security, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD", **basis)
+        end
+      end
+    end
+end

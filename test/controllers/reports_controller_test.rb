@@ -22,6 +22,22 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[transactions_breakdown trends_insights], keys.first(2)
     assert_select "[data-section-key=trends_insights][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=transactions_breakdown][data-reports-section-collapsed-value=?]", "false"
+    assert_select "[data-section-key=trends_insights] > details:not([open])"
+    assert_select "[data-section-key=transactions_breakdown] > details[open]"
+  end
+
+  # Reports renders the shared section list with its own endpoint, param and
+  # labels, and leaves the collapse control on its default endpoint.
+  test "the section list posts to the reports endpoint under the reports keys" do
+    get reports_path
+
+    assert_response :success
+    assert_select "[data-controller~=sortable-list][data-sortable-list-url-value=?][data-sortable-list-param-value=?][aria-label=?]",
+                  update_preferences_reports_path, "preferences.reports_section_order", I18n.t("reports.index.sections_aria")
+    assert_select "[data-section-key=net_worth][aria-label=?]",
+                  "#{I18n.t("reports.net_worth.title")} section. Press Enter or Space to grab for reordering, then use arrow keys to move."
+    assert_select "[data-section-key=net_worth] > details > summary h2", text: I18n.t("reports.net_worth.title")
+    assert_select "[data-reports-section-url-value], [data-reports-section-preference-key-value]", count: 0
   end
 
   test "the reports preferences endpoint stores order and collapse under the reports keys" do
