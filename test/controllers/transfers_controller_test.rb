@@ -1,7 +1,7 @@
 require "test_helper"
 
 class TransfersControllerTest < ActionDispatch::IntegrationTest
-  include EntriesTestHelper
+  include EntriesTestHelper, ForeignFamilyTestHelper
 
   setup do
     sign_in users(:family_admin)
@@ -687,6 +687,47 @@ class TransfersControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to transactions_url
     assert_equal "Transfer updated", flash[:notice]
     assert_equal "Test notes", transfer.reload.notes
+  end
+
+  test "updating a transfer sets the outflow category from the family's categories" do
+    transfer = transfers(:one)
+
+    patch transfer_url(transfer), params: { transfer: { category_id: categories(:food_and_drink).id } }
+
+    assert_equal categories(:food_and_drink), transfer.outflow_transaction.reload.category
+  end
+
+  test "updating a transfer refuses another family's category and writes nothing" do
+    transfer = transfers(:one)
+    transfer.outflow_transaction.update!(category: categories(:food_and_drink))
+
+    patch transfer_url(transfer), params: { transfer: { category_id: foreign_category.id, notes: "should not be saved" } }
+
+    assert_redirected_to transactions_url
+    assert_equal I18n.t("transfers.update.unusable_category"), flash[:alert]
+    assert_equal categories(:food_and_drink), transfer.outflow_transaction.reload.category
+    assert_not_equal "should not be saved", transfer.reload.notes
+  end
+
+  test "updating a transfer keeps an outflow category it already holds when the form sends it back" do
+    transfer = transfers(:one)
+    transfer.outflow_transaction.update_columns(category_id: foreign_category.id)
+
+    patch transfer_url(transfer), params: { transfer: { category_id: foreign_category.id, notes: "kept" } }
+
+    assert_equal foreign_category.id, transfer.outflow_transaction.reload.category_id
+    assert_equal "kept", transfer.reload.notes
+  end
+
+  test "creating a transfer does not attach another family's tag" do
+    from = accounts(:depository)
+    to = accounts(:credit_card)
+
+    post transfers_url, params: {
+      transfer: { from_account_id: from.id, to_account_id: to.id, amount: 25, date: Date.current, tag_ids: [ tags(:one).id, foreign_tag.id ] }
+    }
+
+    assert_equal 0, Tagging.where(tag_id: foreign_tag.id).count
   end
 
   test "confirming a transfer keeps the outflow category" do

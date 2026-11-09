@@ -57,3 +57,4 @@ en:
       uncategorized: Uncategorized
     update:
       success: Transfer updated
+      unusable_category: The category you chose is not available to your family. Choose another and try again.

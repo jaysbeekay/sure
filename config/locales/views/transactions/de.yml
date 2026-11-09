@@ -1,6 +1,7 @@
 ---
 de:
   transactions:
+    unusable_references: Die gewählte Kategorie, der gewählte Händler oder das gewählte Tag steht deiner Familie nicht zur Verfügung. Wähle eine andere und versuche es erneut.
     unknown_name: Unbekannte Transaktion
     form:
       account: Konto

@@ -145,6 +145,15 @@ class TransactionsController < ApplicationController
 
     return unless require_account_permission!(account)
 
+    if unusable_references?(entry_params[:entryable_attributes])
+      @entry = account.entries.new(entry_params)
+      @entry.errors.add(:base, t("transactions.unusable_references"))
+      clear_stale_auto_generated_name!(@entry)
+      set_new_transaction_form_options
+      render :new, status: :unprocessable_entity
+      return
+    end
+
     idempotency_key = submitted_idempotency_key
 
     # Sequential double-submit guard: the form was already submitted
@@ -185,7 +194,16 @@ class TransactionsController < ApplicationController
   end
 
   def update
-    if @entry.update(permitted_entry_params)
+    permitted = permitted_entry_params
+
+    if unusable_references?(permitted[:entryable_attributes])
+      flash.now[:alert] = t("transactions.unusable_references")
+      assign_mark_recurring_state
+      render :show, status: :unprocessable_entity
+      return
+    end
+
+    if @entry.update(permitted)
       sync_needed = @entry.saved_changes_affect_balances?
       transaction = @entry.transaction
       transaction.record_category_usage!
@@ -653,6 +671,11 @@ class TransactionsController < ApplicationController
       end
 
       entry_params
+    end
+
+    def unusable_references?(attributes)
+      @owned_references ||= Transaction::OwnedReferences.new(Current.family, Current.user)
+      @owned_references.unusable(attributes, transaction: @entry&.transaction).any?
     end
 
     def entry_params_with_idempotency_key(idempotency_key)

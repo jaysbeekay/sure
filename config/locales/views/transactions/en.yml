@@ -59,6 +59,7 @@ en:
       transfer: Transfer
     create:
       created: Transaction created
+    unusable_references: The category, merchant or tag you chose is not available to your family. Choose another and try again.
     update:
       updated: Transaction updated
     new:

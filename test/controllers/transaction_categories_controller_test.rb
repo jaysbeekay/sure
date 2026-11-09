@@ -1,6 +1,8 @@
 require "test_helper"
 
 class TransactionCategoriesControllerTest < ActionDispatch::IntegrationTest
+  include ForeignFamilyTestHelper
+
   setup do
     sign_in users(:family_admin)
     @entry = entries(:transaction)
@@ -16,6 +18,28 @@ class TransactionCategoriesControllerTest < ActionDispatch::IntegrationTest
       as: :turbo_stream
 
     assert_not_nil category.reload.last_used_at
+  end
+
+  test "another family's category is refused" do
+    @transaction.update!(category: categories(:food_and_drink))
+
+    patch transaction_category_url(@entry),
+      params: { entry: { entryable_type: "Transaction", entryable_attributes: { id: @transaction.id, category_id: foreign_category.id } } },
+      as: :turbo_stream
+
+    assert_response :unprocessable_entity
+    assert_equal categories(:food_and_drink).id, @transaction.reload.category_id
+    assert_nil foreign_category.reload.last_used_at
+  end
+
+  test "a category the transaction already holds is kept when it is sent back" do
+    @transaction.update_columns(category_id: foreign_category.id)
+
+    patch transaction_category_url(@entry),
+      params: { entry: { entryable_type: "Transaction", entryable_attributes: { id: @transaction.id, category_id: foreign_category.id } } },
+      as: :turbo_stream
+
+    assert_equal foreign_category.id, @transaction.reload.category_id
   end
 
   test "clearing a category does not touch any category's last_used_at" do

@@ -99,6 +99,10 @@ class TransfersController < ApplicationController
     # Confirming or rejecting rewrites the kind of both legs
     return unless require_account_permission!(inflow_account, redirect_path: transactions_url)
 
+    if unusable_category?
+      return redirect_back_or_to transactions_url, alert: t(".unusable_category")
+    end
+
     Transfer.transaction do
       update_transfer_status
       update_transfer_fees_and_amount
@@ -379,6 +383,13 @@ class TransfersController < ApplicationController
       elsif transfer_update_params[:status] == "confirmed"
         @transfer.confirm!
       end
+    end
+
+    def unusable_category?
+      return false unless transfer_update_params.key?(:category_id)
+
+      references = Transaction::OwnedReferences.new(Current.family, Current.user)
+      references.unusable({ category_id: transfer_update_params[:category_id] }, transaction: @transfer.outflow_transaction).any?
     end
 
     def update_investment_contribution

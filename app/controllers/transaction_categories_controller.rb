@@ -8,6 +8,9 @@ class TransactionCategoriesController < ApplicationController
     # read-only (Transaction#category_set_on_transfer_outflow?).
     return head(:unprocessable_entity) if @entry.transaction.category_set_on_transfer_outflow?
 
+    references = Transaction::OwnedReferences.new(Current.family, Current.user)
+    return head(:unprocessable_entity) if references.unusable(entry_params[:entryable_attributes], transaction: @entry.transaction).any?
+
     @entry.update!(entry_params)
 
     transaction = @entry.transaction

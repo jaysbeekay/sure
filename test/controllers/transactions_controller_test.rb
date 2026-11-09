@@ -1,7 +1,7 @@
 require "test_helper"
 
 class TransactionsControllerTest < ActionDispatch::IntegrationTest
-  include EntryableResourceInterfaceTest, EntriesTestHelper
+  include EntryableResourceInterfaceTest, EntriesTestHelper, ForeignFamilyTestHelper
   include ActionView::RecordIdentifier
 
   setup do
@@ -253,6 +253,131 @@ class TransactionsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_url(created_entry.account)
     assert_equal "Transaction created", flash[:notice]
     assert_enqueued_with(job: SyncJob)
+  end
+
+  test "create refuses another family's tag, category or merchant" do
+    assert_no_difference [ "Entry.count", "Transaction.count" ] do
+      post transactions_url, params: {
+        entry: {
+          account_id: @entry.account_id,
+          name: "Crafted",
+          date: Date.current,
+          currency: "USD",
+          amount: 100,
+          nature: "inflow",
+          entryable_type: "Transaction",
+          entryable_attributes: {
+            tag_ids: [ tags(:one).id, foreign_tag.id ],
+            category_id: foreign_category.id,
+            merchant_id: foreign_merchant.id
+          }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_includes response.body, I18n.t("transactions.unusable_references")
+    [ foreign_category.name, foreign_merchant.name, foreign_tag.name ].each { |name| assert_not_includes response.body, name }
+    assert_equal 0, Tagging.where(tag_id: foreign_tag.id).count
+  end
+
+  test "create refuses an id that no record has" do
+    assert_no_difference "Entry.count" do
+      post transactions_url, params: {
+        entry: {
+          account_id: @entry.account_id, name: "Crafted", date: Date.current, currency: "USD", amount: 100,
+          nature: "inflow", entryable_type: "Transaction",
+          entryable_attributes: { category_id: SecureRandom.uuid }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+  end
+
+  test "update refuses another family's tag, category or merchant and changes nothing" do
+    transaction = @entry.entryable
+    transaction.update!(category: categories(:food_and_drink), merchant: merchants(:netflix), tag_ids: [ tags(:one).id ])
+    name = @entry.name
+
+    patch transaction_url(@entry), params: {
+      entry: {
+        name: "Renamed",
+        entryable_type: "Transaction",
+        entryable_attributes: {
+          id: transaction.id,
+          tag_ids: [ foreign_tag.id ],
+          category_id: foreign_category.id,
+          merchant_id: foreign_merchant.id
+        }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_includes response.body, I18n.t("transactions.unusable_references")
+
+    transaction.reload
+
+    assert_equal name, @entry.reload.name
+    assert_equal categories(:food_and_drink).id, transaction.category_id
+    assert_equal merchants(:netflix).id, transaction.merchant_id
+    assert_equal [ tags(:one).id ], transaction.tag_ids
+    assert_equal 0, Tagging.where(tag_id: foreign_tag.id).count
+  end
+
+  test "update refuses another family's tag sent beside a blank" do
+    transaction = @entry.entryable
+    transaction.update!(tag_ids: [ tags(:one).id ])
+
+    patch transaction_url(@entry), params: {
+      entry: { entryable_type: "Transaction", entryable_attributes: { id: transaction.id, tag_ids: [ "", foreign_tag.id ] } }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal [ tags(:one).id ], transaction.reload.tag_ids
+  end
+
+  test "update still clears tags and the category when the form sends them blank" do
+    transaction = @entry.entryable
+    transaction.update!(category: categories(:food_and_drink), tag_ids: [ tags(:one).id ])
+
+    patch transaction_url(@entry), params: {
+      entry: {
+        entryable_type: "Transaction",
+        entryable_attributes: { id: transaction.id, tag_ids: [ "" ], category_id: "" }
+      }
+    }
+
+    transaction.reload
+
+    assert_nil transaction.category_id
+    assert_empty transaction.tag_ids
+  end
+
+  test "update keeps a foreign link the transaction already holds when the form sends it back" do
+    transaction = @entry.entryable
+    transaction.update_columns(category_id: foreign_category.id, merchant_id: foreign_merchant.id)
+    Tagging.create!(tag: foreign_tag, taggable: transaction)
+
+    patch transaction_url(@entry), params: {
+      entry: {
+        name: "Renamed",
+        entryable_type: "Transaction",
+        entryable_attributes: {
+          id: transaction.id,
+          category_id: foreign_category.id,
+          merchant_id: foreign_merchant.id,
+          tag_ids: [ foreign_tag.id, tags(:one).id ]
+        }
+      }
+    }
+
+    transaction.reload
+
+    assert_equal "Renamed", @entry.reload.name
+    assert_equal foreign_category.id, transaction.category_id
+    assert_equal foreign_merchant.id, transaction.merchant_id
+    assert_equal [ foreign_tag.id, tags(:one).id ].sort, transaction.tag_ids.sort
   end
 
   test "resubmitting the same idempotency key does not create a duplicate transaction" do
