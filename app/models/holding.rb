@@ -76,62 +76,103 @@ class Holding < ApplicationRecord
     holding.cost_basis.present? && (holding.cost_basis_locked? || holding.cost_basis.positive?)
   end
 
+  # The rate a trade carries itself (extra["exchange_rate"], e.g. IBKR's
+  # fx_rate_to_base) comes before the table's, as in the calculators and
+  # Balance::SyncCache. Trade#exchange_rate= stores a number, but a row
+  # written to `extra` directly can hold the same rate as a string, which
+  # Trade's validation and Money#exchange_to both accept -- so a plain decimal
+  # string counts too. Anything else, an exponent or an absurd length
+  # included, is not cast, so it cannot overflow numeric and fail the query.
+  AVG_COST_RATE_SQL = <<~SQL.squish.freeze
+    COALESCE(
+      CASE jsonb_typeof(trades.extra->'exchange_rate')
+        WHEN 'number' THEN (trades.extra->>'exchange_rate')::numeric
+        WHEN 'string' THEN CASE WHEN trades.extra->>'exchange_rate' ~ '^[[:space:]]*[+-]?([0-9]{1,20}([.][0-9]{0,20})?|[.][0-9]{1,20})[[:space:]]*$'
+                                THEN (trades.extra->>'exchange_rate')::numeric END
+      END,
+      exchange_rates.rate
+    )
+  SQL
+
+  # The sums both fallbacks take over a holding's purchases -- #calculate_avg_cost
+  # for one holding, .preload_avg_costs for many -- so the two cannot drift.
+  # They read `trades`, `accounts`, `exchange_rates` (joined on the trade's
+  # date and currency) and `lots` (a costed lot on the trade's entry, if any).
+  #
+  # A purchase costs its price, quantity and fee, converted when it is in
+  # another currency; a trade in the account's own currency converts at 1. A
+  # foreign purchase with no usable rate for its day has a cost nothing here
+  # knows, so the position's is unknown too (rate_missing), as with an
+  # internal movement -- counting it at 1:1 would state a figure that looks
+  # measured and is not. A rate of zero or less converts nothing, so it
+  # counts as missing, as it does in Money#exchange_to.
+  AVG_COST_FOREIGN_SQL = "trades.currency <> accounts.currency".freeze
+  AVG_COST_SUMS_SQL = {
+    total_cost: "SUM(CASE WHEN lots.id IS NOT NULL THEN lots.manual_total_cost ELSE (trades.price * trades.qty + trades.fee) * CASE WHEN #{AVG_COST_FOREIGN_SQL} THEN #{AVG_COST_RATE_SQL} ELSE 1 END END)",
+    total_qty: "SUM(trades.qty)",
+    rate_missing: "BOOL_OR(lots.id IS NULL AND #{AVG_COST_FOREIGN_SQL} AND (#{AVG_COST_RATE_SQL} IS NULL OR #{AVG_COST_RATE_SQL} <= 0))"
+  }.freeze
+
   # One query for the fallback Holding#calculate_avg_cost would run per
   # holding: the weighted average of buy trades on or before the holding's
-  # date, converted to the account currency at each trade's date, unknown
-  # (nil) when any of those trades is a Transfer or when there are none. A
+  # date, fees included, converted to the account currency at each trade's
+  # rate, unknown (nil) when any of those trades is an internal movement,
+  # when a foreign one has no usable rate, or when there are none. A
   # trade whose lot the user has costed counts at that cost, and a clamped
   # position is unknown, as in #calculate_avg_cost. A holding in an account
   # that sells by fifo reads its open lots instead (.fifo_avg_costs), in a
   # few more queries for all of them together.
-  # The SQL mirrors #calculate_avg_cost line for line; the parity test in
-  # InvestmentStatementTest holds them together. Nothing extra is read
-  # unless a holding is in a fifo account. Holdings with unsaved changes,
-  # unsaved ones included, are skipped: the query reads the stored row, which
-  # is not what they hold.
+  # The sums are AVG_COST_SUMS_SQL, the ones #calculate_avg_cost takes; the
+  # parity tests in HoldingTest and InvestmentStatementTest hold the rest
+  # together. Nothing extra is read unless a holding is in a fifo account.
+  # Holdings with unsaved changes, unsaved ones included, are skipped: the
+  # query reads the stored row, which is not what they hold.
   def self.preload_avg_costs(holdings)
     pending = holdings.reject { |holding| stored_cost_basis?(holding) || holding.changed? }
     return if pending.empty?
 
-    rows = ActiveRecord::Base.connection.select_all(
-      ActiveRecord::Base.sanitize_sql_array([
-        <<~SQL.squish,
-          SELECT cur.id AS holding_id,
-            BOOL_OR(trades.investment_activity_label = :transfer_label AND lots.id IS NULL) AS has_transfer,
-            SUM(CASE WHEN lots.id IS NOT NULL THEN lots.manual_total_cost
-              WHEN trades.investment_activity_label IS DISTINCT FROM :transfer_label
-              THEN trades.price * trades.qty * COALESCE(exchange_rates.rate, 1) ELSE 0 END) AS total_cost,
-            SUM(CASE WHEN lots.id IS NOT NULL OR trades.investment_activity_label IS DISTINCT FROM :transfer_label
-              THEN trades.qty ELSE 0 END) AS total_qty,
-            BOOL_OR(EXISTS (
-              SELECT 1 FROM holding_lots clamped_lots
-              WHERE clamped_lots.account_id = cur.account_id
-                AND clamped_lots.security_id = cur.security_id
-                AND clamped_lots.clamped
-            )) AS clamped,
-            BOOL_OR(accounts.cost_basis_method = :fifo) AS fifo
-          FROM holdings cur
-          JOIN accounts ON accounts.id = cur.account_id
-          JOIN entries ON entries.account_id = cur.account_id
-            AND entries.entryable_type = 'Trade'
-            AND entries.date <= cur.date
-          JOIN trades ON trades.id = entries.entryable_id
-            AND trades.security_id = cur.security_id
-            AND trades.qty > 0
-          LEFT JOIN exchange_rates ON (
-            exchange_rates.date = entries.date
-            AND exchange_rates.from_currency = trades.currency
-            AND exchange_rates.to_currency = accounts.currency
-          )
-          LEFT JOIN holding_lots lots ON lots.account_id = cur.account_id
-            AND lots.source_entry_id = entries.id
-            AND lots.manual_total_cost IS NOT NULL
-          WHERE cur.id IN (:holding_ids)
-          GROUP BY cur.id
-        SQL
-        { holding_ids: pending.map(&:id), transfer_label: Trade::TRANSFER_LABEL, fifo: "fifo" }
-      ])
-    ).index_by { |row| row["holding_id"] }
+    internal_movement = ActiveRecord::Base.sanitize_sql_array([
+      "trades.investment_activity_label IN (?)", Trade::INTERNAL_MOVEMENT_LABELS
+    ])
+    columns = {
+      "holding_id" => "cur.id",
+      "has_internal_movement" => "BOOL_OR(#{internal_movement} AND lots.id IS NULL)",
+      "total_cost" => AVG_COST_SUMS_SQL[:total_cost],
+      "total_qty" => AVG_COST_SUMS_SQL[:total_qty],
+      "rate_missing" => AVG_COST_SUMS_SQL[:rate_missing],
+      "clamped" => <<~SQL.squish,
+        BOOL_OR(EXISTS (
+          SELECT 1 FROM holding_lots clamped_lots
+          WHERE clamped_lots.account_id = cur.account_id
+            AND clamped_lots.security_id = cur.security_id
+            AND clamped_lots.clamped
+        ))
+      SQL
+      "fifo" => "BOOL_OR(accounts.cost_basis_method = 'fifo')"
+    }
+    rows = Holding.from("holdings cur")
+      .joins(<<~SQL.squish)
+        JOIN accounts ON accounts.id = cur.account_id
+        JOIN entries ON entries.account_id = cur.account_id
+          AND entries.entryable_type = 'Trade'
+          AND entries.date <= cur.date
+        JOIN trades ON trades.id = entries.entryable_id
+          AND trades.security_id = cur.security_id
+          AND trades.qty > 0
+        LEFT JOIN exchange_rates ON (
+          exchange_rates.date = entries.date
+          AND exchange_rates.from_currency = trades.currency
+          AND exchange_rates.to_currency = accounts.currency
+        )
+        LEFT JOIN holding_lots lots ON lots.account_id = cur.account_id
+          AND lots.source_entry_id = entries.id
+          AND lots.manual_total_cost IS NOT NULL
+      SQL
+      .where("cur.id IN (?)", pending.map(&:id))
+      .group("cur.id")
+      .pluck(*columns.values.map { |sql| Arel.sql(sql) })
+      .map { |values| columns.keys.zip(values).to_h }
+      .index_by { |row| row["holding_id"] }
 
     # A holding with no buy trades has no row; its answer is nil either way.
     lot_costs = fifo_avg_costs(pending.select { |holding| rows[holding.id]&.fetch("fifo") })
@@ -143,7 +184,7 @@ class Holding < ApplicationRecord
         nil
       elsif lot_costs.key?(holding.id)
         lot_costs[holding.id]
-      elsif row.nil? || row["has_transfer"] || total_qty.nil? || total_qty <= 0
+      elsif row.nil? || row["has_internal_movement"] || row["rate_missing"] || total_qty.nil? || total_qty <= 0
         nil
       else
         Money.new(row["total_cost"].to_d / total_qty, holding.currency)
@@ -499,6 +540,7 @@ class Holding < ApplicationRecord
 
       trades = account.trades
         .with_entry
+        .joins("INNER JOIN accounts ON accounts.id = entries.account_id")
         .joins(ActiveRecord::Base.sanitize_sql_array([
           "LEFT JOIN exchange_rates ON (
             exchange_rates.date = entries.date AND
@@ -535,36 +577,10 @@ class Holding < ApplicationRecord
         Trade::INTERNAL_MOVEMENT_LABELS
       )
 
-      # The rate a trade carries itself (extra["exchange_rate"], e.g. IBKR's
-      # fx_rate_to_base) comes before the table's, as in the calculators and
-      # Balance::SyncCache; a trade in the account's own currency converts at 1.
-      # Trade#exchange_rate= stores a number, but a row written to `extra`
-      # directly can hold the same rate as a string, which Trade's validation
-      # and Money#exchange_to both accept -- so a plain decimal string counts
-      # too. Anything else, an exponent or an absurd length included, is not
-      # cast, so it cannot overflow numeric and fail the query.
-      rate = <<~SQL.squish
-        COALESCE(
-          CASE jsonb_typeof(trades.extra->'exchange_rate')
-            WHEN 'number' THEN (trades.extra->>'exchange_rate')::numeric
-            WHEN 'string' THEN CASE WHEN trades.extra->>'exchange_rate' ~ '^[[:space:]]*[+-]?([0-9]{1,20}([.][0-9]{0,20})?|[.][0-9]{1,20})[[:space:]]*$'
-                                    THEN (trades.extra->>'exchange_rate')::numeric END
-          END,
-          exchange_rates.rate
-        )
-      SQL
-      foreign = ActiveRecord::Base.sanitize_sql_array([ "trades.currency <> ?", account.currency ])
-
-      # A foreign purchase with no usable rate for its day has a cost nothing
-      # here knows, so the position's is unknown too, as with an internal
-      # movement -- counting it at 1:1 would state a figure that looks measured
-      # and is not. A rate of zero or less converts nothing, so it counts as
-      # missing, as it does in Money#exchange_to. Checked in the same query as
-      # the totals rather than in another round trip.
+      # The missing-rate check rides on the totals query rather than another
+      # round trip. The sums are the ones Holding.preload_avg_costs runs.
       total_cost, total_qty, rate_missing = trades.pick(
-        Arel.sql("SUM(CASE WHEN lots.id IS NOT NULL THEN lots.manual_total_cost ELSE (trades.price * trades.qty + trades.fee) * CASE WHEN #{foreign} THEN #{rate} ELSE 1 END END)"),
-        Arel.sql("SUM(trades.qty)"),
-        Arel.sql("BOOL_OR(lots.id IS NULL AND #{foreign} AND (#{rate} IS NULL OR #{rate} <= 0))")
+        *AVG_COST_SUMS_SQL.values_at(:total_cost, :total_qty, :rate_missing).map { |sql| Arel.sql(sql) }
       )
       return nil if rate_missing
 
