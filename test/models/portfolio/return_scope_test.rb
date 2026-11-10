@@ -12,7 +12,7 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     @period = Period.custom(start_date: @day_one, end_date: @day_two)
   end
 
-  # Contract R15. One point is a position, not a return. Quoting a figure from
+  # One point is a position, not a return. Quoting a figure from
   # it would mean inventing an opening value.
   test "an account with one balance day is insufficient" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
@@ -24,7 +24,7 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     refute scope.supports_money_weighted_return?
   end
 
-  # Contract R16. Without trades or transfers there is no record of what was
+  # Without trades or transfers there is no record of what was
   # paid in, so an XIRR over "the flows" would be an XIRR over an empty set
   # dressed up as a measurement.
   test "a valuation tracked account does not support money weighted return" do
@@ -53,6 +53,33 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     assert_equal "time_weighted_return", scope.return_label_key
   end
 
+  # Trade::CreateForm records a dividend, interest or a fee as a Trade with no
+  # quantity. That is income or a cost booked against a manually valued
+  # account, not a record of what was bought or paid in, so it must not make
+  # the account trade tracked and earn it a money-weighted return. Only a trade
+  # that moved a quantity does, the same split Balance::BaseCalculator makes.
+  test "an account whose only trades are dividends, interest or fees is valuation tracked" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_100, revaluation: 100
+    income_trade account: @account, date: @day_two, amount: 10, label: "Dividend"
+    income_trade account: @account, date: @day_two, amount: 5, label: "Interest"
+    fee = income_trade(account: @account, date: @day_two, amount: 2, label: "Fee")
+    fee.update!(amount: 2)
+
+    direct = Portfolio::ReturnScope.new(account: @account, period: @period)
+    batch = Portfolio::ReturnScope.resolve_all(accounts: [ @account ], period: @period).fetch(@account.id)
+
+    assert direct.valuation_tracked?, "a zero-quantity trade records no position"
+    assert batch.valuation_tracked?, "and the batch path reads it the same way"
+    refute direct.supports_money_weighted_return?
+
+    buy_trade account: @account, date: @day_two, qty: 1, price: 10
+
+    assert Portfolio::ReturnScope.new(account: @account, period: @period).trade_tracked?,
+           "a trade that moved a quantity still counts"
+    assert Portfolio::ReturnScope.resolve_all(accounts: [ @account ], period: @period).fetch(@account.id).trade_tracked?
+  end
+
   test "an account whose only records are external transfers is trade tracked" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
     lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, cash_flow: 500
@@ -62,6 +89,26 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
 
     assert scope.trade_tracked?, "a known deposit is enough to know the flows"
     assert scope.supports_money_weighted_return?
+  end
+
+  # The classifier's CASE arrives already sanitized and full of quoted labels.
+  # Passed back through sanitize_sql_array with the query around it, a `:word`
+  # inside one of those literals is read as a bind variable and the check
+  # raises. No label contains one today; this makes one that does.
+  test "a colon word inside the classifier's sql is not read as a bind" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_500, cash_flow: 500
+    deposit account: @account, date: @day_two, amount: 500
+
+    original = Portfolio::FlowClassifier.new(scope_account_ids: [ @account.id ]).sql_case
+    Portfolio::FlowClassifier.any_instance.stubs(:sql_case)
+      .returns("CASE WHEN false THEN ':probe' ELSE (#{original}) END")
+
+    scope = Portfolio::ReturnScope.new(account: @account, period: @period)
+    resolved = Portfolio::ReturnScope.resolve_all(accounts: [ @account ], period: @period)
+
+    assert scope.trade_tracked?, "the deposit is still read as a known flow"
+    assert resolved.fetch(@account.id).trade_tracked?, "resolve_all reads it the same way"
   end
 
   test "balances with no explanation at all are treated as valuation tracked" do
@@ -75,7 +122,7 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     refute scope.supports_money_weighted_return?
   end
 
-  # F9: an excluded trade is not a record of anything, so it cannot make the
+  # An excluded trade is not a record of anything, so it cannot make the
   # account's flows known.
   test "an excluded trade does not make an account trade tracked" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
@@ -88,7 +135,7 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     refute scope.supports_money_weighted_return?
   end
 
-  # Trades and valuations are read up to the end of the period, so transfers
+  # Trades are read up to the end of the period, so transfers
   # must be too: a deposit made before the period is still a known flow.
   test "a transfer before the period still marks the account trade tracked" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
@@ -100,7 +147,7 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     assert scope.trade_tracked?
   end
 
-  # `entries.excluded` is nullable and F9 reads NULL as live. A bare
+  # `entries.excluded` is nullable and the flow classifier reads NULL as live. A bare
   # `excluded = false` drops such a row.
   test "a deposit with a null excluded flag is a known flow" do
     lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
@@ -146,6 +193,26 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
   # crossed THIS account's boundary. Resolving the set under one shared scope
   # would read this transfer as internal and drop the account to
   # VALUATION_TRACKED, withholding a money-weighted return it should quote.
+  # The batch path reads its own SQL for transfers, so the history rules the
+  # instance follows are asserted on it too: a transfer from before the period
+  # is known, and an excluded one is not a record of anything.
+  test "resolve_all reads transfer history as the instance does" do
+    earlier = create_portfolio_account(family: @family)
+    lay_balance account: earlier, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: earlier, date: @day_two, opening: 1_000, closing: 1_000
+    deposit account: earlier, date: @day_one - 10.days, amount: 1_000
+
+    excluded = create_portfolio_account(family: @family)
+    lay_balance account: excluded, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: excluded, date: @day_two, opening: 1_000, closing: 1_000
+    deposit(account: excluded, date: @day_one, amount: 1_000).update!(excluded: true)
+
+    resolved = Portfolio::ReturnScope.resolve_all(accounts: [ earlier, excluded ], period: @period)
+
+    assert resolved.fetch(earlier.id).trade_tracked?, "a transfer before the period is still a known flow"
+    assert resolved.fetch(excluded.id).valuation_tracked?, "an excluded transfer records nothing"
+  end
+
   test "a transfer to a sibling account in the same set is still external to its own account" do
     sibling = create_portfolio_account(family: @family)
 
@@ -206,6 +273,61 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
                  resolved.fetch(@account.id).balance_days
   end
 
+  # An account's cut-off ends its contribution: Portfolio::DailyReturns drops
+  # every row after it. Two rows in the period with the second past the cut-off
+  # leave ONE day the series can use, and one day is a position, not a return.
+  test "a cut-off that leaves one balance day in the window is insufficient" do
+    lay_balance account: @account, date: @day_one, opening: 1_000, closing: 1_000
+    lay_balance account: @account, date: @day_two, opening: 1_000, closing: 1_100, market_flow: 100
+
+    uncut = Portfolio::ReturnScope.new(account: @account, period: @period)
+    cut = Portfolio::ReturnScope.new(account: @account, period: @period, active_until_date: @day_one)
+
+    assert_equal 2, uncut.balance_days, "the fixture must have two rows in the period"
+    assert_equal 1, cut.balance_days
+    assert cut.insufficient?
+  end
+
+  # The batch path keys the cut-offs by account, as DailyReturns does, and must
+  # read each account's own -- not one shared date, and not none.
+  test "resolve_all counts balance days only up to each account's own cut-off" do
+    cut = @account
+    uncut = create_portfolio_account(family: @family)
+    nil_cut = create_portfolio_account(family: @family)
+    [ cut, uncut, nil_cut ].each do |account|
+      lay_balance account: account, date: @day_one, opening: 1_000, closing: 1_000
+      lay_balance account: account, date: @day_two, opening: 1_000, closing: 1_000
+    end
+
+    resolved = Portfolio::ReturnScope.resolve_all(
+      accounts: [ cut, uncut, nil_cut ], period: @period,
+      active_until_dates: { cut.id => @day_one, nil_cut.id => nil }
+    )
+
+    assert_equal 1, resolved.fetch(cut.id).balance_days
+    assert resolved.fetch(cut.id).insufficient?
+    assert_equal 2, resolved.fetch(uncut.id).balance_days, "an account with no cut-off keeps every row"
+    assert_equal 2, resolved.fetch(nil_cut.id).balance_days, "a nil cut-off means none, as DailyReturns reads it"
+    assert_equal Portfolio::ReturnScope.new(account: cut, period: @period, active_until_date: @day_one).balance_days,
+                 resolved.fetch(cut.id).balance_days, "the batch and instance paths agree"
+  end
+
+  test "resolve_all with cut-offs asks no more queries than without" do
+    second = create_portfolio_account(family: @family)
+    [ @account, second ].each do |account|
+      lay_balance account: account, date: @day_one, opening: 1_000, closing: 1_000
+    end
+
+    queries = capture_sql_queries do
+      Portfolio::ReturnScope.resolve_all(
+        accounts: Account.where(id: [ @account.id, second.id ]), period: @period,
+        active_until_dates: { @account.id => @day_one, second.id => @day_two }
+      )
+    end
+
+    assert_equal 4, queries.size, "cut-offs are part of the balance query, not one more per account\n#{queries.join("\n")}"
+  end
+
   # The batch path's actual cost, pinned so a claim about it can be settled by
   # a number. Four round trips: the account load, then the three resolution
   # queries. The account load is not avoidable here -- `resolve_all` returns
@@ -241,13 +363,138 @@ class Portfolio::ReturnScopeTest < ActiveSupport::TestCase
     assert_empty queries, "an empty set must not reach the database at all"
   end
 
+  # The cut-off ends the account's contribution to the series, so it ends the
+  # history every tracking check reads, not just the balance days. A trade
+  # dated after it records a flow the series never sees; counted, it would make
+  # an account trade tracked on the strength of a day DailyReturns drops.
+  #
+  # Each case below is measured against the same account with no cut-off, so
+  # the assertion is the cut-off's effect rather than the fixture's, and each
+  # is asserted on the instance and on the batch path.
+  test "a trade after the cut-off does not make the account trade tracked" do
+    lay_two_days_before_the_cut_off
+    buy_trade account: @account, date: @day_three, qty: 2, price: 100
+
+    assert_kinds :trade_tracked, cut_off: nil, message: "with no cut-off the trade is a known flow"
+    assert_kinds :valuation_tracked, cut_off: @day_two, message: "the trade falls after the cut-off"
+  end
+
+  test "an external transfer after the cut-off does not make the account trade tracked" do
+    lay_two_days_before_the_cut_off
+    deposit account: @account, date: @day_three, amount: 500
+
+    assert_kinds :trade_tracked, cut_off: nil, message: "with no cut-off the deposit is a known flow"
+    assert_kinds :valuation_tracked, cut_off: @day_two, message: "the deposit falls after the cut-off"
+  end
+
+  # A valuation entry explains a balance without recording a flow, so it
+  # neither makes an account trade tracked nor hides a trade that does. The
+  # batch path reads only trades from its entry query; the valuation-only case
+  # is what would turn trade tracked if that query ever counted a valuation as
+  # one, and the trade case is what would fall if it stopped reading trades.
+  test "a valuation entry never decides the kind, on either path" do
+    lay_two_days_before_the_cut_off
+    create_valuation_entry(date: @day_two, amount: 1_000)
+
+    assert_kinds :valuation_tracked, cut_off: nil, message: "a valuation is not a known flow"
+
+    traded = create_portfolio_account(family: @family)
+    lay_two_days_before_the_cut_off(traded)
+    create_valuation_entry(date: @day_two, amount: 1_000, account: traded)
+
+    assert_kinds :valuation_tracked, cut_off: nil, account: traded, message: "before the trade, the valuation alone"
+
+    buy_trade account: traded, date: @day_two, qty: 2, price: 100
+
+    assert_kinds :trade_tracked, cut_off: nil, account: traded, message: "the trade is a known flow beside the valuation"
+  end
+
+  # The other side of the boundary: the cut-off day is the last day the account
+  # contributes, so activity on it still counts.
+  test "activity on or before the cut-off still counts" do
+    lay_two_days_before_the_cut_off
+    buy_trade account: @account, date: @day_two, qty: 2, price: 100
+
+    assert_kinds :trade_tracked, cut_off: @day_two, message: "a trade on the cut-off day is inside it"
+
+    transfer_only = create_portfolio_account(family: @family)
+    lay_two_days_before_the_cut_off(transfer_only)
+    deposit account: transfer_only, date: @day_one, amount: 500
+
+    assert_kinds :trade_tracked, cut_off: @day_two, account: transfer_only,
+                 message: "a deposit before the cut-off is inside it"
+  end
+
+  # A cut-off is a bound, never an extension: one later than the period end
+  # still stops the read at the period end.
+  test "a cut-off after the period does not read history past the period end" do
+    lay_two_days_before_the_cut_off
+    buy_trade account: @account, date: @day_three + 5.days, qty: 2, price: 100
+
+    assert_kinds :valuation_tracked, cut_off: @day_three + 10.days,
+                 message: "the trade is after the period, so the cut-off cannot bring it in"
+
+    deposited = create_portfolio_account(family: @family)
+    lay_two_days_before_the_cut_off(deposited)
+    deposit account: deposited, date: @day_three + 5.days, amount: 500
+
+    assert_kinds :valuation_tracked, cut_off: @day_three + 10.days, account: deposited,
+                 message: "the deposit is after the period, so the cut-off cannot bring it in"
+  end
+
+  # Every test here counts rows laid by `lay_balance`, so the builder's own
+  # arithmetic check has to hold at the precision the rows are stored at.
+  # These components add up as given, but `balances` keeps four decimal
+  # places: stored, each 0.00005 becomes 0.0001 and the row's end_balance is
+  # 0.0002 against a balance of 0.0001.
+  test "the balance builder refuses an amount finer than balances store" do
+    error = assert_raises(ArgumentError) do
+      lay_balance account: @account, date: @day_one, opening: "0.00005", closing: "0.0001", cash_flow: "0.00005"
+    end
+
+    assert_match "finer than the 4 decimal places", error.message
+    assert_empty @account.balances.reload, "nothing is written for a refused day"
+
+    lay_balance account: @account, date: @day_one, opening: "0.0001", closing: "0.0002", cash_flow: "0.0001"
+    assert_equal BigDecimal("0.0002"), @account.balances.reload.sole.end_balance,
+                 "four decimal places is the stored scale and is accepted"
+  end
+
   private
-    def create_valuation_entry(date:, amount:)
-      @account.entries.create!(
+    # Two balance days in a three-day period, both on or before a cut-off at
+    # day two, so the cut-off leaves the account with a return (two days) and
+    # only the activity laid after it is in question.
+    def lay_two_days_before_the_cut_off(account = @account)
+      @day_three = @day_two + 1.day
+      @period = Period.custom(start_date: @day_one, end_date: @day_three)
+      lay_balance account: account, date: @day_one, opening: 1_000, closing: 1_000
+      lay_balance account: account, date: @day_two, opening: 1_000, closing: 1_000
+    end
+
+    # [instance, batch] for one account under one cut-off.
+    def scopes_for(account, cut_off)
+      [
+        Portfolio::ReturnScope.new(account: account, period: @period, active_until_date: cut_off),
+        Portfolio::ReturnScope.resolve_all(
+          accounts: [ account ], period: @period, active_until_dates: { account.id => cut_off }
+        ).fetch(account.id)
+      ]
+    end
+
+    def assert_kinds(expected, cut_off:, message:, account: @account)
+      instance, batch = scopes_for(account, cut_off)
+
+      assert_equal 2, instance.balance_days, "the cut-off must leave two balance days, or the kind is insufficient for another reason"
+      assert_equal expected, instance.kind, "instance: #{message}"
+      assert_equal expected, batch.kind, "batch: #{message}"
+    end
+
+    def create_valuation_entry(date:, amount:, account: @account)
+      account.entries.create!(
         name: "Valuation",
         date: date,
         amount: amount,
-        currency: @account.currency,
+        currency: account.currency,
         entryable: Valuation.new(kind: "reconciliation")
       )
     end

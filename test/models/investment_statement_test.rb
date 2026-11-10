@@ -1029,6 +1029,24 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_instance_of Portfolio::ReturnScope, scopes.fetch(account.id)
   end
 
+  # The per-account scopes must be resolved over the same days as the
+  # aggregate, which stops reading a disabled account at its cut-off. Without
+  # the cut-off the scope would count the rows after it too.
+  test "return_scopes counts a disabled account's balance days only up to its cut-off" do
+    account = create_investment_account(balance: 1000)
+    (1..6).each { |days_ago| create_balance(account, date: days_ago.days.ago.to_date, amount: 1000) }
+    account.update!(status: "disabled", disabled_at: 3.days.ago)
+    period = Period.last_30_days
+    cutoff = 4.days.ago.to_date
+
+    uncut = Portfolio::ReturnScope.new(account: account, period: period).balance_days
+    scope = @statement.return_scopes(period: period).fetch(account.id)
+
+    assert_equal 6, uncut, "the fixture must hold rows on both sides of the cut-off"
+    assert_equal account.balances.where(date: period.start_date..cutoff).count, scope.balance_days
+    assert_operator scope.balance_days, :<, uncut
+  end
+
   test "contributions and withdrawals are the cash the trade entry records" do
     period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current.end_of_month)
     account = create_investment_account(balance: 500)
@@ -1715,18 +1733,23 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_in_delta 100.0, by_account.sum(&:weight), 0.01
 
     by_currency = @statement.allocation_by("currency")
-    # USD: 1000 + 1000 holdings + 1000 cash = 3000; EUR: (1000 + 500) * 1.1 = 1650; negative EUR cash is omitted.
+    # Account cash is balance less holdings, not cash_balance: the EUR account's
+    # 2,000 balance less its 1,500 of holdings is 500 EUR of cash, whatever its
+    # cash_balance of -50 says. USD: 1000 + 1000 holdings + 1000 cash = 3000;
+    # EUR: (1000 + 500 + 500) * 1.1 = 2200.
     assert_equal %w[USD EUR], by_currency.map(&:id)
     assert_equal Money.new(3000, "USD"), by_currency.first.amount
-    assert_in_delta 1650, by_currency.last.amount.amount, 0.001
+    assert_in_delta 2200, by_currency.last.amount.amount, 0.001
     assert_in_delta 100.0, by_currency.sum(&:weight), 0.01
 
-    by_kind = @statement.allocation_by(:kind)
-    # standard: 1000 + 1100; cash: 1000 + 550; crypto: 1000
-    assert_equal %w[standard cash crypto], by_kind.map(&:id)
-    assert_in_delta 2100, by_kind.first.amount.amount, 0.001
-    assert_in_delta 1550, by_kind.second.amount.amount, 0.001
-    assert_in_delta 100.0, by_kind.sum(&:weight), 0.01
+    by_kind = @statement.allocation_by(:kind).index_by(&:id)
+    # standard: 1000 + 1100; cash: 1000 USD account cash + 550 EUR cash
+    # security + 550 EUR account cash; crypto: 1000
+    assert_equal %w[cash crypto standard], by_kind.keys.sort
+    assert_in_delta 2100, by_kind["standard"].amount.amount, 0.001
+    assert_in_delta 2100, by_kind["cash"].amount.amount, 0.001
+    assert_in_delta 1000, by_kind["crypto"].amount.amount, 0.001
+    assert_in_delta 100.0, by_kind.values.sum(&:weight), 0.01
 
     by_security = @statement.allocation_by("nonsense")
     assert_equal "cash", by_security.last.id, "an unknown grouping is the security roll-up, cash row included"
@@ -2659,6 +2682,24 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     issue = InvestmentStatement.new(@family).data_quality_issues.find { |i| i.kind == :ambiguous_constituent }
 
     assert_equal [ "DUAL" ], issue.detail, "the same ticker was listed twice because of its case"
+  end
+
+  test "account cash is the residual, converted per account" do
+    account = create_investment_account(balance: 1000, cash_balance: 0, currency: "EUR")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+    item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: item.coinstats_accounts.create!(name: "Brokerage", currency: "EUR"))
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 550, amount: 550, currency: "USD",
+                    account_provider: provider)
+
+    liquidity = @statement.allocation_by("asset_class").find { |s| s.id == "liquidity" }
+    cash_sub = @statement.allocation_children("asset_class", "liquidity").find { |s| s.id == "cash" }
+    position = @statement.allocation_children("asset_sub_class", "cash", parent: "liquidity").find { |s| s.id == "cash" }
+
+    [ liquidity, cash_sub, position ].each_with_index do |segment, level|
+      assert_in_delta 550, segment&.amount&.amount.to_f, 0.0001, "level #{level}"
+    end
   end
 
   test "every classification grouping is reachable through allocation_by" do

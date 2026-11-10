@@ -1,9 +1,8 @@
 # Repairs one account's SnapTrade positions whose holdings and trades sit on
 # different Security rows of the same ticker.
 #
-# Before jaysbeekay/sure#334, resolve_security looked a ticker up with no
-# exchange and no ORDER BY, so a position's holdings and trades could land on
-# different rows. Every cost-basis reader filters on security_id, so such a
+# Before #3999, resolve_security looked a ticker up with no exchange and no
+# ORDER BY, so a position's holdings and trades could land on different rows. Every cost-basis reader filters on security_id, so such a
 # holding shows "No cost basis". The deterministic lookup keeps a position on
 # the row it already holds, which keeps an existing split in place rather than
 # healing it.
@@ -14,17 +13,32 @@
 # The target is the row held_security_for returns -- the one the next sync
 # resolves to -- so the repaired position stays put.
 #
+# Only rows of one listing are merged. Security uniqueness is scoped to
+# exchange_operating_mic, so the same ticker on two exchanges is two real
+# instruments; a ticker whose rows name more than one exchange is skipped and
+# reported in #conflicts for review by hand.
+#
 # A dry run (the default) reports what it would do and writes nothing. A live
-# run refuses, writing nothing, when the moved history would have dates priced
-# on a source row but not on the target, unless allow_price_gaps is set.
+# run refuses, writing nothing, when a source row has a split the target lacks,
+# or when the moved history would have dates priced on a source row but not on
+# the target, unless allow_price_gaps is set, and while a SnapTrade sync or
+# activities fetch for the account is pending or running. A live run that
+# fails is rolled back and recorded in the debug log.
 class SnaptradeAccount::SplitSecurityRepair
   include SnaptradeAccount::DataHelpers
 
-  class PriceGapsRefused < StandardError; end
+  class Refused < StandardError; end
+  class PriceGapsRefused < Refused; end
+  class SplitHistoryRefused < Refused; end
+  class SyncInProgress < Refused; end
+
+  # Rows reached a source security while the repair ran; it rolled back.
+  class ConcurrentChange < StandardError; end
 
   Result = Data.define(
     :account, :ticker, :target_id, :target_source, :source_ids,
-    :trades_moved, :holdings_moved, :holdings_dropped, :holdings_replaced, :price_gap_dates
+    :trades_moved, :holdings_moved, :holdings_dropped, :holdings_replaced, :dropped_snapshots,
+    :price_gap_dates, :unmatched_split_dates
   )
 
   def self.accounts
@@ -41,7 +55,18 @@ class SnaptradeAccount::SplitSecurityRepair
     @dry_run
   end
 
+  def snaptrade_linked?
+    snaptrade_provider_id.present?
+  end
+
+  # { "TICKER" => [[security_id, exchange], ...] } for tickers the last run
+  # skipped because their rows name more than one exchange.
+  def conflicts
+    @conflicts ||= {}
+  end
+
   def run
+    @conflicts = {}
     return [] unless snaptrade_provider_id
 
     plans = split_tickers.filter_map { |ticker, security_ids| plan_for(ticker, security_ids) }
@@ -49,13 +74,23 @@ class SnaptradeAccount::SplitSecurityRepair
 
     return plans.map { |plan| plan[:result] } if dry_run?
 
+    refuse_unmatched_splits!(plans)
     refuse_price_gaps!(plans) unless @allow_price_gaps
 
-    ActiveRecord::Base.transaction do
-      plans.each { |plan| apply(plan) }
-      Balance::Materializer.new(
-        account, strategy: :reverse, security_ids: plans.map { |plan| plan[:result].target_id }
-      ).materialize_balances
+    begin
+      ActiveRecord::Base.transaction do
+        hold_off_syncs!
+        plans.each { |plan| apply(plan) }
+        refuse_concurrent_change!(plans)
+        Balance::Materializer.new(
+          account, strategy: :reverse, security_ids: plans.map { |plan| plan[:result].target_id }
+        ).materialize_balances
+      end
+    rescue Refused
+      raise
+    rescue StandardError => e
+      capture_failure(e, plans)
+      raise
     end
 
     plans.map { |plan| plan[:result] }
@@ -68,22 +103,63 @@ class SnaptradeAccount::SplitSecurityRepair
       @snaptrade_provider_id ||= account.account_providers.find_by(provider_type: "SnaptradeAccount")&.id
     end
 
+    def snaptrade_account
+      @snaptrade_account ||= AccountProvider.find(snaptrade_provider_id).provider
+    end
+
+    # A SnapTrade sync resolves each position's security before it writes,
+    # so one running alongside the repair can write to a source row after
+    # refuse_concurrent_change! has looked, and the position stays split.
+    # Syncable#sync_later creates a sync under a row lock on its syncable, so
+    # holding the connection's and the account's rows until the repair
+    # commits keeps a new sync from starting in the meantime. A writer that
+    # is already under way -- an incomplete sync on either, or the activities
+    # fetch a sync leaves behind -- refuses the repair instead.
+    def hold_off_syncs!
+      item = SnaptradeItem.lock.find(snaptrade_account.snaptrade_item_id)
+      locked_account = Account.lock.find(account.id)
+
+      busy = []
+      busy << "the SnapTrade connection has a sync pending or running" if item.syncs.incomplete.exists?
+      busy << "the account has a sync pending or running" if locked_account.syncs.incomplete.exists?
+      busy << "an activities fetch is pending" if SnaptradeAccount.where(id: snaptrade_account.id).pick(:activities_fetch_pending)
+      return if busy.empty?
+
+      raise SyncInProgress, "#{busy.join('; ')}; run it again once the sync has finished"
+    end
+
     # SnapTrade's own holdings and those with no provider (materialized from
     # the account's trades). Another provider's holding is that provider's.
     def repairable_holdings
       account.holdings.where(account_provider_id: [ snaptrade_provider_id, nil ])
     end
 
-    # { "TICKER" => [security_id, ...] } for tickers spread over more than one row.
+    # { "TICKER" => [security_id, ...] } for tickers spread over more than one
+    # row of one listing. The split this repairs is a SnapTrade-created row
+    # (its exchange in exchange_mic, exchange_operating_mic nil) beside a row
+    # with exchange_operating_mic set, so a row's exchange is its operating
+    # MIC, else its exchange_mic. A row with neither fits any group; two
+    # different exchanges mean two listings, and the ticker goes to conflicts.
     def split_tickers
       security_ids = (account.trades.distinct.pluck(:security_id) + repairable_holdings.distinct.pluck(:security_id)).uniq
 
-      Security.where(id: security_ids)
-        .pluck(:id, :ticker)
-        .group_by { |_id, ticker| ticker.to_s.upcase.strip }
-        .transform_values { |rows| rows.map(&:first).sort }
-        .select { |ticker, ids| ticker.present? && ids.size > 1 }
-        .sort.to_h
+      groups = Security.where(id: security_ids)
+        .pluck(:id, :ticker, :exchange_operating_mic, :exchange_mic)
+        .group_by { |_id, ticker, _operating_mic, _mic| ticker.to_s.upcase.strip }
+        .select { |ticker, rows| ticker.present? && rows.size > 1 }
+        .transform_values do |rows|
+          rows.map do |id, _ticker, operating_mic, mic|
+            [ id, Security.canonical_exchange_operating_mic(operating_mic.presence || mic.presence) ]
+          end.sort
+        end
+
+      groups.each_with_object({}) do |(ticker, rows), splits|
+        if rows.filter_map(&:last).uniq.size > 1
+          conflicts[ticker] = rows
+        else
+          splits[ticker] = rows.map(&:first)
+        end
+      end.sort.to_h
     end
 
     def plan_for(ticker, security_ids)
@@ -108,13 +184,17 @@ class SnaptradeAccount::SplitSecurityRepair
           holdings_moved: moves.size,
           holdings_dropped: drops.size,
           holdings_replaced: replaced.size,
-          price_gap_dates: price_gap_dates(target_id, source_ids)
+          dropped_snapshots: dropped_snapshots(drops),
+          price_gap_dates: price_gap_dates(target_id, source_ids),
+          unmatched_split_dates: unmatched_split_dates(target_id, source_ids)
         )
       }
     end
 
     # The row the next sync resolves to, or, with no holding to name one, the
-    # row with the most trades.
+    # row with the most trades. provider_row stays false, as for trades: the
+    # position's trades follow the row its holdings sit on, which for a
+    # same-ticker remap is the chosen row, not provider_security_id.
     def target_for(ticker, security_ids)
       held = held_security_for(account, ticker, snaptrade_provider_id)
       return [ held.id, :held ] if held
@@ -158,6 +238,12 @@ class SnaptradeAccount::SplitSecurityRepair
       [ moves, drops, replaced ]
     end
 
+    # [date, cost_basis] of the SnapTrade snapshots a same-day collision
+    # drops, so a dry run shows which provider cost basis a live run discards.
+    def dropped_snapshots(drop_ids)
+      Holding.where(id: drop_ids, account_provider_id: snaptrade_provider_id).order(:date, :id).pluck(:date, :cost_basis)
+    end
+
     # Dates in the account's history with a price on another row and none on
     # the target. Prices are not moved, so these days can go unpriced in the
     # moved history until market data fills the target.
@@ -166,6 +252,64 @@ class SnaptradeAccount::SplitSecurityRepair
       target_dates = Security::Price.where(security_id: target_id, date: dates).distinct.pluck(:date)
 
       (Security::Price.where(security_id: source_ids, date: dates).distinct.pluck(:date) - target_dates).sort
+    end
+
+    # Ex-dates of the source rows' splits that the target has no split of the
+    # same ratio for. The holding calculators load splits by security_id, so
+    # trades moved onto the target would replay without them. A split only
+    # the target has is left alone: it is the same instrument's history.
+    def unmatched_split_dates(target_id, source_ids)
+      on_target = Security::Split.where(security_id: target_id).pluck(:ex_date, :numerator, :denominator).to_set
+
+      Security::Split.where(security_id: source_ids)
+        .pluck(:ex_date, :numerator, :denominator)
+        .reject { |split| on_target.include?(split) }
+        .map(&:first).uniq.sort
+    end
+
+    # Not overridable: moving the split onto the target is a market-data
+    # change for every family holding it, which this repair never makes.
+    def refuse_unmatched_splits!(plans)
+      unmatched = plans.map { |plan| plan[:result] }.select { |result| result.unmatched_split_dates.any? }
+      return if unmatched.empty?
+
+      summary = unmatched.map { |result| "#{result.ticker}: #{result.unmatched_split_dates.map(&:iso8601).join(', ')}" }.join("; ")
+      raise SplitHistoryRefused,
+        "splits on a source row but not the target (#{summary}); record them on the target first"
+    end
+
+    def capture_failure(error, plans)
+      DebugLogEntry.capture(
+        category: "provider_sync_error",
+        level: "error",
+        message: "SnapTrade split security repair failed and was rolled back: #{error.class}: #{error.message}",
+        source: self.class.name,
+        provider_key: "snaptrade",
+        account: account,
+        account_provider_id: snaptrade_provider_id,
+        metadata: {
+          error_class: error.class.name,
+          tickers: plans.map { |plan| plan[:result].ticker },
+          backtrace: error.backtrace&.first(5)
+        }
+      )
+    end
+
+    # The plans are built before the transaction opens, and a sync can add a
+    # holding or trade to a source row in between (or a user can, after apply
+    # read the trades). Moving the rest and leaving that row behind would
+    # re-split the position, so roll back and let the task be run again. A
+    # holding another provider owns stays on its row by design and is not
+    # counted.
+    def refuse_concurrent_change!(plans)
+      changed = plans.map { |plan| plan[:result] }.select do |result|
+        repairable_holdings.where(security_id: result.source_ids).exists? ||
+          account.trades.where(security_id: result.source_ids).exists?
+      end
+      return if changed.empty?
+
+      raise ConcurrentChange,
+        "rows reached a source security during the repair (#{changed.map(&:ticker).join(', ')}); run it again"
     end
 
     def refuse_price_gaps!(plans)
@@ -180,8 +324,17 @@ class SnaptradeAccount::SplitSecurityRepair
     def apply(plan)
       target_id = plan[:result].target_id
 
+      now = Time.current
       Holding.where(id: plan[:drops]).delete_all if plan[:drops].any?
-      Holding.where(id: plan[:moves]).update_all(security_id: target_id, updated_at: Time.current) if plan[:moves].any?
-      plan[:trades].update_all(security_id: target_id)
+      Holding.where(id: plan[:moves]).update_all(security_id: target_id, updated_at: now) if plan[:moves].any?
+
+      # Report caches key on the latest entry updated_at
+      # (Family#entries_cache_version), and update_all bypasses that, so the
+      # moved trades' entries are stamped too.
+      trade_ids = plan[:trades].pluck(:id)
+      return if trade_ids.empty?
+
+      Trade.where(id: trade_ids).update_all(security_id: target_id, updated_at: now)
+      Entry.where(entryable_type: "Trade", entryable_id: trade_ids).update_all(updated_at: now)
     end
 end

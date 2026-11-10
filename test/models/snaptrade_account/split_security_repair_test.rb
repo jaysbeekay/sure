@@ -4,7 +4,7 @@ RakeTaskTestHelper.load_task("snaptrade:repair_split_securities", "snaptrade")
 
 # A SnapTrade position whose holdings and trades sit on two Security rows of
 # the same ticker, the state left behind by the ticker-only lookup that
-# jaysbeekay/sure#334 replaced. Row A is the one SnapTrade created (exchange in
+# #3999 replaced. Row A is the one SnapTrade created (exchange in
 # exchange_mic); row B is the one a CSV import or ticker search created
 # (exchange in exchange_operating_mic). A is the older row, so the oldest-row
 # and preferred-row fallbacks both pick A; only the held position points at B.
@@ -39,9 +39,21 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
 
     assert_equal Money.new(150, "USD"), holding.reload.avg_cost
     assert_equal @row_b.id, holding.security_id
-    Holding.preload_avg_costs([ holding ])
-    assert_equal Money.new(150, "USD"), holding.avg_cost
     assert_equal 2, result.trades_moved
+  end
+
+  # Report caches key on Family#entries_cache_version (the latest entry
+  # updated_at). Moving trades with update_all touches no entry, so a figure
+  # cached before the repair would keep grouping the trades under the old row.
+  test "a live repair moves the family's entries cache version" do
+    seed_observed_split
+    before = @family.reload.entries_cache_version
+
+    travel 1.minute do
+      repair!
+    end
+
+    assert_not_equal before, @family.reload.entries_cache_version
   end
 
   test "repair resolves to the row resolve_security keeps picking" do
@@ -88,6 +100,36 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal 1, result.holdings_dropped
   end
 
+  # Two SnapTrade snapshots on one date: the target's survives, so the dry run
+  # names the source snapshot it would drop, with its cost basis.
+  test "a same-day collision between two SnapTrade snapshots keeps the target's and reports the dropped one" do
+    seed_observed_split
+    yesterday = 1.day.ago.to_date
+    kept = snaptrade_holding(@row_b, date: yesterday, qty: 20)
+    kept.update!(cost_basis: 0, cost_basis_source: "provider")
+    dropped = snaptrade_holding(@row_a, date: yesterday, qty: 20)
+    dropped.update!(cost_basis: 150, cost_basis_source: "provider")
+
+    planned = SnaptradeAccount::SplitSecurityRepair.new(@account).run.sole
+    assert_equal [ [ yesterday, BigDecimal("150") ] ], planned.dropped_snapshots
+
+    repair!
+    assert_equal [ kept.id ], @account.holdings.where(date: yesterday).pluck(:id)
+    assert_not Holding.exists?(dropped.id)
+  end
+
+  test "a dropped calculated holding is not reported as a SnapTrade snapshot" do
+    seed_observed_split
+    yesterday = 1.day.ago.to_date
+    snaptrade_holding(@row_b, date: yesterday, qty: 20)
+    @account.holdings.create!(security: @row_a, date: yesterday, qty: 20, price: 300, amount: 6000, currency: "USD")
+
+    result = SnaptradeAccount::SplitSecurityRepair.new(@account).run.sole
+
+    assert_equal 1, result.holdings_dropped
+    assert_empty result.dropped_snapshots
+  end
+
   # A calculated row is rebuilt from the trades by the re-materialization; a
   # SnapTrade snapshot is the only record of that day's provider cost basis.
   test "a calculated target row gives way to the SnapTrade snapshot on a same-day collision" do
@@ -105,6 +147,28 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal 123, kept.cost_basis.to_i
     assert_not Holding.exists?(calculated.id)
     assert_equal [ 1, 1 ], [ result.holdings_moved, result.holdings_replaced ]
+  end
+
+  test "a live repair re-materializes the account for the target rows" do
+    seed_observed_split
+    materializer = mock("materializer")
+    materializer.expects(:materialize_balances).once
+    Balance::Materializer.expects(:new)
+      .with(@account, strategy: :reverse, security_ids: [ @row_b.id ])
+      .returns(materializer)
+
+    repair!
+  end
+
+  test "a failure while re-materializing rolls back the moved rows" do
+    holding = seed_observed_split
+    before = account_state
+    Balance::Materializer.any_instance.stubs(:materialize_balances).raises(StandardError, "boom")
+
+    assert_raises(StandardError) { repair! }
+
+    assert_equal before, account_state
+    assert_nil holding.reload.avg_cost
   end
 
   test "dry run changes nothing" do
@@ -220,8 +284,9 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
   end
 
   # The observed split has the held row carrying the prices. Here the held
-  # row has none and the other row has them all, so the moved history can
-  # only be priced once market data fills the held row; the repair says so.
+  # row has only one price, on a date the other row also has, and the other
+  # row has the rest, so the moved history can only be priced on those dates
+  # once market data fills the held row; the repair says so.
   test "a split in the opposite direction keeps today's value and reports the price gap" do
     holding = seed_observed_split
     gap_dates = [ 15.days.ago.to_date, 8.days.ago.to_date ]
@@ -242,10 +307,113 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_equal gap_dates.sort, result.price_gap_dates
   end
 
+  # The plan is built before the transaction opens, so a sync can add a row
+  # to a source security in between. Moving the trades and leaving that row
+  # behind would re-split the position, so the repair rolls back instead.
+  test "a live repair rolls back when a holding lands on a source row after planning" do
+    holding = seed_observed_split
+    before = account_state
+    repair = SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false, allow_price_gaps: true)
+    account, row_a = @account, @row_a
+    repair.define_singleton_method(:apply) do |plan|
+      account.holdings.create!(security: row_a, date: 3.days.ago.to_date, qty: 20, price: 300, amount: 6000, currency: "USD")
+      super(plan)
+    end
+
+    error = assert_raises(SnaptradeAccount::SplitSecurityRepair::ConcurrentChange) { repair.run }
+
+    assert_match(/SPLT/, error.message)
+    assert_equal before, account_state
+    assert_nil holding.reload.avg_cost
+  end
+
+  test "a live repair rolls back when a trade lands on a source row after it moved the trades" do
+    holding = seed_observed_split
+    before = account_state
+    repair = SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false, allow_price_gaps: true)
+    test_case, account, row_a = self, @account, @row_a
+    repair.define_singleton_method(:apply) do |plan|
+      super(plan)
+      test_case.create_trade(row_a, account: account, qty: 1, date: 2.days.ago.to_date, price: 250)
+    end
+
+    assert_raises(SnaptradeAccount::SplitSecurityRepair::ConcurrentChange) { repair.run }
+
+    assert_equal before, account_state
+    assert_nil holding.reload.avg_cost
+  end
+
+  # A sync resolves a position's security before it writes, so one running
+  # alongside the repair can write to a source row after the check above.
+  # Each SnapTrade writer is visible before it starts: an incomplete Sync on
+  # the connection or the account, or the activities fetch flag.
+  # Each case asserts its own reason: every refusal message ends "run it
+  # again once the sync has finished", so matching /sync/ alone would pass
+  # whichever writer was detected.
+  {
+    "the SnapTrade connection has a sync running" => [ ->(test) { test.snaptrade_item.syncs.create!(status: "syncing") }, "the SnapTrade connection has a sync pending or running" ],
+    "the SnapTrade connection has a sync pending" => [ ->(test) { test.snaptrade_item.syncs.create!(status: "pending") }, "the SnapTrade connection has a sync pending or running" ],
+    "the account has a sync pending" => [ ->(test) { test.account.syncs.create!(status: "pending") }, "the account has a sync pending or running" ],
+    "an activities fetch is pending" => [ ->(test) { test.snaptrade_account.update!(activities_fetch_pending: true) }, "an activities fetch is pending" ]
+  }.each do |situation, (arrange, reason)|
+    test "a live repair is refused, writing nothing, when #{situation}" do
+      holding = seed_observed_split
+      arrange.call(self)
+      before = account_state
+
+      error = assert_no_difference -> { DebugLogEntry.count } do
+        assert_raises(SnaptradeAccount::SplitSecurityRepair::SyncInProgress) { repair!(allow_price_gaps: true) }
+      end
+
+      assert_equal "#{reason}; run it again once the sync has finished", error.message
+      assert_equal before, account_state
+      assert_nil holding.reload.avg_cost
+    end
+  end
+
+  test "finished syncs do not hold the repair off" do
+    holding = seed_observed_split
+    %w[completed failed stale].each do |status|
+      snaptrade_item.syncs.create!(status: status)
+      @account.syncs.create!(status: status)
+    end
+
+    repair!(allow_price_gaps: true)
+
+    assert_equal Money.new(150, "USD"), holding.reload.avg_cost
+  end
+
+  test "a sync pending on another account does not hold the repair off" do
+    holding = seed_observed_split
+    accounts(:depository).syncs.create!(status: "pending")
+
+    repair!(allow_price_gaps: true)
+
+    assert_equal Money.new(150, "USD"), holding.reload.avg_cost
+  end
+
+  # Syncable#sync_later creates a sync under a row lock on its syncable, so
+  # holding the connection's and the account's rows until the repair commits
+  # keeps a new sync from starting in the meantime.
+  test "a live repair locks the SnapTrade connection and account rows while it applies" do
+    seed_observed_split
+    locks = []
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+      locks << payload[:sql] if payload[:sql].include?("FOR UPDATE")
+    end
+
+    repair!(allow_price_gaps: true)
+
+    assert locks.any? { |sql| sql.include?(%("snaptrade_items")) }, "locks the SnapTrade connection row"
+    assert locks.any? { |sql| sql.include?(%("accounts")) }, "locks the account row"
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber) if subscriber
+  end
+
   test "the rake task is a dry run unless DRY_RUN is false" do
     holding = seed_observed_split
 
-    output, = with_env("DRY_RUN" => nil) do
+    output, = with_env_overrides("DRY_RUN" => nil) do
       capture_io { Rake::Task["snaptrade:repair_split_securities"].invoke(@account.id) }
     end
     assert_match(/DRY RUN/, output)
@@ -253,10 +421,34 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     assert_nil holding.reload.avg_cost
 
     Rake::Task["snaptrade:repair_split_securities"].reenable
-    with_env("DRY_RUN" => "false") do
+    with_env_overrides("DRY_RUN" => "false") do
       capture_io { Rake::Task["snaptrade:repair_split_securities"].invoke(@account.id) }
     end
     assert_equal Money.new(150, "USD"), holding.reload.avg_cost
+  end
+
+  test "the rake task says when the account is not SnapTrade-linked" do
+    manual = @family.accounts.create!(name: "Manual", balance: 0, cash_balance: 0, currency: "USD", accountable: Investment.new)
+
+    output, = with_env_overrides("DRY_RUN" => nil) do
+      capture_io { Rake::Task["snaptrade:repair_split_securities"].invoke(manual.id) }
+    end
+
+    assert_match(/Account #{manual.id} \(Manual\): not a SnapTrade-linked account/, output)
+    assert_no_match(/no split securities/, output)
+  end
+
+  test "the rake dry run lists the SnapTrade snapshots it would drop" do
+    seed_observed_split
+    yesterday = 1.day.ago.to_date
+    snaptrade_holding(@row_b, date: yesterday, qty: 20)
+    snaptrade_holding(@row_a, date: yesterday, qty: 20).update!(cost_basis: 150, cost_basis_source: "provider")
+
+    output, = with_env_overrides("DRY_RUN" => nil) do
+      capture_io { Rake::Task["snaptrade:repair_split_securities"].invoke(@account.id) }
+    end
+
+    assert_match(/SnapTrade snapshots dropped: #{yesterday.iso8601} \(cost basis 150\.0\)/, output)
   end
 
   test "the rake task refuses a live repair with price gaps unless ALLOW_PRICE_GAPS names one account" do
@@ -264,27 +456,219 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
     Security::Price.create!(security: @row_a, date: 15.days.ago.to_date, price: 180, currency: "USD")
     task = Rake::Task["snaptrade:repair_split_securities"]
 
-    output, = with_env("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => nil) { capture_io { task.invoke(@account.id) } }
+    output, error = invoke_task_expecting_exit({ "DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => nil }, @account.id)
+    assert_not error.success?, "a refused live repair exits non-zero"
     assert_match(/refused, nothing written/, output)
+    assert_match(/Refused: 1 account\(s\): #{@account.id}/, output)
     assert_nil holding.reload.avg_cost
 
     task.reenable
-    output, = with_env("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => "true") { capture_io { task.invoke } }
+    output, error = invoke_task_expecting_exit("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => "true")
+    assert_not error.success?, "a rejected invocation exits non-zero"
     assert_match(/needs an account id/, output)
     assert_nil holding.reload.avg_cost
 
     task.reenable
-    with_env("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => "true") { capture_io { task.invoke(@account.id) } }
+    with_env_overrides("DRY_RUN" => "false", "ALLOW_PRICE_GAPS" => "true") { capture_io { task.invoke(@account.id) } }
     assert_equal Money.new(150, "USD"), holding.reload.avg_cost
   end
 
+  # Security uniqueness is scoped to exchange_operating_mic, so one ticker can
+  # be two real listings. Holding both is not the split this repairs.
+  test "a ticker held on two different exchanges is left alone and reported" do
+    shop_us = Security.create!(ticker: "SHOP", name: "Shopify", exchange_operating_mic: "XNYS")
+    shop_ca = Security.create!(ticker: "SHOP", name: "Shopify", exchange_operating_mic: "XTSE")
+    create_trade(shop_us, account: @account, qty: 5, date: 9.days.ago.to_date, price: 100)
+    create_trade(shop_ca, account: @account, qty: 7, date: 8.days.ago.to_date, price: 130)
+    snaptrade_holding(shop_us, date: Date.current, qty: 5)
+    snaptrade_holding(shop_ca, date: Date.current, qty: 7)
+    before = account_state
+    repair = SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false)
+
+    assert_empty repair.run
+    assert_equal before, account_state
+    assert_equal({ "SHOP" => [ [ shop_us.id, "XNYS" ], [ shop_ca.id, "XTSE" ] ].sort }, repair.conflicts)
+  end
+
+  test "a SnapTrade row on another exchange than the second row is not merged" do
+    seed_observed_split
+    @row_a.update_columns(exchange_mic: "XTSE")
+    before = account_state
+    repair = SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false)
+
+    assert_empty repair.run
+    assert_equal before, account_state
+    assert_equal [ "SPLT" ], repair.conflicts.keys
+  end
+
+  test "a row with no exchange at all is merged with the row that has one" do
+    holding = seed_observed_split
+    @row_a.update_columns(exchange_mic: nil)
+
+    repair = SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false)
+    repair.run
+
+    assert_equal Money.new(150, "USD"), holding.reload.avg_cost
+    assert_empty repair.conflicts
+  end
+
+  # The holding calculators load splits by security_id, so trades moved onto
+  # a target that lacks the source's split would replay without it.
+  test "a live repair is refused when the source row has a split the target lacks" do
+    holding = seed_observed_split
+    @row_a.splits.create!(ex_date: 15.days.ago.to_date, numerator: 2, denominator: 1, source: "manual")
+    before = account_state
+
+    error = assert_raises(SnaptradeAccount::SplitSecurityRepair::SplitHistoryRefused) { repair!(allow_price_gaps: true) }
+
+    assert_match(/SPLT: #{15.days.ago.to_date.iso8601}/, error.message)
+    assert_equal before, account_state
+    assert_nil holding.reload.avg_cost
+  end
+
+  test "a dry run reports the source splits the target lacks" do
+    seed_observed_split
+    ex_date = 15.days.ago.to_date
+    @row_a.splits.create!(ex_date: ex_date, numerator: 2, denominator: 1, source: "manual")
+    @row_a.splits.create!(ex_date: 5.days.ago.to_date, numerator: 3, denominator: 1, source: "manual")
+    # Same date and ratio on the target: matched, so not reported.
+    @row_b.splits.create!(ex_date: 5.days.ago.to_date, numerator: 3, denominator: 1, source: "manual")
+
+    result = SnaptradeAccount::SplitSecurityRepair.new(@account).run.sole
+
+    assert_equal [ ex_date ], result.unmatched_split_dates
+  end
+
+  test "a source split with a different ratio on the target is unmatched" do
+    seed_observed_split
+    ex_date = 15.days.ago.to_date
+    @row_a.splits.create!(ex_date: ex_date, numerator: 2, denominator: 1, source: "manual")
+    @row_b.splits.create!(ex_date: ex_date, numerator: 3, denominator: 1, source: "manual")
+
+    assert_equal [ ex_date ], SnaptradeAccount::SplitSecurityRepair.new(@account).run.sole.unmatched_split_dates
+  end
+
+  test "a live repair goes ahead when the target carries the same split" do
+    holding = seed_observed_split
+    [ @row_a, @row_b ].each do |row|
+      row.splits.create!(ex_date: 15.days.ago.to_date, numerator: 2, denominator: 1, source: "manual")
+    end
+
+    result = repair!.sole
+
+    assert_empty result.unmatched_split_dates
+    assert_equal @row_b.id, holding.reload.security_id
+    assert_equal 0, @account.trades.where(security_id: @row_a.id).count
+  end
+
+  test "a failed live repair is recorded in the debug log" do
+    seed_observed_split
+    Balance::Materializer.any_instance.stubs(:materialize_balances).raises(StandardError, "boom")
+
+    assert_difference -> { DebugLogEntry.count }, 1 do
+      assert_raises(StandardError) { repair! }
+    end
+
+    entry = DebugLogEntry.order(:created_at).last
+    assert_equal [ "provider_sync_error", "error", "snaptrade" ], [ entry.category, entry.level, entry.provider_key ]
+    assert_equal [ @account.id, @family.id, @provider_id ], [ entry.account_id, entry.family_id, entry.account_provider_id ]
+    assert_equal "StandardError", entry.metadata["error_class"]
+    assert_match(/boom/, entry.message)
+  end
+
+  test "a refusal is not recorded in the debug log" do
+    seed_observed_split
+    Security::Price.create!(security: @row_a, date: 15.days.ago.to_date, price: 180, currency: "USD")
+
+    assert_no_difference -> { DebugLogEntry.count } do
+      assert_raises(SnaptradeAccount::SplitSecurityRepair::PriceGapsRefused) { repair! }
+    end
+  end
+
+  test "the rake task exits non-zero when an account fails" do
+    seed_observed_split
+    Balance::Materializer.any_instance.stubs(:materialize_balances).raises(StandardError, "boom")
+    SnaptradeAccount::SplitSecurityRepair.stubs(:accounts).returns(Account.where(id: @account.id))
+
+    output, error = invoke_task_expecting_exit("DRY_RUN" => "false")
+
+    assert_not error.success?
+    assert_match(/Account #{@account.id}: failed, rolled back: StandardError: boom/, output)
+    assert_equal [ @row_a.id ], @account.trades.distinct.pluck(:security_id), "the failed account rolled back"
+  end
+
+  # The repair's transaction has committed by the time the task reports on
+  # it, so a failure while reporting must not claim a rollback.
+  test "a failure while reporting a live repair does not claim a rollback" do
+    holding = seed_observed_split
+    SnaptradeAccount::SplitSecurityRepair.stubs(:accounts).returns(Account.where(id: @account.id))
+    SnaptradeAccount::SplitSecurityRepair.any_instance.stubs(:conflicts).raises(StandardError, "report boom")
+
+    output, error = invoke_task_expecting_exit("DRY_RUN" => "false")
+
+    assert_not error.success?
+    assert_equal Money.new(150, "USD"), holding.reload.avg_cost, "the repair committed before reporting failed"
+    assert_match(/Account #{@account.id}: repair applied, but reporting failed: StandardError: report boom/, output)
+    assert_no_match(/rolled back/, output)
+  end
+
+  test "a failure while reporting a dry run says nothing was written" do
+    holding = seed_observed_split
+    SnaptradeAccount::SplitSecurityRepair.stubs(:accounts).returns(Account.where(id: @account.id))
+    SnaptradeAccount::SplitSecurityRepair.any_instance.stubs(:conflicts).raises(StandardError, "report boom")
+
+    output, error = invoke_task_expecting_exit("DRY_RUN" => nil)
+
+    assert_not error.success?
+    assert_nil holding.reload.avg_cost
+    assert_match(/Account #{@account.id}: reporting failed, nothing written: StandardError: report boom/, output)
+    assert_no_match(/rolled back/, output)
+  end
+
+  test "the rake dry run names each row's exchange and the conflicting tickers" do
+    seed_observed_split
+    Security.create!(ticker: "SHOP", name: "Shopify", exchange_operating_mic: "XNYS").tap do |row|
+      create_trade(row, account: @account, qty: 5, date: 9.days.ago.to_date, price: 100)
+    end
+    Security.create!(ticker: "SHOP", name: "Shopify", exchange_operating_mic: "XTSE").tap do |row|
+      create_trade(row, account: @account, qty: 7, date: 8.days.ago.to_date, price: 130)
+    end
+
+    output, = with_env_overrides("DRY_RUN" => nil) do
+      capture_io { Rake::Task["snaptrade:repair_split_securities"].invoke(@account.id) }
+    end
+
+    assert_match(/target #{@row_b.id} \(XNYS, Split Co\)/, output)
+    assert_match(/#{@row_a.id} \(XNYS, Split Co\)/, output)
+    assert_match(/SHOP: skipped, rows on different exchanges/, output)
+  end
+
+  attr_reader :account, :snaptrade_account
+
+  def snaptrade_item
+    @snaptrade_account.snaptrade_item
+  end
+
   private
+    # Runs the task (for every account unless an id is given) and returns its
+    # stdout and stderr together, with the SystemExit its abort raises.
+    def invoke_task_expecting_exit(env, *task_args)
+      original_stdout, original_stderr = $stdout, $stderr
+      $stdout = $stderr = StringIO.new
+      error = assert_raises(SystemExit) do
+        with_env_overrides(env) { Rake::Task["snaptrade:repair_split_securities"].invoke(*task_args) }
+      end
+      [ $stdout.string, error ]
+    ensure
+      $stdout, $stderr = original_stdout, original_stderr
+    end
+
 
     def repair!(allow_price_gaps: false)
       SnaptradeAccount::SplitSecurityRepair.new(@account, dry_run: false, allow_price_gaps: allow_price_gaps).run
     end
 
-    # The we-promise/sure#3988 state: buys on A, the current provider holding
+    # The #3988 state: buys on A, the current provider holding
     # on B with an unknown (zero) provider cost basis.
     def seed_observed_split
       create_trade(@row_a, account: @account, qty: 10, date: 20.days.ago.to_date, price: 100)
@@ -312,13 +696,5 @@ class SnaptradeAccount::SplitSecurityRepairTest < ActiveSupport::TestCase
         @account.holdings.order(:id).pluck(:id, :security_id, :qty, :updated_at),
         @account.balances.count
       ]
-    end
-
-    def with_env(vars)
-      saved = vars.keys.index_with { |key| ENV[key] }
-      vars.each { |key, value| ENV[key] = value }
-      yield
-    ensure
-      saved.each { |key, value| ENV[key] = value }
     end
 end
