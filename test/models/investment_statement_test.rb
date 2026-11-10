@@ -1632,7 +1632,7 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
   # 1,000 EUR at 1.1 is 1,100 USD, less a 550 USD position: 550 USD of cash.
   # Subtracting before converting gives 495; reading cash_balance gives 0.
-  test "account cash is the residual, converted per account" do
+  test "account cash is the residual, converted per account, in both views and the account grouping" do
     account = create_investment_account(balance: 1000, cash_balance: 0, currency: "EUR")
     ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
     stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
@@ -2662,6 +2662,24 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     issue = InvestmentStatement.new(@family).data_quality_issues.find { |i| i.kind == :ambiguous_constituent }
 
     assert_equal [ "DUAL" ], issue.detail, "the same ticker was listed twice because of its case"
+  end
+
+  test "account cash is the residual, converted per account" do
+    account = create_investment_account(balance: 1000, cash_balance: 0, currency: "EUR")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+    item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: item.coinstats_accounts.create!(name: "Brokerage", currency: "EUR"))
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 550, amount: 550, currency: "USD",
+                    account_provider: provider)
+
+    liquidity = @statement.allocation_by("asset_class").find { |s| s.id == "liquidity" }
+    cash_sub = @statement.allocation_children("asset_class", "liquidity").find { |s| s.id == "cash" }
+    position = @statement.allocation_children("asset_sub_class", "cash", parent: "liquidity").find { |s| s.id == "cash" }
+
+    [ liquidity, cash_sub, position ].each_with_index do |segment, level|
+      assert_in_delta 550, segment&.amount&.amount.to_f, 0.0001, "level #{level}"
+    end
   end
 
   test "every classification grouping is reachable through allocation_by" do

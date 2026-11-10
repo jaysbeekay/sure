@@ -1030,11 +1030,17 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             is queried, one existence check per series -- the portfolio's
   #             and up to five comparison lines, so bounded by D7's cap. With
   #             the same one-query CI margin as above, 111
+  #  111 -> 117 the sidebar's sparkline versions (we-promise/sure#4675,
+  #             we-promise/sure#4692), merged with the 2026-11-10 upstream sync:
+  #             the layout's account groups now key each sparkline on its
+  #             account's balances, provider links and syncs, read in batched
+  #             queries once per page. The same six on fork main's 111 in the
+  #             same environment, none of them per holding
   #
-  # Neither rise is per holding, and the comparison's is bounded rather than
+  # No rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 111
+  PORTFOLIO_QUERY_CEILING = 117
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one
