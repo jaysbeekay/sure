@@ -233,7 +233,7 @@ class InvestmentStatement
   def allocation_children(by, bucket, look_through: false, parent: nil)
     case by.to_s
     when "asset_class" then allocation_sub_classes_within(bucket, look_through: look_through)
-    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, "cash", look_through: look_through, parent: parent)
+    when "asset_sub_class" then allocation_holdings_within(:asset_sub_class, bucket, CASH_SUB_CLASS, look_through: look_through, parent: parent)
     else []
     end
   end
@@ -280,8 +280,8 @@ class InvestmentStatement
     when "currency" then allocation_by_currency
     when "kind" then allocation_by_kind
     when "tag" then allocation_by_tag
-    when "asset_class" then allocation_by_classification(:asset_class, cash_bucket: "liquidity", look_through: look_through)
-    when "asset_sub_class" then allocation_by_classification(:asset_sub_class, cash_bucket: "cash", look_through: look_through)
+    when "asset_class" then allocation_by_classification(:asset_class, cash_bucket: CASH_ASSET_CLASS, look_through: look_through)
+    when "asset_sub_class" then allocation_by_classification(:asset_sub_class, cash_bucket: CASH_SUB_CLASS, look_through: look_through)
     when "sector" then allocation_by_classification(:sector, look_through: look_through)
     when "region" then allocation_by_classification(:region, look_through: look_through)
     else
@@ -377,6 +377,12 @@ class InvestmentStatement
       )
     end
   end
+
+  # Where account cash and cash securities are filed: the asset class and the
+  # sub-class a cash balance belongs to. Values from Security::ASSET_CLASSES
+  # and Security::ASSET_SUB_CLASSES.
+  CASH_ASSET_CLASS = "liquidity".freeze
+  CASH_SUB_CLASS = "cash".freeze
 
   # Unrealized gains across all holdings, summed in family currency
   def unrealized_gains
@@ -1024,8 +1030,8 @@ class InvestmentStatement
     end
 
     # One shape for all four classification groupings: read the column off the
-    # security, fall back to UNCLASSIFIED, and place each account's positive
-    # cash balance where that grouping says it belongs.
+    # security, fall back to UNCLASSIFIED, and place each account's cash
+    # (`positive_account_cash`) where that grouping says it belongs.
     #
     # `cash_bucket` is the argument that matters. Cash is not a holding -- it
     # sits on the account -- so every grouping has to say where it goes, and
@@ -1110,7 +1116,7 @@ class InvestmentStatement
         if weights.empty?
           [ {
             asset_class: classification_bucket(holding.security, :asset_class, "liquidity"),
-            asset_sub_class: classification_bucket(holding.security, :asset_sub_class, "cash"),
+            asset_sub_class: classification_bucket(holding.security, :asset_sub_class, CASH_SUB_CLASS),
             id: holding.security_id,
             name: holding.security.name.presence || holding.security.ticker,
             held_directly: true,
@@ -1342,13 +1348,13 @@ class InvestmentStatement
           grouped[row[:asset_sub_class]] += row[:value]
         end
       else
-        holdings_classified_as(:asset_class, asset_class, "liquidity").each do |holding|
-          bucket = classification_bucket(holding.security, :asset_sub_class, "cash")
+        holdings_classified_as(:asset_class, asset_class, CASH_ASSET_CLASS).each do |holding|
+          bucket = classification_bucket(holding.security, :asset_sub_class, CASH_SUB_CLASS)
           grouped[bucket] += convert_to_family_currency(holding.amount, holding.currency)
         end
       end
 
-      grouped["cash"] += account_cash_total if asset_class == "liquidity" && account_cash_total.positive?
+      grouped[CASH_SUB_CLASS] += account_cash_total if asset_class == CASH_ASSET_CLASS && account_cash_total.positive?
 
       build_segments(grouped.map { |bucket, value| [ bucket, bucket, value ] })
     end
@@ -1406,26 +1412,43 @@ class InvestmentStatement
     end
 
     # Account cash as a position of the cash bucket: ONE row, the sum over
-    # accounts of each account's cash in the family currency where it is
-    # positive -- the rule `allocation_sub_classes_within` and
+    # accounts of each account's cash (balance less holdings) in the family
+    # currency where it is positive -- the rule `allocation_sub_classes_within` and
     # `allocation_by_classification` count it by. It belongs to Liquidity/Cash
     # only, so any other bucket, or a cash sub-class reached from another asset
-    # class, gets none. Identified and named as `allocation`'s own cash row.
+    # class, gets none.
     def account_cash_rows(bucket, cash_bucket, parent)
       return [] unless cash_bucket.present? && bucket == cash_bucket
-      return [] unless parent.nil? || parent == "liquidity"
+      return [] unless parent.nil? || parent == CASH_ASSET_CLASS
 
       [ [ "cash", I18n.t("models.investment_statement.cash"), account_cash_total ] ]
     end
 
-    # Each investment account whose cash balance is positive, with that cash in
-    # the family currency. Every allocation level counts account cash through
-    # this one rule -- positive balances only, converted per account -- so a
-    # parent bucket and the positions below it cannot disagree about it.
+    # Each investment account with cash, and that cash in the family currency.
+    # An account's cash is its balance less its allocatable holdings, each
+    # converted on its own and then subtracted, kept only where positive. Every
+    # allocation grouping and level counts account cash through this one rule,
+    # so a parent bucket and the positions below it cannot disagree about it,
+    # and no grouping counts a balance another grouping drops.
+    #
+    # Not Account#cash_balance. It can be absent (a manual or never-synced
+    # account), or default to the whole balance when a provider sends no cash
+    # figure (`Account::ProviderImportAdapter#update_balance`), which would
+    # count the holdings twice. `Balance::BaseCalculator` derives an
+    # investment account's cash the same way, so on synced data the two agree.
+    # Per account, so one account's margin cannot net against another's cash.
     def positive_account_cash
       @positive_account_cash ||= investment_accounts.filter_map do |account|
-        cash = account.cash_balance.to_d
-        [ account, convert_to_family_currency(cash, account.currency) ] if cash.positive?
+        balance = convert_to_family_currency(account.balance.to_d, account.currency)
+        cash = balance - account_holdings_totals[account.id]
+        [ account, cash ] if cash.positive?
+      end
+    end
+
+    # Each account's allocatable holdings in the family currency, by account id.
+    def account_holdings_totals
+      @account_holdings_totals ||= allocatable_holdings.each_with_object(Hash.new(0)) do |holding, totals|
+        totals[holding.account_id] += convert_to_family_currency(holding.amount, holding.currency)
       end
     end
 
@@ -1438,10 +1461,10 @@ class InvestmentStatement
     #
     # A cash security is answered from `cash?` rather than from its columns. A
     # non-primary-currency cash position is a real holding -- `Security.cash_for`
-    # creates one per currency -- and until the defaults slice populates the
-    # taxonomy its `asset_class` is nil. Reading the column alone would file the
-    # family's euros under Unclassified while the account's own euro cash
-    # balance sat under Liquidity: two answers for the same money on one chart.
+    # creates one per currency -- and its `asset_class` may be nil. Reading the
+    # column alone would file the family's euros under Unclassified while the
+    # account's own euro cash balance sat under Liquidity: two answers for the
+    # same money on one chart.
     def classification_bucket(security, column, cash_bucket)
       return cash_bucket if security.cash? && cash_bucket.present?
 
@@ -1455,7 +1478,7 @@ class InvestmentStatement
     def holdings_classified_as(column, bucket, cash_bucket = nil, parent: nil)
       allocatable_holdings.select do |holding|
         classification_bucket(holding.security, column, cash_bucket) == bucket &&
-          (parent.nil? || classification_bucket(holding.security, :asset_class, "liquidity") == parent)
+          (parent.nil? || classification_bucket(holding.security, :asset_class, CASH_ASSET_CLASS) == parent)
       end
     end
 
