@@ -584,11 +584,15 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal 1, @statement.period_return_unconvertible_count(period: period)
   end
 
+  # Holding.preload_avg_costs is this model's average-cost SQL, moved, so
+  # the guard reads it where it now lives as well as where it was.
   test "no COALESCE parity conversion survives in this model's SQL" do
-    source = File.read(Rails.root.join("app/models/investment_statement.rb"))
+    %w[app/models/investment_statement.rb app/models/holding.rb].each do |path|
+      source = File.read(Rails.root.join(path))
 
-    assert_no_match(/COALESCE\(\s*\w+\.rate\s*,\s*1\s*\)/, source,
-                    "a COALESCE(<alias>.rate, 1) parity conversion is back")
+      assert_nil source[/COALESCE\(\s*\w+\.rate\s*,\s*1\s*\)/],
+                 "a COALESCE(<alias>.rate, 1) parity conversion is back in #{path}"
+    end
   end
 
   test "period_return_trend returns nil when no balance data in period" do
