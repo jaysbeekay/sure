@@ -113,14 +113,15 @@ class InvestmentStatement
   end
 
   # Portfolio allocation by security (rolled up across accounts), plus one
-  # cash row for the part of the portfolio no holding accounts for, so the
-  # weights sum to 100 and every security carries the same weight here as in
-  # #top_holdings.
+  # cash row for the part of each account's balance no holding accounts for,
+  # so the weights sum to 100 and every security carries the same weight here
+  # as in #top_holdings.
   #
-  # The cash row is a residual (portfolio value minus holdings total), not
-  # Account#cash_balance: when account balances are stale the residual is
-  # zero and the row is omitted, whereas the reported cash balance could push
-  # the sum past 100.
+  # The cash row is the account cash every grouping files
+  # (`account_cash_total`): per account, balance less holdings, positive
+  # only. Not Account#cash_balance, which can be stale or default to the whole
+  # balance; and not one residual across the portfolio, which would let one
+  # account's margin net against another account's cash.
   def allocation
     rolled_up = holdings_rolled_up_by_security
     total = weight_denominator(rolled_up)
@@ -135,7 +136,7 @@ class InvestmentStatement
       )
     end
 
-    cash = total - rolled_up.sum { |_, value, _| value }
+    cash = account_cash_total
     if cash.positive?
       rows << HoldingAllocation.new(
         security: nil,
@@ -179,11 +180,12 @@ class InvestmentStatement
 
   # Allocation of the portfolio grouped by :account, :currency or :kind
   # (cash, crypto, standard), or by :security (the #allocation roll-up).
-  # Weights within a grouping sum to 100 within rounding: the account
-  # grouping is measured against the account balances, the currency and
-  # kind groupings against the holdings plus each account's positive cash
-  # balance, so a stale or negative cash balance never pushes a grouping
-  # past 100. Segments are sorted by amount, largest first.
+  # Every grouping measures the same portfolio: the allocatable holdings plus
+  # each account's cash, where an account's cash is its balance less its
+  # holdings, positive only (`positive_account_cash`). So every grouping, and
+  # every level of the drill-down, sums to the sum over accounts of
+  # max(balance, holdings), and weights within a grouping sum to 100 within
+  # rounding. Segments are sorted by amount, largest first.
   ALLOCATION_GROUPINGS = %w[security asset_class asset_sub_class sector region tag account currency kind].freeze
 
   # The bucket a holding falls into when the column it is grouped by is empty.
@@ -927,15 +929,20 @@ class InvestmentStatement
         .maximum(:date)
     end
 
+    # Each account's holdings plus its cash, by the rule every other grouping
+    # files cash by. Not Account#balance: an account below its holdings (margin,
+    # or a stale zero balance) would otherwise show less than it holds, or drop
+    # out of the grouping altogether.
     def allocation_by_account
+      cash = positive_account_cash.to_h { |account, value| [ account.id, value ] }
       segments = investment_accounts.map do |account|
-        [ account.id, account.name, convert_to_family_currency(account.balance, account.currency) ]
+        [ account.id, account.name, account_holdings_totals[account.id] + cash.fetch(account.id, 0) ]
       end
       build_segments(segments)
     end
 
     # Value by the currency each holding is priced in, plus each account's
-    # positive cash balance in the account's currency. Reads
+    # cash (`positive_account_cash`) in the account's currency. Reads
     # `allocatable_holdings` so a corrupt negative row cannot net against a good
     # one here while the drill-down below drops it.
     def allocation_by_currency
@@ -947,7 +954,7 @@ class InvestmentStatement
 
     # Value by what kind of instrument each holding is -- cash, crypto or a
     # standard security -- from the security's own flags, with each account's
-    # positive cash balance under cash. Reads `allocatable_holdings` for the
+    # cash (`positive_account_cash`) under cash. Reads `allocatable_holdings` for the
     # same reason as `allocation_by_currency`.
     def allocation_by_kind
       grouped = Hash.new(0)
@@ -1286,7 +1293,7 @@ class InvestmentStatement
     # the segments sum to more than the portfolio, and this section renders as a
     # donut: segments that overrun the total draw a chart that is simply wrong,
     # and `allocation_by` is covered by an invariant test asserting every grouping
-    # adds up to `portfolio_value`.
+    # adds up to the same total: holdings plus each account's positive cash.
     #
     # So a multi-tagged holding is SPLIT evenly across its tags. "Half in pension,
     # half in tech bet" is an answer a reader can act on; a donut summing to 140%
@@ -1518,20 +1525,21 @@ class InvestmentStatement
         end
     end
 
-    # The one denominator every weight is measured against: the larger of the
-    # live portfolio value (account balances, cash included) and the holdings
-    # total.
+    # The one denominator every weight is measured against: the holdings total
+    # plus the account cash every grouping files -- the total each allocation
+    # grouping sums to, so a security carries the same weight in #top_holdings
+    # as in every grouping.
     #
-    # Portfolio value is the right denominator -- a security's weight is its
-    # share of everything the user holds, cash included -- but it is
-    # Account#balance, which can lag the holdings (stale zero after a sync)
-    # or fall below them (negative cash from margin or an unsettled buy).
-    # Dividing by it in either case reports a weight over 100. The holdings
-    # total is a floor that keeps every weight at or below 100; when it wins,
-    # the residual cash is zero or negative and #allocation shows no cash row.
+    # A security's weight is its share of everything the user holds, cash
+    # included. Account#balance alone is not that: it can lag the holdings
+    # (stale zero after a sync) or fall below them (margin, an unsettled buy),
+    # and dividing by it reports a weight over 100. Account cash is positive
+    # only, so the denominator is never below the holdings and no weight
+    # exceeds 100. It equals #portfolio_value unless an account's balance is
+    # below its holdings.
     def weight_denominator(rolled_up)
       holdings_total = rolled_up.sum { |_, value, _| value }
-      [ portfolio_value, holdings_total ].max
+      holdings_total + account_cash_total
     end
 
     # Groups current holdings by security and sums family-currency value.

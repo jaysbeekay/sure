@@ -1775,6 +1775,162 @@ class InvestmentStatementTest < ActiveSupport::TestCase
       "every grouping must add up to the portfolio value: #{totals.inspect}"
   end
 
+  # ------------------------------------------ one cash rule for every grouping
+  #
+  # Account cash is each account's balance less its allocatable holdings, in
+  # the family currency, positive only. Every grouping, and every level of the
+  # asset-class drill-down, files that one figure, so all of them sum to
+  # T = sum over accounts of max(balance, holdings).
+
+  # A balance no holding accounts for and no cash_balance explains -- a manual
+  # crypto account, an account never synced -- is cash in every grouping, not
+  # in the security and account groupings alone.
+  test "every grouping sums to the same total when an account has a balance and no holdings" do
+    coherent = create_investment_account(balance: 3000, cash_balance: 1000)
+    create_crypto_account(balance: 10_000, cash_balance: 0)
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: coherent, security: stock, date: Date.current, qty: 1, price: 2000, amount: 2000, currency: "USD")
+
+    assert_every_grouping_and_level_sums_to 13_000
+  end
+
+  # The adapter default writes cash_balance = balance for a provider that sends
+  # no cash figure. The holdings must not then be counted a second time.
+  test "a cash_balance that is the whole balance is not counted twice" do
+    account = create_investment_account(balance: 1500, cash_balance: 0)
+    account.update_columns(cash_balance: 1500)
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    assert_every_grouping_and_level_sums_to 1500
+  end
+
+  # 1,000 EUR at 1.1 is 1,100 USD, less a 550 USD position: 550 USD of cash.
+  # Subtracting before converting gives 495; reading cash_balance gives 0.
+  # The USD position sits in a provider-linked EUR account: a manual account's
+  # current holdings are only those in its own currency.
+  test "account cash is the residual, converted per account, in both views and the account grouping" do
+    account = create_investment_account(balance: 1000, cash_balance: 0, currency: "EUR")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+    item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: item.coinstats_accounts.create!(name: "Brokerage", currency: "EUR"))
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 550, amount: 550, currency: "USD",
+                    account_provider: provider)
+
+    [ false, true ].each do |look_through|
+      liquidity = @statement.allocation_by("asset_class", look_through: look_through).find { |s| s.id == "liquidity" }
+      cash_sub = @statement.allocation_children("asset_class", "liquidity", look_through: look_through).find { |s| s.id == "cash" }
+      position = @statement.allocation_children("asset_sub_class", "cash", look_through: look_through, parent: "liquidity").find { |s| s.id == "cash" }
+
+      [ liquidity, cash_sub, position ].each_with_index do |segment, level|
+        assert_in_delta 550, segment&.amount&.amount.to_f, 0.0001, "look_through=#{look_through} level #{level}"
+      end
+    end
+
+    assert_in_delta 1100, @statement.allocation_by("account").sole.amount.amount, 0.0001
+  end
+
+  # The security grouping's Cash row, the kind grouping's cash and the Cash
+  # sub-class are one figure. The third account sits below its holdings, so a
+  # global residual (1,300) would disagree with the per-account rule (1,500).
+  test "the security grouping's cash row is the same cash every grouping files" do
+    first = create_investment_account(balance: 3000, cash_balance: 1000)
+    create_investment_account(balance: 500, cash_balance: 500)
+    margin = create_investment_account(balance: 800, cash_balance: -200)
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: first, security: stock, date: Date.current, qty: 1, price: 2000, amount: 2000, currency: "USD")
+    Holding.create!(account: margin, security: stock, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    security_cash = @statement.allocation_by("security").find { |s| s.id == "cash" }
+    kind_cash = @statement.allocation_by("kind").find { |s| s.id == "cash" }
+    sub_class_cash = @statement.allocation_by("asset_sub_class").find { |s| s.id == "cash" }
+
+    assert_equal 1500, @statement.send(:account_cash_total)
+    [ security_cash, kind_cash, sub_class_cash ].each_with_index do |segment, index|
+      assert_equal 1500, segment&.amount&.amount, "segment #{index} did not file the account cash"
+    end
+  end
+
+  # Margin in one account cannot net against cash in another: A is 200 below
+  # its holdings, B is 500 above, so the cash is 500, not 300, and T is 2,500.
+  test "an account below its holdings contributes no cash and offsets no other account's cash" do
+    margin_case_accounts
+
+    assert_equal 500, @statement.allocation_by("security").find { |s| s.id == "cash" }&.amount&.amount
+    assert_every_grouping_and_level_sums_to 2500
+
+    InvestmentStatement::ALLOCATION_GROUPINGS.each do |by|
+      assert @statement.allocation_by(by).all? { |s| s.amount.amount.positive? }, "#{by} has a non-positive segment"
+    end
+  end
+
+  # The residual subtracts the allocatable holdings, not every current row: a
+  # corrupt -500 row left in would raise the account's cash from 1,000 to 1,500
+  # and every grouping's total from 2,000 to 2,500.
+  test "a corrupt negative holding does not inflate the account's cash" do
+    account = create_investment_account(balance: 2000, cash_balance: 0)
+    good = create_classified_security(ticker: "POS646", asset_class: "equity", asset_sub_class: "stock")
+    bad = create_classified_security(ticker: "NEG646", asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: good, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+    corrupt = Holding.create!(account: account, security: bad, date: Date.current, qty: 1, price: 500, amount: 500, currency: "USD")
+    corrupt.update_columns(amount: -500)
+
+    assert_equal 1000, @statement.send(:account_cash_total)
+    assert_equal 1000, @statement.allocation_by("security").find { |s| s.id == "cash" }&.amount&.amount
+    assert_equal 2000, @statement.allocation_by("currency").sum { |s| s.amount.amount }
+    assert_equal 2000, @statement.allocation_by("account").sole.amount.amount
+    assert_every_grouping_and_level_sums_to 2000
+  end
+
+  # The control: balances equal holdings plus cash_balance everywhere, so
+  # balance less holdings and cash_balance are the same figure and every
+  # grouping, weight and top_holdings weight is what either source gives.
+  test "a coherent portfolio is unchanged" do
+    first = create_investment_account(balance: 3000, cash_balance: 1000)
+    second = create_investment_account(balance: 500, cash_balance: 500)
+    stock = create_classified_security(ticker: "STK646", name: "Stock", asset_class: "equity", asset_sub_class: "stock", sector: "Technology", region: "north_america")
+    bond = create_classified_security(ticker: "BND646", name: "Bond", asset_class: "fixed_income", asset_sub_class: "bond")
+    Holding.create!(account: first, security: stock, date: Date.current, qty: 1, price: 1200, amount: 1200, currency: "USD")
+    Holding.create!(account: first, security: bond, date: Date.current, qty: 1, price: 800, amount: 800, currency: "USD")
+
+    figures = ->(by) { @statement.allocation_by(by).map { |s| [ s.id, s.amount.amount.to_i, s.weight.to_f ] } }
+
+    # The security grouping lists the securities by value, then its Cash row.
+    assert_equal [ [ stock.id, 1200, 34.29 ], [ bond.id, 800, 22.86 ], [ "cash", 1500, 42.86 ] ], figures.("security")
+    assert_equal [ [ "liquidity", 1500, 42.86 ], [ "equity", 1200, 34.29 ], [ "fixed_income", 800, 22.86 ] ], figures.("asset_class")
+    assert_equal [ [ "unclassified", 2300, 65.71 ], [ "Technology", 1200, 34.29 ] ], figures.("sector")
+    assert_equal [ [ first.id, 3000, 85.71 ], [ second.id, 500, 14.29 ] ], figures.("account")
+    assert_equal [ [ "standard", 2000, 57.14 ], [ "cash", 1500, 42.86 ] ], figures.("kind")
+    assert_equal [ [ "USD", 3500, 100.0 ] ], figures.("currency")
+    assert_equal [ [ "STK646", 34.29 ], [ "BND646", 22.86 ] ], @statement.top_holdings.map { |h| [ h.ticker, h.weight.to_f ] }
+    assert_every_grouping_and_level_sums_to 3500
+  end
+
+  # A stale zero balance beside real holdings: the account shows its holdings
+  # rather than dropping out of the account grouping, and there is no cash.
+  test "a stale zero balance keeps the account in the account grouping" do
+    account = create_investment_account(balance: 0, cash_balance: 0)
+    stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+
+    assert_equal [ [ account.id.to_s, 1000 ] ], @statement.allocation_by("account").map { |s| [ s.id, s.amount.amount ] }
+    assert_nil @statement.allocation_by("security").find { |s| s.id == "cash" }
+    assert_every_grouping_and_level_sums_to 1000
+  end
+
+  # The mixed case again: a security's weight is its share of T, in
+  # top_holdings and in the allocation alike -- 1,000 of 2,500 is 40%.
+  test "top_holdings and allocation share the denominator in the mixed case" do
+    first, = margin_case_accounts
+
+    top = @statement.top_holdings.find { |h| h.ticker == first.ticker }
+    allocated = @statement.allocation_by("security").find { |s| s.id == first.id }
+
+    assert_in_delta 40.0, top.weight, 0.001
+    assert_equal top.weight, allocated.weight
+  end
+
   test "data_quality_issues flags missing cost basis, stale prices and unhealthy providers" do
     account = create_investment_account(balance: 5000)
     as_of = Date.current
@@ -2098,9 +2254,13 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
   # The parent counts each account's cash only where it is positive, so the
   # child does too: +1,000 and -500 is 1,000 at both levels, not a netted 500.
+  # The second account's balance is 500 below the position it holds, which is
+  # what makes its cash negative.
   test "negative account cash is left out below as above" do
     create_investment_account(balance: 1000, cash_balance: 1000)
-    create_investment_account(balance: 0, cash_balance: -500)
+    margin = create_investment_account(balance: 0, cash_balance: -500)
+    Holding.create!(account: margin, security: create_classified_security(asset_class: "equity", asset_sub_class: "stock"),
+                    date: Date.current, qty: 1, price: 500, amount: 500, currency: "USD")
 
     [ false, true ].each do |look_through|
       parent = @statement.allocation_children("asset_class", "liquidity", look_through: look_through).find { |r| r.id == "cash" }
@@ -2872,6 +3032,62 @@ class InvestmentStatementTest < ActiveSupport::TestCase
         currency: currency,
         accountable: Investment.new
       )
+    end
+
+    def create_crypto_account(balance:, cash_balance: 0, currency: "USD")
+      @family.accounts.create!(
+        name: "Crypto #{SecureRandom.hex(3)}",
+        balance: balance,
+        cash_balance: cash_balance,
+        currency: currency,
+        accountable: Crypto.new
+      )
+    end
+
+    # Account A holds 1,000 against a balance of 800 (margin); account B holds
+    # 1,000 against 1,500. Returns the two securities.
+    def margin_case_accounts
+      margin = create_investment_account(balance: 800, cash_balance: -200)
+      funded = create_investment_account(balance: 1500, cash_balance: 500)
+      first = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
+      second = create_classified_security(asset_class: "fixed_income", asset_sub_class: "bond")
+      Holding.create!(account: margin, security: first, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+      Holding.create!(account: funded, security: second, date: Date.current, qty: 1, price: 1000, amount: 1000, currency: "USD")
+      [ first, second ]
+    end
+
+    # Every grouping sums to `expected`, and so does every level of the
+    # asset-class drill-down: each segment's children sum to the segment and each
+    # child's positions sum to the child, with look-through off and on.
+    def assert_every_grouping_and_level_sums_to(expected)
+      sum = ->(segments) { segments.sum { |s| s.amount.amount } }
+
+      InvestmentStatement::ALLOCATION_GROUPINGS.each do |by|
+        assert_in_delta expected, sum.(@statement.allocation_by(by)), 0.0001, "#{by} does not sum to #{expected}"
+      end
+
+      [ false, true ].each do |look_through|
+        context = "look_through=#{look_through}"
+        classes = @statement.allocation_by("asset_class", look_through: look_through)
+        assert_in_delta expected, sum.(classes), 0.0001, "#{context}: asset_class does not sum to #{expected}"
+
+        classes.each do |klass|
+          subs = @statement.allocation_children("asset_class", klass.id, look_through: look_through)
+          assert_in_delta klass.amount.amount, sum.(subs), 0.0001, "#{context}: #{klass.id}'s sub-classes"
+
+          subs.each do |sub|
+            positions = @statement.allocation_children("asset_sub_class", sub.id, look_through: look_through, parent: klass.id)
+            assert_in_delta sub.amount.amount, sum.(positions), 0.0001, "#{context}: #{klass.id}/#{sub.id}'s positions"
+          end
+        end
+
+        sub_classes = @statement.allocation_by("asset_sub_class", look_through: look_through)
+        assert_in_delta expected, sum.(sub_classes), 0.0001, "#{context}: asset_sub_class does not sum to #{expected}"
+        sub_classes.each do |sub|
+          positions = @statement.allocation_children("asset_sub_class", sub.id, look_through: look_through)
+          assert_in_delta sub.amount.amount, sum.(positions), 0.0001, "#{context}: #{sub.id}'s positions"
+        end
+      end
     end
 
     # end_balance is a stored virtual column; with no flows, start_non_cash_balance
