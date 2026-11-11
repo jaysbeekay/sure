@@ -70,25 +70,10 @@ class InvestmentStatement
   # and day_change each call this, so an unmemoized version ran the same
   # DISTINCT ON query up to 5x per dashboard/report request.
   def current_holdings
-    @current_holdings ||= begin
-      account_ids = investment_account_ids
-
-      if account_ids.any?
-        # Get the latest holding for each security per account
-        Holding
-          .where(account_id: account_ids)
-          .where.not(qty: 0)
-          .where(
-            id: Holding
-              .where(account_id: account_ids)
-              .select("DISTINCT ON (holdings.account_id, holdings.security_id) holdings.id")
-              .order(Arel.sql("holdings.account_id, holdings.security_id, holdings.date DESC"))
-          )
-          .includes(:security, :account)
-      else
-        Holding.none
-      end
-    end
+    @current_holdings ||= Holding::CurrentForInvestmentAccounts
+      .new(investment_account_ids)
+      .relation
+      .includes(:security, :account)
   end
 
   # current_holdings as an Array, with the average-cost fallback for every
@@ -174,8 +159,9 @@ class InvestmentStatement
   # blank and flags the row. Holding#avg_cost would fall back to a trades
   # query per position, which is what a table of every holding must avoid.
   #
-  # sort: one of HOLDINGS_SORT_KEYS; dir: "asc" or "desc". Anything else is
-  # the default (value desc), so the query string cannot raise.
+  # sort: one of HOLDINGS_SORT_KEYS; dir: "asc" or "desc". Each falls back on
+  # its own -- an unknown sort to "value", an unknown dir to "desc" -- so the
+  # query string cannot raise and a valid half of it is kept.
   HOLDINGS_SORT_KEYS = %w[value weight return day_change name].freeze
   HOLDINGS_SORT_DIRECTIONS = %w[asc desc].freeze
 
@@ -357,11 +343,12 @@ class InvestmentStatement
 
     # By SECURITY, not by holding, and `holding: nil` -- the same shape the
     # `stale_price` and `provider` kinds above already use, and for the same
-    # reason. `current_holdings` returns a row per (account, security), so a
-    # family holding one fund in two accounts got two identical rows naming the
-    # same fund and the same tickers. The ambiguity is a property of the fund's
-    # constituents, resolved once for the whole portfolio; it has nothing to do
-    # with which account the position sits in (CodeRabbit, #220).
+    # reason. `current_holdings` returns at least a row per account and
+    # security, so a family holding one fund in two accounts got two identical
+    # rows naming the same fund and the same tickers. The ambiguity is a
+    # property of the fund's constituents, resolved once for the whole
+    # portfolio; it has nothing to do with which account the position sits in
+    # (CodeRabbit, #220).
     current_holdings.map(&:security).uniq.filter_map do |security|
       weights = constituent_weights_for(security)
       next if weights.empty?
@@ -537,9 +524,9 @@ class InvestmentStatement
     @historical_scope ||= HistoricalScope.new(family, user: user)
   end
 
-  # The snapshot before each current holding, keyed by [account_id,
-  # security_id]: the latest row for the same account, security and currency
-  # dated before the current row, which is what Holding#day_change compares
+  # The snapshot before each current holding, keyed by the current holding's
+  # id: the latest row for the same account, security and currency dated
+  # before the current row, which is what Holding#day_change compares
   # against. One query for every holding rather than one per holding, so a
   # page that lists every position does not issue a query per row. Memoized
   # like current_holdings.
@@ -548,21 +535,24 @@ class InvestmentStatement
       current_ids = current_holdings.map(&:id)
 
       if current_ids.any?
-        Holding
-          .joins(ActiveRecord::Base.sanitize_sql_array([
-            <<~SQL.squish,
-              JOIN holdings current_holdings
-                ON current_holdings.id IN (:current_ids)
-                AND current_holdings.account_id = holdings.account_id
-                AND current_holdings.security_id = holdings.security_id
-                AND current_holdings.currency = holdings.currency
-                AND holdings.date < current_holdings.date
-            SQL
-            { current_ids: current_ids }
-          ]))
-          .select("DISTINCT ON (holdings.account_id, holdings.security_id) holdings.*")
-          .order(Arel.sql("holdings.account_id, holdings.security_id, holdings.date DESC"))
-          .index_by { |holding| [ holding.account_id, holding.security_id ] }
+        # Keyed by the current holding, not by account and security: a provider
+        # can report one security in two currencies, and each current row has
+        # its own previous snapshot in its own currency.
+        Holding.find_by_sql([ <<~SQL.squish, { current_ids: current_ids } ]).index_by(&:current_holding_id)
+          SELECT prior.*, current_holdings.id AS current_holding_id
+          FROM holdings current_holdings
+          JOIN LATERAL (
+            SELECT holdings.*
+            FROM holdings
+            WHERE holdings.account_id = current_holdings.account_id
+              AND holdings.security_id = current_holdings.security_id
+              AND holdings.currency = current_holdings.currency
+              AND holdings.date < current_holdings.date
+            ORDER BY holdings.date DESC
+            LIMIT 1
+          ) prior ON TRUE
+          WHERE current_holdings.id IN (:current_ids)
+        SQL
       else
         {}
       end
@@ -575,7 +565,7 @@ class InvestmentStatement
   def holding_day_change(holding)
     return nil unless holding.amount_money
 
-    previous = previous_holdings[[ holding.account_id, holding.security_id ]]
+    previous = previous_holdings[holding.id]
     return nil unless previous&.amount_money
 
     Trend.new(current: holding.amount_money, previous: previous.amount_money)
@@ -683,18 +673,27 @@ class InvestmentStatement
     # Rails.cache across requests, plus a per-instance memo so a single
     # dashboard render that asks for the same series twice runs one query.
     #
-    # Every series is trimmed to the date all linked accounts in the scope
-    # have history for, as the account charts are: the balance rows before a
-    # broker's first snapshot are zeros, and charting them shows a portfolio
-    # that appears from nothing on the day the connection was made.
+    # Every series is trimmed to the first date any linked account in the
+    # scope has history for: the balance rows before a broker's first snapshot
+    # are zeros, and charting them shows a portfolio that appears from nothing
+    # on the day the connection was made. The earliest start, not the common
+    # one, so linking a new broker does not erase the history of an older
+    # one, open or closed.
     def fetch_series(kind, period)
       @series_cache ||= {}
       @series_cache[[ kind, period.start_date, period.end_date ]] ||= Rails.cache.fetch(series_cache_key(kind, period)) do
         Balance::LinkedInvestmentSeriesNormalizer.trim_to_supported_history(
           yield(series_builder(period)),
-          account_ids: historical_scope.account_ids
+          account_ids: historical_scope.account_ids,
+          history_start: series_history_start
         )
       end
+    end
+
+    # The trim fetch_series applies, read by its cache key too, so a series
+    # cached under one trim is never served under another.
+    def series_history_start
+      :earliest
     end
 
     def series_builder(period)
@@ -721,9 +720,12 @@ class InvestmentStatement
     #   history start (P30), which provider holdings' dates and securities
     #   decide, so deleting or remapping a holding can move the value and
     #   holdings-value charts' first date without a sync.
+    # - the history trim (every kind): it decides the series' first point, and
+    #   nothing else in the key moves when only the trim does.
     def series_cache_key(kind, period)
       key = [
         "investment_statement_#{kind}_series",
+        "start-#{series_history_start}",
         user&.id,
         shares_version,
         holdings_version,
@@ -750,8 +752,12 @@ class InvestmentStatement
     # deletion (a row gone, timestamps unchanged) each move every series key.
     def holdings_version
       @holdings_version ||= begin
-        holdings = Holding.where(account_id: historical_scope.account_ids)
-        "#{holdings.count}-#{holdings.maximum(:updated_at)&.to_f || 0}"
+        # The provider-linked count covers an unlink, which clears
+        # account_provider_id with update_all and leaves updated_at alone,
+        # yet moves the supported-history trim that reads that column.
+        count, linked, latest = Holding.where(account_id: historical_scope.account_ids)
+          .pick(Arel.sql("COUNT(*), COUNT(account_provider_id), MAX(updated_at)"))
+        "#{count}-#{linked}-#{latest&.to_f || 0}"
       end
     end
 
@@ -1550,9 +1556,10 @@ class InvestmentStatement
     # the weight denominator a real ceiling -- with a negative row in the sum,
     # holdings_total falls below the largest row and its weight goes over 100.
     #
-    # The filter is per row, not on the netted total: current_holdings is
-    # DISTINCT ON (account_id, security_id), so one security held in two
-    # accounts yields two rows, and a negative row in one would otherwise net
+    # The filter is per row, not on the netted total: current_holdings has a
+    # row per account and security (and per currency on a provider's import
+    # day), so one security held in two accounts yields two rows, and a
+    # negative row in one would otherwise net
     # against the good row in the other. The filtered rows are returned so
     # the trend excludes the bad row too.
     #
