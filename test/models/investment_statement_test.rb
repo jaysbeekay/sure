@@ -1803,11 +1803,16 @@ class InvestmentStatementTest < ActiveSupport::TestCase
 
   # 1,000 EUR at 1.1 is 1,100 USD, less a 550 USD position: 550 USD of cash.
   # Subtracting before converting gives 495; reading cash_balance gives 0.
+  # The USD position sits in a provider-linked EUR account: a manual account's
+  # current holdings are only those in its own currency.
   test "account cash is the residual, converted per account, in both views and the account grouping" do
     account = create_investment_account(balance: 1000, cash_balance: 0, currency: "EUR")
     ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current, rate: 1.1)
+    item = @family.coinstats_items.create!(name: "CoinStats", api_key: "test-key")
+    provider = AccountProvider.create!(account: account, provider: item.coinstats_accounts.create!(name: "Brokerage", currency: "EUR"))
     stock = create_classified_security(asset_class: "equity", asset_sub_class: "stock")
-    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 550, amount: 550, currency: "USD")
+    Holding.create!(account: account, security: stock, date: Date.current, qty: 1, price: 550, amount: 550, currency: "USD",
+                    account_provider: provider)
 
     [ false, true ].each do |look_through|
       liquidity = @statement.allocation_by("asset_class", look_through: look_through).find { |s| s.id == "liquidity" }
