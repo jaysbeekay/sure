@@ -147,6 +147,163 @@ class HoldingTest < ActiveSupport::TestCase
     assert_equal 2, queries.count { |sql| sql.include?('FROM "trades"') }
   end
 
+  # Each case pins the figure #avg_cost gives on its own, then checks the batch
+  # hands the holding that same figure and that reading it afterwards runs no
+  # query, so the answer is the preload's and not the per-holding fallback's.
+  test "the batched average cost matches the per-holding one" do
+    sweep = create_security("SWP", prices: [ { date: Date.current, price: 10 } ])
+    plain = create_security("PLN", prices: [ { date: Date.current, price: 10 } ])
+    unrated = create_security("CADX", prices: [ { date: Date.current, price: 10 } ])
+    sweep_holding = create_holding(sweep, Date.current, 5)
+    plain_holding = create_holding(plain, Date.current, 5)
+    unrated_holding = create_holding(unrated, Date.current, 5)
+
+    # fee: (10 * 212 + 10 + 15 * 216 + 5) / 25
+    create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, fee: 10, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 15, price: 216.00, fee: 5, date: Date.current)
+    # a foreign purchase converted at the rate it carries: 10 * 128 CAD at 1.25
+    create_trade(@nvda.security, account: @account, qty: 10, price: 128.00, date: 1.day.ago.to_date, currency: "CAD")
+      .entryable.update!(exchange_rate: 1.25)
+    # a foreign purchase with no rate anywhere
+    create_trade(unrated, account: @account, qty: 5, price: 10, date: Date.current, currency: "CAD")
+    # a sweep is an internal movement, so the position has no knowable cost
+    create_trade(sweep, account: @account, qty: 5, price: 10, date: Date.current)
+      .entryable.update!(investment_activity_label: "Sweep In")
+    create_trade(plain, account: @account, qty: 5, price: 8, date: Date.current)
+    # neither a sale nor a trade dated after the holding enters the average
+    create_trade(@amzn.security, account: @account, qty: -5, price: 300.00, date: Date.current)
+    create_trade(plain, account: @account, qty: 5, price: 999, date: 1.day.from_now.to_date)
+
+    # a second account in another currency: its USD purchase converts into EUR
+    # at the exchange-rate table's rate, 4 * 10 USD at 0.9
+    euro_account = families(:empty).accounts.create!(name: "Euro Brokerage", balance: 0, cash_balance: 0, currency: "EUR", accountable: Investment.new)
+    euro_security = create_security("EURB", prices: [ { date: Date.current, price: 10 } ])
+    euro_holding = euro_account.holdings.create!(date: Date.current, security: euro_security, qty: 4, price: 9, amount: 36, currency: "EUR")
+    ExchangeRate.create!(from_currency: "USD", to_currency: "EUR", date: Date.current, rate: 0.9)
+    create_trade(euro_security, account: euro_account, qty: 4, price: 10, date: Date.current, currency: "USD")
+
+    expected = {
+      @amzn => Money.new(BigDecimal("215")),
+      @nvda => Money.new(BigDecimal("160")),
+      unrated_holding => nil,
+      sweep_holding => nil,
+      plain_holding => Money.new(BigDecimal("8")),
+      euro_holding => Money.new(BigDecimal("9"), "EUR")
+    }
+    expected.each { |holding, value| assert_cost value, Holding.find(holding.id).avg_cost, holding.ticker }
+
+    batch = Holding.where(id: expected.keys.map(&:id)).includes(:security).to_a
+    Holding.preload_avg_costs(batch)
+
+    batch.each do |holding|
+      original = expected.keys.find { |h| h.id == holding.id }
+      # uncached: the per-holding reads above put the fallback's SQL in the
+      # query cache, which capture_sql_queries does not count.
+      queries = Holding.uncached { capture_sql_queries { assert_cost expected[original], holding.avg_cost, holding.ticker } }
+      assert_empty queries, "#{holding.ticker} read its cost after the preload"
+    end
+  end
+
+  test "the batched average cost reads every holding's trades in one query" do
+    batch_sizes = [ 2, 4 ].map do |count|
+      holdings = Array.new(count) do |i|
+        security = create_security("B#{count}#{i}", prices: [ { date: Date.current, price: 10 } ])
+        create_trade(security, account: @account, qty: 1, price: 10, date: Date.current)
+        create_holding(security, Date.current, 1)
+      end
+
+      capture_sql_queries { Holding.preload_avg_costs(holdings) }.size
+    end
+
+    assert_equal [ 1, 1 ], batch_sizes
+  end
+
+  test "the batch leaves a stored cost basis alone and does not query for it" do
+    @amzn.update!(cost_basis: 100)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 212.00, date: Date.current)
+
+    queries = capture_sql_queries { Holding.preload_avg_costs([ @amzn ]) }
+
+    assert_empty queries
+    assert_equal Money.new(100), @amzn.avg_cost
+  end
+
+  test "a reload drops the preloaded average cost and the trend built on it" do
+    create_trade(@amzn.security, account: @account, qty: 15, price: 200.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+    assert_equal Money.new(200), @amzn.avg_cost
+    trend_before = @amzn.trend
+    assert_not_nil trend_before, "the trend must be built before the reload, or keeping it would go unseen"
+
+    create_trade(@amzn.security, account: @account, qty: 15, price: 100.00, date: Date.current)
+    @amzn.reload
+
+    assert_equal Money.new(150), @amzn.avg_cost
+    assert_not_equal trend_before.value, @amzn.trend.value
+  end
+
+  test "a preload drops the trend built on the cost it replaces" do
+    create_trade(@amzn.security, account: @account, qty: 15, price: 200.00, date: Date.current)
+    assert_equal Money.new(15 * 200), @amzn.trend.previous, "the trend must be built from the fallback before the preload"
+
+    create_trade(@amzn.security, account: @account, qty: 15, price: 100.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+
+    assert_equal Money.new(150), @amzn.avg_cost
+    assert_equal Money.new(15 * 150), @amzn.trend.previous
+  end
+
+  test "a reload drops the memoized day change" do
+    assert_equal Money.new(15 * 216), @amzn.day_change.current
+    Holding.where(id: @amzn.id).update_all(amount: 4000)
+
+    @amzn.reload
+
+    assert_equal Money.new(4000), @amzn.day_change.current
+  end
+
+  # The batch reads the stored rows, so for a holding that is unsaved or has
+  # unsaved changes it would answer for another holding -- or for none.
+  test "the batch leaves unsaved and changed holdings to their own attributes" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 100.00, date: Date.current)
+    @amzn.date = 1.day.ago.to_date # stored as today, where the average is 150
+    create_trade(@nvda.security, account: @account, qty: 10, price: 120.00, date: Date.current)
+    unsaved = @account.holdings.new(date: Date.current, security: @nvda.security, qty: 1, price: 124, amount: 124, currency: "USD")
+
+    Holding.preload_avg_costs([ @amzn, unsaved ])
+
+    assert_equal Money.new(200), @amzn.avg_cost
+    assert_equal BigDecimal("120"), unsaved.avg_cost&.amount
+  end
+
+  # A preloaded cost answers for the attributes it was computed from. Once the
+  # holding changes, the holding's own attributes decide again.
+  test "a holding changed after the preload reads its own cost, not the preloaded one" do
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, date: 1.day.ago.to_date)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 100.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+    assert_equal Money.new(150), @amzn.avg_cost, "the preload answers for today's date"
+
+    @amzn.date = 1.day.ago.to_date
+
+    assert_equal Money.new(200), @amzn.avg_cost
+  end
+
+  test "a holding saved after the preload reads its own cost, not the preloaded one" do
+    earlier = 400.days.ago.to_date
+    create_trade(@amzn.security, account: @account, qty: 10, price: 200.00, date: earlier)
+    create_trade(@amzn.security, account: @account, qty: 10, price: 100.00, date: Date.current)
+    Holding.preload_avg_costs([ @amzn ])
+    assert_equal Money.new(150), @amzn.avg_cost, "the preload answers for today's date"
+    assert_equal Money.new(150 * @amzn.qty), @amzn.trend.previous, "the trend is built on the preloaded cost"
+
+    @amzn.update!(date: earlier)
+
+    assert_equal Money.new(200), @amzn.avg_cost
+    assert_equal Money.new(200 * @amzn.qty), @amzn.trend.previous
+  end
+
   test "calculates total return trend" do
     @amzn.stubs(:avg_cost).returns(Money.new(214.00))
     @nvda.stubs(:avg_cost).returns(Money.new(126.00))
@@ -533,6 +690,26 @@ class HoldingTest < ActiveSupport::TestCase
     assert_equal 0, @account.trades.where(security: old_security).count
   end
 
+  # cost_basis is per share and the merged row carries both sides' units, so
+  # the merge takes the quantity-weighted mean: (5 x 100 + 10 x 40) / 15 = 60.
+  # Neither side's figure, and not their plain mean (70).
+  test "remap_security! merge pins the weighted cost basis" do
+    new_security = create_security("GOOGW", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(
+      date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500,
+      currency: "USD", cost_basis: 100
+    )
+    @amzn.update_columns(qty: 10, amount: 2160, cost_basis: 40)
+
+    assert_equal 100, existing.reload.cost_basis
+
+    @amzn.remap_security!(new_security)
+
+    existing.reload
+    assert_equal 15, existing.qty
+    assert_equal 60, existing.cost_basis
+  end
+
   test "reset_security_to_provider! restores original security" do
     old_security = @amzn.security
     new_security = create_security("GOOG", prices: [ { date: Date.current, price: 100.00 } ])
@@ -705,6 +882,189 @@ class HoldingTest < ActiveSupport::TestCase
     assert_equal BigDecimal("3000"), target.cost_basis
   end
 
+  # cost_basis is per share. A locked 5 @ $80 merged with an unlocked 15 @ $40
+  # is 20 units: keeping $80 would misstate the 15 merged-in units, so the
+  # weighted $50 is the right figure. The user's lock stays on the merged row.
+  test "remap_security! merge onto a locked row blends the basis and keeps the lock" do
+    new_security = create_security("GOOGLK1", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500, currency: "USD")
+    existing.set_manual_cost_basis!(80)
+    @amzn.update_columns(cost_basis: 40, cost_basis_source: "calculated") # 15 units
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_equal 20, existing.qty, "precondition: the rows did not merge"
+    assert_equal 50, existing.cost_basis.to_d, "merged basis is not the weighted blend (80 x 5 + 40 x 15) / 20"
+    assert existing.cost_basis_locked?, "the merge dropped the existing row's lock"
+    assert_equal "manual", existing.cost_basis_source
+  end
+
+  # The moved row carries the user's lock and is destroyed by the merge, so
+  # the lock has to travel to the surviving row with the blend.
+  test "remap_security! merge from a locked moved row blends the basis and keeps the lock" do
+    new_security = create_security("GOOGLK2", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 15, price: 100, amount: 1500, currency: "USD",
+                                         cost_basis: 40, cost_basis_source: "calculated")
+    @amzn.update_columns(qty: 5, amount: 5 * @amzn.price)
+    @amzn.set_manual_cost_basis!(80)
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_equal 20, existing.qty, "precondition: the rows did not merge"
+    assert_equal 50, existing.cost_basis.to_d, "merged basis is not the weighted blend (80 x 5 + 40 x 15) / 20"
+    assert existing.cost_basis_locked?, "the moved row's lock was lost in the merge"
+    assert_equal "manual", existing.cost_basis_source
+  end
+
+  # The remap controller re-materializes straight after the merge, and an
+  # unlocked merged row would take the trade-derived figure instead.
+  test "the blended basis from a locked moved row survives the re-materialization after a remap" do
+    account = families(:empty).accounts.create!(name: "Remap", balance: 0, cash_balance: 0, currency: "USD", accountable: Investment.new)
+    moved_security = create_security("MOVD", prices: [ { date: 1.day.ago.to_date, price: 100 }, { date: Date.current, price: 100 } ])
+    target_security = create_security("TRGT", prices: [ { date: 1.day.ago.to_date, price: 100 }, { date: Date.current, price: 100 } ])
+    create_trade(moved_security, account: account, qty: 5, price: 200, date: 1.day.ago.to_date)
+    create_trade(target_security, account: account, qty: 15, price: 40, date: 1.day.ago.to_date)
+    Holding::Materializer.new(account, strategy: :forward).materialize_holdings
+
+    moved = account.holdings.find_by!(security: moved_security, date: Date.current)
+    moved.set_manual_cost_basis!(80)
+    moved.remap_security!(target_security)
+
+    merged = account.holdings.find_by!(security: target_security, date: Date.current)
+    assert_equal 50, merged.cost_basis.to_d, "precondition: the merge did not write the blend"
+
+    # As HoldingsController#remap_security does.
+    Balance::Materializer.new(Account.find(account.id), strategy: :forward, security_ids: [ target_security.id ]).materialize_balances
+    merged.reload
+
+    assert_equal 20, merged.qty
+    assert_equal 50, merged.cost_basis.to_d, "re-materialization replaced the blend with the trade-derived (200 x 5 + 40 x 15) / 20"
+    assert merged.cost_basis_locked?
+  end
+
+  # Both figures are the user's, each for its own units, so the blend is the
+  # user's figure for all 20.
+  test "remap_security! merge of two locked rows blends both figures and stays locked" do
+    new_security = create_security("GOOGLK3", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500, currency: "USD")
+    existing.set_manual_cost_basis!(80)
+    @amzn.set_manual_cost_basis!(40) # 15 units
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_equal 50, existing.cost_basis.to_d
+    assert existing.cost_basis_locked?
+    assert_equal "manual", existing.cost_basis_source
+  end
+
+  test "remap_security! merge with neither side locked stays unlocked" do
+    new_security = create_security("GOOGLK4", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500, currency: "USD",
+                                         cost_basis: 100, cost_basis_source: "calculated")
+    @amzn.update_columns(qty: 10, amount: 10 * @amzn.price, cost_basis: 40, cost_basis_source: "calculated")
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_equal 60, existing.cost_basis.to_d, "(100 x 5 + 40 x 10) / 15"
+    assert_not existing.cost_basis_locked?
+    assert_equal "calculated", existing.cost_basis_source
+  end
+
+  # Never state a cost for units nobody costed: the user's $80 covers its own
+  # 5 units, not the 10 merged in.
+  test "remap_security! merge with an unknown moved side leaves the basis unknown and unlocked" do
+    new_security = create_security("GOOGLK5", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500, currency: "USD")
+    existing.set_manual_cost_basis!(80)
+    @amzn.update_columns(qty: 10, amount: 10 * @amzn.price, cost_basis: nil, cost_basis_source: nil)
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_equal 15, existing.qty, "precondition: the rows did not merge"
+    assert_nil existing.cost_basis
+    assert_not existing.cost_basis_locked?
+    assert_nil existing.cost_basis_source
+  end
+
+  test "remap_security! merge of an unknown existing row with a locked moved row leaves the basis unknown and unlocked" do
+    new_security = create_security("GOOGLK6", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500, currency: "USD")
+    @amzn.update_columns(qty: 10, amount: 10 * @amzn.price)
+    @amzn.set_manual_cost_basis!(40)
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_nil existing.cost_basis
+    assert_not existing.cost_basis_locked?
+  end
+
+  # A negative row is units gone, so its unknown basis leaves the held side's
+  # figure standing, and that figure keeps its lock.
+  test "remap_security! merge of a locked row into a negative one keeps its figure and its lock" do
+    new_security = create_security("GOOGLK7", prices: [ { date: Date.current, price: 216.0 } ])
+    target = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 0, price: 216.0, amount: 0.0, currency: "USD")
+    target.update_columns(qty: -2, amount: -432.0)
+    @amzn.set_manual_cost_basis!(80) # 15 units
+
+    @amzn.remap_security!(new_security)
+    target.reload
+
+    assert_equal BigDecimal("13"), target.qty
+    assert_equal BigDecimal("80"), target.cost_basis
+    assert target.cost_basis_locked?, "the moved row's lock was lost in the merge"
+    assert_equal "manual", target.cost_basis_source
+  end
+
+  # Providers send 0 when they do not know a cost, so an unlocked 0 is no
+  # figure (Holding#known_cost_basis), and the merged basis is unknown.
+  test "remap_security! merge with an unlocked zero basis on one side leaves the basis unknown" do
+    new_security = create_security("GOOGLK9", prices: [ { date: Date.current, price: 100.00 } ])
+    existing = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 5, price: 100, amount: 500, currency: "USD",
+                                         cost_basis: 100, cost_basis_source: "calculated")
+    @amzn.update_columns(qty: 10, amount: 10 * @amzn.price, cost_basis: 0, cost_basis_source: "provider")
+
+    @amzn.remap_security!(new_security)
+    existing.reload
+
+    assert_nil existing.cost_basis, "the unknown 10 units were costed at 0"
+    assert_not existing.cost_basis_locked?
+  end
+
+  # A lock covers the units of the row it is on. On a target holding none,
+  # it covers units gone, so the merged row takes the moved row's figure,
+  # unlocked, with its source.
+  test "remap_security! merge into a locked negative row takes the moved row's figure, unlocked" do
+    new_security = create_security("GOOGLKA", prices: [ { date: Date.current, price: 216.0 } ])
+    target = @account.holdings.create!(date: @amzn.date, security: new_security, qty: 0, price: 216.0, amount: 0.0, currency: "USD")
+    target.update_columns(qty: -2, amount: -432.0, cost_basis: 3000.0, cost_basis_source: "manual", cost_basis_locked: true)
+    @amzn.update_columns(cost_basis: 216.0, cost_basis_source: "calculated") # 15 units
+
+    @amzn.remap_security!(new_security)
+    target.reload
+
+    assert_equal BigDecimal("216"), target.cost_basis
+    assert_not target.cost_basis_locked?
+    assert_equal "calculated", target.cost_basis_source
+  end
+
+  test "a remap without a collision keeps the moved row's lock" do
+    new_security = create_security("GOOGLK8", prices: [ { date: Date.current, price: 100.00 } ])
+    @amzn.set_manual_cost_basis!(80)
+
+    @amzn.remap_security!(new_security)
+    @amzn.reload
+
+    assert_equal new_security, @amzn.security
+    assert_equal 80, @amzn.cost_basis.to_d
+    assert @amzn.cost_basis_locked?
+  end
+
   test "reset_security_to_provider! moves a negative-qty holding back without raising" do
     old_security = @amzn.security
     new_security = create_security("GOOGRST", prices: [ { date: Date.current, price: 100.0 } ])
@@ -763,6 +1123,10 @@ class HoldingTest < ActiveSupport::TestCase
   end
 
   private
+
+    def assert_cost(expected, actual, message)
+      expected.nil? ? assert_nil(actual, message) : assert_equal(expected, actual, message)
+    end
 
     def load_holdings
       security1 = create_security("AMZN", prices: [

@@ -30,6 +30,10 @@ class Holding < ApplicationRecord
 
   delegate :ticker, to: :security
 
+  # Answers derived from the attributes go when a change to them is saved,
+  # as on #reload: `changed?` is false again by then and cannot tell.
+  after_save :forget_derived_answers
+
   def name
     security.name || ticker
   end
@@ -57,8 +61,126 @@ class Holding < ApplicationRecord
     # Use stored cost_basis if available (eliminates N+1 queries)
     return Money.new(known_cost_basis, currency) if known_cost_basis
 
+    # A caller that has many holdings can compute the fallback for all of
+    # them in one query and hand each its answer (.preload_avg_costs), so a
+    # page that lists every position does not run calculate_avg_cost's two
+    # queries per holding. nil is a valid preloaded answer: "unknown". It
+    # answers for the attributes it was computed from, so a holding changed
+    # since then computes its own.
+    return @preloaded_avg_cost if defined?(@preloaded_avg_cost) && !changed?
+
     # Fallback to calculation for holdings without pre-computed cost_basis
     calculate_avg_cost
+  end
+
+  # The rate a trade carries itself (extra["exchange_rate"], e.g. IBKR's
+  # fx_rate_to_base) comes before the table's, as in the calculators and
+  # Balance::SyncCache; a trade in the account's own currency converts at 1.
+  # Trade#exchange_rate= stores a number, but a row written to `extra`
+  # directly can hold the same rate as a string, which Trade's validation
+  # and Money#exchange_to both accept -- so a plain decimal string counts
+  # too. Anything else, an exponent or an absurd length included, is not
+  # cast, so it cannot overflow numeric and fail the query.
+  AVG_COST_TRADE_RATE_SQL = <<~SQL.squish.freeze
+    COALESCE(
+      CASE jsonb_typeof(trades.extra->'exchange_rate')
+        WHEN 'number' THEN (trades.extra->>'exchange_rate')::numeric
+        WHEN 'string' THEN CASE WHEN trades.extra->>'exchange_rate' ~ '^[[:space:]]*[+-]?([0-9]{1,20}([.][0-9]{0,20})?|[.][0-9]{1,20})[[:space:]]*$'
+                                THEN (trades.extra->>'exchange_rate')::numeric END
+      END,
+      exchange_rates.rate
+    )
+  SQL
+
+  # #calculate_avg_cost for every holding given, in one query: the same
+  # trades, rates, fees and internal-movement rule, read through the same SQL
+  # (.avg_cost_rates_join, .avg_cost_totals_sql, .avg_cost_from_totals), so
+  # the batch cannot answer differently from the holding on its own. Holdings
+  # with a stored cost basis are skipped, since #avg_cost never reaches the
+  # fallback for them. So are holdings with unsaved changes, unsaved ones
+  # included: the query reads the stored row, which is not what they hold.
+  def self.preload_avg_costs(holdings)
+    pending = holdings.reject { |holding| holding.known_cost_basis || holding.changed? }
+    return if pending.empty?
+
+    rows = Holding.where(id: pending.map(&:id))
+      .joins(:account)
+      .joins("JOIN entries ON entries.account_id = holdings.account_id AND entries.entryable_type = 'Trade' AND entries.date <= holdings.date")
+      .joins("JOIN trades ON trades.id = entries.entryable_id AND trades.security_id = holdings.security_id AND trades.qty > 0")
+      .joins(avg_cost_rates_join)
+      .group("holdings.id")
+      .pluck(
+        Arel.sql("holdings.id"),
+        Arel.sql(sanitize_sql_array([ "BOOL_OR(trades.investment_activity_label IN (?))", Trade::INTERNAL_MOVEMENT_LABELS ])),
+        *avg_cost_totals_sql
+      )
+      .index_by(&:first)
+
+    pending.each do |holding|
+      _id, internal_movement, total_cost, total_qty, rate_missing = rows[holding.id]
+      value = avg_cost_from_totals(total_cost, total_qty, rate_missing, holding.currency) unless internal_movement
+      holding.preload_avg_cost(value)
+    end
+  end
+
+  # Joins each trade to the table's rate for its day into the account's
+  # currency: `currency`, one holding's account currency, bound as a value; or
+  # :joined for `accounts.currency`, in a query that joins each holding's
+  # account.
+  def self.avg_cost_rates_join(currency = :joined)
+    target = currency != :joined ? sanitize_sql_array([ "exchange_rates.to_currency = ?", currency ]) : "exchange_rates.to_currency = accounts.currency"
+
+    <<~SQL.squish
+      LEFT JOIN exchange_rates ON (
+        exchange_rates.date = entries.date AND
+        exchange_rates.from_currency = trades.currency AND
+        #{target}
+      )
+    SQL
+  end
+
+  # Total cost with fees in the account's currency, total quantity, and
+  # whether any foreign purchase lacks a usable rate. `currency` as in
+  # .avg_cost_rates_join.
+  #
+  # A foreign purchase with no usable rate for its day has a cost nothing
+  # here knows, so the position's is unknown too, as with an internal
+  # movement -- counting it at 1:1 would state a figure that looks measured
+  # and is not. A rate of zero or less converts nothing, so it counts as
+  # missing, as it does in Money#exchange_to. Checked in the same query as
+  # the totals rather than in another round trip.
+  def self.avg_cost_totals_sql(currency = :joined)
+    foreign = currency != :joined ? sanitize_sql_array([ "trades.currency <> ?", currency ]) : "trades.currency <> accounts.currency"
+    rate = AVG_COST_TRADE_RATE_SQL
+
+    [
+      Arel.sql("SUM((trades.price * trades.qty + trades.fee) * CASE WHEN #{foreign} THEN #{rate} ELSE 1 END)"),
+      Arel.sql("SUM(trades.qty)"),
+      Arel.sql("BOOL_OR(#{foreign} AND (#{rate} IS NULL OR #{rate} <= 0))")
+    ]
+  end
+
+  # nil when there are no purchases -- cost basis is genuinely unknown, not
+  # the market price -- or when a rate is missing.
+  def self.avg_cost_from_totals(total_cost, total_qty, rate_missing, currency)
+    return nil if rate_missing
+    return nil unless total_qty && total_qty > 0
+
+    Money.new(total_cost / total_qty, currency)
+  end
+
+  # Replacing the cost replaces the #trend derived from it.
+  def preload_avg_cost(value)
+    @preloaded_avg_cost = value
+    remove_instance_variable(:@trend) if defined?(@trend)
+  end
+
+  # A reload replaces the attributes, so an answer computed from the old ones
+  # must go with them -- including #trend, which is derived from avg_cost,
+  # and #day_change, which is derived from amount and date.
+  def reload(*)
+    forget_derived_answers
+    super
   end
 
   def trend
@@ -176,21 +298,7 @@ class Holding < ApplicationRecord
           merged_qty = existing.qty + holding.qty
           merged_amount = existing.amount + holding.amount
 
-          # Weighted average cost basis when both rows hold units. A negative
-          # row is units gone, not units bought, so it adds no cost: when only
-          # one side holds units, the merged row keeps that side's basis, as a
-          # sale leaves the per-share basis unchanged.
-          merged_cost_basis = if !merged_qty.positive?
-            existing.cost_basis
-          elsif existing.qty.positive? && holding.qty.positive?
-            if existing.cost_basis.present? && holding.cost_basis.present?
-              ((existing.cost_basis * existing.qty) + (holding.cost_basis * holding.qty)) / merged_qty
-            else
-              existing.cost_basis # Keep existing if we can't calculate weighted average
-            end
-          else
-            (existing.qty.positive? ? existing : holding).cost_basis
-          end
+          merged_basis = merged_cost_basis_attrs(existing, holding, merged_qty)
 
           # amount / qty, as the calculators write amount = qty x price with
           # a positive price; that holds for a negative merged row too. Two
@@ -212,9 +320,8 @@ class Holding < ApplicationRecord
           merge_attrs = {
             qty: merged_qty,
             amount: merged_amount,
-            price: merged_price,
-            cost_basis: merged_cost_basis
-          }
+            price: merged_price
+          }.merge(merged_basis)
           merge_attrs[:external_id] ||= holding.external_id if existing.external_id.blank? && holding.external_id.present?
           merge_attrs[:provider_security_id] ||= holding.provider_security_id || old_security.id if existing.provider_security_id.blank?
           merge_attrs[:account_provider_id] ||= holding.account_provider_id if existing.account_provider_id.blank? && holding.account_provider_id.present?
@@ -247,8 +354,10 @@ class Holding < ApplicationRecord
         end
       end
 
-      # Move all trades for old security to new security
+      # Move all trades for old security to new security, and their lots
       account.trades.where(security: old_security).update_all(security_id: new_security.id)
+      lots = account.holding_lots.where(security: old_security)
+      HoldingLot.move!(derived: lots.derived, opening: lots.opening, to: new_security)
     end
 
     # Reload self to reflect changes (may raise RecordNotFound if self was destroyed)
@@ -277,6 +386,8 @@ class Holding < ApplicationRecord
     transaction do
       # Move trades back (see note above about limitation)
       account.trades.where(security: current_security).update_all(security_id: original_security.id)
+      lots = account.holding_lots.where(security: current_security)
+      HoldingLot.move!(derived: lots.derived, opening: lots.opening.where(origin_security: original_security), to: original_security)
 
       # Reset ALL holdings that were remapped from this provider_security
       # Write only the columns the reset owns, so a negative derived row
@@ -312,6 +423,37 @@ class Holding < ApplicationRecord
   end
 
   private
+    # The cost basis columns for a remap merge of `moved` into `existing`.
+    # The merged figure is made of the rows that hold units: a negative row
+    # is units gone, not units bought, so it adds no cost, as a sale leaves
+    # the per-share basis unchanged, and a lock on it is dropped with it.
+    # Both holding units: the weighted blend. A figure the user locked on
+    # either of those rows locks the result, so the next sync keeps it;
+    # otherwise the result keeps the source of the target, or of the moved
+    # row when the target holds none. If any of them has no known basis (an
+    # unlocked 0 is none, as in #known_cost_basis), the merged basis is
+    # unknown and unlocked: never state a cost for units nobody costed. A
+    # merge that leaves no units held keeps the target's basis.
+    def merged_cost_basis_attrs(existing, moved, merged_qty)
+      return {} unless merged_qty.positive?
+
+      held = [ existing, moved ].select { |row| row.qty.positive? }
+      return { cost_basis: nil, cost_basis_source: nil, cost_basis_locked: false } if held.any? { |row| row.known_cost_basis.nil? }
+
+      locked = held.any?(&:cost_basis_locked?)
+      {
+        cost_basis: held.sum { |row| row.known_cost_basis * row.qty } / held.sum(&:qty),
+        cost_basis_source: locked ? "manual" : held.first.cost_basis_source,
+        cost_basis_locked: locked
+      }
+    end
+
+    def forget_derived_answers
+      remove_instance_variable(:@preloaded_avg_cost) if defined?(@preloaded_avg_cost)
+      remove_instance_variable(:@trend) if defined?(@trend)
+      remove_instance_variable(:@day_change) if defined?(@day_change)
+    end
+
     def amount_in_account_currency
       return amount if currency == account.currency
 
@@ -336,13 +478,7 @@ class Holding < ApplicationRecord
     def calculate_avg_cost
       trades = account.trades
         .with_entry
-        .joins(ActiveRecord::Base.sanitize_sql_array([
-          "LEFT JOIN exchange_rates ON (
-            exchange_rates.date = entries.date AND
-            exchange_rates.from_currency = trades.currency AND
-            exchange_rates.to_currency = ?
-          )", account.currency
-        ]))
+        .joins(self.class.avg_cost_rates_join(account.currency))
         .where(security_id: security.id)
         .where("trades.qty > 0 AND entries.date <= ?", date)
 
@@ -364,43 +500,8 @@ class Holding < ApplicationRecord
         Trade::INTERNAL_MOVEMENT_LABELS
       )
 
-      # The rate a trade carries itself (extra["exchange_rate"], e.g. IBKR's
-      # fx_rate_to_base) comes before the table's, as in the calculators and
-      # Balance::SyncCache; a trade in the account's own currency converts at 1.
-      # Trade#exchange_rate= stores a number, but a row written to `extra`
-      # directly can hold the same rate as a string, which Trade's validation
-      # and Money#exchange_to both accept -- so a plain decimal string counts
-      # too. Anything else, an exponent or an absurd length included, is not
-      # cast, so it cannot overflow numeric and fail the query.
-      rate = <<~SQL.squish
-        COALESCE(
-          CASE jsonb_typeof(trades.extra->'exchange_rate')
-            WHEN 'number' THEN (trades.extra->>'exchange_rate')::numeric
-            WHEN 'string' THEN CASE WHEN trades.extra->>'exchange_rate' ~ '^[[:space:]]*[+-]?([0-9]{1,20}([.][0-9]{0,20})?|[.][0-9]{1,20})[[:space:]]*$'
-                                    THEN (trades.extra->>'exchange_rate')::numeric END
-          END,
-          exchange_rates.rate
-        )
-      SQL
-      foreign = ActiveRecord::Base.sanitize_sql_array([ "trades.currency <> ?", account.currency ])
+      total_cost, total_qty, rate_missing = trades.pick(*self.class.avg_cost_totals_sql(account.currency))
 
-      # A foreign purchase with no usable rate for its day has a cost nothing
-      # here knows, so the position's is unknown too, as with an internal
-      # movement -- counting it at 1:1 would state a figure that looks measured
-      # and is not. A rate of zero or less converts nothing, so it counts as
-      # missing, as it does in Money#exchange_to. Checked in the same query as
-      # the totals rather than in another round trip.
-      total_cost, total_qty, rate_missing = trades.pick(
-        Arel.sql("SUM((trades.price * trades.qty + trades.fee) * CASE WHEN #{foreign} THEN #{rate} ELSE 1 END)"),
-        Arel.sql("SUM(trades.qty)"),
-        Arel.sql("BOOL_OR(#{foreign} AND (#{rate} IS NULL OR #{rate} <= 0))")
-      )
-      return nil if rate_missing
-
-      # Return nil when no trades exist - cost basis is genuinely unknown
-      # Previously this fell back to current market price, which was misleading
-      return nil unless total_qty && total_qty > 0
-
-      Money.new(total_cost / total_qty, currency)
+      self.class.avg_cost_from_totals(total_cost, total_qty, rate_missing, currency)
     end
 end
