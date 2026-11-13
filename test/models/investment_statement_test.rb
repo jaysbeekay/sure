@@ -405,6 +405,170 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_in_delta 3980, trend.previous.amount, 0.001
   end
 
+  # ------------------------------------- period return: no conversion at parity
+
+  # A balance with no rate to the family currency is left out, rather than
+  # counted as though one unit of its currency were one unit of the family's.
+  test "an account whose currency has no rate at all is left out, not converted at parity" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    usd = create_investment_account(balance: 10_500)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+
+    [ [ usd, "USD" ], [ eur, "EUR" ] ].each do |account, currency|
+      account.balances.create!(date: period.date_range.begin - 1.day, balance: 10_000,
+                               currency: currency, start_non_cash_balance: 10_000, net_market_flows: 0)
+      account.balances.create!(date: period.date_range.end, balance: 10_000,
+                               currency: currency, start_non_cash_balance: 10_000, net_market_flows: 500)
+    end
+    # No EUR->USD rate anywhere.
+
+    trend = @statement.period_return_trend(period: period)
+
+    assert_equal 10_000, trend.previous.amount, "the EUR start value was converted at parity"
+    assert_equal 10_500, trend.current.amount, "the EUR flows were converted at parity"
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
+  end
+
+  # Row-level NULLs would keep the converting start value and discard the
+  # in-period flows measured against it.
+  test "an account whose rows are only partly convertible is dropped whole" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    account = create_investment_account(balance: 5000)
+    # Anchor in the family currency: converts on its own.
+    account.balances.create!(date: period.date_range.begin - 1.day, balance: 4000,
+                             currency: "USD", start_non_cash_balance: 4000, net_market_flows: 0)
+    # In-period rows after a currency change, with no rate anywhere.
+    account.balances.create!(date: period.date_range.end, balance: 4000,
+                             currency: "EUR", start_non_cash_balance: 4000, net_market_flows: 300)
+
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period),
+                 "the account was not recognised as partly unconvertible"
+    assert_nil @statement.period_return_trend(period: period),
+               "its start value was counted while its flows were discarded"
+  end
+
+  test "an account whose currency has a rate is converted with it" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    eur.balances.create!(date: period.date_range.end, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 100)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: period.date_range.begin, rate: 2)
+
+    trend = @statement.period_return_trend(period: period)
+
+    assert_equal 2000, trend.previous.amount, "1000 EUR at 2.0 is 2000 USD"
+    assert_equal 2200, trend.current.amount
+    assert_equal 0, @statement.period_return_unconvertible_count(period: period)
+  end
+
+  # The lookup carries forward, so a weekend or a holiday with no rate row of
+  # its own does not suppress an account.
+  test "a rate from before the date is carried forward rather than suppressing the account" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: period.date_range.begin - 30, rate: 2)
+
+    assert_equal 0, @statement.period_return_unconvertible_count(period: period)
+    assert_equal 2000, @statement.period_return_trend(period: period).previous.amount
+  end
+
+  # And backward: a pair whose only rate is later still resolves.
+  test "a rate that exists only after the date is used rather than withheld" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current + 5, rate: 3)
+
+    assert_equal 0, @statement.period_return_unconvertible_count(period: period)
+    assert_equal 3000, @statement.period_return_trend(period: period).previous.amount
+  end
+
+  # Back-filling takes the nearest later rate, not the latest one.
+  test "of several later rates, the earliest is used" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current + 5, rate: 3)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: Date.current + 10, rate: 7)
+
+    assert_equal 3000, @statement.period_return_trend(period: period).previous.amount
+  end
+
+  # exchange_rates is shared by every family, so a closer rate from the same
+  # currency to another target must not be picked, on either side of the date.
+  test "a closer rate to another currency is not used" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: period.date_range.begin - 30, rate: 2)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "AUD", date: period.date_range.begin - 2, rate: 9)
+    gbp = create_investment_account(balance: 5000, currency: "GBP")
+    gbp.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "GBP", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "GBP", to_currency: "USD", date: Date.current + 10, rate: 3)
+    ExchangeRate.create!(from_currency: "GBP", to_currency: "AUD", date: Date.current + 5, rate: 9)
+
+    assert_equal 0, @statement.period_return_unconvertible_count(period: period)
+    assert_equal 5000, @statement.period_return_trend(period: period).previous.amount,
+                 "1000 EUR at 2 plus 1000 GBP at 3; an AUD rate was picked instead"
+  end
+
+  test "a currency with rates only to another currency is still unconvertible" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+    eur.balances.create!(date: period.date_range.begin - 1.day, balance: 1000,
+                         currency: "EUR", start_non_cash_balance: 1000, net_market_flows: 0)
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "AUD", date: period.date_range.begin, rate: 9)
+
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
+    assert_nil @statement.period_return_trend(period: period)
+  end
+
+  test "an unconvertible account is excluded however a parity default might be spelled" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    usd = create_investment_account(balance: 10_500)
+    eur = create_investment_account(balance: 5000, currency: "EUR")
+
+    [ [ usd, "USD" ], [ eur, "EUR" ] ].each do |account, currency|
+      account.balances.create!(date: period.date_range.begin - 1.day, balance: 10_000,
+                               currency: currency, start_non_cash_balance: 10_000, net_market_flows: 0)
+    end
+
+    trend = @statement.period_return_trend(period: period)
+
+    assert_equal 10_000, trend.previous.amount,
+                 "the EUR account contributed, so something converted it without a rate"
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
+  end
+
+  test "an account that held an unconvertible currency in an earlier period is left out" do
+    period = Period.custom(start_date: Date.current.beginning_of_month, end_date: Date.current)
+    usd = create_investment_account(balance: 10_500)
+    switched = create_investment_account(balance: 5000)
+    switched.balances.create!(date: period.date_range.begin - 60.days, balance: 3000,
+                              currency: "EUR", start_non_cash_balance: 3000, net_market_flows: 0)
+
+    [ usd, switched ].each do |account|
+      account.balances.create!(date: period.date_range.begin - 1.day, balance: 10_000,
+                               currency: "USD", start_non_cash_balance: 10_000, net_market_flows: 0)
+      account.balances.create!(date: period.date_range.end, balance: 10_000,
+                               currency: "USD", start_non_cash_balance: 10_000, net_market_flows: 500)
+    end
+
+    trend = @statement.period_return_trend(period: period)
+
+    assert_equal 10_000, trend.previous.amount, "the account with an earlier EUR row was included"
+    assert_equal 10_500, trend.current.amount
+    assert_equal 1, @statement.period_return_unconvertible_count(period: period)
+  end
+
   test "period_return_trend returns nil when no balance data in period" do
     period = Period.custom(start_date: 10.years.ago.to_date, end_date: 9.years.ago.to_date)
     assert_nil @statement.period_return_trend(period: period)
