@@ -56,20 +56,25 @@
 
     <%# Withheld entirely for a valuation-only scope (R16): without trade or
         transfer records the external flows are unknown, and an XIRR over them
-        would be a fabrication. Nil arrives here and reads as no data. %>
+        would be a fabrication. Nil arrives here and reads as no data.
+
+        When the flows may fit more than one rate, the figure is still shown
+        and both money-weighted cards say it may not be the only one. The
+        annualised card hedges only a figure it shows: under a year it keeps
+        the hint that explains why the figure is withheld. %>
     <%= render "portfolios/kpi_card",
           icon: "user",
           label: t("portfolios.performance.mwr"),
           money: nil,
           rate: returns[:mwr],
-          hint: t("portfolios.performance.mwr_hint") %>
+          hint: returns[:mwr_ambiguous] ? t("portfolios.performance.mwr_ambiguous_hint") : t("portfolios.performance.mwr_hint") %>
 
     <%= render "portfolios/kpi_card",
           icon: "calendar-clock",
           label: t("portfolios.performance.annualized_mwr"),
           money: nil,
           rate: returns[:annualized_mwr],
-          hint: t("portfolios.performance.annualized_hint") %>
+          hint: returns[:mwr_ambiguous] && returns[:annualized_mwr] ? t("portfolios.performance.mwr_ambiguous_hint") : t("portfolios.performance.annualized_hint") %>
 
     <%= render "portfolios/kpi_card",
           icon: "activity",

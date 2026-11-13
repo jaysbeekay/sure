@@ -133,6 +133,31 @@ class Assistant::Function::PortfolioToolsTest < ActiveSupport::TestCase
     assert_nil result[:time_weighted_return]
   end
 
+  # The page hedges a money-weighted figure whose flows may fit several rates;
+  # the tool reports the same flag beside the same figure, so the assistant
+  # can hedge it too. Off, then on, against the same figures.
+  test "performance reports whether the money-weighted return may be one of several rates" do
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(BigDecimal("0.21"))
+
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return_ambiguous?).returns(false)
+    unique = call(Assistant::Function::GetPortfolioPerformance, { "period" => "last_30_days" })
+
+    Portfolio::Performance.any_instance.stubs(:money_weighted_return_ambiguous?).returns(true)
+    ambiguous = call(Assistant::Function::GetPortfolioPerformance, { "period" => "last_30_days" })
+
+    assert_equal false, unique[:money_weighted_ambiguous]
+    assert_equal true, ambiguous[:money_weighted_ambiguous]
+    assert_equal unique[:money_weighted_return], ambiguous[:money_weighted_return],
+      "the flag qualifies the figure; it does not change it"
+  end
+
+  test "the performance description explains money_weighted_ambiguous" do
+    description = Assistant::Function::GetPortfolioPerformance.description
+
+    assert_match(/money_weighted_ambiguous/, description)
+    assert_match(/may/, description[/money_weighted_ambiguous.*/m])
+  end
+
   # ------------------------------------------------ income, as the page shows it
 
   # A dividend with no security recorded, and one naming a security this

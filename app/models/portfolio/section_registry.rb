@@ -261,6 +261,9 @@ class Portfolio::SectionRegistry
         annualized_twr: performance.annualized_time_weighted_return,
         mwr: performance.money_weighted_return,
         annualized_mwr: performance.annualized_money_weighted_return,
+        # Whether the money-weighted figures may be one of several rates that
+        # solve the same flows. False whenever :mwr is nil.
+        mwr_ambiguous: performance.money_weighted_return_ambiguous?,
         volatility: performance.volatility,
         max_drawdown: performance.max_drawdown
       }
