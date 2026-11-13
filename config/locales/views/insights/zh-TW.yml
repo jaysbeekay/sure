@@ -34,6 +34,7 @@ zh-TW:
       idle_cash: 閒置現金
       budget_at_risk: 預算
       budget_on_track: 預算
+      spending_pace: "支出進度"
     meta:
       next_n_days:
         one: 未來一天
@@ -54,6 +55,7 @@ zh-TW:
       idle_days:
         one: 閒置 %{count} 天
         other: 閒置 %{count} 天
+      over_budget: "超出預算"
     actions:
       spending_anomaly: 查看 %{category} 的交易
       cash_flow_warning: 檢視定期交易
@@ -79,6 +81,9 @@ zh-TW:
         one: 您的預算中有一個分類需要注意
         other: 您的預算中有 %{count} 個分類需要注意
       budget_on_track: 您的預算進度正常
+      spending_pace:
+        approaching: "您的支出快於預算進度"
+        over: "您本月已超出預算"
     templates:
       spending_anomaly:
         above: 依目前進度，您這個月在 %{category} 的支出約為 %{projected_spend}，比近期月均 %{baseline_spend} 高出約 %{deviation_pct}%。
@@ -97,3 +102,6 @@ zh-TW:
         over: '%{categories} 這個月已超出預算。您目前已使用總預算的 %{budget_spent_pct}%。'
         near: '%{categories} 這個月已接近預算上限。您目前已使用總預算的 %{budget_spent_pct}%。'
       budget_on_track: 您已使用 %{budgeted} 預算中的 %{spent}（%{budget_spent_pct}%），全部都在上限之內。
+      spending_pace:
+        approaching: "本月已過 %{elapsed_pct}%，您已使用 %{budgeted} 預算中的 %{spent_pct}%。依目前進度，您將支出約 %{projected_spend}。"
+        over: "您已支出 %{spent}，預算為 %{budgeted}，超出 %{over_by}。"

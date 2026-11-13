@@ -46,6 +46,7 @@ de:
       need_attention: zu prüfen
       of_budget: vom Budget
       on_pace: hochgerechnet
+      over_budget: "über Budget"
       today: heute
       vs_previous: vs. Vormonat
     index:
@@ -84,6 +85,9 @@ de:
       spending_anomaly:
         above: Hochgerechnet gibst du diesen Monat %{projected_spend} für %{category} aus, rund %{deviation_pct} % mehr als dein jüngster Monatsschnitt von %{baseline_spend}.
         below: Hochgerechnet gibst du diesen Monat %{projected_spend} für %{category} aus, rund %{deviation_pct} % weniger als dein jüngster Monatsschnitt von %{baseline_spend}.
+      spending_pace:
+        approaching: "Du hast %{spent_pct} % deines Budgets von %{budgeted} ausgegeben, und %{elapsed_pct} % des Monats sind vorbei. Bei diesem Tempo gibst du etwa %{projected_spend} aus."
+        over: "Du hast %{spent} bei einem Budget von %{budgeted} ausgegeben, also %{over_by} darüber."
       subscription_audit: "%{name} (%{amount}) ist seit dem erwarteten Termin am %{expected_on} nicht mehr aufgetaucht. Vielleicht ist das Abo gekündigt oder die Abbuchung hat sich verschoben."
     titles:
       budget_at_risk:
@@ -102,6 +106,9 @@ de:
       spending_anomaly:
         above: Deine Ausgaben für %{category} steigen
         below: Deine Ausgaben für %{category} sinken
+      spending_pace:
+        approaching: "Deine Ausgaben liegen über dem Budgettempo"
+        over: "Du bist diesen Monat über dem Budget"
       subscription_audit: Läuft %{name} noch?
     types:
       budget_at_risk: Budget
@@ -112,4 +119,5 @@ de:
       net_worth_milestone: Nettovermögen
       savings_rate_change: Sparquote
       spending_anomaly: Ausgaben
+      spending_pace: "Ausgabentempo"
       subscription_audit: Abos
