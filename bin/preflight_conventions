@@ -1,0 +1,261 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Flags upstream conventions that pre-flight PRs (bases `mirror/upstream-main`
+# and `up/*`) keep breaking, on the lines a change adds only.
+#
+#   bin/preflight_conventions BASE HEAD
+#
+# BASE and HEAD are commits already present in the repository. Nothing is
+# checked out: the diff and the head's files are read through git. Prints one
+# `path:line: [rule] message` per hit and a final count line.
+#
+# Exit status: 0 no hits, 1 hits, 2 the check could not run.
+
+require "open3"
+
+module PreflightConventions
+  Hit = Struct.new(:path, :line, :rule, :message) do
+    def to_s = "#{path}:#{line}: [#{rule}] #{message}"
+  end
+
+  # Rule 1: comments that narrate fork history or review rounds.
+  FORK_HISTORY = [
+    %r{jaysbeekay/sure}i,
+    /\b(?:slice|drop)\s+(?:IP)?\d+(?:\.\d+[a-z]?)*\b/i,
+    /\b(?:address(?:es|ed)?|per|from|after)\s+(?:the\s+|a\s+)?(?:review|coderabbit|cubic|codex|gatekeeper)\b/i,
+    /\bfork\s+(?:PR|issue|pre-?flight)\b/i
+  ].freeze
+
+  RUBY_FILES = /\.(?:rb|rake|ya?ml)\z/
+  JS_FILES = /\.(?:js|ts|mjs)\z/
+
+  # Rule 2: support-relevant provider and import failures go to DebugLogEntry.
+  LOGGER = /\bRails\.logger\.(?:warn|error)\b/
+  PROVIDER_PATHS = [
+    %r{\Aapp/models/provider/},
+    %r{\Aapp/models/(?:.+/)?provider[^/]*\.rb\z},
+    %r{\Aapp/models/[^/]+_(?:account|item)(?:/|\.rb\z)},
+    %r{\Aapp/models/(?:[^/]+_)?import\.rb\z},
+    %r{\Aapp/models/import/},
+    %r{\Aapp/models/.*importer[^/]*\.rb\z}
+  ].freeze
+
+  # Rule 3: design-system tokens, not raw palette classes or hex colours.
+  PALETTE = /\b(?:bg|text|border|ring|fill|stroke|from|to|via|divide|outline|placeholder)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-(?:50|[1-9]00|950)\b/
+  BLACK_WHITE = /\b(?:bg|text|border)-(?:white|black)\b/
+  HEX_DIGITS = "(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})"
+  # A hex colour only where a colour is set: a Tailwind arbitrary value
+  # (`bg-[#fff]`) or a colour property or attribute (`color: #fff`,
+  # `fill="#fff"`). Anchors, Stimulus actions and HTML entities are not.
+  HEX_COLOUR = /\[\##{HEX_DIGITS}\]|\b(?:color|background(?:-color)?|fill|stroke|border(?:-color)?)\s*[:=]\s*["']?\##{HEX_DIGITS}\b/i
+  UI_PATHS = %r{\Aapp/(?:views|components)/.+\.(?:erb|rb)\z}
+
+  # Rule 4: new migrations use the current Rails migration version.
+  MIGRATION_VERSION = /ActiveRecord::Migration\[(\d+\.\d+)\]/
+  SCHEMA_VERSION = /ActiveRecord::Schema\[(\d+\.\d+)\]/
+
+  def self.check(base, head, dir: Dir.pwd)
+    Checker.new(base, head, dir).hits
+  end
+
+  # The comment part of a line, or nil. Covers whole-line and trailing
+  # comments, ERB comment tags, HTML comments and JS block comments.
+  def self.comment_in(path, text)
+    stripped = text.strip
+    if path.end_with?(".erb")
+      return stripped[3..] if stripped.start_with?("<%#")
+      return Regexp.last_match(1) if text =~ /<%-?\s*#(.*?)(?:-?%>|\z)/
+      return Regexp.last_match(1) if text =~ /<!--(.*?)(?:-->|\z)/
+
+      # A trailing Ruby comment inside a code tag: <% x = 1 # note %>
+      text.scan(/<%[-=]?(.*?)(?:-?%>|\z)/).each do |(code)|
+        comment = trailing_after(code, "#")
+        return comment if comment
+      end
+      nil
+    elsif path.match?(RUBY_FILES)
+      trailing_after(text, "#")
+    elsif path.match?(JS_FILES)
+      return stripped if stripped.start_with?("*", "/*")
+
+      trailing_after(text, "//")
+    end
+  end
+
+  # The text after the first `marker` outside a string literal, or nil. A
+  # `#{` is interpolation, not a comment.
+  def self.trailing_after(text, marker)
+    quote = nil
+    i = 0
+    while i < text.length
+      char = text[i]
+      if quote
+        if char == "\\"
+          i += 1
+        elsif char == quote
+          quote = nil
+        end
+      elsif [ "\"", "'", "`" ].include?(char)
+        quote = char
+      elsif text[i, marker.length] == marker && !(marker == "#" && text[i + 1] == "{")
+        return text[(i + marker.length)..]
+      end
+      i += 1
+    end
+    nil
+  end
+
+  # The line with any trailing Ruby comment removed.
+  def self.ruby_code(text)
+    comment = trailing_after(text, "#")
+    comment ? text.delete_suffix("#" + comment) : text
+  end
+
+  class Checker
+    def initialize(base, head, dir)
+      @base = base
+      @head = head
+      @dir = dir
+      @files = {}
+    end
+
+    def hits
+      found = []
+      added_lines.each do |path, line, text|
+        found.concat(comment_hits(path, line, text))
+        found.concat(logger_hits(path, line, text))
+        found.concat(ui_hits(path, line, text))
+      end
+      found.concat(migration_hits)
+      found
+    end
+
+    private
+
+      def git(*args)
+        out, err, status = Open3.capture3("git", "-C", @dir, *args)
+        raise "git #{args.join(' ')} failed: #{err}" unless status.success?
+
+        out
+      end
+
+      def head_lines(path)
+        @files[path] ||= git("show", "#{@head}:#{path}").lines
+      end
+
+      # [path, line number in the head file, text] for each added line. A
+      # `+++` line is a file header only between `diff --git` and the first
+      # `@@`; inside a hunk it is an added line that starts with "++".
+      def added_lines
+        rows = []
+        path = nil
+        line = nil
+        in_header = false
+        git("diff", "--unified=0", "--no-color", "--no-renames", @base, @head).each_line do |raw|
+          raw = raw.chomp
+          if raw.start_with?("diff --git ")
+            in_header = true
+            path = nil
+            line = nil
+          elsif in_header && raw.start_with?("+++ ")
+            path = raw == "+++ /dev/null" ? nil : raw.delete_prefix("+++ b/")
+          elsif (m = raw.match(/\A@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/))
+            in_header = false
+            line = m[1].to_i
+          elsif !in_header && raw.start_with?("+") && path && line
+            rows << [ path, line, raw[1..] ]
+            line += 1
+          end
+        end
+        rows
+      end
+
+      def comment_hits(path, line, text)
+        comment = PreflightConventions.comment_in(path, text)
+        return [] unless comment && FORK_HISTORY.any? { |pattern| comment.match?(pattern) }
+
+        [ Hit.new(path, line, "fork-history", "comment narrates fork or review history; comments describe current behaviour (AGENTS.md)") ]
+      end
+
+      def logger_hits(path, line, text)
+        return [] unless PROVIDER_PATHS.any? { |pattern| path.match?(pattern) }
+        return [] unless PreflightConventions.ruby_code(text).match?(LOGGER)
+        return [] if enclosing_method(path, line)&.any? { |l| l.include?("DebugLogEntry.capture") }
+
+        [ Hit.new(path, line, "debug-log", "provider or import failure logged with Rails.logger and no DebugLogEntry.capture in the same method (AGENTS.md)") ]
+      end
+
+      # The lines of the method that contains `line` in the head file, or nil
+      # when it is in none (a class body, a block outside any method). An
+      # endless method (`def x = ...`) has no body to search and is skipped.
+      def enclosing_method(path, line)
+        lines = head_lines(path)
+        index = line - 1
+        target_indent = lines[index].to_s[/\A */].size
+        (index - 1).downto(0) do |start|
+          candidate = lines[start]
+          next unless candidate.match?(/\A *def\s/)
+          next if candidate.match?(/\A *def\s+[\w.?!]+(?:\([^)]*\))?\s*=(?!=)/)
+
+          indent = candidate[/\A */]
+          next unless indent.size < target_indent
+
+          finish = ((start + 1)...lines.size).find { |i| lines[i].match?(/\A#{indent}end\b/) }
+          return finish && finish > index ? lines[start..finish] : nil
+        end
+        nil
+      end
+
+      def ui_hits(path, line, text)
+        return [] unless path.match?(UI_PATHS)
+
+        code = path.end_with?(".rb") ? PreflightConventions.ruby_code(text) : text
+        found = []
+        if code.match?(PALETTE) || code.match?(BLACK_WHITE)
+          found << Hit.new(path, line, "design-tokens", "raw Tailwind palette class; use a design-system token (AGENTS.md)")
+        end
+        if code.match?(HEX_COLOUR)
+          found << Hit.new(path, line, "design-tokens", "hex colour literal; use a design-system token (AGENTS.md)")
+        end
+        found
+      end
+
+      def migration_hits
+        added = git("diff", "--name-only", "--diff-filter=A", "--no-renames", @base, @head, "--", "db/migrate").split("\n")
+        return [] if added.empty?
+
+        schema = head_lines("db/schema.rb").join[SCHEMA_VERSION, 1]
+        return [] unless schema
+
+        added.filter_map do |path|
+          lines = head_lines(path)
+          index = lines.index { |l| l.match?(MIGRATION_VERSION) }
+          next unless index
+
+          version = lines[index][MIGRATION_VERSION, 1]
+          next if version == schema
+
+          Hit.new(path, index + 1, "migration-version", "new migration uses Migration[#{version}]; the schema is on #{schema} (AGENTS.md)")
+        end
+      end
+  end
+end
+
+if $PROGRAM_NAME == __FILE__
+  unless ARGV.size == 2
+    warn "usage: bin/preflight_conventions BASE HEAD"
+    exit 2
+  end
+
+  begin
+    hits = PreflightConventions.check(*ARGV)
+  rescue StandardError => e
+    warn "preflight_conventions could not run: #{e.message}"
+    exit 2
+  end
+
+  hits.each { |hit| puts hit }
+  puts "#{hits.size} convention #{hits.size == 1 ? 'hit' : 'hits'}"
+  exit(hits.empty? ? 0 : 1)
+end

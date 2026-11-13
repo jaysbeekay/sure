@@ -1,0 +1,108 @@
+# Fork only. Checks pre-flight pull requests (bases `mirror/upstream-main` and
+# `up/*`) for upstream conventions they keep breaking, on the lines they add.
+#
+# Pre-flight heads are cut from upstream and never carry this file, so it runs
+# from the default branch through `workflow_run` on the workflows every
+# pre-flight already starts: `Pull Request`, or `Chart CI` for a change under
+# charts/ (which `Pull Request` ignores). The head is fetched into
+# refs only: none of its code is checked out or run. The result is a commit
+# status on the head commit.
+name: Pre-flight conventions
+
+on:
+  workflow_run:
+    workflows: ["Pull Request", "Chart CI"]
+    types: [requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  conventions:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # The run's own pull_requests list can hold several PRs for one branch
+      # in no set order, so ask for the open PRs on this commit and take the
+      # one whose base is a pre-flight base.
+      - name: Find the pre-flight pull request
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unexpected head SHA; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+            --jq '[.[] | select(.state == "open") | .base.ref | select(. == "mirror/upstream-main" or startswith("up/"))][0] // ""')
+          if [ -n "$base" ] && ! [[ "$base" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Unexpected base branch name; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$base" ]; then
+            echo "No open pre-flight pull request on this commit; skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Pre-flight base: $base"
+            echo "BASE_REF=$base" >> "$GITHUB_ENV"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the default branch (the script lives here)
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the head and base into refs only
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          git fetch --no-tags origin "$HEAD_SHA" "+refs/heads/${BASE_REF}:refs/remotes/preflight/base"
+          echo "MERGE_BASE=$(git merge-base refs/remotes/preflight/base "$HEAD_SHA")" >> "$GITHUB_ENV"
+
+      - name: Check conventions
+        if: steps.scope.outputs.run == 'true'
+        id: check
+        run: |
+          set +e
+          ruby bin/preflight_conventions "$MERGE_BASE" "$HEAD_SHA" > hits.txt
+          code=$?
+          set -e
+          cat hits.txt
+          {
+            echo "### Pre-flight conventions"
+            echo '```'
+            cat hits.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -eq 0 ]; then
+            echo "state=success" >> "$GITHUB_OUTPUT"
+            echo "description=No convention hits on the added lines" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 1 ]; then
+            echo "state=failure" >> "$GITHUB_OUTPUT"
+            echo "description=$(tail -n 1 hits.txt) on the added lines; see the run summary" >> "$GITHUB_OUTPUT"
+          else
+            echo "state=error" >> "$GITHUB_OUTPUT"
+            echo "description=The convention check could not run" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report a commit status
+        if: steps.scope.outputs.run == 'true' && always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.check.outputs.state || 'error' }}
+          DESCRIPTION: ${{ steps.check.outputs.description || 'The convention check could not run' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$STATE" \
+            -f context="preflight-conventions" \
+            -f description="${DESCRIPTION:0:140}" \
+            -f target_url="$RUN_URL"
