@@ -97,7 +97,9 @@ export default class extends Controller {
     const textPrimary = isDark ? "#ffffff" : "#171717";
     const textSecondary = isDark ? "#cfcfcf" : "#737373";
     const borderSubdued = isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.10)";
-    const containerBg = isDark ? "#0a0a0a" : "#ffffff";
+    // Halos, dot rings and hollow dots blend into the card the chart sits in
+    // (DS::Card, bg-container), so they take that token in either theme.
+    const containerBg = "var(--color-container)";
 
     // Reserve gutter for y-axis labels when there's room. Mobile (< 320)
     // keeps the tighter left margin and skips the y-axis entirely.
@@ -239,8 +241,6 @@ export default class extends Controller {
     const COLLISION_PX = 18;
     const targetY = targetAmount > 0 ? y(targetAmount) : null;
     const yTicks = yAxisVisible ? y.ticks(3) : [];
-    const targetCollidesWithTick =
-      targetY !== null && yTicks.some((tv) => Math.abs(y(tv) - targetY) < COLLISION_PX);
 
     if (yAxisVisible) {
       yTicks.forEach((tickValue) => {
@@ -252,8 +252,8 @@ export default class extends Controller {
           .attr("y2", y(tickValue))
           .attr("stroke", borderSubdued)
           .attr("stroke-width", 1);
-        // Skip the y-axis label when its row is close to the target line.
-        // The target's own label will take over that y-slot below.
+        // Skip the y-axis label when its row is close to the target line,
+        // which carries its own amount, so the row is not labelled twice.
         if (targetY !== null && Math.abs(y(tickValue) - targetY) < COLLISION_PX) return;
         svg
           .append("text")
@@ -277,29 +277,21 @@ export default class extends Controller {
         .attr("stroke-width", 1)
         .attr("stroke-dasharray", "3 3");
 
-      if (targetCollidesWithTick) {
-        // Merge target label into the y-axis column at the target's y-row.
-        // The collided y-axis tick was suppressed above so this label takes
-        // over that slot cleanly.
-        svg
-          .append("text")
-          .attr("x", margin.left - 6)
-          .attr("y", targetY + 3)
-          .attr("text-anchor", "end")
-          .attr("font-size", 12)
-          .attr("fill", textPrimary)
-          .text(`Target · ${data.target_amount_short_label}`);
-      } else {
-        // Plenty of room: keep the right-side full-format label.
-        svg
-          .append("text")
-          .attr("x", margin.left + innerWidth - 4)
-          .attr("y", targetY - 6)
-          .attr("text-anchor", "end")
-          .attr("font-size", 12)
-          .attr("fill", textPrimary)
-          .text(`Target · ${data.target_amount_label}`);
-      }
+      // Always on the right, in full, above the line. The y-axis gutter is
+      // sized for short tick labels and cannot hold it. The halo keeps the
+      // projection line from running through the text.
+      svg
+        .append("text")
+        .attr("x", margin.left + innerWidth - 4)
+        .attr("y", targetY - 6)
+        .attr("text-anchor", "end")
+        .attr("font-size", 12)
+        .attr("fill", textPrimary)
+        .attr("paint-order", "stroke")
+        .attr("stroke", containerBg)
+        .attr("stroke-width", 4)
+        .attr("stroke-linejoin", "round")
+        .text(`Target · ${data.target_amount_label}`);
     }
 
     const area = d3
@@ -478,7 +470,7 @@ export default class extends Controller {
     const tickFmt = d3.timeFormat("%b %Y");
     const tickCount = Math.min(5, Math.max(2, Math.round(innerWidth / 80)));
     const ticks = x.ticks(tickCount);
-    const tickGroup = svg.append("g");
+    const tickGroup = svg.append("g").attr("data-axis", "x").attr("data-raw-ticks", ticks.length);
     tickGroup
       .selectAll("text")
       .data(ticks)
@@ -490,6 +482,23 @@ export default class extends Controller {
       .attr("font-size", 12)
       .attr("fill", textSecondary)
       .text((d) => tickFmt(d));
+    // d3 treats the tick count as a hint and can return nearly twice as many
+    // (nine quarterly ticks for a two-year goal when asked for five). When the
+    // widest label plus a gap is wider than the closest pair of ticks, keep
+    // every k-th tick, so the labels thin to a regular interval. The first
+    // tick is always kept, so the axis never goes blank.
+    const LABEL_GAP_PX = 12;
+    const labelNodes = tickGroup.selectAll("text").nodes();
+    const widest = d3.max(labelNodes, (n) => n.getComputedTextLength());
+    if (ticks.length >= 2 && Number.isFinite(widest) && widest > 0) {
+      const minSpacing = d3.min(d3.pairs(ticks), ([a, b]) => x(b) - x(a));
+      const stride = minSpacing > 0 ? Math.ceil((widest + LABEL_GAP_PX) / minSpacing) : ticks.length;
+      if (stride > 1) {
+        labelNodes.forEach((n, i) => {
+          if (i % stride !== 0) n.remove();
+        });
+      }
+    }
     // De-dupe adjacent equal tick labels (e.g. multiple "May '26" on a
     // short window where d3.ticks oversamples).
     const tickNodes = tickGroup.selectAll("text").nodes();
