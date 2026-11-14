@@ -291,8 +291,16 @@ class Provider::FamilyGeneratorTest < ActiveSupport::TestCase
 
     assert_parses with_view
     assert_parses without_view
-    assert_includes with_view, %(declares_connection key: "gocardless", name: "Gocardless", panel: true\n)
+    assert_includes with_view, %(declares_connection key: "gocardless", name: "Gocardless", panel: true,\n)
     assert_includes without_view, %(declares_connection key: "gocardless", name: "Gocardless"\n)
+  end
+
+  # The generated panel counts only connections that have their secret, so the panel
+  # list loads those rather than the default.
+  test "the generated adapter's panel loads only connections that have their secret" do
+    assert_includes render_adapter(skip_view: false),
+                    %(lists: { settings_panel: ->(items) { items.where.not(api_key: [ nil, "" ]) } }\n)
+    assert_not_includes render_adapter(skip_view: true), "lists:"
   end
 
   # Bank sync's lists all derive from the declaration, so the generator only checks
