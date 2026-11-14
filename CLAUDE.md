@@ -162,6 +162,20 @@ from this fork.
 11. **Every issue is classified as a bug or a feature request** *(this fork)*.
     Label it `bug` or `enhancement` when raising it, and write the body in the
     matching structure from step 1 of the sequence below.
+12. **Scope discipline** *(both repos)*. Every changed line traces to the issue.
+    - **Don't pick silently.** If a request reads more than one way, present the
+      readings and ask. If a simpler approach exists, say so and push back.
+    - **Nothing speculative.** No features beyond the issue, no abstraction for
+      single-use code, no configurability nobody asked for, no error handling for
+      cases that cannot happen. Ask: would a senior engineer call this
+      overcomplicated?
+    - **Surgical edits.** Don't reformat, restyle or "improve" adjacent code;
+      match the existing style. Update a comment your change made stale, and
+      leave unrelated ones alone.
+    - **Orphans.** Remove what your own change made unused. Mention unrelated dead
+      code (in the PR or a follow-up issue) instead of deleting it.
+
+    This is what keeps upstream PRs inside the ~300-line limit.
 
 ### Issue and pull request sequence (this fork)
 
