@@ -4,7 +4,7 @@ class Provider::<%= class_name %>Adapter < Provider::Base
 
   # Register this adapter with the factory
   Provider::Factory.register("<%= class_name %>Account", self)
-  declares_connection key: "<%= file_name %>"<% unless options[:skip_view] %>, panel: { title: "<%= class_name.titleize %>" }<% end %>
+  declares_connection key: "<%= file_name %>", name: "<%= class_name.titleize %>"<% unless options[:skip_view] %>, panel: true<% end %>
 
   # Define which account types this provider supports
   def self.supported_account_types
