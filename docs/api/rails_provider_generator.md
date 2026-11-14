@@ -341,7 +341,9 @@ class Provider::MyBankAdapter < Provider::Base
 
   # Register this adapter with the factory
   Provider::Factory.register("MyBankAccount", self)
-  declares_connection key: "my_bank", name: "My Bank", panel: true
+  # The panel counts only connections that have their api_key.
+  declares_connection key: "my_bank", name: "My Bank", panel: true,
+                      lists: { settings_panel: ->(items) { items.where.not(api_key: [ nil, "" ]) } }
 
   def provider_name
     "my_bank"
@@ -552,15 +554,17 @@ end
 
 ### 7. Settings Updates
 
-**File:** `app/controllers/settings/providers_controller.rb` (updated)
-- Adds `@my_bank_items` instance variable
+No change to `app/controllers/settings/providers_controller.rb` or
+`app/helpers/settings_helper.rb`; Bank sync derives everything from the adapter:
 - `FAMILY_PANELS` lists My Bank because the adapter declares `name: "My Bank", panel: true`,
   so Bank sync shows it and opens its panel in the drawer. `FAMILY_PANEL_KEYS` also keeps
   it out of the global provider forms.
+- The page loads `@my_bank_items` with the default in `Provider::Base::ITEM_LISTS`. The
+  adapter declares `lists: { settings_panel: ... }` so the panel counts only connections
+  that have their secret field; change `lists:` to load them differently.
 - The same `panel:` declaration gives its connection row a sync status and a working
   Sync button (`family_panel_items` and `PANEL_SYNCABLE_TYPES` are derived from it), and
-  `provider_summary` lists a connected My Bank under Your connections, so
-  `app/helpers/settings_helper.rb` needs no change.
+  `provider_summary` lists a connected My Bank under Your connections.
 
 ---
 
@@ -790,10 +794,9 @@ end
    The generator writes this line only into an adapter it creates. When the adapter
    already existed or `--skip-adapter` was passed, it prints the line to add instead.
 
-2. Check that the instance variable is set:
-   ```ruby
-   @my_bank_items = Current.family.my_bank_items.ordered.select(:id)
-   ```
+2. Check that `Family` has the `my_bank_items` association. Bank sync loads the items
+   through it, with the adapter's `lists:` queries or the defaults in
+   `Provider::Base::ITEM_LISTS`.
 
 ### Form Not Submitting
 

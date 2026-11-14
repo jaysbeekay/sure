@@ -4,7 +4,14 @@ class Provider::<%= class_name %>Adapter < Provider::Base
 
   # Register this adapter with the factory
   Provider::Factory.register("<%= class_name %>Account", self)
-  declares_connection key: "<%= file_name %>", name: "<%= class_name.titleize %>"<% unless options[:skip_view] %>, panel: true<% end %>
+<% if options[:skip_view] -%>
+  declares_connection key: "<%= file_name %>", name: "<%= class_name.titleize %>"
+<% else -%>
+<% secret_field = parsed_fields.select { |f| f[:secret] }.first&.dig(:name) || "api_key" -%>
+  # The panel counts only connections that have their <%= secret_field %>.
+  declares_connection key: "<%= file_name %>", name: "<%= class_name.titleize %>", panel: true,
+                      lists: { settings_panel: ->(items) { items.where.not(<%= secret_field %>: [ nil, "" ]) } }
+<% end -%>
 
   # Define which account types this provider supports
   def self.supported_account_types
