@@ -16,6 +16,6 @@
       <%= render DS::Link.new(text: t("rules.category_rule_cta.create_rule"), variant: "primary", href: rule_href, frame: :modal) %>
     <% end %>
     <%# Visible, not a title tooltip, so touch and keyboard users see it too. %>
-    <p class="mt-2 text-xs text-secondary text-right"><%= t("rules.category_rule_cta.hide_for_today_hint") %></p>
+    <p class="mt-2 text-xs text-secondary text-right text-pretty"><%= t("rules.category_rule_cta.hide_for_today_hint") %></p>
   <% end %>
 <% end %>

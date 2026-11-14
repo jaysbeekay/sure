@@ -49,6 +49,37 @@ class CategoryRulePromptTest < ApplicationSystemTestCase
     assert_selector "#cta", text: "Updated to #{@categories.second.name}"
   end
 
+  test "the prompt's text and actions use the toast's full width" do
+    visit transactions_url
+    assign_category @categories.first
+    assert_selector "#cta", text: "Hide for today pauses these suggestions for 24 hours."
+
+    layout = page.evaluate_script(<<~JS)
+      (() => {
+        const toast = document.querySelector("#cta > div");
+        const t = toast.getBoundingClientRect();
+        const pad = parseFloat(getComputedStyle(toast).paddingLeft);
+        const p = (text) => [...toast.querySelectorAll("p")].find(e => e.textContent.includes(text));
+        const title = p("Updated to"), description = p("You can create a rule"), hint = p("pauses these suggestions");
+        return {
+          pad,
+          title_padding_right: parseFloat(getComputedStyle(title).paddingRight),
+          description_right_gap: t.right - description.getBoundingClientRect().right,
+          hint_left_gap: hint.getBoundingClientRect().left - t.left,
+          hint_right_gap: t.right - hint.getBoundingClientRect().right
+        };
+      })()
+    JS
+
+    # The description runs to the toast's padding instead of stopping short under the X.
+    assert_in_delta layout["pad"], layout["description_right_gap"], 1
+    # The actions and hint span the toast, not the text column beside the check icon.
+    assert_in_delta layout["pad"], layout["hint_left_gap"], 1
+    assert_in_delta layout["pad"], layout["hint_right_gap"], 1
+    # Only the title shares a line with the X, so only the title keeps clear of it.
+    assert_operator layout["title_padding_right"], :>=, 24
+  end
+
   test "hide for today snoozes rule prompts" do
     visit transactions_url
     assign_category @categories.first
