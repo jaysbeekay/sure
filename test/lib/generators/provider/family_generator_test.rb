@@ -302,8 +302,8 @@ class Provider::FamilyGeneratorTest < ActiveSupport::TestCase
 
     assert_parses with_view
     assert_parses without_view
-    assert_includes with_view, %(declares_connection key: "gocardless", panel: { title: "Gocardless" }\n)
-    assert_includes without_view, %(declares_connection key: "gocardless"\n)
+    assert_includes with_view, %(declares_connection key: "gocardless", name: "Gocardless", panel: true\n)
+    assert_includes without_view, %(declares_connection key: "gocardless", name: "Gocardless"\n)
   end
 
   # An adapter the generator did not write (it existed, or --skip-adapter) lacks the
@@ -312,7 +312,7 @@ class Provider::FamilyGeneratorTest < ActiveSupport::TestCase
     assert Provider::FamilyGenerator.panel_declared?(render_adapter(skip_view: false), key: "gocardless")
     assert_not Provider::FamilyGenerator.panel_declared?(render_adapter(skip_view: true), key: "gocardless")
     assert_not Provider::FamilyGenerator.panel_declared?("class Provider::GocardlessAdapter < Provider::Base\nend\n", key: "gocardless")
-    assert_not Provider::FamilyGenerator.panel_declared?(%(  declares_connection key: "gocardless_bank", panel: { title: "X" }\n), key: "gocardless")
+    assert_not Provider::FamilyGenerator.panel_declared?(%(  declares_connection key: "gocardless_bank", name: "X", panel: true\n), key: "gocardless")
   end
 
   test "returns nil when there is no provider_summary to update" do
