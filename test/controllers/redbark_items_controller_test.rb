@@ -91,6 +91,18 @@ class RedbarkItemsControllerTest < ActionDispatch::IntegrationTest
     assert @redbark_item.reload.scheduled_for_deletion?
   end
 
+  test "select_accounts drops hostless return paths and keeps a routable one" do
+    [ "///evil.com", "//evil.com", "/\\evil.com" ].each do |return_to|
+      get select_accounts_redbark_items_url, params: { return_to: return_to }
+
+      assert_redirected_to setup_accounts_redbark_item_path(@redbark_item, return_to: nil), "#{return_to} should be dropped"
+    end
+
+    get select_accounts_redbark_items_url, params: { return_to: "/accounts" }
+
+    assert_redirected_to setup_accounts_redbark_item_path(@redbark_item, return_to: "/accounts")
+  end
+
   test "complete_account_setup creates and links an account" do
     assert_difference "Account.count", 1 do
       post complete_account_setup_redbark_item_url(@redbark_item), params: {

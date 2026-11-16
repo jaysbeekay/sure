@@ -206,6 +206,26 @@ class QuestradeItemsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to accounts_path
   end
 
+  test "complete_account_setup ignores hostless return paths and honours a routable one" do
+    { "///evil.com" => accounts_path, "//evil.com" => accounts_path, "/\\evil.com" => accounts_path,
+      "/transactions" => "/transactions" }.each_with_index do |(return_to, expected), index|
+      questrade_account = @questrade_item.questrade_accounts.create!(
+        name: "Margin (2222222#{index})",
+        questrade_account_id: "2222222#{index}",
+        account_type: "Margin",
+        currency: "CAD",
+        current_balance: 3000
+      )
+
+      post complete_account_setup_questrade_item_url(@questrade_item), params: {
+        return_to: return_to,
+        accounts: { questrade_account.id.to_s => { account_type: "investment", balance: "3000" } }
+      }
+
+      assert_redirected_to expected, "#{return_to} should redirect to #{expected}"
+    end
+  end
+
   test "complete_account_setup redirects with alert when no accounts provided" do
     post complete_account_setup_questrade_item_url(@questrade_item), params: { accounts: {} }
 

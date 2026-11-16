@@ -154,6 +154,26 @@ class KrakenItemsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to setup_accounts_kraken_item_path(@second_item, return_to: nil)
   end
 
+  test "select accounts drops hostless return paths and keeps a routable one" do
+    [ "///evil.com", "//evil.com", "/\\evil.com" ].each do |return_to|
+      get select_accounts_kraken_items_url, params: {
+        kraken_item_id: @second_item.id,
+        accountable_type: "Crypto",
+        return_to: return_to
+      }
+
+      assert_redirected_to setup_accounts_kraken_item_path(@second_item, return_to: nil), "#{return_to} should be dropped"
+    end
+
+    get select_accounts_kraken_items_url, params: {
+      kraken_item_id: @second_item.id,
+      accountable_type: "Crypto",
+      return_to: "/accounts"
+    }
+
+    assert_redirected_to setup_accounts_kraken_item_path(@second_item, return_to: "/accounts")
+  end
+
   test "sync only queues a sync for the selected kraken item" do
     assert_difference -> { Sync.where(syncable: @second_item).count }, 1 do
       assert_no_difference -> { Sync.where(syncable: @existing_item).count } do
