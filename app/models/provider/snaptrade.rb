@@ -135,6 +135,7 @@ class Provider::Snaptrade
 
       endpoint = oauth_authorization_server_metadata["device_authorization_endpoint"]
       raise ApiError.new("SnapTrade OAuth metadata missing device_authorization_endpoint") if endpoint.blank?
+      validate_oauth_endpoint_url!(endpoint, "device_authorization_endpoint")
 
       # Retried despite being a POST: a lost response means we never learned the
       # user code, so the device code it created is useless to us and expires on
@@ -301,6 +302,22 @@ class Provider::Snaptrade
           faraday.options.timeout = 30
           faraday.options.open_timeout = 10
         end
+      end
+
+      def validate_oauth_endpoint_url!(url, field_name)
+        uri = URI.parse(url)
+        discovery_uri = URI.parse(OAUTH_DISCOVERY_URL)
+
+        valid = uri.is_a?(URI::HTTPS) &&
+          uri.host.present? &&
+          uri.host == discovery_uri.host &&
+          uri.userinfo.blank?
+
+        return if valid
+
+        raise ApiError.new("SnapTrade OAuth metadata contains invalid #{field_name}")
+      rescue URI::InvalidURIError
+        raise ApiError.new("SnapTrade OAuth metadata contains invalid #{field_name}")
       end
 
       def parse_json(body)
