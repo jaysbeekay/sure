@@ -1,6 +1,16 @@
 class Import::MappingsController < ApplicationController
   include ImportGuestGuardable
 
+  ALLOWED_MAPPABLE_CLASSES = {
+    "Contact" => Contact,
+    "Company" => Company
+  }.freeze
+
+  ALLOWED_MAPPING_CLASSES = {
+    "Import::Mappings::ContactMapping" => Import::Mappings::ContactMapping,
+    "Import::Mappings::CompanyMapping" => Import::Mappings::CompanyMapping
+  }.freeze
+
   before_action :set_import
   before_action :require_import_editable!
 
@@ -37,10 +47,10 @@ class Import::MappingsController < ApplicationController
     end
 
     def mappable_class
-      mapping_params[:mappable_type]&.constantize
+      ALLOWED_MAPPABLE_CLASSES[mapping_params[:mappable_type]]
     end
 
     def mapping_class
-      mapping_params[:type]&.constantize
+      ALLOWED_MAPPING_CLASSES[mapping_params[:type]]
     end
 end
