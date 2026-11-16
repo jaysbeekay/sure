@@ -412,6 +412,105 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
     assert_select "span", text: /Netflix/, minimum: 6
   end
 
+  test "index shows each rule's latest run" do
+    rule = rules(:one)
+    create_rule_run(rule, queued: 5, modified: 1, executed_at: 2.days.ago)
+    create_rule_run(rule, queued: 2, modified: 1, executed_at: 1.hour.ago)
+
+    get rules_url
+
+    assert_response :success
+    assert_select "[data-rule-id='#{rule.id}'][data-rule-last-run='changed']" do
+      assert_select "[data-rule-last-run-summary]", text: /matched 2 · changed 1/
+      assert_select "[data-rule-last-run-summary]", text: /matched 5/, count: 0
+    end
+  end
+
+  test "index shows not run yet for a rule without runs" do
+    rule = rules(:one)
+    rule.rule_runs.delete_all
+
+    get rules_url
+
+    assert_response :success
+    assert_select "[data-rule-id='#{rule.id}'][data-rule-last-run='none'] [data-rule-last-run-summary]", text: "not run yet"
+  end
+
+  test "index marks a rule whose latest run changed nothing" do
+    family = @user.family
+    changed_nothing, changed, matched_nothing = 3.times.map { |index| create_exclude_rule(family, "Run #{index}") }
+    create_rule_run(changed_nothing, queued: 4, modified: 0)
+    create_rule_run(changed, queued: 4, modified: 1)
+    create_rule_run(matched_nothing, queued: 0, modified: 0)
+
+    get rules_url
+
+    assert_response :success
+    assert_select "[data-rule-id='#{changed_nothing.id}'][data-rule-last-run='changed-nothing']"
+    assert_select "[data-rule-id='#{changed.id}'][data-rule-last-run='changed']"
+    assert_select "[data-rule-id='#{matched_nothing.id}'][data-rule-last-run='matched-nothing']"
+    assert_select "input[type='radio'][name='last_run'][value='matched-nothing'][data-filter-label='Matched nothing']"
+    assert_select "input[type='radio'][name='last_run'][value='changed-nothing'][data-filter-label='Changed nothing']"
+  end
+
+  test "index shows a pending latest run as running, not changed nothing" do
+    rule = rules(:one)
+    create_rule_run(rule, queued: 12, modified: 3, executed_at: 1.day.ago)
+    create_rule_run(rule, queued: 12, modified: 0, status: "pending", executed_at: 1.minute.ago)
+
+    get rules_url
+
+    assert_response :success
+    assert_select "[data-rule-id='#{rule.id}'][data-rule-last-run='pending']" do
+      assert_select "[data-rule-last-run-summary]", text: "matched 12 · running"
+    end
+    assert_select "[data-rule-id='#{rule.id}'][data-rule-last-run='changed-nothing']", count: 0
+  end
+
+  test "index shows a failed latest run" do
+    rule = rules(:one)
+    create_rule_run(rule, queued: 4, modified: 2, executed_at: 1.day.ago)
+    create_rule_run(rule, queued: 4, modified: 0, status: "failed", executed_at: 1.minute.ago)
+
+    get rules_url
+
+    assert_response :success
+    assert_select "[data-rule-id='#{rule.id}'][data-rule-last-run='failed'] [data-rule-last-run-summary]", text: "last run failed"
+  end
+
+  test "index shows the latest run of a rule inside a group" do
+    family = @user.family
+    group = family.rule_groups.create!(name: "Groceries")
+    grouped = create_exclude_rule(family, "Grouped rule", group: group)
+    create_rule_run(grouped, queued: 7, modified: 2)
+
+    get rules_url
+
+    assert_response :success
+    assert_select "[data-sortable-list-id='group:#{group.id}'] [data-rule-id='#{grouped.id}'][data-rule-last-run='changed']" do
+      assert_select "[data-rule-last-run-summary]", text: /matched 7 · changed 2/
+    end
+  end
+
+  test "index loads latest runs in a fixed number of queries" do
+    family = @user.family
+    add_rule_with_runs = lambda do |index|
+      rule = create_exclude_rule(family, "Rule #{index}")
+      create_rule_run(rule, queued: 3, modified: 1, executed_at: 1.day.ago)
+      create_rule_run(rule, queued: 3, modified: 0)
+    end
+
+    2.times { |index| add_rule_with_runs.call(index) }
+    queries_with_few = capture_sql_queries { get rules_url }.size
+
+    4.times { |index| add_rule_with_runs.call(index + 2) }
+    queries_with_more = capture_sql_queries { get rules_url }.size
+
+    assert_response :success
+    assert_equal queries_with_few, queries_with_more
+    assert_select "[data-rule-last-run='changed-nothing']", minimum: 6
+  end
+
   test "reorder saves the new order" do
     family = @user.family
     second = family.rules.create!(resource_type: "transaction",
@@ -1105,5 +1204,15 @@ class RulesControllerTest < ActionDispatch::IntegrationTest
         .select { |rule_id, _| rule_id == rule.id }
         .flat_map(&:second)
         .sort
+    end
+
+    def create_exclude_rule(family, name, group: nil)
+      family.rules.create!(name: name, resource_type: "transaction", rule_group: group,
+        actions: [ Rule::Action.new(action_type: "exclude_transaction") ])
+    end
+
+    def create_rule_run(rule, queued:, modified:, status: "success", executed_at: Time.current)
+      rule.rule_runs.create!(execution_type: "scheduled", status: status, transactions_queued: queued,
+        transactions_processed: queued, transactions_modified: modified, pending_jobs_count: 0, executed_at: executed_at)
     end
 end

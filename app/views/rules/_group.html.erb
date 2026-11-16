@@ -1,4 +1,4 @@
-<%# locals: (item:, list_filter:) %>
+<%# locals: (item:, list_filter:, last_runs: {}) %>
 <% group = item.group %>
 <% inactive_count = item.rules.count { |rule| !rule.active? } %>
 <div data-sortable-list-target="item"
@@ -61,7 +61,7 @@
         <p class="px-4 py-3 text-sm text-secondary"><%= t("rules.group.empty") %></p>
       <% end %>
       <% item.rules.each do |rule| %>
-        <%= render "rules/list_rule", rule: rule, sortable_id: rule.id, list_filter: list_filter, list: "sortable-sublist" %>
+        <%= render "rules/list_rule", rule: rule, sortable_id: rule.id, list_filter: list_filter, list: "sortable-sublist", last_run: last_runs[rule.id] %>
       <% end %>
     </div>
   <% end %>

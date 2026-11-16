@@ -1,4 +1,4 @@
-<%# locals: (rule:, sortable_id:, list_filter:, list: "sortable-list", foldable: false) %>
+<%# locals: (rule:, sortable_id:, list_filter:, list: "sortable-list", foldable: false, last_run: nil) %>
 <div class="flex items-center"
      data-<%= list %>-target="item"
      data-sortable-list-id="<%= sortable_id %>"
@@ -13,7 +13,8 @@
      data-rule-actions="<%= list_filter.action_types(rule).join(" ") %>"
      data-rule-conditions="<%= list_filter.condition_types(rule).join(" ") %>"
      data-rule-accounts="<%= list_filter.account_ids(rule).join(" ") %>"
-     data-rule-group="<%= rule.rule_group_id || "none" %>">
+     data-rule-group="<%= rule.rule_group_id || "none" %>"
+     data-rule-last-run="<%= rule_last_run_state(last_run) %>">
   <% rule_label = rule.name.presence || rule.primary_condition_title %>
   <%= render "rules/drag_handle", list: list, label: t("rules.index.reorder_rule", name: rule_label) %>
   <%# A rule outside a group folds to one line, like a group does. %>
@@ -30,6 +31,6 @@
     ) %>
   <% end %>
   <div class="grow min-w-0">
-    <%= render "rules/rule", rule: rule %>
+    <%= render "rules/rule", rule: rule, last_run: last_run %>
   </div>
 </div>

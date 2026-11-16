@@ -97,6 +97,10 @@ export default class extends Controller {
       return false;
     }
 
+    if (filters.last_run && rule.dataset.ruleLastRun !== filters.last_run) {
+      return false;
+    }
+
     return (
       this.#listIncludes(rule.dataset.ruleActions, filters.action_type) &&
       this.#listIncludes(rule.dataset.ruleConditions, filters.condition_type) &&

@@ -27,6 +27,11 @@ en:
         all: All statuses
         active: Active
         inactive: Inactive
+      last_run:
+        label: Last run
+        all: Any last run
+        matched_nothing: Matched nothing
+        changed_nothing: Changed nothing
       action_type:
         label: Action
         all: All actions
@@ -40,6 +45,11 @@ en:
         label: Group
         all: All groups
         none: No group
+    last_run:
+      none: not run yet
+      failed: last run failed
+      running: "matched %{matched} · running"
+      summary: "matched %{matched} · changed %{changed} · %{date}"
     group:
       rules_count:
         one: 1 rule

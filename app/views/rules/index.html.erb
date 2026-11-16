@@ -86,9 +86,9 @@
                aria-label="<%= t(".rules_heading") %>">
             <% @layout.items.each do |item| %>
               <% if item.group? %>
-                <%= render "rules/group", item: item, list_filter: @list_filter %>
+                <%= render "rules/group", item: item, list_filter: @list_filter, last_runs: @last_runs %>
               <% else %>
-                <%= render "rules/list_rule", rule: item.rule, sortable_id: item.key, list_filter: @list_filter, foldable: true %>
+                <%= render "rules/list_rule", rule: item.rule, sortable_id: item.key, list_filter: @list_filter, foldable: true, last_run: @last_runs[item.rule.id] %>
               <% end %>
             <% end %>
           </div>

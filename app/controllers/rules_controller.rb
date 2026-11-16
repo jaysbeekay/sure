@@ -9,6 +9,11 @@ class RulesController < ApplicationController
     Rule.share_option_lists(@rules)
     @layout = Rule::Layout.new(Current.family, rules: @rules)
     @list_filter = Rule::ListFilter.new(@rules)
+    @last_runs = RuleRun.joins(:rule)
+                        .where(rules: { family_id: Current.family.id })
+                        .select("DISTINCT ON (rule_runs.rule_id) rule_runs.*")
+                        .order("rule_runs.rule_id, rule_runs.executed_at DESC, rule_runs.created_at DESC")
+                        .index_by(&:rule_id)
 
     # Fetch recent rule runs with pagination
     recent_runs_scope = RuleRun

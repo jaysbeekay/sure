@@ -265,6 +265,51 @@ class RulesTest < ApplicationSystemTestCase
     assert_no_current_path(/status=/)
   end
 
+  test "filters rules by what their latest run did" do
+    family = @user.family
+    family.rules.destroy_all
+    runs = {
+      "Changed nothing rule" => { status: "success", transactions_queued: 4, transactions_modified: 0 },
+      "Matched nothing rule" => { status: "success", transactions_queued: 0, transactions_modified: 0 },
+      "Changed rule" => { status: "success", transactions_queued: 4, transactions_modified: 2 },
+      "Pending rule" => { status: "pending", transactions_queued: 4, transactions_modified: 0 },
+      "Failed rule" => { status: "failed", transactions_queued: 4, transactions_modified: 0 }
+    }
+    rules = runs.to_h do |name, counts|
+      rule = create_exclude_rule(name)
+      rule.rule_runs.create!(execution_type: "scheduled", transactions_processed: counts[:transactions_queued],
+        pending_jobs_count: 0, executed_at: Time.current, **counts)
+      [ name, rule ]
+    end
+    never_run = create_exclude_rule("Never run rule")
+
+    visit rules_path
+    click_on "Filter"
+    within("#rule-filters-menu") do
+      click_on "Last run"
+      choose "Changed nothing"
+      click_on "Done"
+    end
+
+    assert_selector "[data-sortable-list-id='rule:#{rules["Changed nothing rule"].id}']"
+    (rules.except("Changed nothing rule").values + [ never_run ]).each do |rule|
+      assert_no_selector "[data-sortable-list-id='rule:#{rule.id}']"
+    end
+    assert_current_path(/last_run=changed-nothing/)
+
+    click_on "Filter"
+    within("#rule-filters-menu") do
+      click_on "Last run"
+      choose "Matched nothing"
+      click_on "Done"
+    end
+
+    assert_selector "[data-sortable-list-id='rule:#{rules["Matched nothing rule"].id}']"
+    (rules.except("Matched nothing rule").values + [ never_run ]).each do |rule|
+      assert_no_selector "[data-sortable-list-id='rule:#{rule.id}']"
+    end
+  end
+
   test "folds a group and keeps it folded after a reload" do
     family = @user.family
     group = family.rule_groups.create!(name: "Food")
