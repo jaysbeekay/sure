@@ -66,14 +66,38 @@ class RedbarkItemsControllerTest < ActionDispatch::IntegrationTest
     assert @redbark_item.good?
   end
 
-  test "blank api key update is rejected and preserves the stored key" do
+  # The panel renders the key field empty, so every edit submits a blank key.
+  test "a blank api key on update keeps the stored key and saves the other fields" do
+    @redbark_item.update!(status: :requires_update)
     original_key = @redbark_item.api_key
+    assert_not_equal "Renamed Redbark", @redbark_item.name
 
-    patch redbark_item_url(@redbark_item), params: {
-      redbark_item: { api_key: "" }
-    }
+    patch redbark_item_url(@redbark_item),
+          params: { redbark_item: { name: "Renamed Redbark", api_key: "" } },
+          as: :turbo_stream
 
-    assert_equal original_key, @redbark_item.reload.api_key
+    assert_turbo_stream action: "replace", target: "redbark-providers-panel"
+    assert_not_includes response.body, ERB::Util.html_escape("Api key can't be blank")
+    @redbark_item.reload
+    assert_equal "Renamed Redbark", @redbark_item.name
+    assert_equal original_key, @redbark_item.api_key
+    assert @redbark_item.requires_update?, "a blank key is not a fresh key"
+  end
+
+  test "submitting the panel without a key keeps the key, the status and does not sync" do
+    @redbark_item.update!(status: :requires_update)
+    original_key = @redbark_item.api_key
+    RedbarkItem.any_instance.expects(:sync_later).never
+
+    patch redbark_item_url(@redbark_item),
+          params: { redbark_item: { api_key: "" } },
+          as: :turbo_stream
+
+    assert_turbo_stream action: "replace", target: "redbark-providers-panel"
+    assert_not_includes response.body, ERB::Util.html_escape("Api key can't be blank")
+    @redbark_item.reload
+    assert_equal original_key, @redbark_item.api_key
+    assert @redbark_item.requires_update?
   end
 
   test "sync enqueues a sync" do

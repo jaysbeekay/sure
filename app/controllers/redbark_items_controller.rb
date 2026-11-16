@@ -241,11 +241,14 @@ class RedbarkItemsController < ApplicationController
     end
 
     def redbark_item_params
-      params.require(:redbark_item).permit(
+      permitted = params.require(:redbark_item).permit(
         :name,
         :sync_start_date,
         :api_key
       )
+      # The panel never renders the stored key, so a blank one on an edit keeps it.
+      permitted.delete(:api_key) if @redbark_item&.persisted? && permitted[:api_key].blank?
+      permitted
     end
 
     def link_redbark_account(redbark_account, accountable_type)
