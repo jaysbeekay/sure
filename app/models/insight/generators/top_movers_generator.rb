@@ -38,8 +38,10 @@ class Insight::Generators::TopMoversGenerator < Insight::Generator
   private
     attr_reader :today
 
+    # Only the accounts every member may open: the feed is shared.
     def narrative
-      @narrative ||= Spending::Narrative.new(family: family, user: nil, on: today, household: true)
+      @narrative ||= Spending::Narrative.new(family: family, user: nil, on: today, household: true,
+                                             accounts: shared_accounts)
     end
 
     # Exact comparison, not the rounded display percentage: 24.9% must not pass
@@ -76,7 +78,8 @@ class Insight::Generators::TopMoversGenerator < Insight::Generator
           direction: direction,
           lead_id: lead.key,
           category_ids: listed.map(&:key).sort,
-          change_bucket: change_bucket(lead)
+          change_bucket: change_bucket(lead),
+          accounts_digest: shared_accounts_digest
         },
         # Month to date, not the whole budget month the spending pace card
         # uses: the comparison covers only the days elapsed so far.

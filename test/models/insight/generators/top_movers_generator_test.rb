@@ -223,12 +223,41 @@ class Insight::Generators::TopMoversGeneratorTest < ActiveSupport::TestCase
   test "another family's spending never shows up" do
     other = families(:empty)
     account = Account.create!(family: other, name: "Other", balance: 0, currency: "USD", accountable: Depository.new)
+    # Shared with every member, so the other family's own feed counts it.
+    other.users.where(active: true).where.not(id: account.owner_id).find_each { |user| AccountShare.create!(account: account, user: user, permission: :read_only) }
     other_category = other.categories.create!(name: "Other family mover", color: "#101010", lucide_icon: "circle")
     Entry.create!(account: account, name: "Prev", date: PREVIOUS_DAY, currency: "USD", amount: 400, entryable: Transaction.new(category: other_category))
     Entry.create!(account: account, name: "Cur", date: CURRENT_DAY, currency: "USD", amount: 9000, entryable: Transaction.new(category: other_category))
 
     assert_empty generate
     assert_equal 1, generate(family: other).size
+  end
+
+  # The feed is shared by the whole family, so only accounts every member may
+  # open count. `connected` is private to family_admin.
+  test "a rise on an account private to one member does not show the card" do
+    create_transaction(category: @dining, amount: 100, date: PREVIOUS_DAY, name: "Private prev", account: accounts(:connected))
+    create_transaction(category: @dining, amount: 900, date: CURRENT_DAY, name: "Private cur", account: accounts(:connected))
+
+    assert_empty generate
+  end
+
+  test "a rise on a shared account still shows the card" do
+    create_transaction(category: @dining, amount: 100, date: PREVIOUS_DAY, name: "Shared prev", account: accounts(:depository))
+    create_transaction(category: @dining, amount: 900, date: CURRENT_DAY, name: "Shared cur", account: accounts(:depository))
+
+    assert_equal [ "top_movers" ], generate.map(&:insight_type)
+  end
+
+  test "revoking a share changes the account digest of the insight" do
+    seed_baseline
+    spend(@dining, 300, CURRENT_DAY)
+    before = generate.first.metadata[:accounts_digest]
+
+    account_shares(:credit_card_shared_with_member).destroy!
+
+    assert_not_nil before
+    assert_not_equal before, generate.first.metadata[:accounts_digest]
   end
 
   test "carries the period of the comparison and is registered" do
