@@ -322,9 +322,11 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     render_performance_with(mwr_ambiguous: true)
     assert_select "#portfolio-performance p", text: hedge, count: 2
     assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.mwr_hint"), count: 1
-    # The annualised money-weighted card swaps off the shared hint; the
-    # annualised time-weighted card keeps it.
-    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.annualized_hint"), count: plain_annualized - 1
+    # Both annualised cards keep the shared caveat, and the annualised
+    # money-weighted card adds the hedge below it.
+    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.annualized_hint"), count: plain_annualized
+    assert_equal [ I18n.t("portfolios.performance.annualized_hint"), hedge ],
+                 mwr_card_hints(I18n.t("portfolios.performance.annualized_mwr"))
     # The figures themselves are unchanged.
     assert_select "#portfolio-performance p", text: /21\.00%/
     assert_select "#portfolio-performance p", text: /30\.00%/
@@ -1162,9 +1164,12 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
 
     def period_mwr_card_hints
-      label = I18n.t("portfolios.performance.mwr")
+      mwr_card_hints(I18n.t("portfolios.performance.mwr"))
+    end
+
+    def mwr_card_hints(label)
       card = css_select("#portfolio-performance .bg-container-inset").find { |c| c.at_css("span")&.text == label }
-      assert card, "period money-weighted card not rendered"
+      assert card, "#{label} card not rendered"
       card.css("p.text-xs").map(&:text)
     end
 
