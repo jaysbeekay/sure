@@ -169,6 +169,12 @@ module Family::AutoTransferMatchable
     # uncategorized, since a categorized purchase against an income is not a
     # transfer), and `user` able to write to both accounts
     # (TransferMatchesController#create requires that).
+    #
+    # Unlike auto_match_transfers!, a confirmed route does not exempt a pair
+    # from the category check here. That is deliberate: auto-match turns a
+    # route pair into a pending transfer, and once a leg has a transfer (pending
+    # or confirmed) the hint skips it, so the hint has nothing to offer for a
+    # route pair once auto-match has run.
     def transfer_hint_candidates(transactions, user:)
       unmatched_ids = transactions.reject { |transaction| transaction.transfer? || transaction.transfer.present? }.map(&:id)
       return [] if unmatched_ids.empty?
