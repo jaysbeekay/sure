@@ -15,16 +15,19 @@
 # One account scope for every figure. When a budget exists everything is read
 # through that budget's own income statement (a personal budget counts its
 # owner's accounts; the household budget counts what the viewer can see).
+# `accounts`, when given, replaces that scope: the shared insight feed passes
+# the accounts every member may open.
 class Spending::Narrative
   attr_reader :family, :user, :on
 
   # `household: true` asks for the household budget (the one family-wide
   # insights are computed against) instead of the viewer's own.
-  def initialize(family:, user:, on:, household: false)
+  def initialize(family:, user:, on:, household: false, accounts: nil)
     @family = family
     @user = user
     @on = on
     @household = household
+    @accounts = accounts
   end
 
   def period
@@ -51,7 +54,10 @@ class Spending::Narrative
       else
         family.budgets.find_by(start_date: month_start, end_date: month_end, user: owner)
       end
-    @budget.current_user = user if @budget
+    if @budget
+      @budget.current_user = user
+      @budget.income_statement_accounts = @accounts if @accounts
+    end
     @budget
   end
 
@@ -81,6 +87,6 @@ class Spending::Narrative
     end
 
     def income_statement
-      @income_statement ||= budget ? budget.income_statement : family.income_statement(user: user)
+      @income_statement ||= budget ? budget.income_statement : family.income_statement(user: user, accounts: @accounts)
     end
 end
