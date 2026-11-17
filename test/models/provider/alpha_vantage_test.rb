@@ -157,8 +157,8 @@ class Provider::AlphaVantageTest < ActiveSupport::TestCase
 
     assert response.success?
     info = response.data
-    assert_equal [ "CSPX.LON", "iShares Core S&P 500 UCITS ETF", "etf", "Tracks the S&P 500.", "https://www.ishares.com", "XLON" ],
-      [ info.symbol, info.name, info.kind, info.description, info.links, info.exchange_operating_mic ]
+    assert_equal [ "iShares Core S&P 500 UCITS ETF", "etf", "Tracks the S&P 500.", "https://www.ishares.com", "XLON" ],
+      [ info.name, info.kind, info.description, info.links, info.exchange_operating_mic ]
   end
 
   test "fetch_security_info with a blank Name returns a failed response" do
@@ -193,6 +193,19 @@ class Provider::AlphaVantageTest < ActiveSupport::TestCase
 
     response = build_provider.fetch_security_prices(
       symbol: "AAPL", exchange_operating_mic: "XNAS", start_date: Date.new(2024, 8, 1), end_date: Date.new(2024, 8, 1)
+    )
+
+    assert response.success?
+    assert_equal [ "USD" ], response.data.map(&:currency)
+  end
+
+  test "fetch_security_prices prices in a cached currency over the suffix default" do
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    Rails.cache.write("alpha_vantage:currency:CSPX.LON", "USD")
+    stub_av_query({ "function" => "TIME_SERIES_DAILY", "symbol" => "CSPX.LON" }, daily_body("2024-08-01" => "101.00"))
+
+    response = build_provider.fetch_security_prices(
+      symbol: "CSPX", exchange_operating_mic: "XLON", start_date: Date.new(2024, 8, 1), end_date: Date.new(2024, 8, 1)
     )
 
     assert response.success?
