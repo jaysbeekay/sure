@@ -154,7 +154,7 @@ class Provider::MfapiTest < ActiveSupport::TestCase
 
     assert_not response.success?
     assert_instance_of Provider::Mfapi::Error, response.error
-    assert_match(/\AAPI error: /, response.error.message)
+    assert_equal "API error: boom", response.error.message
   end
 
   test "a FAIL status body maps to Error" do

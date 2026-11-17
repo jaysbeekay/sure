@@ -289,7 +289,7 @@ class Provider::AlphaVantageTest < ActiveSupport::TestCase
 
     assert_not response.success?
     assert_instance_of Provider::AlphaVantage::Error, response.error
-    assert_match(/\AAPI error: /, response.error.message)
+    assert_equal "API error: Invalid API call.", response.error.message
   end
 
   test "an HTTP 500 maps to Error" do
