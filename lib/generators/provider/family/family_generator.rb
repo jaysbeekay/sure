@@ -340,19 +340,10 @@ class Provider::FamilyGenerator < Rails::Generators::NamedBase
     warn_unless_panel_declared
   end
 
-  # /accounts loads the provider's connections through its adapter's declaration
-  # (the accounts_index list), so only the sync stats map is added here. An adapter
-  # without the declaration leaves @<key>_items unset, so the added code reads it
-  # nil-safe, here and in the index section.
-  def update_accounts_controller
-    controller_path = "app/controllers/accounts_controller.rb"
-    return unless File.exist?(controller_path)
-
-    add_accounts_controller_sync_stats_map(controller_path)
-  end
-
   # The section renders the item partial, which --skip-view does not write, so it is
-  # left for the developer to add with that partial.
+  # left for the developer to add with that partial. /accounts loads the provider's
+  # connections through its adapter's declaration (the accounts_index list); an
+  # adapter without one leaves @<key>_items unset, so the section reads it nil-safe.
   def update_accounts_index_view
     view_path = "app/views/accounts/index.html.erb"
     return unless File.exist?(view_path)
@@ -456,7 +447,7 @@ class Provider::FamilyGenerator < Rails::Generators::NamedBase
     say "     - test/models/#{file_name}_account/processor_test.rb"
     say "  🛣️  Routes: Updated config/routes.rb"
     say "  🌐 Locale: config/locales/views/#{file_name}_items/en.yml"
-    say "  ⚙️  Settings: Updated the accounts controller and Family model"
+    say "  ⚙️  Settings: Updated the Family model"
 
     if parsed_fields.any?
       say "\nCredential fields:", :cyan
@@ -617,50 +608,6 @@ class Provider::FamilyGenerator < Rails::Generators::NamedBase
         say "Added #{file_name} to #{model_name} source enum", :green
       else
         say "Could not find source enum in #{model_name}", :yellow
-      end
-    end
-
-    def add_accounts_controller_sync_stats_map(controller_path)
-      content = File.read(controller_path)
-      stats_var = "@#{file_name}_sync_stats_map"
-
-      if content.include?(stats_var)
-        say "Accounts controller already has #{stats_var}", :skip
-        return
-      end
-
-      # Find the build_sync_stats_maps method and add our stats map before the closing 'end'
-      sync_stats_block = <<~RUBY
-
-      # #{class_name} sync stats
-      #{stats_var} = {}
-      @#{file_name}_items&.each do |item|
-        latest_sync = item.syncs.ordered.first
-        #{stats_var}[item.id] = latest_sync&.sync_stats || {}
-      end
-      RUBY
-
-      lines = content.lines
-      method_start = nil
-      method_end = nil
-      indent_level = 0
-
-      lines.each_with_index do |line, index|
-        if line.include?("def build_sync_stats_maps")
-          method_start = index
-          indent_level = line[/^\s*/].length
-        elsif method_start && line =~ /^#{' ' * indent_level}end\s*$/
-          method_end = index
-          break
-        end
-      end
-
-      if method_end
-        lines.insert(method_end, sync_stats_block)
-        write_file(controller_path, lines.join)
-        say "Added #{stats_var} to build_sync_stats_maps", :green
-      else
-        say "Could not find build_sync_stats_maps method end", :yellow
       end
     end
 

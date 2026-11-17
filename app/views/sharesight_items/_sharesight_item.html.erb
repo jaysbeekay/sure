@@ -84,7 +84,7 @@
           <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
-        <% stats = sharesight_item.syncs.ordered.first&.sync_stats || {} %>
+        <% stats = sharesight_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(stats: stats, provider_item: sharesight_item, show_account_details: visible_accounts.size == sharesight_item.accounts.size) %>
 
         <% if Current.user&.admin? %>

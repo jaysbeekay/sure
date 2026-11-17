@@ -102,6 +102,45 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     controller.send(:preload_latest_sync_metadata_for_index!)
   end
 
+  test "index shows each connection's latest sync stats" do
+    plaid_items(:one).syncs.create!(status: "completed", completed_at: Time.current, created_at: 1.minute.from_now, sync_stats: { "tx_seen" => 41 })
+    kraken_items(:one).syncs.create!(status: "completed", completed_at: Time.current, created_at: 1.minute.from_now, sync_stats: { "tx_seen" => 43 })
+
+    get accounts_url
+
+    assert_response :success
+    assert_includes response.body, I18n.t("provider_sync_summary.transactions.seen", count: 41)
+    assert_includes response.body, I18n.t("provider_sync_summary.transactions.seen", count: 43)
+  end
+
+  # Every card reads its connection's latest sync from the batch the index preloads,
+  # so the page does not look up each connection's syncs one by one.
+  test "index reads every connection's latest sync from the preload" do
+    lookups = []
+    record = lambda do |_name, _started, _finished, _id, payload|
+      next unless payload[:sql].match?(/FROM "syncs" WHERE "syncs"\."syncable_id" = .*ORDER BY "syncs"\."created_at" DESC/)
+
+      type = Array(payload[:type_casted_binds]).find { |bind| bind.to_s.end_with?("Item") }
+      lookups << type if type
+    end
+
+    ActiveSupport::Notifications.subscribed(record, "sql.active_record") { get accounts_url }
+
+    assert_response :success
+    assert_empty lookups, "per-connection sync lookups for #{lookups.tally}"
+  end
+
+  test "index counts an Enable Banking connection's latest sync error in its summary" do
+    item = EnableBankingItem.create!(family: @user.family, name: "EB", country_code: "FI", application_id: "app", client_certificate: "cert")
+    item.syncs.create!(status: "failed", created_at: 1.minute.from_now, error: "The bank refused the session", sync_stats: { "total_accounts" => 1 })
+
+    get accounts_url
+
+    assert_response :success
+    card = Nokogiri::HTML(response.body).at_css("##{dom_id(item)}")
+    assert_includes card.text, I18n.t("provider_sync_summary.health.errors", count: 1)
+  end
+
   test "account reconciliation indicators only render when manual reconciliation is enabled" do
     get accounts_url
 
@@ -2019,6 +2058,19 @@ class AccountsControllerSimplefinCtaTest < ActionDispatch::IntegrationTest
   setup do
     sign_in users(:family_admin)
     @family = families(:dylan_family)
+  end
+
+  test "a connection whose latest sync only skipped duplicate accounts says so instead of showing an error" do
+    item = SimplefinItem.create!(family: @family, name: "Dupes", access_url: "https://example.com/access")
+    message = "Duplicate upstream account detected for SimpleFIN"
+    item.syncs.create!(status: "failed", created_at: 1.minute.from_now, error: message, sync_stats: { "errors" => [ { "message" => message } ] })
+
+    get accounts_path
+
+    assert_response :success
+    card = Nokogiri::HTML(@response.body).at_css("#simplefin_item_#{item.id}")
+    assert_includes card.text, I18n.t("simplefin_items.simplefin_item.duplicate_accounts_skipped")
+    assert_not_includes card.text, I18n.t("simplefin_items.simplefin_item.error")
   end
 
   test "when unlinked SFAs exist and manuals exist, shows setup button only" do
