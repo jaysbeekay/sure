@@ -321,13 +321,28 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
     render_performance_with(mwr_ambiguous: true)
     assert_select "#portfolio-performance p", text: hedge, count: 2
-    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.mwr_hint"), count: 0
+    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.mwr_hint"), count: 1
     # The annualised money-weighted card swaps off the shared hint; the
     # annualised time-weighted card keeps it.
     assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.annualized_hint"), count: plain_annualized - 1
     # The figures themselves are unchanged.
     assert_select "#portfolio-performance p", text: /21\.00%/
     assert_select "#portfolio-performance p", text: /30\.00%/
+  end
+
+  # The hedge says the figure may not be the only one; the period caveat says
+  # what kind of figure it is and why it can differ from a broker's. Both stay
+  # true when the flows are ambiguous, so the period card shows the caveat and
+  # then the hedge, against the caveat alone with the flag off.
+  test "the period money-weighted card shows its caveat beside the hedge" do
+    caveat = I18n.t("portfolios.performance.mwr_hint")
+    hedge = I18n.t("portfolios.performance.mwr_ambiguous_hint")
+
+    render_performance_with(mwr_ambiguous: false)
+    assert_equal [ caveat ], period_mwr_card_hints
+
+    render_performance_with(mwr_ambiguous: true)
+    assert_equal [ caveat, hedge ], period_mwr_card_hints
   end
 
   # Under a year the annualised money-weighted figure is withheld while the
@@ -1144,6 +1159,13 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
       get portfolio_path
       assert_response :success
+    end
+
+    def period_mwr_card_hints
+      label = I18n.t("portfolios.performance.mwr")
+      card = css_select("#portfolio-performance .bg-container-inset").find { |c| c.at_css("span")&.text == label }
+      assert card, "period money-weighted card not rendered"
+      card.css("p.text-xs").map(&:text)
     end
 
     def enable_preview(user)
