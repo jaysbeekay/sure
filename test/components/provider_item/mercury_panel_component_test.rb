@@ -30,6 +30,19 @@ class ProviderItem::MercuryPanelComponentTest < ActiveSupport::TestCase
     render_panel(items: :one)
   end
 
+  test "the disconnect button has an aria-label naming the connection" do
+    doc = Nokogiri::HTML.parse(render_panel(items: :one))
+
+    button = doc.css("button").find { |b| b.text.strip == "Disconnect" }
+    refute_nil button, "expected a button with the text 'Disconnect' in the Mercury panel"
+
+    expected = "Disconnect #{@item.name}"
+    assert_equal expected, button["aria-label"],
+      "the Mercury Disconnect button should carry aria-label=\"#{expected}\" so screen " \
+      "readers announce which connection is being disconnected; " \
+      "it currently has no aria-label (or a different one)"
+  end
+
   private
     def render_panel(options)
       @item.class.any_instance.stubs(:syncing?).returns(true) if options[:syncing]
