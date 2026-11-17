@@ -155,7 +155,7 @@ class KrakenItemsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "select accounts drops hostless return paths and keeps a routable one" do
-    [ "///evil.com", "//evil.com", "/\\evil.com" ].each do |return_to|
+    [ "///evil.com", "//evil.com", "/\\evil.com", "/%2Fevil.example/accounts", "/\naccounts", "/no/such/route" ].each do |return_to|
       get select_accounts_kraken_items_url, params: {
         kraken_item_id: @second_item.id,
         accountable_type: "Crypto",

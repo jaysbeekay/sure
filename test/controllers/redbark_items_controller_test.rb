@@ -92,7 +92,7 @@ class RedbarkItemsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "select_accounts drops hostless return paths and keeps a routable one" do
-    [ "///evil.com", "//evil.com", "/\\evil.com" ].each do |return_to|
+    [ "///evil.com", "//evil.com", "/\\evil.com", "/%2Fevil.example/accounts", "/\naccounts", "/no/such/route" ].each do |return_to|
       get select_accounts_redbark_items_url, params: { return_to: return_to }
 
       assert_redirected_to setup_accounts_redbark_item_path(@redbark_item, return_to: nil), "#{return_to} should be dropped"

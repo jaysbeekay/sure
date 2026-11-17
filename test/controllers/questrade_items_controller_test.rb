@@ -208,6 +208,7 @@ class QuestradeItemsControllerTest < ActionDispatch::IntegrationTest
 
   test "complete_account_setup ignores hostless return paths and honours a routable one" do
     { "///evil.com" => accounts_path, "//evil.com" => accounts_path, "/\\evil.com" => accounts_path,
+      "/%2Fevil.example/accounts" => accounts_path, "/\naccounts" => accounts_path, "/no/such/route" => accounts_path,
       "/transactions" => "/transactions" }.each_with_index do |(return_to, expected), index|
       questrade_account = @questrade_item.questrade_accounts.create!(
         name: "Margin (2222222#{index})",
