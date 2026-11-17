@@ -47,6 +47,7 @@ id:
       budget_on_track: Anggaran
       maintained_goal_depleted: Dana cadangan
       spending_pace: "Laju pengeluaran"
+      top_movers: "Perubahan terbesar"
     meta:
       next_n_days:
         one: Hari berikutnya
@@ -68,6 +69,7 @@ id:
         one: menganggur %{count} hari
         other: menganggur %{count} hari
       over_budget: "melebihi anggaran"
+      vs_prior_period: "vs periode sebelumnya"
     actions:
       spending_anomaly: Lihat transaksi %{category}
       cash_flow_warning: Tinjau transaksi berulang
@@ -98,6 +100,9 @@ id:
       spending_pace:
         approaching: "Pengeluaran Anda melaju lebih cepat dari anggaran"
         over: "Anda melebihi anggaran bulan ini"
+      top_movers:
+        up: "%{category} paling banyak naik dalam pengeluaran Anda"
+        down: "%{category} paling banyak turun dalam pengeluaran Anda"
     templates:
       spending_anomaly:
         above: Anda diperkirakan akan menghabiskan %{projected_spend} untuk %{category} bulan ini, sekitar %{deviation_pct}% lebih banyak dari rata-rata bulanan terbaru sebesar %{baseline_spend}.
@@ -120,3 +125,6 @@ id:
       spending_pace:
         approaching: "Anda telah membelanjakan %{spent_pct}% dari anggaran %{budgeted} saat %{elapsed_pct}% bulan ini telah berlalu. Dengan laju ini, Anda akan membelanjakan sekitar %{projected_spend}."
         over: "Anda telah membelanjakan %{spent} dari anggaran %{budgeted}, atau %{over_by} di atasnya."
+      top_movers:
+        up: "Dibandingkan %{days} hari sebelumnya, pengeluaran paling banyak naik pada %{categories}, dengan kenaikan terbesar %{top_change}."
+        down: "Dibandingkan %{days} hari sebelumnya, pengeluaran paling banyak turun pada %{categories}, dengan penurunan terbesar %{top_change}."

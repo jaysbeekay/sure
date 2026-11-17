@@ -47,6 +47,7 @@ zh-CN:
       budget_on_track: 预算
       maintained_goal_depleted: 储备金
       spending_pace: "支出进度"
+      top_movers: "最大变化"
     meta:
       next_n_days:
         one: 未来一天
@@ -68,6 +69,7 @@ zh-CN:
         one: "闲置 %{count} 天"
         other: "闲置 %{count} 天"
       over_budget: "超出预算"
+      vs_prior_period: "较上一期间"
     actions:
       spending_anomaly: "查看 %{category} 交易"
       cash_flow_warning: 查看循环交易
@@ -98,6 +100,9 @@ zh-CN:
       spending_pace:
         approaching: "您的支出快于预算进度"
         over: "您本月已超出预算"
+      top_movers:
+        up: "%{category} 是您支出中增长最多的类别"
+        down: "%{category} 是您支出中下降最多的类别"
     templates:
       spending_anomaly:
         above: "按目前进度，您本月在 %{category} 上的支出预计为 %{projected_spend}，比近期月均支出 %{baseline_spend} 高出约 %{deviation_pct}%。"
@@ -120,3 +125,6 @@ zh-CN:
       spending_pace:
         approaching: "本月已过去 %{elapsed_pct}%，您已花费 %{budgeted} 预算的 %{spent_pct}%。按此进度，您将花费约 %{projected_spend}。"
         over: "您已花费 %{spent}，预算为 %{budgeted}，超出 %{over_by}。"
+      top_movers:
+        up: "与之前 %{days} 天相比，%{categories} 的支出增长最多，最大增幅为 %{top_change}。"
+        down: "与之前 %{days} 天相比，%{categories} 的支出下降最多，最大降幅为 %{top_change}。"
