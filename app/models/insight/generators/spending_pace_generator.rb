@@ -31,9 +31,11 @@ class Insight::Generators::SpendingPaceGenerator < Insight::Generator
     attr_reader :today
 
     # No viewer: insights are family-wide, so this resolves the household
-    # budget (or the only one) exactly as the nightly generators always have.
+    # budget (or the only one) exactly as the nightly generators always have,
+    # and reads only the accounts every member may open.
     def narrative
-      @narrative ||= Spending::Narrative.new(family: family, user: nil, on: today, household: true)
+      @narrative ||= Spending::Narrative.new(family: family, user: nil, on: today, household: true,
+                                             accounts: shared_accounts)
     end
 
     def pace_insight(budget, pace)
@@ -59,7 +61,8 @@ class Insight::Generators::SpendingPaceGenerator < Insight::Generator
         # material signal; the display numbers live in `facts` only.
         metadata: {
           status: status,
-          spent_pct_bucket: (spent_pct / 10) * 10
+          spent_pct_bucket: (spent_pct / 10) * 10,
+          accounts_digest: shared_accounts_digest
         },
         # The whole budget month, not the month-to-date `narrative.period` the
         # spend is read over: the pace is judged against the whole month's

@@ -46,6 +46,7 @@ id:
       budget_at_risk: Anggaran
       budget_on_track: Anggaran
       maintained_goal_depleted: Dana cadangan
+      spending_pace: "Laju pengeluaran"
     meta:
       next_n_days:
         one: Hari berikutnya
@@ -66,6 +67,7 @@ id:
       idle_days:
         one: menganggur %{count} hari
         other: menganggur %{count} hari
+      over_budget: "melebihi anggaran"
     actions:
       spending_anomaly: Lihat transaksi %{category}
       cash_flow_warning: Tinjau transaksi berulang
@@ -93,6 +95,9 @@ id:
         one: Satu kategori perlu perhatian dalam anggaran Anda
         other: "%{count} kategori perlu perhatian dalam anggaran Anda"
       budget_on_track: Anggaran Anda berjalan sesuai rencana
+      spending_pace:
+        approaching: "Pengeluaran Anda melaju lebih cepat dari anggaran"
+        over: "Anda melebihi anggaran bulan ini"
     templates:
       spending_anomaly:
         above: Anda diperkirakan akan menghabiskan %{projected_spend} untuk %{category} bulan ini, sekitar %{deviation_pct}% lebih banyak dari rata-rata bulanan terbaru sebesar %{baseline_spend}.
@@ -112,3 +117,6 @@ id:
         over: "%{categories} melebihi anggaran bulan ini. Anda telah menggunakan %{budget_spent_pct}% dari total anggaran sejauh ini."
         near: "%{categories} mendekati batas anggaran bulan ini. Anda telah menggunakan %{budget_spent_pct}% dari total anggaran sejauh ini."
       budget_on_track: Anda telah membelanjakan %{spent} dari anggaran %{budgeted} (%{budget_spent_pct}%) dan semuanya masih dalam batas yang ditentukan.
+      spending_pace:
+        approaching: "Anda telah membelanjakan %{spent_pct}% dari anggaran %{budgeted} saat %{elapsed_pct}% bulan ini telah berlalu. Dengan laju ini, Anda akan membelanjakan sekitar %{projected_spend}."
+        over: "Anda telah membelanjakan %{spent} dari anggaran %{budgeted}, atau %{over_by} di atasnya."

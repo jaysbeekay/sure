@@ -90,6 +90,8 @@ class Insight::Generators::SpendingPaceGeneratorTest < ActiveSupport::TestCase
     other = families(:empty)
     create_budget(family: other, budgeted: 10)
     account = Account.create!(family: other, name: "Other", balance: 0, currency: "USD", accountable: Depository.new)
+    # Shared with every member, so the other family's own feed counts it.
+    other.users.where(active: true).where.not(id: account.owner_id).find_each { |user| AccountShare.create!(account: account, user: user, permission: :read_only) }
     Entry.create!(account: account, name: "Other", date: MONTH + 1, currency: "USD", amount: 5000, entryable: Transaction.new)
 
     assert_empty generate(on: Date.new(2024, 3, 14))
@@ -177,6 +179,33 @@ class Insight::Generators::SpendingPaceGeneratorTest < ActiveSupport::TestCase
     assert_not_equal baseline, next_bucket
     assert_equal "approaching", baseline[:status]
     assert_equal "over", over[:status]
+  end
+
+  # The feed is shared by the whole family, so only accounts every member may
+  # open count. `connected` is private to family_admin.
+  test "spending on an account private to one member does not show the card" do
+    create_budget
+    create_transaction(amount: 1001, date: MONTH + 1, name: "Private", account: accounts(:connected))
+
+    assert_empty generate(on: MONTH + 2)
+  end
+
+  test "spending on a shared account still shows the card" do
+    create_budget
+    create_transaction(amount: 1001, date: MONTH + 1, name: "Shared", account: accounts(:depository))
+
+    assert_equal [ "spending_pace" ], generate(on: MONTH + 2).map(&:insight_type)
+  end
+
+  test "revoking a share changes the account digest of the insight" do
+    create_budget
+    spend(1001)
+    before = generate(on: MONTH + 2).first.metadata[:accounts_digest]
+
+    account_shares(:credit_card_shared_with_member).destroy!
+
+    assert_not_nil before
+    assert_not_equal before, generate(on: MONTH + 2).first.metadata[:accounts_digest]
   end
 
   test "is registered and declares the type it produces" do

@@ -11,8 +11,8 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
     @user = users(:family_admin)
   end
 
-  def narrative(on: TODAY, family: @family, user: @user, household: false)
-    Spending::Narrative.new(family: family, user: user, on: on, household: household)
+  def narrative(on: TODAY, family: @family, user: @user, household: false, accounts: nil)
+    Spending::Narrative.new(family: family, user: user, on: on, household: household, accounts: accounts)
   end
 
   def create_budget(user: nil, budgeted: 1000, start_date: Date.new(2024, 3, 1))
@@ -221,5 +221,20 @@ class Spending::NarrativeTest < ActiveSupport::TestCase
     assert_equal [ 400 ], as_owner.top_movers.select { |m| m.category.id == category.id }.map { |m| m.delta.to_i }
     assert_equal 0, as_member.spent
     assert_empty as_member.top_movers.select { |m| m.category.id == category.id }
+  end
+
+  # The shared insight feed passes the accounts every member may open. The
+  # same spend counts without that scope, so the zeros below are its doing.
+  test "an account scope limits the spend read, with a budget and without one" do
+    create_transaction(amount: 400, date: Date.new(2024, 3, 5), name: "Private", account: accounts(:connected))
+    shared = @family.accounts.where.not(id: accounts(:connected).id)
+
+    assert_equal 400, narrative(user: nil).spent
+    assert_equal 0, narrative(user: nil, accounts: shared).spent
+
+    create_budget
+
+    assert_equal 400, narrative(user: nil, household: true).spent
+    assert_equal 0, narrative(user: nil, household: true, accounts: shared).spent
   end
 end
