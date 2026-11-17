@@ -93,8 +93,10 @@ jobs:
             echo "description=The convention check could not run" >> "$GITHUB_OUTPUT"
           fi
 
+      # Also runs when the lookup step itself failed (run is unset), so a
+      # failed lookup posts an error status instead of nothing.
       - name: Report a commit status
-        if: steps.scope.outputs.run == 'true' && always()
+        if: always() && steps.scope.outputs.run != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           STATE: ${{ steps.check.outputs.state || 'error' }}

@@ -54,6 +54,14 @@ class PreflightConventionsTest < Minitest::Test
     assert_empty hits
   end
 
+  # "slice" and "drop" name a fork slice only with a dotted number or an IP
+  # number; a plain integer is ordinary prose.
+  def test_leaves_slice_and_drop_followed_by_a_plain_integer
+    hits = check({}, "app/models/foo.rb" => "# drop 2 rows from the batch\n# slice 1 of 3 per page\n")
+
+    assert_empty hits
+  end
+
   # --- rule 2: Rails.logger instead of DebugLogEntry ---
 
   def test_flags_a_logger_in_an_importer_and_in_import_namespace
@@ -224,6 +232,28 @@ class PreflightConventionsTest < Minitest::Test
     hits = check({}, "app/components/a_component.rb" => "COLOR = :primary # replaces #fff\n")
 
     assert_empty hits
+  end
+
+  # --- paths ---
+
+  # git quotes a non-ASCII path in a diff header ("b/caf\303\251/...") unless
+  # core.quotePath is off, and a quoted path matches none of the rules.
+  def test_reports_a_non_ascii_path_unquoted
+    hits = check({}, "app/views/café/show.html.erb" => "<div class=\"bg-gray-100\">a</div>\n")
+
+    assert_equal [ [ "app/views/café/show.html.erb", 1 ] ], hits.map { |h| [ h.path, h.line ] }
+  end
+
+  # Under the C locale git's bytes would be read as US-ASCII, and matching a
+  # non-ASCII path would raise and exit 2.
+  def test_command_line_reports_a_non_ascii_path_under_the_c_locale
+    base = commit({ "README.md" => "x\n" }, "base")
+    head = commit({ "app/views/café/show.html.erb" => "<div class=\"bg-gray-100\">a</div>\n" }, "head")
+    script = File.expand_path("../../bin/preflight_conventions", __dir__)
+
+    out, status = Open3.capture2({ "LANG" => "C", "LC_ALL" => "C" }, "ruby", script, base, head, chdir: @dir)
+    assert_equal 1, status.exitstatus
+    assert_includes out.force_encoding(Encoding::UTF_8), "app/views/café/show.html.erb:1: [design-tokens]"
   end
 
   # --- added lines only ---

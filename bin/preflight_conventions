@@ -22,7 +22,7 @@ module PreflightConventions
   # Rule 1: comments that narrate fork history or review rounds.
   FORK_HISTORY = [
     %r{jaysbeekay/sure}i,
-    /\b(?:slice|drop)\s+(?:IP)?\d+(?:\.\d+[a-z]?)*\b/i,
+    /\b(?:slice|drop)\s+(?:IP\d+|\d+\.\d+[a-z]?)(?:\.\d+[a-z]?)*\b/i,
     /\b(?:address(?:es|ed)?|per|from|after)\s+(?:the\s+|a\s+)?(?:review|coderabbit|cubic|codex|gatekeeper)\b/i,
     /\bfork\s+(?:PR|issue|pre-?flight)\b/i
   ].freeze
@@ -133,11 +133,14 @@ module PreflightConventions
 
     private
 
+      # core.quotePath=false keeps a non-ASCII path unquoted in diff headers
+      # and name lists, so the path rules can match it. The output is read as
+      # UTF-8 whatever the locale, so matching it cannot raise.
       def git(*args)
-        out, err, status = Open3.capture3("git", "-C", @dir, *args)
+        out, err, status = Open3.capture3("git", "-C", @dir, "-c", "core.quotePath=false", *args)
         raise "git #{args.join(' ')} failed: #{err}" unless status.success?
 
-        out
+        out.force_encoding(Encoding::UTF_8).scrub
       end
 
       def head_lines(path)
