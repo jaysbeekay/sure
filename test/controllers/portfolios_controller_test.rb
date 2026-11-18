@@ -1036,11 +1036,17 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             account's balances, provider links and syncs, read in batched
   #             queries once per page. The same six on fork main's 111 in the
   #             same environment, none of them per holding
+  #  117 -> 119 IncomeStatement#cache_freshness_key now carries
+  #             family.tags_version (we-promise/sure#5136), merged with the
+  #             2026-11-18 upstream sync: one count/max read of tags and one of
+  #             taggings, once per page. Measured in the same environment: 116
+  #             on fork main, 118 here, and those two are the only difference
+  #             apart from the period-return rate lookups swapped one for one
   #
   # No rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 117
+  PORTFOLIO_QUERY_CEILING = 119
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one
@@ -1095,6 +1101,97 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#portfolio-realized-gains [data-controller=?]", "bar-chart", count: 0
     assert_select "#portfolio-realized-gains p.text-3xl", count: 0
     assert_no_match I18n.t("portfolios.realized_gains.summary", count: 0, period: Period.last_30_days.label), response.body
+  end
+
+  test "a preferences body that is not an object is refused and writes nothing" do
+    before = @user.reload.preferences.dup
+
+    patch update_preferences_portfolio_path, params: { preferences: "foo" }
+
+    assert_response :bad_request
+    assert_equal before, @user.reload.preferences
+  end
+
+  test "an order that is not a list leaves the saved order alone" do
+    @user.update!(preferences: @user.preferences.merge("portfolio_section_order" => %w[accounts]))
+
+    [ "accounts", { accounts: 1 } ].each do |order|
+      patch update_preferences_portfolio_path, params: { preferences: { portfolio_section_order: order } }, as: :json
+
+      assert_response :ok
+      assert_equal %w[accounts], @user.reload.preferences["portfolio_section_order"], "order #{order.inspect} must not be stored"
+    end
+  end
+
+  test "deduplicates the saved order, first occurrence winning" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[accounts accounts] } },
+      as: :json
+
+    assert_response :ok
+    assert_equal %w[accounts], @user.reload.preferences["portfolio_section_order"]
+  end
+
+  test "renders sections collapsed where the user left them" do
+    get portfolio_path
+    assert_select "[data-section-key=accounts][data-reports-section-collapsed-value=?]", "false"
+    assert_select "[data-section-key=accounts] > details[open] > summary"
+
+    @user.update_section_preferences("portfolio", collapsed: { "accounts" => true })
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key=accounts][data-reports-section-collapsed-value=?]", "true"
+    assert_select "[data-section-key=accounts] > details:not([open]) > summary"
+  end
+
+  # Portfolio is the only desktop-only entry, so every other item still
+  # reaches both bars: the mobile bar is the desktop rail without Portfolio,
+  # plus the mobile-only Assistant.
+  test "every other nav item still renders in both bars" do
+    get root_path
+    assert_response :success
+
+    desktop = css_select("ul li a").map { |link| link["href"] }
+    mobile = css_select("nav[data-viewport-target=bottomNav] a").map { |link| link["href"] }
+
+    assert_includes desktop, portfolio_path
+    assert_equal desktop - [ portfolio_path ], mobile - [ chats_path ]
+    assert_includes mobile, chats_path if @family.assistant_enabled?
+  end
+
+  # Without an id tiebreaker Postgres may return same-named accounts in any
+  # order, so the cards could swap places between requests. The ids descend
+  # in insertion order, so storage order and id order disagree.
+  test "accounts with the same name are listed in id order" do
+    same = %w[f d b].map do |digit|
+      @family.accounts.create!(id: "#{digit * 8}-0000-4000-8000-000000000000", name: "Same brokerage", balance: 100,
+                               currency: "USD", accountable: Investment.new, owner: @user)
+    end
+
+    get portfolio_path
+
+    assert_response :success
+    hrefs = css_select("#portfolio-accounts a").map { |a| a["href"] }
+    shown = hrefs.filter_map { |href| same.find { |account| href == account_path(account, tab: "holdings") } }
+    assert_equal same.sort_by(&:id), shown
+  end
+
+  # The empty state shows whenever the viewer counts no investment account,
+  # which includes a family whose investment accounts are all excluded.
+  test "the empty state does not claim the family has no investment accounts" do
+    user = users(:empty)
+    enable_preview(user)
+    sign_in user
+    user.family.accounts.create!(name: "Excluded brokerage", balance: 100, currency: "USD", accountable: Investment.new,
+                                 owner: user, exclude_from_reports: true)
+
+    get portfolio_path
+
+    assert_response :success
+    assert_select "[data-section-key]", count: 0
+    assert_match I18n.t("portfolios.empty_state.title"), response.body
+    assert_no_match(/yet/i, I18n.t("portfolios.empty_state.title"))
   end
 
   private

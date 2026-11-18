@@ -98,7 +98,7 @@ en:
     empty_state:
       add_account: Add an investment account
       description: Connect or add a brokerage, retirement or crypto account and this page will show its value, returns and holdings.
-      title: No investment accounts yet
+      title: No investment accounts to show
     holdings:
       columns:
         account: Account
@@ -200,12 +200,10 @@ en:
       retirement: Financial independence
       value_chart: Portfolio value
     show:
-      drag_to_reorder: Drag to reorder section
-      section_aria_label: "%{title} section. Press Enter or Space to grab for reordering, then use arrow keys to move."
-      sections_aria_label: Portfolio sections
+      section_aria: "%{title} section. Press Enter or Space to grab for reordering, then use arrow keys to move."
+      sections_aria: Portfolio sections
       subtitle: Everything you hold, what it is worth, and how it has moved.
       title: Portfolio
-      toggle_section: Toggle section
     value_chart:
       as_of: As of %{date}
       no_data: Not enough data to chart this period.

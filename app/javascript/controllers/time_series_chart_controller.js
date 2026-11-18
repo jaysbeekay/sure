@@ -1,6 +1,7 @@
 import { Controller } from "@hotwired/stimulus";
 import * as d3 from "d3";
 import { CHART_TOOLTIP_CLASSES } from "utils/chart_tooltip";
+import SettledResize from "utils/settled_resize";
 
 const parseLocalDate = d3.timeParse("%Y-%m-%d");
 
@@ -54,7 +55,7 @@ export default class extends Controller {
   _normalDataPoints = [];
   _comparisonPoints = [];
   _multiSeries = [];
-  _resizeObserver = null;
+  _settledResize = null;
   _d3DragSelectBrush = null;
   _d3DragSelectGroup = null;
   // d3 only nulls a truly zero-width selection, so 1-3px of jitter on a click
@@ -72,13 +73,14 @@ export default class extends Controller {
   connect() {
     this._install();
     document.addEventListener("turbo:load", this._reinstall);
-    this._setupResizeObserver();
+    this._settledResize = new SettledResize(this.element, this._reinstall);
+    this._settledResize.start();
   }
 
   disconnect() {
     this._teardown();
     document.removeEventListener("turbo:load", this._reinstall);
-    this._resizeObserver?.disconnect();
+    this._settledResize?.stop();
   }
 
   _reinstall = () => {
@@ -102,6 +104,8 @@ export default class extends Controller {
     this._normalizeDataPoints();
     this._rememberInitialContainerSize();
     this._draw();
+    this._settledResize?.drew();
+    this.element.dispatchEvent(new CustomEvent("time-series-chart:drawn", { bubbles: true }));
   }
 
   _normalizeDataPoints() {
@@ -369,7 +373,10 @@ export default class extends Controller {
         // We know we only have 2 values
         return i === 0 ? "5em" : "-5em";
       })
-      .attr("dy", "0em");
+      .attr("dy", "0em")
+      // While the chart is stretched (utils/settled_resize), each date keeps its
+      // distance from its own edge.
+      .attr("data-settled-resize-edge", (_d, i) => (i === 0 ? "left" : "right"));
   }
 
   _drawGradientBelowTrendline() {
@@ -925,12 +932,5 @@ export default class extends Controller {
       .scaleLinear()
       .rangeRound([this._d3ContainerHeight, 0])
       .domain([yMin, yMax]);
-  }
-
-  _setupResizeObserver() {
-    this._resizeObserver = new ResizeObserver(() => {
-      this._reinstall();
-    });
-    this._resizeObserver.observe(this.element);
   }
 }

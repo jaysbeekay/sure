@@ -67,6 +67,7 @@ class Transactions::CategorySuggestionsControllerTest < ActionDispatch::Integrat
 
   test "index shows the backlog count and the cost of one batch, capped at 25" do
     create_backlog(26)
+    use_ai_routes(categorize: %w[openai/gpt-4.1-mini])
     LlmUsage.expects(:estimate_auto_categorize_cost).with { |transaction_count:, **| transaction_count == 25 }.returns(0.0123)
 
     get transactions_category_suggestions_url
@@ -79,6 +80,7 @@ class Transactions::CategorySuggestionsControllerTest < ActionDispatch::Integrat
 
   test "index says there is no pricing rather than inventing a cost" do
     create_backlog(2)
+    use_ai_routes(categorize: %w[openai/gpt-4.1-mini])
     LlmUsage.stubs(:estimate_auto_categorize_cost).returns(nil)
 
     get transactions_category_suggestions_url

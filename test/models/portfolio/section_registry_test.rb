@@ -588,6 +588,29 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
       "the accounts section's queries grew with the number of linked accounts"
   end
 
+  test "the accounts section is visible only when the family has investment accounts" do
+    assert registry.sections.find { |s| s[:key] == "accounts" }[:visible]
+
+    empty_statement = InvestmentStatement.new(families(:empty), user: nil)
+    empty = Portfolio::SectionRegistry.new(statement: empty_statement, period: @period, as_of: @as_of, user: @user).sections
+    assert_not empty.find { |s| s[:key] == "accounts" }[:visible]
+  end
+
+  # Created in reverse name order, so the cards come back by name only if the
+  # query asks for it.
+  test "the accounts section lists the cards in name order" do
+    zeta = @family.accounts.create!(name: "Zeta brokerage", balance: 100, currency: "USD", accountable: Investment.new, owner: @user)
+    alpha = @family.accounts.create!(name: "Alpha brokerage", balance: 100, currency: "USD", accountable: Investment.new, owner: @user)
+    @statement = InvestmentStatement.new(@family, user: @user)
+
+    cards = registry.sections.find { |s| s[:key] == "accounts" }[:locals][:accounts]
+
+    assert_includes cards, zeta
+    assert_operator cards.index(alpha), :<, cards.index(zeta)
+    assert_equal @statement.investment_accounts.to_a.sort_by(&:id), cards.sort_by(&:id),
+      "the cards must be exactly the statement's investment accounts"
+  end
+
   private
     def link_investment_account(index)
       account = @family.accounts.create!(name: "Linked brokerage #{index}", balance: 1_000, currency: "USD",
