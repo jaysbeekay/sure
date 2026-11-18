@@ -44,6 +44,13 @@ class Portfolio::SectionRegistry
     @extra_sections = extra_sections || []
   end
 
+  # True when the viewer counts no investment account; the page shows its
+  # empty state instead of the sections. Reads the same loaded list as the
+  # cards, so the accounts are queried once per request.
+  def empty?
+    accounts_for_cards.empty?
+  end
+
   def sections
     all = built_in_sections + extra_sections
 
@@ -183,7 +190,7 @@ class Portfolio::SectionRegistry
           title: "portfolios.sections.accounts",
           partial: "portfolios/accounts",
           locals: shared_locals.merge(accounts: accounts_for_cards),
-          visible: statement.investment_accounts.any?,
+          visible: accounts_for_cards.any?,
           collapsible: true
         },
         {
@@ -740,19 +747,17 @@ class Portfolio::SectionRegistry
       end
     end
 
-    def shared_locals
-      { statement: statement, period: period, as_of: as_of }
+    # The accounts the cards show, in name order (id breaks ties, so
+    # same-named cards keep their places), with every record the logo reads
+    # (the attachment, the accountable's colour, the provider links and the
+    # provider each falls back to) loaded here rather than once per card.
+    def accounts_for_cards
+      @accounts_for_cards ||= statement.investment_accounts.with_attached_logo
+        .includes(:accountable, :plaid_account, :simplefin_account, account_providers: :provider)
+        .alphabetically.order(:id).to_a
     end
 
-    # One card per investment account the user may count, in name order. The
-    # logo partial reads the attached logo, the accountable's colour and
-    # Account#logo_url, which goes through #linked? (the provider links, the
-    # Plaid account and the SimpleFIN account) and falls back to the first
-    # link's provider record. All of them are loaded here rather than once
-    # per card.
-    def accounts_for_cards
-      statement.investment_accounts.with_attached_logo
-        .includes(:accountable, :plaid_account, :simplefin_account, account_providers: :provider)
-        .alphabetically.to_a
+    def shared_locals
+      { statement: statement, period: period, as_of: as_of }
     end
 end

@@ -1,19 +1,8 @@
-<%# locals: (statement:, period:, as_of:, accounts:) %>
+<%# locals: (accounts:, statement:, period:, as_of:) %>
 
-<%# One card per account, straight to its holdings tab. The accounts arrive
-    with everything the logo partial reads already loaded
-    (Portfolio::SectionRegistry#accounts_for_cards). %>
+<%# One card per investment account the user may count, straight to its holdings tab. %>
 <div id="portfolio-accounts" class="grid grid-cols-1 @2xl:grid-cols-2 @4xl:grid-cols-3 gap-3">
   <% accounts.each do |account| %>
-    <%= link_to account_path(account, tab: "holdings"), class: "bg-container-inset rounded-lg p-4 flex items-center justify-between hover:bg-container-hover transition-colors focus-ring", data: { turbo_frame: "_top" } do %>
-      <div class="flex items-center gap-3 min-w-0">
-        <%= render "accounts/logo", account: account, size: "sm" %>
-        <div class="min-w-0">
-          <p class="font-medium text-primary text-sm truncate"><%= account.name %></p>
-          <p class="text-xs text-secondary"><%= account.short_subtype_label %></p>
-        </div>
-      </div>
-      <p class="font-medium text-primary privacy-sensitive whitespace-nowrap"><%= format_money(account.balance_money) %></p>
-    <% end %>
+    <%= render "accounts/balance_card", account: account, href: account_path(account, tab: "holdings"), truncate: true, focus_ring: true %>
   <% end %>
 </div>

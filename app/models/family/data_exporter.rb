@@ -264,13 +264,20 @@ class Family::DataExporter
       # there. Primary-key order is arbitrary, so without this a valid export
       # could put a loan ahead of its asset and fail the restore.
       accounts_in_dependency_order.each do |account|
+        data = account.as_json(
+          include: {
+            accountable: {}
+          }
+        )
+        # A property's address lives in its own table, so it is not part of
+        # the accountable's columns.
+        if account.accountable.is_a?(Property) && (address = account.accountable.address)
+          data["accountable"]["address"] = address.as_json(only: Family::DataImporter::PROPERTY_ADDRESS_ATTRIBUTES)
+        end
+
         lines << {
           type: "Account",
-          data: account.as_json(
-            include: {
-              accountable: {}
-            }
-          )
+          data: data
         }.to_json
       end
 
@@ -615,7 +622,7 @@ class Family::DataExporter
       if parent_entry.association(:child_entries).loaded?
         parent_entry.child_entries.sort_by { |entry| [ entry.created_at, entry.id ] }
       else
-        parent_entry.child_entries.order(:created_at, :id).to_a
+        parent_entry.child_entries.in_split_order.to_a
       end
     end
 

@@ -52,7 +52,6 @@ class Spending::DailyCategoryTotals
         #{entries_join_sql("at")}
         #{accounts_join_sql}
         LEFT JOIN categories c ON c.id = at.category_id
-        #{exchange_rates_join_sql}
         WHERE at.kind NOT IN (#{budget_excluded_kinds_sql})
           #{investment_activity_label_sql("at")}
           AND ae.excluded = false

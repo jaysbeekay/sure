@@ -30,6 +30,9 @@ class Insight < ApplicationRecord
     spending_pace
     top_movers
     stale_valuation
+    bill_not_covered
+    loan_payment_change
+    bank_fees
   ].freeze
 
   # How many the dashboard widget shows. Shared so PagesController (first render)
@@ -56,6 +59,10 @@ class Insight < ApplicationRecord
   # otherwise stay in the feed until the next nightly run expires them.
   # Nothing is written, so the row reappears as it was if access is restored.
   #
+  # A total (metadata accounts_digest) names no single account, so it shows
+  # only while its digest still matches the set every active member can open
+  # now; otherwise its figures may include an account someone lost.
+  #
   # The id is cast to uuid (not the column to text) so the lookup stays a
   # primary-key probe; the CASE keeps a malformed value from raising.
   scope :about_shared_accounts, -> {
@@ -67,7 +74,33 @@ class Insight < ApplicationRecord
           THEN (insights.metadata->>'account_id')::uuid
         END
       SQL
+    current_digest = Account.accessible_by_all_active_members
+      .where("accounts.family_id = insights.family_id")
+      .select(Account::ID_SET_DIGEST_SQL)
+
     where("NOT (insights.metadata ? 'account_id')").or(where(shared_account.arel.exists))
+      .where("NOT (insights.metadata ? 'accounts_digest') OR insights.metadata->>'accounts_digest' = (#{current_digest.to_sql})")
+      .about_shared_recurring_transactions
+  }
+
+  # A recurring series can move to another account after its insight was
+  # written, so the stored account_id may be stale. An insight that names a
+  # series (metadata recurring_transaction_id) also checks the series' current
+  # account: it shows only while that series exists and has no account or one
+  # every active member can see.
+  scope :about_shared_recurring_transactions, -> {
+    shared_account = Account.visible.accessible_by_all_active_members
+      .where("accounts.id = recurring_transactions.account_id")
+    current_series = RecurringTransaction
+      .where("recurring_transactions.family_id = insights.family_id")
+      .where(<<~SQL.squish)
+        recurring_transactions.id = CASE
+          WHEN insights.metadata->>'recurring_transaction_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          THEN (insights.metadata->>'recurring_transaction_id')::uuid
+        END
+      SQL
+      .where("recurring_transactions.account_id IS NULL OR EXISTS (#{shared_account.to_sql})")
+    where("NOT (insights.metadata ? 'recurring_transaction_id')").or(where(current_series.arel.exists))
   }
 
   scope :ordered, -> {

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_18_090100) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -655,6 +655,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.uuid "enable_banking_item_id", null: false
     t.string "iban"
     t.jsonb "identification_hashes", default: []
+    t.boolean "ignored", default: false, null: false
     t.jsonb "institution_metadata"
     t.string "name"
     t.string "product"
@@ -724,6 +725,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.string "name", null: false
     t.text "notes"
     t.uuid "parent_entry_id"
+    t.string "reconciled_status", default: "unreconciled", null: false
     t.string "plaid_id"
     t.datetime "reconciled_at"
     t.uuid "reconciled_by_statement_id"
@@ -743,6 +745,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.index ["import_id"], name: "index_entries_on_import_id"
     t.index ["import_locked"], name: "index_entries_on_import_locked_true", where: "(import_locked = true)"
     t.index ["parent_entry_id"], name: "index_entries_on_parent_entry_id"
+    t.index ["account_id", "reconciled_status"], name: "index_entries_on_account_id_and_reconciled_status"
+    t.check_constraint "reconciled_status::text = ANY (ARRAY['unreconciled'::character varying, 'cleared'::character varying, 'reconciled'::character varying]::text[])", name: "chk_entries_reconciled_status"
     t.index ["reconciled_by_statement_id"], name: "index_entries_on_reconciled_by_statement", where: "(reconciled_by_statement_id IS NOT NULL)"
     t.index ["user_modified"], name: "index_entries_on_user_modified_true", where: "(user_modified = true)"
     t.check_constraint "reconciled_by_statement_id IS NULL OR reconciled_at IS NOT NULL", name: "chk_entries_reconciled_at_present_when_statement_set"
@@ -865,7 +869,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.datetime "updated_at", null: false
     t.index ["from_currency", "to_currency", "date"], name: "index_exchange_rates_on_base_converted_date_unique", unique: true
     t.index ["from_currency"], name: "index_exchange_rates_on_from_currency"
-    t.index ["to_currency"], name: "index_exchange_rates_on_to_currency"
+    t.index ["to_currency", "updated_at"], name: "index_exchange_rates_on_to_currency_and_updated_at"
+    t.index ["updated_at"], name: "index_exchange_rates_on_updated_at"
     t.check_constraint "rate > 0::numeric AND rate <> 'NaN'::numeric AND rate::text <> 'Infinity'::text", name: "chk_exchange_rates_rate_positive"
   end
 
@@ -895,6 +900,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.datetime "latest_sync_activity_at", default: -> { "CURRENT_TIMESTAMP" }
     t.datetime "latest_sync_completed_at", default: -> { "CURRENT_TIMESTAMP" }
     t.string "locale", default: "en"
+    t.boolean "manual_reconciliation", default: false, null: false
     t.string "moniker", default: "Family", null: false
     t.integer "month_start_day", default: 1, null: false
     t.string "name"
@@ -1492,6 +1498,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.datetime "created_at", null: false
     t.string "currency"
     t.decimal "current_balance", precision: 19, scale: 4
+    t.boolean "ignored", default: false, null: false
     t.string "indexa_capital_account_id"
     t.string "indexa_capital_authorization_id"
     t.uuid "indexa_capital_item_id", null: false
@@ -1636,6 +1643,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
   create_table "llm_usages", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.integer "cache_creation_tokens"
     t.integer "cache_read_tokens"
+    t.uuid "call_id"
     t.integer "completion_tokens", default: 0, null: false
     t.datetime "created_at", null: false
     t.decimal "estimated_cost", precision: 10, scale: 6
@@ -1645,13 +1653,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.string "operation", null: false
     t.integer "prompt_tokens", default: 0, null: false
     t.string "provider", null: false
+    t.string "status", default: "succeeded", null: false
     t.integer "total_tokens", default: 0, null: false
     t.datetime "updated_at", null: false
+    t.index ["call_id"], name: "index_llm_usages_on_call_id"
     t.index ["family_id", "created_at"], name: "index_llm_usages_on_family_id_and_created_at"
     t.index ["family_id", "operation"], name: "index_llm_usages_on_family_id_and_operation"
     t.index ["family_id"], name: "index_llm_usages_on_family_id"
     t.check_constraint "cache_creation_tokens IS NULL OR cache_creation_tokens >= 0", name: "chk_llm_usages_cache_creation_tokens_non_negative"
     t.check_constraint "cache_read_tokens IS NULL OR cache_read_tokens >= 0", name: "chk_llm_usages_cache_read_tokens_non_negative"
+    t.check_constraint "status::text = ANY (ARRAY['succeeded'::character varying, 'failed'::character varying, 'cancelled'::character varying]::text[])", name: "chk_llm_usages_status"
   end
 
   create_table "loans", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -1664,6 +1675,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.string "insurance_rate_type"
     t.decimal "interest_rate", precision: 10, scale: 3
     t.jsonb "locked_attributes", default: {}
+    t.boolean "principal_only_transfers", default: false, null: false
     t.string "rate_type"
     t.date "start_date"
     t.string "subtype"
@@ -2481,6 +2493,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.check_constraint "kind::text = ANY (ARRAY['standard'::character varying::text, 'cash'::character varying::text])", name: "chk_securities_kind"
   end
 
+  create_table "security_audit_logs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.string "event_type", null: false
+    t.text "ip_address"
+    t.jsonb "metadata", default: {}, null: false
+    t.datetime "updated_at", null: false
+    t.text "user_agent"
+    t.text "user_email"
+    t.uuid "user_id"
+    t.index ["created_at"], name: "index_security_audit_logs_on_created_at"
+    t.index ["event_type"], name: "index_security_audit_logs_on_event_type"
+    t.index ["user_id", "created_at"], name: "index_security_audit_logs_on_user_id_and_created_at"
+    t.index ["user_id"], name: "index_security_audit_logs_on_user_id"
+  end
+
   create_table "security_classification_proposals", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "asset_class"
     t.string "asset_sub_class"
@@ -2727,6 +2754,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.string "customer_id"
     t.jsonb "institution_metadata"
     t.datetime "last_updated"
+    t.boolean "lender_signed"
     t.boolean "manual_sync", default: false, null: false
     t.string "member_id"
     t.string "name", null: false
@@ -2850,6 +2878,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.jsonb "data"
     t.string "error"
     t.datetime "failed_at"
+    t.boolean "full_resync_requested", default: false, null: false
     t.uuid "parent_id"
     t.datetime "pending_at"
     t.string "status", default: "pending"
@@ -3007,6 +3036,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.string "kind", default: "standard", null: false
     t.jsonb "locked_attributes", default: {}
     t.uuid "merchant_id"
+    t.string "provider_entry_reference"
     t.uuid "transfer_id"
     t.datetime "updated_at", null: false
     t.index "(((extra -> 'goal'::text) ->> 'pledge_id'::text))", name: "ix_transactions_extra_goal_pledge_id", unique: true, where: "(((extra -> 'goal'::text) ->> 'pledge_id'::text) IS NOT NULL)"
@@ -3202,6 +3232,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
     t.index ["credential_id"], name: "index_webauthn_credentials_on_credential_id", unique: true
     t.index ["user_id"], name: "index_webauthn_credentials_on_user_id"
     t.check_constraint "sign_count >= 0", name: "chk_webauthn_credentials_sign_count_non_negative"
+  end
+
+  create_table "weekly_cleanup_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.uuid "family_id", null: false
+    t.date "period_start", null: false
+    t.jsonb "summary", default: {}, null: false
+    t.datetime "updated_at", null: false
+    t.uuid "user_id", null: false
+    t.index ["family_id", "user_id", "period_start"], name: "idx_weekly_cleanup_runs_dedup", unique: true
+    t.index ["family_id"], name: "index_weekly_cleanup_runs_on_family_id"
+    t.index ["user_id"], name: "index_weekly_cleanup_runs_on_user_id"
   end
 
   create_table "wise_accounts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -3410,6 +3452,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
   add_foreign_key "rule_runs", "rules"
   add_foreign_key "rules", "families"
   add_foreign_key "rules", "rule_groups", on_delete: :nullify
+  add_foreign_key "security_audit_logs", "users", on_delete: :nullify
   add_foreign_key "security_classification_proposals", "families"
   add_foreign_key "security_classification_proposals", "securities"
   add_foreign_key "security_constituents", "securities"
@@ -3455,4 +3498,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_01_120000) do
   add_foreign_key "webauthn_credentials", "users"
   add_foreign_key "wise_accounts", "wise_items", on_delete: :cascade
   add_foreign_key "wise_items", "families"
+  add_foreign_key "weekly_cleanup_runs", "families", on_delete: :cascade
+  add_foreign_key "weekly_cleanup_runs", "users", on_delete: :cascade
 end

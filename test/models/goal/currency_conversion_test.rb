@@ -98,13 +98,14 @@ class Goal::CurrencyConversionTest < ActiveSupport::TestCase
 
   test "investment contributions are converted after excluding market gains" do
     eur = @family.accounts.create!(name: "EUR investments", accountable: Investment.new, currency: "EUR", balance: 1_000)
-    # The fork keeps an explicit basis rather than defaulting investment-backed
-    # goals to contributions (jaysbeekay/sure#299), so this test chooses it.
-    goal = goal_on("USD", [ [ eur, nil ] ], progress_basis: "contributions")
+    goal = goal_on("USD", [ [ eur, nil ] ])
     goal.market_flows = { eur.id => 200 }
     rate("EUR", "USD", 1.2)
+    assert_equal 1_200, goal.current_balance
 
-    assert goal.contributions_basis?
+    # The basis is the user's choice, never inferred from the account type.
+    goal.update!(progress_basis: "contributions")
+
     assert_equal 960, goal.current_balance
     assert_equal 1_200, goal.market_value_money.amount
   end
@@ -243,8 +244,8 @@ class Goal::CurrencyConversionTest < ActiveSupport::TestCase
     end
 
     # `accounts` pairs each account with its native earmark; nil links the whole balance.
-    def goal_on(currency, accounts, target: 5_000, progress_basis: "balance")
-      @family.goals.create!(name: "Mixed goal", target_amount: target, currency: currency, progress_basis: progress_basis) do |goal|
+    def goal_on(currency, accounts, target: 5_000)
+      @family.goals.create!(name: "Mixed goal", target_amount: target, currency: currency) do |goal|
         accounts.each { |account, amount| goal.goal_accounts.build(account: account, allocated_amount: amount) }
       end
     end

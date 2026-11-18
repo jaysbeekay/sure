@@ -143,10 +143,17 @@ class Holding::ReverseCalculator
       @lot_books = Hash.new { |h, k| h[k] = Holding::LotBook.new(method: account.cost_basis_method) }
       open_unknown_start = {}
 
-      # get_trades is already chronological (date, then created_at, then id).
+      # get_trades is already in replay order (date, created_at, acquisitions
+      # before disposals, then id).
       # Re-sorting by date alone is unstable and could reorder same-day trades,
       # which matters because the lot book is order-sensitive once sells relieve.
       trades = portfolio_cache.get_trades
+      # A scheduled trade has not happened yet, so it explains none of today's
+      # position.
+      trades = trades.reject { |te| te.date > Date.current }
+      # A scoped run (a remap, a price sync) replays only its own securities;
+      # the cache holds every trade in the account.
+      trades = trades.select { |te| @security_ids.include?(te.entryable.security_id) } if @security_ids
       events = replay_events(trades)
 
       # A reverse-synced account can hold shares before its first imported trade,
@@ -169,7 +176,10 @@ class Holding::ReverseCalculator
           positions[event.entryable.security_id] -= event.entryable.qty
         end
       end
-      open_lots(snapshot.merge(positions), traded: positions.keys)
+      # The snapshot covers the whole account; a scoped run books only its own.
+      baselines = snapshot.merge(positions)
+      baselines = baselines.slice(*@security_ids) if @security_ids
+      open_lots(baselines, traded: positions.keys)
 
       events.each do |event|
         if event.is_a?(Security::Split)
@@ -241,11 +251,13 @@ class Holding::ReverseCalculator
     # provider reports) are the opening lot. Its cost is unknown to the trades,
     # so it stays out of the average, and sales relieve it like any other lot.
     # A traded position whose provider quantity is below its trades' total has
-    # nothing to open and is recorded as clamped.
+    # nothing to open and is recorded as clamped. A shortfall within the drift a
+    # split's rounding leaves (OPENING_RESIDUAL_BOUND) is not one: there is
+    # nothing to open either, but the trades still explain the position.
     def open_lots(baselines, traded:)
       @clamped_security_ids = Set.new
       baselines.each do |security_id, qty|
-        if qty.negative? && traded.include?(security_id)
+        if qty <= -Holding::LotBook::OPENING_RESIDUAL_BOUND && traded.include?(security_id)
           @clamped_security_ids << security_id
         else
           @lot_books[security_id].add_unknown(qty)

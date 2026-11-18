@@ -12,7 +12,9 @@ class CodacyRubocopConfigTest < ActiveSupport::TestCase
     repository = effective_config(".rubocop.yml")
     codacy = effective_config(".rubocop-codacy.yml")
 
-    drifted = (repository.keys | codacy.keys).reject { |name| repository[name] == codacy[name] }
+    # The repository's own Sure/ cops load through .rubocop.yml's `require:`, which
+    # Codacy's image cannot run, so the flattened copy leaves them out.
+    drifted = (repository.keys | codacy.keys).reject { |name| name.start_with?("Sure/") || repository[name] == codacy[name] }
 
     assert_empty drifted, "regenerate .rubocop-codacy.yml from the gem's config plus .rubocop.yml; differs on #{drifted.join(', ')}"
   end
