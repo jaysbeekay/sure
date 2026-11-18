@@ -120,8 +120,9 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     record = lambda do |_name, _started, _finished, _id, payload|
       next unless payload[:sql].match?(/FROM "syncs" WHERE "syncs"\."syncable_id" = .*ORDER BY "syncs"\."created_at" DESC/)
 
-      type = Array(payload[:type_casted_binds]).find { |bind| bind.to_s.end_with?("Item") }
-      lookups << type if type
+      binds = Array(payload[:type_casted_binds]).map(&:to_s)
+      # The family's own latest sync is looked up once per page, not once per card.
+      lookups << binds.join(" ") unless binds.include?("Family")
     end
 
     ActiveSupport::Notifications.subscribed(record, "sql.active_record") { get accounts_url }
