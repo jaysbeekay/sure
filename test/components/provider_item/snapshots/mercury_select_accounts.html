@@ -20,8 +20,7 @@
 <div class="px-4 grow">
 <div class="space-y-4">
 <p class="text-sm text-secondary">Select the accounts you want to link to your Sure account.</p>
-<form action="/mercury_items/link_accounts" method="post" class="space-y-4" data-turbo-frame="_top">
-<input type="hidden" name="authenticity_token" id="authenticity_token" value="CSRF" />
+<form class="space-y-4" data-turbo-frame="_top" action="/mercury_items/link_accounts" accept-charset="UTF-8" method="post">
 <input type="hidden" name="mercury_item_id" id="mercury_item_id" value="UUID" />
 <input type="hidden" name="accountable_type" id="accountable_type" value="Depository" />
 <input type="hidden" name="return_to" id="return_to" value="/accounts" />
@@ -47,17 +46,17 @@
 <div class="text-xs text-secondary mt-1">Mercury • USD • archived • Savings</div>
 </div>
 </label>
-<label class="flex items-start gap-3 p-3 border border-error bg-error/5 rounded-lg cursor-not-allowed opacity-60 transition-colors">
+<label class="flex items-start gap-3 p-3 border border-destructive bg-destructive/10 rounded-lg cursor-not-allowed opacity-60 transition-colors">
 <input type="checkbox" name="account_ids[]" id="account_ids_" value="merc_4" disabled="disabled" class="mt-1" />
 <div class="flex-1">
-<div class="font-medium text-sm text-error">(No name)</div>
+<div class="font-medium text-sm text-destructive">(No name)</div>
 <div class="text-xs text-secondary mt-1">Mercury • USD • active • Checking</div>
-<div class="text-xs text-error mt-1">Cannot import - please configure account name in Mercury</div>
+<div class="text-xs text-destructive mt-1">Cannot import - please configure account name in Mercury</div>
 </div>
 </label>
 </div>
 <div class="flex gap-2 justify-end pt-4">
-<a class="font-medium whitespace-nowrap focus-ring disabled:cursor-not-allowed aria-disabled:cursor-not-allowed aria-disabled:opacity-50 inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-primary bg-gray-200 theme-dark:bg-gray-700 hover:bg-gray-300 theme-dark:hover:bg-gray-600 disabled:bg-gray-200 theme-dark:disabled:bg-gray-600" data-turbo-frame="_top" data-action="DS--dialog#close" href="/accounts">Cancel</a>
+<a class="font-medium whitespace-nowrap focus-ring disabled:cursor-not-allowed aria-disabled:cursor-not-allowed aria-disabled:opacity-50 inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-primary bg-gray-200 theme-dark:bg-gray-700 hover:bg-gray-300 theme-dark:hover:bg-gray-600 disabled:bg-gray-200 theme-dark:disabled:bg-gray-600" data-turbo-frame="_top" href="/accounts">Cancel</a>
 <button type="submit" class="font-medium whitespace-nowrap focus-ring disabled:cursor-not-allowed aria-disabled:cursor-not-allowed aria-disabled:opacity-50 inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-inverse bg-inverse hover:bg-inverse-hover disabled:bg-gray-500 theme-dark:disabled:bg-gray-400">
 <span class="min-w-0 truncate">Link selected accounts</span>
 </button>
