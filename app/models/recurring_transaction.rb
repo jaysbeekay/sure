@@ -79,6 +79,10 @@ class RecurringTransaction < ApplicationRecord
 
   before_update :remember_previous_name_as_alias, if: :renaming_name_keyed_series?
 
+  # A bill declared by hand is born active, so it never makes the activation
+  # transition below. Ahead of generation, for the same reason activation runs
+  # ahead of regeneration. A restore brings its own occurrences and allocations.
+  after_commit :reconstruct_history_on_declaration, on: :create, if: :declared_active?
   after_commit :generate_occurrences, on: :create
   # Ahead of regeneration: activation changes status, so both run, and with
   # load_defaults 7.1+ these run in the order defined. An exception in one
@@ -240,7 +244,8 @@ class RecurringTransaction < ApplicationRecord
 
   # Links what a bill already paid before it was a bill. Every route that
   # confirms a detection -- the review strip, the pause toggle, the API and
-  # the assistant's update_bill -- lands here through the status change.
+  # the assistant's update_bill -- lands here through the status change, and
+  # every route that creates a bill already active lands here on create.
   # Generation is scoped to this series; the matcher pass inside stays
   # family-wide on purpose (exact-tier, idempotent, and scoping it would need
   # a parallel Matcher entry point). Returns false only when another pipeline
@@ -273,6 +278,10 @@ class RecurringTransaction < ApplicationRecord
     saved_change_to_status?(from: "suggested", to: "active")
   end
 
+  def declared_active?
+    active? && !restoring_matcher_hints
+  end
+
   # Skipping under a held lock used to leave the bill without history for
   # good, since the live matcher never looks behind the current cycle.
   #
@@ -285,6 +294,12 @@ class RecurringTransaction < ApplicationRecord
   rescue StandardError => e
     Rails.error.report(e, handled: true, context: { recurring_transaction_id: id })
     BackfillRecurringHistoryJob.perform_later(id)
+  end
+
+  # A second registration of the activation method would replace the first
+  # (callbacks are keyed by method name), so creation has its own entry point.
+  def reconstruct_history_on_declaration
+    reconstruct_history_on_activation
   end
 
   # Regenerating rebuilds only scheduled, allocation-free, not-yet-due rows;
