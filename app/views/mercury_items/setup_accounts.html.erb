@@ -7,6 +7,5 @@
       account_type_options: @account_type_options,
       displayable_account_type_options: @account_type_options.reject { |_, type| type == "skip" },
       subtype_options: @subtype_options,
-      defaults: mercury_account_setup_defaults(@mercury_accounts),
-      variant: :classic
+      defaults: mercury_account_setup_defaults(@mercury_accounts)
     ) %>

@@ -57,18 +57,11 @@
           </div>
         <% end %>
 
-        <% if classic? %>
-          <form action="<%= form_url %>" method="post" class="space-y-4" data-turbo-frame="_top">
-            <%= hidden_field_tag :authenticity_token, helpers.form_authenticity_token %>
-            <%= fields %>
-          </form>
-        <% else %>
-          <%= form_with url: form_url,
-                        method: :post,
-                        data: { turbo_frame: "_top" },
-                        class: "space-y-4" do %>
-            <%= fields %>
-          <% end %>
+        <%= form_with url: form_url,
+                      method: :post,
+                      data: { turbo_frame: "_top" },
+                      class: "space-y-4" do %>
+          <%= fields %>
         <% end %>
       </div>
     <% end %>
