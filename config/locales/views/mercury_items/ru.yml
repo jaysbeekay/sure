@@ -101,6 +101,7 @@ ru:
       default_connection_name: Подключение Mercury
       disconnect: Отключить
       disconnect_confirm: Отключить %{name}?
+      disconnect_label: Отключить %{name}
       instructions:
         copy_token_html: Скопируйте <strong>полный токен</strong> (включая префикс
           <code>secret-token:</code>) и добавьте его как именованное подключение ниже

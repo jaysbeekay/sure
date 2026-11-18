@@ -77,6 +77,7 @@ pt-PT:
       default_connection_name: Ligação Mercury
       disconnect: Desligar
       disconnect_confirm: "Desassociar %{name}?"
+      disconnect_label: "Desligar %{name}"
       instructions:
         copy_token_html: "Copie o <strong>token completo</strong> (incluindo o prefixo <code>secret-token:</code>) e adicione-o como ligação nomeada abaixo"
         create_token: Crie um novo token de API com acesso "Só de leitura"

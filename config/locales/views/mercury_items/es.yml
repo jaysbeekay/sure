@@ -77,6 +77,7 @@ es:
       default_connection_name: Conexión Mercury
       disconnect: Desconectar
       disconnect_confirm: ¿Desconectar %{name}?
+      disconnect_label: "Desconectar %{name}"
       instructions:
         copy_token_html: Copia el <strong>token completo</strong> (incluido el prefijo <code>secret-token:</code>) y añádelo abajo como una conexión con nombre
         create_token: Crea un nuevo token de API con acceso de "solo lectura"
