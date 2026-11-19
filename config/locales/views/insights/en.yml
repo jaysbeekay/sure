@@ -49,6 +49,7 @@ en:
       bill_not_covered: Bills
       loan_payment_change: Loan payment
       spending_pace: Spending pace
+      top_movers: Biggest changes
       bank_fees: Fees
     meta:
       next_n_days:
@@ -65,6 +66,7 @@ en:
       of_budget: of budget
       need_attention: need attention
       over_budget: over budget
+      vs_prior_period: vs prior period
       days_overdue:
         one: "%{count} day overdue"
         other: "%{count} days overdue"
@@ -112,6 +114,9 @@ en:
       spending_pace:
         approaching: Your spending is ahead of your budget pace
         over: You're over budget this month
+      top_movers:
+        up: "%{category} rose the most in your spending"
+        down: "%{category} fell the most in your spending"
       bank_fees: Fees on %{account}
     templates:
       spending_anomaly:
@@ -139,6 +144,9 @@ en:
       spending_pace:
         approaching: You've spent %{spent_pct}% of your %{budgeted} budget with %{elapsed_pct}% of the month gone. At this pace you'd spend about %{projected_spend}.
         over: You've spent %{spent} against a budget of %{budgeted}, which is %{over_by} over it.
+      top_movers:
+        up: Spending rose most in %{categories} compared with the previous %{days} days, with the biggest increase at %{top_change}.
+        down: Spending fell most in %{categories} compared with the previous %{days} days, with the biggest decrease at %{top_change}.
       bank_fees:
         recurring: "%{account} had %{amount} in fees over the last %{days} days."
         new: "%{account} had %{amount} in fees over the last %{days} days, after none in the %{days} days before."

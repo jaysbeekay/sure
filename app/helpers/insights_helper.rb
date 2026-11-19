@@ -14,6 +14,7 @@ module InsightsHelper
     "bill_not_covered" => "calendar-x",
     "loan_payment_change" => "landmark",
     "spending_pace" => "gauge",
+    "top_movers" => "arrow-up-down",
     "bank_fees" => "receipt"
   }.freeze
 
@@ -96,6 +97,9 @@ module InsightsHelper
       else
         facts["projected_spend"] && [ facts["projected_spend"], t("insights.figures.on_pace") ]
       end
+    when "top_movers"
+      sign = insight.metadata&.dig("direction") == "down" ? "−" : "+"
+      facts["top_change"] && [ "#{sign}#{facts["top_change"]}", t("insights.figures.vs_prior_period") ]
     when "bank_fees"
       facts["amount"] && [ facts["amount"], t("insights.figures.fee_charges", count: facts["count"].to_i) ]
     end
@@ -203,6 +207,8 @@ module InsightsHelper
       metadata["current_rate"].to_f >= metadata["previous_rate"].to_f ? :positive : :warning
     when "spending_anomaly"
       metadata["direction"] == "below" ? :positive : :warning
+    when "top_movers"
+      metadata["direction"] == "down" ? :positive : :warning
     when "cash_flow_warning"
       metadata["negative"] ? :negative : :warning
     when "bill_not_covered"

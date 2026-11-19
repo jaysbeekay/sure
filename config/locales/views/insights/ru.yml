@@ -35,6 +35,7 @@ ru:
       budget_on_track: Бюджет
       maintained_goal_depleted: Резерв
       spending_pace: "Темп расходов"
+      top_movers: "Наибольшие изменения"
     meta:
       next_n_days:
         one: Следующий %{count} день
@@ -64,6 +65,7 @@ ru:
         many: без движения %{count} дней
         other: без движения %{count} дня
       over_budget: "сверх бюджета"
+      vs_prior_period: "к прошлому периоду"
     actions:
       spending_anomaly: Операции в категории «%{category}»
       cash_flow_warning: Проверить регулярные операции
@@ -96,6 +98,9 @@ ru:
       spending_pace:
         approaching: "Расходы опережают темп бюджета"
         over: "В этом месяце бюджет превышен"
+      top_movers:
+        up: "Сильнее всего выросли расходы в категории «%{category}»"
+        down: "Сильнее всего снизились расходы в категории «%{category}»"
     templates:
       spending_anomaly:
         above: При текущем темпе вы потратите в этом месяце %{projected_spend} в категории «%{category}» — примерно на %{deviation_pct}% больше вашего обычного среднемесячного уровня %{baseline_spend}.
@@ -118,3 +123,6 @@ ru:
       spending_pace:
         approaching: "Вы потратили %{spent_pct}% бюджета %{budgeted}, а прошло %{elapsed_pct}% месяца. При таком темпе вы потратите около %{projected_spend}."
         over: "Вы потратили %{spent} при бюджете %{budgeted} — это на %{over_by} больше."
+      top_movers:
+        up: "По сравнению с предыдущим периодом (%{days} дн.) расходы сильнее всего выросли в категориях: %{categories}; наибольший рост — %{top_change}."
+        down: "По сравнению с предыдущим периодом (%{days} дн.) расходы сильнее всего снизились в категориях: %{categories}; наибольшее снижение — %{top_change}."

@@ -30,6 +30,7 @@ class Insight < ApplicationRecord
     bill_not_covered
     loan_payment_change
     spending_pace
+    top_movers
     bank_fees
   ].freeze
 

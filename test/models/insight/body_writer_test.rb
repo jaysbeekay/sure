@@ -80,6 +80,8 @@ class Insight::BodyWriterTest < ActiveSupport::TestCase
       "bill_not_covered" => { name: "Rent", amount: "$1,460.00", due_on: "Dec 7, 2026", account: "Joint account", shortfall: "$300.00" },
       "spending_pace.approaching" => { spent: "$500.00", budgeted: "$1,000.00", spent_pct: 50, elapsed_pct: 45, projected_spend: "$1,107.14", over_by: "$0.00" },
       "spending_pace.over" => { spent: "$1,250.00", budgeted: "$1,000.00", spent_pct: 125, elapsed_pct: 45, projected_spend: "$2,767.86", over_by: "$250.00" },
+      "top_movers.up" => { categories: "Dining and Travel", top_category: "Dining", top_change: "$200.00", days: 14 },
+      "top_movers.down" => { categories: "Travel", top_category: "Travel", top_change: "$800.00", days: 14 },
       "bank_fees.recurring" => { account: "Checking", amount: "$36.00", count: 3, days: 90 },
       "bank_fees.new" => { account: "Checking", amount: "$3.00", count: 1, days: 90 }
     }.freeze

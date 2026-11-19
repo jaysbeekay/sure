@@ -16,6 +16,7 @@ class Insight::GeneratorRegistry
     Insight::Generators::BillNotCoveredGenerator,
     Insight::Generators::LoanRepaymentChangeGenerator,
     Insight::Generators::SpendingPaceGenerator,
+    Insight::Generators::TopMoversGenerator,
     Insight::Generators::BankFeesGenerator
   ].freeze
 
