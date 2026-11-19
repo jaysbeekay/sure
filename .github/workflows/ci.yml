@@ -226,7 +226,13 @@ jobs:
   test_system_shard:
     name: test_system (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Raised from 15: this stack adds two insight generators (spending pace,
+    # top movers) that run on every insight generation a system test
+    # triggers, and upstream's newest system tests landed at the same time -
+    # shards went from 5-8 min to 10-15+ and shard 2 crossed the old cap.
+    # Fork-local; reconsider (or drop) when the stack goes upstream, and see
+    # the generator-perf follow-up before accepting 25 as the steady state.
+    timeout-minutes: 25
 
     strategy:
       fail-fast: false
