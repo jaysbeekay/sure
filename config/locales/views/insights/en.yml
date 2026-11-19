@@ -48,6 +48,7 @@ en:
       maintained_goal_depleted: Reserve
       bill_not_covered: Bills
       loan_payment_change: Loan payment
+      spending_pace: Spending pace
       bank_fees: Fees
     meta:
       next_n_days:
@@ -63,6 +64,7 @@ en:
       on_pace: on pace
       of_budget: of budget
       need_attention: need attention
+      over_budget: over budget
       days_overdue:
         one: "%{count} day overdue"
         other: "%{count} days overdue"
@@ -107,6 +109,9 @@ en:
       loan_payment_change:
         up: "%{account} payment is going up"
         down: "%{account} payment is going down"
+      spending_pace:
+        approaching: Your spending is ahead of your budget pace
+        over: You're over budget this month
       bank_fees: Fees on %{account}
     templates:
       spending_anomaly:
@@ -131,6 +136,9 @@ en:
       loan_payment_change:
         up: "Your %{account} payment changes from %{previous_payment} to %{new_payment} on %{effective_on}, %{change_pct}% more, according to the loan's schedule and its recorded rates."
         down: "Your %{account} payment changes from %{previous_payment} to %{new_payment} on %{effective_on}, %{change_pct}% less, according to the loan's schedule and its recorded rates."
+      spending_pace:
+        approaching: You've spent %{spent_pct}% of your %{budgeted} budget with %{elapsed_pct}% of the month gone. At this pace you'd spend about %{projected_spend}.
+        over: You've spent %{spent} against a budget of %{budgeted}, which is %{over_by} over it.
       bank_fees:
         recurring: "%{account} had %{amount} in fees over the last %{days} days."
         new: "%{account} had %{amount} in fees over the last %{days} days, after none in the %{days} days before."

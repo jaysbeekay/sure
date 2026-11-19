@@ -78,6 +78,8 @@ class Insight::BodyWriterTest < ActiveSupport::TestCase
       "budget_at_risk.near" => { categories: "Shopping", count: 1, budget_spent_pct: 72 },
       "budget_on_track" => { spent: "$2,948.00", budgeted: "$5,200.00", budget_spent_pct: 57 },
       "bill_not_covered" => { name: "Rent", amount: "$1,460.00", due_on: "Dec 7, 2026", account: "Joint account", shortfall: "$300.00" },
+      "spending_pace.approaching" => { spent: "$500.00", budgeted: "$1,000.00", spent_pct: 50, elapsed_pct: 45, projected_spend: "$1,107.14", over_by: "$0.00" },
+      "spending_pace.over" => { spent: "$1,250.00", budgeted: "$1,000.00", spent_pct: 125, elapsed_pct: 45, projected_spend: "$2,767.86", over_by: "$250.00" },
       "bank_fees.recurring" => { account: "Checking", amount: "$36.00", count: 3, days: 90 },
       "bank_fees.new" => { account: "Checking", amount: "$3.00", count: 1, days: 90 }
     }.freeze

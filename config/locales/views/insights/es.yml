@@ -48,6 +48,7 @@ es:
       maintained_goal_depleted: Reserva
       bill_not_covered: Recibos
       loan_payment_change: Cuota del préstamo
+      spending_pace: "Ritmo de gasto"
       bank_fees: Comisiones
     meta:
       next_n_days:
@@ -70,6 +71,7 @@ es:
         one: "%{count} día inactivo"
         other: "%{count} días inactivos"
       short_on: faltarán el %{date}
+      over_budget: "por encima del presupuesto"
       fee_charges:
         one: "%{count} cargo"
         other: "%{count} cargos"
@@ -107,6 +109,9 @@ es:
       loan_payment_change:
         up: La cuota de %{account} va a subir
         down: La cuota de %{account} va a bajar
+      spending_pace:
+        approaching: "Tu gasto va por delante del ritmo de tu presupuesto"
+        over: "Has superado tu presupuesto este mes"
       bank_fees: Comisiones en %{account}
     templates:
       spending_anomaly:
@@ -131,6 +136,9 @@ es:
       loan_payment_change:
         up: "La cuota de %{account} pasa de %{previous_payment} a %{new_payment} el %{effective_on}, un %{change_pct}% más, según el cuadro de amortización y los tipos registrados."
         down: "La cuota de %{account} pasa de %{previous_payment} a %{new_payment} el %{effective_on}, un %{change_pct}% menos, según el cuadro de amortización y los tipos registrados."
+      spending_pace:
+        approaching: "Has gastado el %{spent_pct}% de tu presupuesto de %{budgeted} con el %{elapsed_pct}% del mes transcurrido. A este ritmo gastarías unos %{projected_spend}."
+        over: "Has gastado %{spent} frente a un presupuesto de %{budgeted}, es decir, %{over_by} por encima."
       bank_fees:
         recurring: "%{account} acumula %{amount} en comisiones en los últimos %{days} días."
         new: "%{account} acumula %{amount} en comisiones en los últimos %{days} días, y ninguna en los %{days} días anteriores."

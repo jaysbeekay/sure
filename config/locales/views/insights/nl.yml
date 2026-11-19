@@ -37,6 +37,7 @@ nl:
       budget_at_risk: "Budget"
       budget_on_track: "Budget"
       maintained_goal_depleted: "Reserve"
+      spending_pace: "Uitgaventempo"
     meta:
       next_n_days:
         one: "Volgende dag"
@@ -57,6 +58,7 @@ nl:
       idle_days:
         one: "%{count} dag inactief"
         other: "%{count} dagen inactief"
+      over_budget: "boven budget"
     actions:
       spending_anomaly: "Transacties in %{category} bekijken"
       cash_flow_warning: "Terugkerende transacties bekijken"
@@ -84,6 +86,9 @@ nl:
         one: "Eén categorie in uw budget vraagt aandacht"
         other: "%{count} categorieën in uw budget vragen aandacht"
       budget_on_track: "Uw budget is op schema"
+      spending_pace:
+        approaching: "Uw uitgaven lopen voor op het tempo van uw budget"
+        over: "U zit deze maand boven uw budget"
     templates:
       spending_anomaly:
         above: "In dit tempo geeft u deze maand %{projected_spend} uit aan %{category}, ongeveer %{deviation_pct}% meer dan uw recente maandgemiddelde van %{baseline_spend}."
@@ -103,3 +108,6 @@ nl:
         over: "%{categories} gingen deze maand over het budget. U heeft tot nu toe %{budget_spent_pct}% van uw totale budget gebruikt."
         near: "%{categories} zitten deze maand dicht bij hun limiet. U heeft tot nu toe %{budget_spent_pct}% van uw totale budget gebruikt."
       budget_on_track: "U heeft %{spent} van uw budget van %{budgeted} uitgegeven (%{budget_spent_pct}%) en alles blijft binnen de limiet."
+      spending_pace:
+        approaching: "U heeft %{spent_pct}% van uw budget van %{budgeted} uitgegeven terwijl %{elapsed_pct}% van de maand voorbij is. In dit tempo geeft u ongeveer %{projected_spend} uit."
+        over: "U heeft %{spent} uitgegeven bij een budget van %{budgeted}, dat is %{over_by} erboven."

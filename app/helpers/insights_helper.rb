@@ -13,6 +13,7 @@ module InsightsHelper
     "maintained_goal_depleted" => "shield-alert",
     "bill_not_covered" => "calendar-x",
     "loan_payment_change" => "landmark",
+    "spending_pace" => "gauge",
     "bank_fees" => "receipt"
   }.freeze
 
@@ -88,6 +89,13 @@ module InsightsHelper
       facts["shortfall"] && [ facts["shortfall"], t("insights.figures.short_on", date: facts["due_on"]) ]
     when "loan_payment_change"
       facts["new_payment"] && [ facts["new_payment"], facts["effective_on"] ]
+    when "spending_pace"
+      # Ahead of pace: what the month projects to. Already over: by how much.
+      if insight.metadata&.dig("status") == "over"
+        facts["over_by"] && [ facts["over_by"], t("insights.figures.over_budget") ]
+      else
+        facts["projected_spend"] && [ facts["projected_spend"], t("insights.figures.on_pace") ]
+      end
     when "bank_fees"
       facts["amount"] && [ facts["amount"], t("insights.figures.fee_charges", count: facts["count"].to_i) ]
     end
@@ -127,7 +135,7 @@ module InsightsHelper
         href: transactions_path(q: { start_date: insight.period_start.to_s, end_date: insight.period_end.to_s }) }
     when "net_worth_milestone"
       { text: t("insights.actions.net_worth_milestone"), href: reports_path }
-    when "budget_at_risk", "budget_on_track"
+    when "budget_at_risk", "budget_on_track", "spending_pace"
       return nil unless insight.period_start
       { text: t("insights.actions.budget"), href: budget_path(Budget.date_to_param(insight.period_start)) }
     when "maintained_goal_depleted"
@@ -202,7 +210,7 @@ module InsightsHelper
       :negative
     when "loan_payment_change"
       metadata["new_payment"].to_f < metadata["previous_payment"].to_f ? :positive : :warning
-    when "budget_at_risk", "maintained_goal_depleted", "bank_fees"
+    when "budget_at_risk", "maintained_goal_depleted", "spending_pace", "bank_fees"
       # Warning, not negative: the reserve is short, not overdrawn, and red is
       # reserved here for money actually going the wrong side of zero.
       :warning

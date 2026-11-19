@@ -29,6 +29,7 @@ class Insight < ApplicationRecord
     maintained_goal_depleted
     bill_not_covered
     loan_payment_change
+    spending_pace
     bank_fees
   ].freeze
 

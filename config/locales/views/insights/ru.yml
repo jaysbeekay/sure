@@ -34,6 +34,7 @@ ru:
       budget_at_risk: Бюджет
       budget_on_track: Бюджет
       maintained_goal_depleted: Резерв
+      spending_pace: "Темп расходов"
     meta:
       next_n_days:
         one: Следующий %{count} день
@@ -62,6 +63,7 @@ ru:
         few: без движения %{count} дня
         many: без движения %{count} дней
         other: без движения %{count} дня
+      over_budget: "сверх бюджета"
     actions:
       spending_anomaly: Операции в категории «%{category}»
       cash_flow_warning: Проверить регулярные операции
@@ -91,6 +93,9 @@ ru:
         many: '%{count} категорий бюджета требуют внимания'
         other: '%{count} категории бюджета требуют внимания'
       budget_on_track: Бюджет идёт по плану
+      spending_pace:
+        approaching: "Расходы опережают темп бюджета"
+        over: "В этом месяце бюджет превышен"
     templates:
       spending_anomaly:
         above: При текущем темпе вы потратите в этом месяце %{projected_spend} в категории «%{category}» — примерно на %{deviation_pct}% больше вашего обычного среднемесячного уровня %{baseline_spend}.
@@ -110,3 +115,6 @@ ru:
         over: 'Превышен бюджет в этом месяце: %{categories}. Вы уже использовали %{budget_spent_pct}% общего бюджета.'
         near: 'Близки к лимиту в этом месяце: %{categories}. Вы уже использовали %{budget_spent_pct}% общего бюджета.'
       budget_on_track: Вы потратили %{spent} из бюджета %{budgeted} (%{budget_spent_pct}%), и все категории в пределах лимита.
+      spending_pace:
+        approaching: "Вы потратили %{spent_pct}% бюджета %{budgeted}, а прошло %{elapsed_pct}% месяца. При таком темпе вы потратите около %{projected_spend}."
+        over: "Вы потратили %{spent} при бюджете %{budgeted} — это на %{over_by} больше."
