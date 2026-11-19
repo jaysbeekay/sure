@@ -12,7 +12,9 @@
     money-weighted one when any account has a single day (R15), and the
     money-weighted return when any account holding a balance in the period is
     valuation-tracked (R16). All arrive here as
-    nil and must read as "no data" rather than as zero. %>
+    nil and must read as "no data" rather than as zero.
+
+    `hint` is a string, or an array of strings shown as separate lines. %>
 
 <div class="bg-container-inset rounded-lg p-4">
   <div class="flex items-center gap-2 mb-3">
@@ -39,7 +41,7 @@
     <p class="text-xl font-semibold text-secondary"><%= t("portfolios.kpi_row.no_data") %></p>
   <% end %>
 
-  <% if hint.present? %>
-    <p class="text-xs text-secondary mt-1"><%= hint %></p>
+  <% Array(hint).compact_blank.each do |line| %>
+    <p class="text-xs text-secondary mt-1"><%= line %></p>
   <% end %>
 </div>

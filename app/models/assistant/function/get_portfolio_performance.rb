@@ -19,6 +19,11 @@ class Assistant::Function::GetPortfolioPerformance < Assistant::Function
 
         The money-weighted return, in the portfolio page's words: #{I18n.t("portfolios.performance.mwr_hint", locale: :en)}
 
+        money_weighted_ambiguous is true when the deposits and withdrawals may fit
+        more than one rate, so the money-weighted figures may be one of several
+        that solve the same flows. Report the figure, and say it may not be the
+        only one. It is false whenever the money-weighted return is null.
+
         A figure is null when it is withheld, never when it is zero:
         - annualised returns need at least a year of history;
         - rate_missing means a currency had no exchange rate in the period, so no
@@ -58,6 +63,7 @@ class Assistant::Function::GetPortfolioPerformance < Assistant::Function
       annualized_time_weighted_return: percent(performance.annualized_time_weighted_return),
       money_weighted_return: percent(performance.money_weighted_return),
       annualized_money_weighted_return: percent(performance.annualized_money_weighted_return),
+      money_weighted_ambiguous: performance.money_weighted_return_ambiguous?,
       volatility: percent(performance.volatility),
       max_drawdown: percent(performance.max_drawdown),
       suppressed_days: Array(performance.suppressed_dates).size,
