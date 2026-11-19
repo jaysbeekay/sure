@@ -49,6 +49,7 @@ en:
       bill_not_covered: Bills
       loan_payment_change: Loan payment
       spending_pace: Spending pace
+      bank_fees: Fees
     meta:
       next_n_days:
         one: Next day
@@ -71,6 +72,9 @@ en:
         one: idle %{count} day
         other: idle %{count} days
       short_on: short on %{date}
+      fee_charges:
+        one: "%{count} charge"
+        other: "%{count} charges"
     actions:
       spending_anomaly: View %{category} transactions
       cash_flow_warning: Review recurring transactions
@@ -82,6 +86,7 @@ en:
       maintained_goal_depleted: View reserve
       bill_not_covered: Go to account
       loan_payment_change: View loan
+      bank_fees: View fees
     titles:
       spending_anomaly:
         above: "%{category} spending is trending up"
@@ -107,6 +112,7 @@ en:
       spending_pace:
         approaching: Your spending is ahead of your budget pace
         over: You're over budget this month
+      bank_fees: Fees on %{account}
     templates:
       spending_anomaly:
         above: You're on pace to spend %{projected_spend} on %{category} this month, about %{deviation_pct}% more than your recent monthly average of %{baseline_spend}.
@@ -133,3 +139,6 @@ en:
       spending_pace:
         approaching: You've spent %{spent_pct}% of your %{budgeted} budget with %{elapsed_pct}% of the month gone. At this pace you'd spend about %{projected_spend}.
         over: You've spent %{spent} against a budget of %{budgeted}, which is %{over_by} over it.
+      bank_fees:
+        recurring: "%{account} had %{amount} in fees over the last %{days} days."
+        new: "%{account} had %{amount} in fees over the last %{days} days, after none in the %{days} days before."
