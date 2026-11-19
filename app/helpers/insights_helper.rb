@@ -14,7 +14,8 @@ module InsightsHelper
     "bill_not_covered" => "calendar-x",
     "loan_payment_change" => "landmark",
     "spending_pace" => "gauge",
-    "top_movers" => "arrow-up-down"
+    "top_movers" => "arrow-up-down",
+    "bank_fees" => "receipt"
   }.freeze
 
   def insight_icon_key(insight)
@@ -99,6 +100,8 @@ module InsightsHelper
     when "top_movers"
       sign = insight.metadata&.dig("direction") == "down" ? "−" : "+"
       facts["top_change"] && [ "#{sign}#{facts["top_change"]}", t("insights.figures.vs_prior_period") ]
+    when "bank_fees"
+      facts["amount"] && [ facts["amount"], t("insights.figures.fee_charges", count: facts["count"].to_i) ]
     end
   end
 
@@ -119,6 +122,13 @@ module InsightsHelper
     when "idle_cash", "bill_not_covered", "loan_payment_change"
       account = insight_account(insight)
       account && { text: t("insights.actions.#{insight.insight_type}"), href: account_path(account) }
+    when "bank_fees"
+      account = insight_account(insight)
+      fee_names = insight.family.categories.fees.pluck(:name)
+      return nil unless account && fee_names.any? && insight.period_start && insight.period_end
+      { text: t("insights.actions.bank_fees"),
+        href: transactions_path(q: { account_ids: [ account.id ], categories: fee_names, status: [ "confirmed" ], types: [ "expense", "income" ],
+                                     start_date: insight.period_start.to_s, end_date: insight.period_end.to_s }) }
     when "subscription_audit"
       { text: t("insights.actions.subscription_audit"), href: recurring_transactions_path }
     when "cash_flow_warning"
@@ -206,7 +216,7 @@ module InsightsHelper
       :negative
     when "loan_payment_change"
       metadata["new_payment"].to_f < metadata["previous_payment"].to_f ? :positive : :warning
-    when "budget_at_risk", "maintained_goal_depleted", "spending_pace"
+    when "budget_at_risk", "maintained_goal_depleted", "spending_pace", "bank_fees"
       # Warning, not negative: the reserve is short, not overdrawn, and red is
       # reserved here for money actually going the wrong side of zero.
       :warning
