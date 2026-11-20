@@ -32,6 +32,10 @@ module Syncable
     end
   end
 
+  def latest_sync_stats
+    latest_sync_record&.sync_stats || {}
+  end
+
   def latest_completed_sync_record
     if Current.respond_to?(:latest_completed_sync_by_syncable) && (latest_completed_sync_by_syncable = Current.latest_completed_sync_by_syncable)
       key = [ self.class.base_class.name, id ]

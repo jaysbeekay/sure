@@ -46,9 +46,7 @@ class AccountsController < ApplicationController
     end
 
     preload_latest_sync_metadata_for_index!
-
-    # Build sync stats maps for all providers
-    build_sync_stats_maps
+    build_provider_card_maps
 
     # Prevent Turbo Drive from caching this page to ensure fresh account lists
     expires_now
@@ -552,12 +550,12 @@ class AccountsController < ApplicationController
       @tab == "statements"
     end
 
-    # Builds sync stats maps for all provider types to avoid N+1 queries in views
-    def build_sync_stats_maps
+    # Per-card counts and flags some providers' cards need, batched to avoid N+1
+    # queries. Cards read their sync stats from the item (latest_sync_stats).
+    def build_provider_card_maps
       manual_accounts_exist = @manual_accounts.any?
 
-      # SimpleFIN sync stats
-      @simplefin_sync_stats_map = {}
+      # SimpleFIN relink and duplicate-only flags
       @simplefin_has_unlinked_map = {}
       @simplefin_unlinked_count_map = {}
       @simplefin_show_relink_map = {}
@@ -582,9 +580,7 @@ class AccountsController < ApplicationController
         end
 
       @simplefin_items.each do |item|
-        latest_sync = item.latest_sync_record
-        stats = latest_sync&.sync_stats || {}
-        @simplefin_sync_stats_map[item.id] = stats
+        stats = item.latest_sync_stats
         @simplefin_has_unlinked_map[item.id] = manual_accounts_exist
 
         # Count unlinked accounts
@@ -601,97 +597,14 @@ class AccountsController < ApplicationController
         @simplefin_duplicate_only_map[item.id] = errors.present? && errors.all? { |m| m.to_s.downcase.include?("duplicate upstream account detected") }
       rescue => e
         Rails.logger.warn("SimpleFin stats map build failed for item #{item.id}: #{e.class} - #{e.message}")
-        @simplefin_sync_stats_map[item.id] = {}
         @simplefin_show_relink_map[item.id] = false
         @simplefin_duplicate_only_map[item.id] = false
       end
 
-      # Plaid sync stats
-      @plaid_sync_stats_map = {}
-      @plaid_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @plaid_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Lunchflow sync stats
-      @lunchflow_sync_stats_map = {}
-      @lunchflow_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @lunchflow_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Akahu sync stats
-      @akahu_sync_stats_map = {}
-      @akahu_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @akahu_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Up sync stats
-      @up_sync_stats_map = {}
-      @up_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @up_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Monobank sync stats
-      @monobank_sync_stats_map = {}
-      @monobank_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @monobank_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Enable Banking sync stats
-      @enable_banking_sync_stats_map = {}
-      @enable_banking_latest_sync_error_map = {}
-      @enable_banking_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @enable_banking_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-        @enable_banking_latest_sync_error_map[item.id] = latest_sync&.error
-      end
-
-      # TrueLayer sync stats
-      @truelayer_sync_stats_map = {}
-      @truelayer_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @truelayer_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # CoinStats sync stats
-      @coinstats_sync_stats_map = {}
-      @coinstats_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @coinstats_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Sophtron sync stats
-      @sophtron_sync_stats_map = {}
-      @sophtron_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @sophtron_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Redbark sync stats
-      @redbark_sync_stats_map = {}
-      @redbark_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @redbark_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Mercury sync stats
-      @mercury_sync_stats_map = {}
-      @mercury_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @mercury_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Brex sync stats
-      @brex_sync_stats_map = {}
+      # Brex account and institution counts
       @brex_account_counts_map = {}
       @brex_institutions_count_map = {}
       @brex_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @brex_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
         brex_accounts = item.brex_accounts.to_a
         linked_count = brex_accounts.count { |brex_account| brex_account.account_provider.present? }
         total_count = brex_accounts.count
@@ -706,8 +619,7 @@ class AccountsController < ApplicationController
           .count
       end
 
-      # Coinbase sync stats
-      @coinbase_sync_stats_map = {}
+      # Coinbase unlinked counts
       @coinbase_unlinked_count_map = {}
 
       coinbase_item_ids = @coinbase_items.map(&:id)
@@ -723,27 +635,13 @@ class AccountsController < ApplicationController
         end
 
       @coinbase_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @coinbase_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-
         # Count unlinked accounts
         @coinbase_unlinked_count_map[item.id] = coinbase_unlinked_counts_by_item_id[item.id].to_i
       end
 
-      # IndexaCapital sync stats
-      @indexa_capital_sync_stats_map = {}
-      @indexa_capital_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @indexa_capital_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Binance sync stats
-      @binance_sync_stats_map = {}
+      # Binance unlinked counts
       @binance_unlinked_count_map = {}
       @binance_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @binance_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-
         # Count unlinked accounts
         count = item.binance_accounts
           .left_joins(:account_provider)
@@ -752,31 +650,14 @@ class AccountsController < ApplicationController
         @binance_unlinked_count_map[item.id] = count
       end
 
-      # Questrade sync stats and account counts
-      @questrade_sync_stats_map = {}
+      # Questrade account counts
       @questrade_account_counts_map = {}
       @questrade_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @questrade_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
         accounts = item.questrade_accounts.to_a
         linked = accounts.count { |a| a.account_provider.present? }
         @questrade_account_counts_map[item.id] = {
           linked: linked, unlinked: accounts.size - linked, total: accounts.size
         }
-      end
-
-      # Wise sync stats
-      @wise_sync_stats_map = {}
-      @wise_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @wise_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
-      end
-
-      # Fio sync stats
-      @fio_sync_stats_map = {}
-      @fio_items.each do |item|
-        latest_sync = item.latest_sync_record
-        @fio_sync_stats_map[item.id] = latest_sync&.sync_stats || {}
       end
     end
 end

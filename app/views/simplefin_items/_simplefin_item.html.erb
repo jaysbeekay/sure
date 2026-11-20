@@ -41,7 +41,7 @@
                 <%= simplefin_item.institution_summary %>
               </p>
               <%# Extra inline badges from latest sync stats - only show warnings %>
-              <% stats = (@simplefin_sync_stats_map || {})[simplefin_item.id] || {} %>
+              <% stats = simplefin_item.latest_sync_stats %>
               <% has_warnings = stats["accounts_skipped"].to_i > 0 ||
                                 stats["rate_limited"].present? ||
                                 stats["rate_limited_at"].present? ||
@@ -190,7 +190,7 @@
       <div class="space-y-4 mt-4">
         <%# Replacement suggestions from the ReplacementDetector (card-fraud swap, etc.).
            Only rendered when the latest sync flagged candidate pairs. %>
-        <% suggestions = ((@simplefin_sync_stats_map || {})[simplefin_item.id] || {})["replacement_suggestions"] %>
+        <% suggestions = simplefin_item.latest_sync_stats["replacement_suggestions"] %>
         <% if all_accounts_visible && suggestions.is_a?(Array) && suggestions.any? %>
           <%= render "simplefin_items/replacement_prompt",
                      simplefin_item: simplefin_item,
@@ -201,15 +201,8 @@
           <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
-        <%# Sync summary (collapsible) - using shared ProviderSyncSummary component
-            Prefer controller-provided map; fallback to latest sync stats so Turbo broadcasts
-            can render the summary without requiring a full page refresh. %>
-        <% stats = if defined?(@simplefin_sync_stats_map) && @simplefin_sync_stats_map
-             @simplefin_sync_stats_map[simplefin_item.id] || {}
-           else
-             # `latest_sync` is private on Syncable; access via association for broadcast renders.
-             simplefin_item.syncs.ordered.first&.sync_stats || {}
-           end %>
+        <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
+        <% stats = simplefin_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: simplefin_item,

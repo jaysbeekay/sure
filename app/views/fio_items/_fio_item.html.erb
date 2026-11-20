@@ -72,11 +72,7 @@
 
         <%# The accounts index preloads one stats row per item; a standalone render (the %>
         <%# sync-complete broadcast) has to look it up itself. %>
-        <% stats = if defined?(@fio_sync_stats_map) && @fio_sync_stats_map
-             @fio_sync_stats_map[fio_item.id] || {}
-           else
-             fio_item.latest_sync_record&.sync_stats || {}
-           end %>
+        <% stats = fio_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(stats: stats, provider_item: fio_item, show_account_details: visible_accounts.size == fio_item.accounts.size) %>
 
         <% if fio_item.requires_update? %>

@@ -375,27 +375,26 @@ class Provider::FamilyGeneratorTest < ActiveSupport::TestCase
   # the generator adds there must not fail on nil.
   test "the code added to /accounts runs when the provider's items are not loaded" do
     Dir.mktmpdir do |dir|
-      files = %w[app/controllers/accounts_controller.rb app/views/accounts/index.html.erb]
-      originals = files.index_with { |path| Rails.root.join(path).read }
-      files.each do |path|
-        FileUtils.mkdir_p(File.join(dir, File.dirname(path)))
-        File.write(File.join(dir, path), originals[path])
+      path = "app/views/accounts/index.html.erb"
+      original = Rails.root.join(path).read
+      FileUtils.mkdir_p(File.join(dir, File.dirname(path)))
+      File.write(File.join(dir, path), original)
+
+      section = Dir.chdir(dir) do
+        capture_io { Provider::FamilyGenerator.new([ "gocardless" ]).update_accounts_index_view }
+        inserted_text(original, File.read(path))
       end
 
-      added = Dir.chdir(dir) do
-        generator = Provider::FamilyGenerator.new([ "gocardless" ])
-        capture_io { generator.update_accounts_controller && generator.update_accounts_index_view }
-        files.index_with { |path| inserted_text(originals[path], File.read(path)) }
-      end
-
-      stats = added["app/controllers/accounts_controller.rb"]
-      section = added["app/views/accounts/index.html.erb"]
-      assert_includes stats, "@gocardless_items"
       assert_includes section, "@gocardless_items"
-
-      Object.new.instance_eval(stats)
       Object.new.instance_eval(ActionView::Template::Handlers::ERB::Erubi.new(section).src)
     end
+  end
+
+  # A card reads its sync stats from its item, so /accounts needs nothing from the
+  # generator beyond its section.
+  test "the generator leaves the accounts controller alone" do
+    assert_empty Rails.root.join("lib/generators/provider/family").glob("**/*").select(&:file?)
+      .select { |file| file.read.include?("accounts_controller") }
   end
 
   # The /accounts section renders the item partial, which --skip-view does not write,
@@ -516,6 +515,21 @@ class Provider::FamilyGeneratorTest < ActiveSupport::TestCase
     # The card lists the accounts it is given, not every account on the connection.
     assert_includes other, accounts(:investment).name
     assert_not_includes other, linked.name
+  end
+
+  # /accounts preloads every connection's latest sync, so the card reads its stats
+  # from there rather than querying the connection's syncs itself.
+  test "the generated item card shows the latest sync stats the page preloaded" do
+    Current.session = Session.create!(user: users(:family_admin))
+    item = redbark_items(:one)
+    assert_empty item.syncs
+    Current.latest_sync_by_syncable = { [ "RedbarkItem", item.id ] => Sync.new(sync_stats: { "tx_seen" => 3 }) }
+    generated = render_template("item_partial.html.erb.tt", file_name: "redbark")
+
+    card = render_generated_view(generated, partial: "redbark_items/redbark_item",
+                                            locals: { redbark_item: item, visible_accounts: [] })
+
+    assert_includes card, I18n.t("provider_sync_summary.transactions.seen", count: 3)
   end
 
   test "the generated setup accounts view is plain ERB that renders" do

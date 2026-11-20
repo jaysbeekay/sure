@@ -69,11 +69,7 @@
           <%= render "accounts/index/account_groups", accounts: visible_accounts %>
         <% end %>
 
-        <% stats = if defined?(@akahu_sync_stats_map) && @akahu_sync_stats_map
-             @akahu_sync_stats_map[akahu_item.id] || {}
-           else
-             akahu_item.syncs.ordered.first&.sync_stats || {}
-           end %>
+        <% stats = akahu_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: akahu_item, show_account_details: visible_accounts.size == akahu_item.accounts.size,

@@ -10,7 +10,6 @@ module SimplefinItems
       items = Array(items).compact
       return if items.empty?
 
-      @simplefin_sync_stats_map ||= {}
       @simplefin_has_unlinked_map ||= {}
       @simplefin_unlinked_count_map ||= {}
       @simplefin_duplicate_only_map ||= {}
@@ -41,7 +40,6 @@ module SimplefinItems
           item.syncs.ordered.first
         end
         stats = (latest_sync&.sync_stats || {})
-        @simplefin_sync_stats_map[item.id] = stats
 
         # Whether the family has any manual accounts available to link (from batch query)
         @simplefin_has_unlinked_map[item.id] = families_with_manuals.include?(item.family_id)
@@ -70,7 +68,6 @@ module SimplefinItems
       end
 
       # Ensure maps are hashes even when items empty
-      @simplefin_sync_stats_map ||= {}
       @simplefin_has_unlinked_map ||= {}
       @simplefin_unlinked_count_map ||= {}
       @simplefin_duplicate_only_map ||= {}
