@@ -25,7 +25,7 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
     importer = RedbarkItem::Importer.new(redbark_account.redbark_item, redbark_provider: provider)
 
     assert_nothing_raised do
-      importer.send(:import_loan_account_details, [ redbark_account.reload ])
+      importer.send(:import_account_details, [ redbark_account.reload ])
     end
 
     assert_equal({ "lendingRate" => "0.0625" }, redbark_account.reload.raw_account_details_payload,
@@ -55,7 +55,7 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
     )
 
     travel_to Time.utc(2026, 9, 22, 0, 0, 30) do
-      importer.send(:import_loan_account_details, [ redbark_account.reload ])
+      importer.send(:import_account_details, [ redbark_account.reload ])
     end
 
     assert_equal injected, redbark_account.reload.account_details_fetched_at.utc,
@@ -97,7 +97,7 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
             .returns([])
 
     importer = RedbarkItem::Importer.new(item, redbark_provider: provider)
-    importer.send(:import_loan_account_details, [ first.reload, second.reload ])
+    importer.send(:import_account_details, [ first.reload, second.reload ])
 
     assert_equal "0.0675", first.reload.raw_account_details_payload["lendingRate"],
                  "the account the retry could serve never got its details stored"
@@ -106,9 +106,9 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
                "an account the retry could not serve was written anyway"
   end
 
-  # Only loans: every other account type would cost a request per sync for a
-  # field nothing reads.
-  test "account details are not fetched when no linked account is a loan" do
+  # Only loans and credit cards: every other account type would cost a request
+  # per sync for a field nothing reads.
+  test "account details are not fetched when no linked account is a loan or credit card" do
     redbark_account = redbark_accounts(:savings_account)
     family = redbark_account.redbark_item.family
     account = family.accounts.create!(
@@ -121,7 +121,34 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
     provider.expects(:get_account_details).never
     importer = RedbarkItem::Importer.new(redbark_account.redbark_item, redbark_provider: provider)
 
-    importer.send(:import_loan_account_details, [ redbark_account.reload ])
+    importer.send(:import_account_details, [ redbark_account.reload ])
+  end
+
+  # A card's APR and annual fee come from the same endpoint.
+  test "a credit card's account details are fetched and stamped" do
+    redbark_account = redbark_accounts(:savings_account)
+    family = redbark_account.redbark_item.family
+    account = family.accounts.create!(
+      name: "Credit card", balance: 100, currency: "AUD", accountable: CreditCard.new
+    )
+    redbark_account.ensure_account_provider!(account)
+
+    injected = Time.utc(2026, 11, 20, 9, 0, 0)
+    provider = mock
+    provider.stubs(:list_connections).returns([])
+    provider.expects(:get_account_details)
+            .with(account_ids: [ redbark_account.redbark_account_id ])
+            .returns([ { accountId: redbark_account.redbark_account_id, lendingRates: [ { rateType: "PURCHASE", rate: "0.1999" } ] } ])
+    importer = RedbarkItem::Importer.new(
+      redbark_account.redbark_item, redbark_provider: provider, fetched_at: injected
+    )
+
+    importer.send(:import_account_details, [ redbark_account.reload ])
+
+    redbark_account.reload
+    assert_equal "0.1999", redbark_account.raw_account_details_payload.dig("lendingRates", 0, "rate"),
+                 "a credit card's details were not stored"
+    assert_equal injected, redbark_account.account_details_fetched_at.utc
   end
 
   test "merge_transactions keeps posted rows and refreshes by id" do
