@@ -1,8 +1,7 @@
 <%= render ProviderItem::PanelComponent.new(
       items: local_assigns[:mercury_items] || @mercury_items || Current.family.mercury_items.active.ordered,
       new_item: Current.family.mercury_items.build(name: t("mercury_items.provider_panel.default_connection_name")),
-      error_message: local_assigns[:error_message] || @error_message,
-      variant: :classic
+      error_message: local_assigns[:error_message] || @error_message
     ) do |panel| %>
   <% panel.with_setup_steps do %>
     <%= render "settings/providers/setup_steps",

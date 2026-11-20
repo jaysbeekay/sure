@@ -30,6 +30,12 @@ class ProviderItem::MercuryPanelComponentTest < ActiveSupport::TestCase
     render_panel(items: :one)
   end
 
+  test "the Mercury panel's Disconnect button is labelled with the connection's name" do
+    labels = Nokogiri::HTML.fragment(render_panel(items: :one)).css("button[aria-label]").map { |button| button["aria-label"] }
+
+    assert_equal [ "Disconnect #{@item.name}" ], labels
+  end
+
   private
     def render_panel(options)
       @item.class.any_instance.stubs(:syncing?).returns(true) if options[:syncing]

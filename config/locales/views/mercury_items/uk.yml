@@ -82,6 +82,7 @@ uk:
       default_connection_name: З'єднання Mercury
       disconnect: Відключити
       disconnect_confirm: "Відключити %{name}?"
+      disconnect_label: "Від'єднати %{name}"
       instructions:
         copy_token_html: "Скопіюйте <strong>повний токен</strong> (включаючи префікс <code>secret-token:</code>) і додайте його як іменоване з'єднання нижче"
         create_token: Створіть новий токен API з доступом "Лише для читання"

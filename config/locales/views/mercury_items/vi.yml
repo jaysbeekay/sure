@@ -77,6 +77,7 @@ vi:
       default_connection_name: Kết nối Mercury
       disconnect: Ngắt kết nối
       disconnect_confirm: "Ngắt kết nối %{name}?"
+      disconnect_label: "Ngắt kết nối %{name}"
       instructions:
         copy_token_html: "Sao chép <strong>toàn bộ mã thông báo</strong> (bao gồm tiền tố <code>secret-token:</code>) và thêm làm kết nối có tên bên dưới"
         create_token: Tạo mã thông báo API mới với quyền truy cập "Chỉ đọc"
