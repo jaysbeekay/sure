@@ -109,6 +109,22 @@ class PreflightConventionsTest < Minitest::Test
     assert_empty hits
   end
 
+  def test_flags_a_logger_whose_method_only_mentions_capture_in_a_comment_or_string
+    source = <<~RUBY
+      class PlaidAccount::Processor
+        def import
+          # TODO: use DebugLogEntry.capture
+          note = "DebugLogEntry.capture is the rule"
+          Rails.logger.warn("failed")
+        end
+      end
+    RUBY
+
+    hits = check({}, "app/models/plaid_account/processor.rb" => source)
+
+    assert_equal [ 5 ], lines_for(hits, "debug-log")
+  end
+
   # --- rule 3: design-system tokens ---
 
   def test_flags_raw_palette_classes_and_hex_in_views
@@ -232,6 +248,25 @@ class PreflightConventionsTest < Minitest::Test
     hits = check({}, "app/components/a_component.rb" => "COLOR = :primary # replaces #fff\n")
 
     assert_empty hits
+  end
+
+  def test_flags_four_and_eight_digit_hex_colours
+    hits = check({}, "app/views/a/show.html.erb" => <<~ERB)
+      <div class="bg-[#ffffff80]">a</div>
+      <div style="color: #0008">b</div>
+    ERB
+
+    assert_equal [ 1, 2 ], lines_for(hits, "design-tokens")
+  end
+
+  def test_leaves_a_hash_inside_a_ruby_percent_string
+    hits = check({}, "app/models/foo.rb" => <<~'RUBY')
+      LABEL = %q{# jaysbeekay/sure#123}
+      NAMES = %w[slice 4.1b]
+      OTHER = %(# drop IP2 note)
+    RUBY
+
+    assert_empty lines_for(hits, "fork-history")
   end
 
   # --- paths ---

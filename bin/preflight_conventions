@@ -44,7 +44,7 @@ module PreflightConventions
   # Rule 3: design-system tokens, not raw palette classes or hex colours.
   PALETTE = /\b(?:bg|text|border|ring|fill|stroke|from|to|via|divide|outline|placeholder)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-(?:50|[1-9]00|950)\b/
   BLACK_WHITE = /\b(?:bg|text|border)-(?:white|black)\b/
-  HEX_DIGITS = "(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})"
+  HEX_DIGITS = "(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})"
   # A hex colour only where a colour is set: a Tailwind arbitrary value
   # (`bg-[#fff]`) or a colour property or attribute (`color: #fff`,
   # `fill="#fff"`). Anchors, Stimulus actions and HTML entities are not.
@@ -83,10 +83,20 @@ module PreflightConventions
     end
   end
 
+  PERCENT_LITERAL = /\A%[qQwWiIrs]?([^\w\s])/
+  PERCENT_CLOSERS = { "(" => ")", "[" => "]", "{" => "}", "<" => ">" }.freeze
+
   # The text after the first `marker` outside a string literal, or nil. A
-  # `#{` is interpolation, not a comment.
+  # `#{` is interpolation, not a comment. Ruby's percent literals (`%q{}`,
+  # `%w[]`, `%()`) are strings too.
   def self.trailing_after(text, marker)
+    scan_code(text, marker)[1]
+  end
+
+  # [code outside string literals, text after the first `marker` or nil].
+  def self.scan_code(text, marker)
     quote = nil
+    code = +""
     i = 0
     while i < text.length
       char = text[i]
@@ -98,12 +108,24 @@ module PreflightConventions
         end
       elsif [ "\"", "'", "`" ].include?(char)
         quote = char
+      elsif char == "%" && (literal = text[i..].match(PERCENT_LITERAL))
+        opener = literal[1]
+        quote = PERCENT_CLOSERS.fetch(opener, opener)
+        i += literal[0].length
+        next
       elsif text[i, marker.length] == marker && !(marker == "#" && text[i + 1] == "{")
-        return text[(i + marker.length)..]
+        return [ code, text[(i + marker.length)..] ]
+      else
+        code << char
       end
       i += 1
     end
-    nil
+    [ code, nil ]
+  end
+
+  # The line's code with string literals and any trailing comment removed.
+  def self.bare_code(text)
+    scan_code(text, "#")[0]
   end
 
   # The line with any trailing Ruby comment removed.
@@ -184,7 +206,7 @@ module PreflightConventions
       def logger_hits(path, line, text)
         return [] unless PROVIDER_PATHS.any? { |pattern| path.match?(pattern) }
         return [] unless PreflightConventions.ruby_code(text).match?(LOGGER)
-        return [] if enclosing_method(path, line)&.any? { |l| l.include?("DebugLogEntry.capture") }
+        return [] if enclosing_method(path, line)&.any? { |l| PreflightConventions.bare_code(l).match?(/\bDebugLogEntry\.capture\b/) }
 
         [ Hit.new(path, line, "debug-log", "provider or import failure logged with Rails.logger and no DebugLogEntry.capture in the same method (AGENTS.md)") ]
       end
