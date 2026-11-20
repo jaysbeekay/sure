@@ -124,7 +124,7 @@ class RedbarkItem::ImporterTest < ActiveSupport::TestCase
     importer.send(:import_account_details, [ redbark_account.reload ])
   end
 
-  # A card's APR and annual fee come from the same endpoint.
+  # A card's APR comes from the same endpoint.
   test "a credit card's account details are fetched and stamped" do
     redbark_account = redbark_accounts(:savings_account)
     family = redbark_account.redbark_item.family

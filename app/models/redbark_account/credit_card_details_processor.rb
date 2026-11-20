@@ -1,13 +1,16 @@
 # frozen_string_literal: true
 
-# Fills a credit card's APR and annual fee from the product details the bank
-# publishes through `GET /v1/account-details`.
+# Fills a credit card's blank APR from the product details the bank publishes
+# through `GET /v1/account-details`.
 #
 # FILL-BLANK ONLY, unlike Plaid, which writes the APR on every sync. Plaid's
-# figure is the issuer's for this account; Redbark's `lendingRates` and `fees`
-# are the PRODUCT's published reference data ("The Annual Fee that may apply is
-# up to $190"). A value already on the card -- typed, imported or restored -- is
-# at least as good evidence as a product sheet, so this only fills a gap.
+# figure is the issuer's for this account; Redbark's `lendingRates` describe the
+# PRODUCT. A value already on the card -- typed, imported or restored -- is at
+# least as good evidence as a product sheet, so this only fills a gap.
+#
+# The annual fee is deliberately not read: `fees` publishes the product's
+# ceiling ("The Annual Fee that may apply is up to $190"), not what this
+# account is charged.
 #
 # `lendingRate` is not read. What it means for a card is documented nowhere
 # this code can cite, and it is null on the one real card payload seen. The
@@ -26,13 +29,10 @@ class RedbarkAccount::CreditCardDetailsProcessor
     return unless card
     return if details.blank?
     return unless details_fetched_this_sync?
+    return if card.apr.present?
 
-    attrs = {}
-    attrs[:apr] = purchase_rate if card.apr.blank?
-    attrs[:annual_fee] = annual_fee if card.annual_fee.blank?
-    attrs.compact!
-
-    write(attrs) if attrs.any?
+    rate = purchase_rate
+    write(apr: rate) if rate
   end
 
   private
@@ -79,22 +79,6 @@ class RedbarkAccount::CreditCardDetailsProcessor
       to_percentage(distinct.first)
     end
 
-    # A yearly periodic fee: `PERIODIC` with a period of `P1Y`. A monthly fee
-    # or a yearly EVENT fee is not the card's annual fee.
-    def annual_fee
-      amounts = Array(details[:fees]).filter_map do |fee|
-        next unless fee.is_a?(Hash)
-        next unless fee[:feeType].to_s.casecmp("PERIODIC").zero?
-        next unless fee[:additionalValue].to_s.casecmp("P1Y").zero?
-
-        parse_decimal(fee[:amount])
-      end.uniq
-
-      return nil unless amounts.size == 1
-
-      amounts.first if amounts.first.positive?
-    end
-
     # The API reports fractions: "0.1999" is 19.99%. `credit_cards.apr` is a
     # percentage with two decimal places.
     def to_percentage(decimal)
@@ -111,7 +95,7 @@ class RedbarkAccount::CreditCardDetailsProcessor
       decimal = BigDecimal(value.to_s)
       decimal if decimal.finite?
     rescue ArgumentError, TypeError
-      capture("Redbark reported an unparseable card figure", value: value.to_s)
+      capture("Redbark reported an unparseable card rate", value: value.to_s)
       nil
     end
 

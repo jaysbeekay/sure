@@ -210,7 +210,7 @@ class RedbarkItem::Importer
 
     # Loans and credit cards only, and only when there are any:
     # `account-details` is the one endpoint that reports a rate -- a loan's
-    # (we-promise/sure#3891), and a card's purchase rate and annual fee -- and
+    # (we-promise/sure#3891), and a card's purchase rate -- and
     # for every other account type it would be a request per sync for
     # something nothing reads.
     #

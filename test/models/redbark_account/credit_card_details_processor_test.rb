@@ -2,14 +2,13 @@
 
 require "test_helper"
 
-# A Redbark-linked card's APR and annual fee, read from the product details the
-# bank publishes through `/v1/account-details`. Rates there are FRACTIONS as
-# strings ("0.1999" is 19.99%); fees carry `feeType`, an `amount` and, for a
-# periodic fee, its period as an ISO 8601 duration in `additionalValue`.
+# A Redbark-linked card's APR, read from the product details the bank publishes
+# through `/v1/account-details`. Rates there are FRACTIONS as strings: "0.1999"
+# is 19.99%.
 #
 # The fixtures mirror a real Bankwest More Platinum payload: the purchase rate
 # is listed twice (once as the balance transfer rate) beside a cash advance
-# rate, and the annual fee sits among several other periodic and event fees.
+# rate.
 class RedbarkAccount::CreditCardDetailsProcessorTest < ActiveSupport::TestCase
   setup do
     @redbark_account = redbark_accounts(:savings_account)
@@ -112,62 +111,38 @@ class RedbarkAccount::CreditCardDetailsProcessorTest < ActiveSupport::TestCase
 
   # --- Annual fee --------------------------------------------------------
 
-  test "a blank annual fee is filled from the yearly periodic fee only" do
-    detail fees: [
-      fee("PERIODIC", "200.00", "P1M", name: "Monthly fee"),
-      fee("PERIODIC", "190.00", "P1Y", name: "Annual Fee"),
-      fee("EVENT", "50.00", "P1Y", name: "Yearly event fee"),
-      fee("LATE_PAYMENT", "25.00", "1", name: "Late Payment Administration Fee")
-    ]
+  # The published fee is the product's ceiling ("up to $190"), not what this
+  # account is charged, so it is never copied onto the card.
+  test "a published yearly fee does not fill a blank annual fee" do
+    detail lendingRates: [ purchase("0.1999") ], fees: [ fee("PERIODIC", "190.00", "P1Y", name: "Annual Fee") ]
 
     process
 
-    assert_equal BigDecimal("190.00"), @card.reload.annual_fee
-  end
-
-  test "two different yearly fees fill nothing" do
-    detail fees: [
-      fee("PERIODIC", "190.00", "P1Y"),
-      fee("PERIODIC", "95.00", "P1Y")
-    ]
-
-    process
-
-    assert_nil @card.reload.annual_fee
-  end
-
-  test "a zero yearly fee is not recorded" do
-    detail fees: [ fee("PERIODIC", "0.00", "P1Y") ]
-
-    process
-
-    assert_nil @card.reload.annual_fee
+    @card.reload
+    assert_equal BigDecimal("19.99"), @card.apr
+    assert_nil @card.annual_fee
   end
 
   # --- What is never written ---------------------------------------------
 
-  test "values already on the card are kept" do
-    @card.update!(apr: 12.5, annual_fee: 395)
-    detail lendingRates: [ purchase("0.1999") ], fees: [ fee("PERIODIC", "190.00", "P1Y") ]
+  test "an APR already on the card is kept" do
+    @card.update!(apr: 12.5)
+    detail lendingRates: [ purchase("0.1999") ]
 
     assert_no_difference -> { DataEnrichment.where(enrichable: @card).count } do
       process
     end
 
-    @card.reload
-    assert_equal BigDecimal("12.5"), @card.apr
-    assert_equal BigDecimal("395"), @card.annual_fee
+    assert_equal BigDecimal("12.5"), @card.reload.apr
   end
 
-  test "a locked blank attribute stays blank" do
+  test "a locked blank APR stays blank" do
     @card.lock_attr!(:apr)
-    detail lendingRates: [ purchase("0.1999") ], fees: [ fee("PERIODIC", "190.00", "P1Y") ]
+    detail lendingRates: [ purchase("0.1999") ]
 
     process
 
-    @card.reload
-    assert_nil @card.apr, "a locked APR was written by the provider"
-    assert_equal BigDecimal("190.00"), @card.annual_fee, "the unlocked fee should still fill"
+    assert_nil @card.reload.apr, "a locked APR was written by the provider"
   end
 
   test "a snapshot not fetched this sync is not acted on" do
@@ -181,9 +156,7 @@ class RedbarkAccount::CreditCardDetailsProcessorTest < ActiveSupport::TestCase
   test "a card with no details is left alone" do
     process
 
-    @card.reload
-    assert_nil @card.apr
-    assert_nil @card.annual_fee
+    assert_nil @card.reload.apr
   end
 
   test "an account that is not a credit card is left alone" do
