@@ -28,10 +28,14 @@ class Balance::Materializer
 
       if strategy == :forward
         update_account_info
-      elsif holdings_from_trades?
+      elsif holdings_from_trades? && trades_exist?
         update_cash_balance
-      elsif @had_derived_position
-        account.update!(cash_balance: account.balance)
+      elsif fallback_owns_cash?
+        reset_cash_balance
+      elsif !trade_fallback_eligible? && account.fallback_cash_balance
+        # A provider snapshot took over: forget the fallback's figure, so it
+        # cannot claim the cash again should the snapshot later go.
+        account.update!(fallback_cash_balance: nil)
       end
     end
   end
@@ -65,7 +69,7 @@ class Balance::Materializer
       return @holdings_from_trades if defined?(@holdings_from_trades)
 
       @holdings_from_trades = trade_fallback_eligible? && (
-        !account.trades.exists? ||
+        !trades_exist? ||
         (account.trades.distinct.pluck(:security_id) - incomplete_security_ids.to_a).any?
       )
     end
@@ -118,6 +122,33 @@ class Balance::Materializer
         account.holdings.where(account_provider_id: nil).where.not(qty: 0).exists?
     end
 
+    def trades_exist?
+      return @trades_exist if defined?(@trades_exist)
+
+      @trades_exist = account.trades.exists?
+    end
+
+    # Whether the account's cash_balance is the one the fallback wrote, which
+    # only the fallback may then reset to the provider's balance. The fallback
+    # stores each figure it writes in fallback_cash_balance, and owns the cash
+    # while cash_balance still equals it: any other writer, a provider
+    # processor among them, takes it back. An account with no stored figure is
+    # recognised by the position the fallback left: an open one, or any once
+    # no trade is left.
+    def fallback_owns_cash?
+      return false unless trade_fallback_eligible?
+
+      if account.fallback_cash_balance
+        account.cash_balance == account.fallback_cash_balance
+      else
+        @had_derived_position || (@had_calculated_position && !trades_exist?)
+      end
+    end
+
+    def reset_cash_balance
+      account.update!(cash_balance: account.balance, fallback_cash_balance: nil)
+    end
+
     # Where the fallback stands aside for a position it had built, the reverse
     # path would read that position back as the provider's snapshot and keep
     # it. Clearing the rows first leaves the account as it reads without the
@@ -150,15 +181,9 @@ class Balance::Materializer
     # The provider set cash_balance to the whole balance, as it sent no
     # holdings. Once holdings come from trades, cash is what they leave of the
     # provider's balance. Only cash is written: the balance stays the provider's.
-    # When the last trade goes, the purge has cleared the position it built, so
-    # cash is the provider's whole balance again. An account that never had a
-    # calculated holding keeps the provider's cash untouched.
+    # The figure is stored too, so a later run knows the cash is the
+    # fallback's (fallback_owns_cash?).
     def update_cash_balance
-      unless account.trades.exists?
-        account.update!(cash_balance: account.balance) if @had_derived_position || @had_calculated_position
-        return
-      end
-
       current_balance = account.balances
         .where(currency: account.currency)
         .where(date: ..Date.current)
@@ -167,7 +192,7 @@ class Balance::Materializer
       return unless current_balance
 
       Rails.logger.info("Cash balance set from trade-derived holdings for account #{account.id}")
-      account.update!(cash_balance: current_balance.end_cash_balance)
+      account.update!(cash_balance: current_balance.end_cash_balance, fallback_cash_balance: current_balance.end_cash_balance)
     end
 
     def update_account_info

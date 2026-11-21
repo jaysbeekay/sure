@@ -326,6 +326,7 @@ class Family::DataImporter
           name: data["name"],
           balance: data["balance"].to_d,
           cash_balance: data["cash_balance"]&.to_d || data["balance"].to_d,
+          fallback_cash_balance: data["fallback_cash_balance"]&.to_d,
           currency: data["currency"] || @family.currency,
           subtype: data["subtype"],
           institution_name: data["institution_name"],
