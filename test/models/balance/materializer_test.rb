@@ -471,6 +471,105 @@ class Balance::MaterializerTest < ActiveSupport::TestCase
     assert_equal 7_000, account.reload.cash_balance
   end
 
+  # The fallback wrote cash for a position it built and then closed; with the
+  # buy deleted the lone sell leaves history incomplete and the fallback
+  # stands aside. Nothing in the holdings shows the position, so only the
+  # stored figure tells the materializer the cash is the fallback's.
+  test "deleting the buy of a closed position resets cash when the fallback stands aside" do
+    account, security = linked_account_with_trade
+    create_trade(security, account: account, qty: -2, date: Date.current, price: 210)
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+    assert_equal 9_600, account.reload.cash_balance, "the fallback wrote a trade-adjusted cash figure"
+
+    account.trades.find_by!(qty: 2).entry.destroy!
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+
+    assert_equal 10_000, account.reload.cash_balance
+    assert_nil account.fallback_cash_balance
+  end
+
+  test "a closed position whose history stays complete keeps the fallback's cash" do
+    account, security = linked_account_with_trade
+    create_trade(security, account: account, qty: -2, date: Date.current, price: 210)
+
+    2.times { Balance::Materializer.new(account, strategy: :reverse).materialize_balances }
+
+    assert_equal [ 9_600, 9_600 ], [ account.reload.cash_balance, account.fallback_cash_balance ]
+  end
+
+  # A provider processor writes its own cash after the fallback did; the
+  # cash is then the provider's, and standing aside leaves it.
+  test "cash another writer set after the fallback is kept when the fallback stands aside" do
+    account, security = linked_account_with_trade
+    create_trade(security, account: account, qty: -2, date: Date.current, price: 210)
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+    account.update!(cash_balance: 4_000)
+
+    account.trades.find_by!(qty: 2).entry.destroy!
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+
+    assert_equal 4_000, account.reload.cash_balance
+  end
+
+  # Without a stored figure, the position the fallback left identifies its
+  # cash.
+  test "an open trade-built position with no stored figure resets cash when history becomes incomplete" do
+    account, security = linked_account_with_trade
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+    account.update_columns(fallback_cash_balance: nil)
+
+    create_trade(security, account: account, qty: -5, date: 5.days.ago.to_date, price: 200)
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+
+    assert_equal 10_000, account.reload.cash_balance
+  end
+
+  test "a closed trade-built position with no stored figure resets cash when its trades are removed" do
+    account, security = linked_account_with_trade
+    create_trade(security, account: account, qty: -2, date: Date.current, price: 210)
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+    account.update_columns(fallback_cash_balance: nil)
+
+    account.trades.each { |trade| trade.entry.destroy! }
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+
+    assert_equal 10_000, account.reload.cash_balance
+  end
+
+  test "a provider snapshot keeps the provider's cash even when the fallback wrote that figure" do
+    account, security = linked_account_with_trade
+    account.update_columns(cash_balance: 3_000, fallback_cash_balance: 3_000)
+    account.holdings.create!(
+      security: security, date: Date.current, qty: 5, price: 210, amount: 1_050, currency: "USD",
+      account_provider: account.account_providers.first
+    )
+
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+
+    assert_equal [ 3_000, nil ], [ account.reload.cash_balance, account.fallback_cash_balance ]
+  end
+
+  # Once a snapshot has taken over, the fallback's figure is forgotten, so a
+  # purged snapshot does not hand it the provider's cash back.
+  test "the fallback's figure does not outlive a provider snapshot" do
+    account = linked_investment_account
+    security = Security.create!(ticker: "SNAPX", name: "Snapshot")
+    (5.days.ago.to_date..Date.current).each { |date| Security::Price.create!(security: security, date: date, price: 200) }
+    create_trade(security, account: account, qty: -2, date: 3.days.ago.to_date, price: 200)
+    create_valuation(account: account, amount: 10_000, date: 1.day.ago.to_date, kind: "current_anchor")
+    account.update_columns(cash_balance: 3_000, fallback_cash_balance: 3_000)
+    account.holdings.create!(security: security, date: Date.current, qty: 5, price: 200, amount: 1_000, currency: "USD",
+                             account_provider: account.account_providers.first)
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+    assert_nil account.reload.fallback_cash_balance
+
+    # The snapshot and the rows the reverse path built from it are purged.
+    account.holdings.delete_all
+    Balance::Materializer.new(account, strategy: :reverse).materialize_balances
+
+    assert_equal 3_000, account.reload.cash_balance
+  end
+
   # The guard reads the position the trades actually build. Summing trade
   # quantities would call this one negative (2 - 3), but the 2:1 split between
   # them leaves one share.

@@ -353,6 +353,16 @@ class Family::DataExporterTest < ActiveSupport::TestCase
     end
   end
 
+  test "exports the cash figure the trade fallback wrote with its account" do
+    @account.update_columns(fallback_cash_balance: 800)
+
+    Zip::File.open_buffer(@exporter.generate_export) do |zip|
+      record = zip.read("all.ndjson").split("\n").map { |line| JSON.parse(line) }
+        .find { |line| line["type"] == "Account" && line.dig("data", "id") == @account.id }
+      assert_equal "800.0", record.dig("data", "fallback_cash_balance")
+    end
+  end
+
   test "generates valid NDJSON file" do
     zip_data = @exporter.generate_export
 

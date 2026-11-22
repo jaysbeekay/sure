@@ -15,6 +15,7 @@ class Family::DataImporterTest < ActiveSupport::TestCase
           id: "old-account-1",
           name: "Test Checking",
           balance: "1500.00",
+          fallback_cash_balance: "1200.00",
           currency: "USD",
           accountable_type: "Depository",
           accountable: { subtype: "checking" }
@@ -27,6 +28,7 @@ class Family::DataImporterTest < ActiveSupport::TestCase
 
     assert_equal 1, result[:account_ids].count
     account = Account.find(result[:account_ids].first)
+    assert_equal BigDecimal("1200"), account.fallback_cash_balance
     assert_equal "Test Checking", account.name
     assert_equal 1500.0, account.balance.to_f
     assert_equal "USD", account.currency
