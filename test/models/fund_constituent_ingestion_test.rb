@@ -85,9 +85,12 @@ class FundConstituentIngestionTest < ActiveSupport::TestCase
       )
     end
     # The fund must be reached first, or the stock is priced before anything
-    # raises and the test proves nothing.
-    assert_equal [ fund.id, stock.id ], account.trades.pluck(:security_id).uniq,
-                 "precondition: the fund is not first in the importer's loop"
+    # raises and the test proves nothing. The windows come from a grouped
+    # query with no order, so the importer is handed them fund first.
+    importer = Account::MarketDataImporter.new(account)
+    windows = importer.price_windows
+    assert_equal [ fund.id, stock.id ].sort, windows.keys.sort, "precondition: both securities need prices"
+    importer.stubs(:price_windows).returns(windows.slice(fund.id, stock.id))
 
     provider = capable_provider("provider")
     provider.stubs(:class).returns(Provider::TwelveData)
@@ -108,7 +111,7 @@ class FundConstituentIngestionTest < ActiveSupport::TestCase
     # The importer fills forward from the one provider price, so the count is
     # asserted to rise rather than pinned to a figure the filler decides.
     before = Security::Price.where(security: stock).count
-    Account::MarketDataImporter.new(account).import_security_prices
+    importer.import_security_prices
     assert_operator Security::Price.where(security: stock).count, :>, before,
                     "the security after the malformed fund received no prices"
     assert_not_nil fund.reload.constituents_fetched_at
