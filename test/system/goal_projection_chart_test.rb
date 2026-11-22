@@ -51,7 +51,7 @@ class GoalProjectionChartTest < ApplicationSystemTestCase
           const label = kids.findIndex((n) => n.tagName === "text" && n.textContent.startsWith("Target"));
           const lastPath = kids.map((n) => n.tagName).lastIndexOf("path");
           const circles = kids
-            .map((n, i) => (n.tagName === "circle" && n.style.display !== "none" ? i : -1))
+            .map((n, i) => (n.tagName === "circle" && !n.hasAttribute("data-milestone") && n.style.display !== "none" ? i : -1))
             .filter((i) => i >= 0);
           return { label, lastPath, circles };
         })()
@@ -253,7 +253,9 @@ class GoalProjectionChartTest < ApplicationSystemTestCase
           const svg = root.querySelector("svg");
           const halos = Array.from(svg.querySelectorAll("text[paint-order='stroke']"))
             .map((t) => ({ text: t.textContent, colour: getComputedStyle(t).stroke }));
-          const rings = Array.from(svg.querySelectorAll("circle"))
+          // A milestone dot is hollow on purpose: filled with the card and
+          // stroked in the projection's colour, so it is not a ring.
+          const rings = Array.from(svg.querySelectorAll("circle:not([data-milestone])"))
             .map((c) => ({ fill: c.getAttribute("fill"), colour: getComputedStyle(c).stroke }));
           return { backdrop, halos, rings };
         })()
