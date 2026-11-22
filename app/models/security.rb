@@ -118,11 +118,13 @@ class Security < ApplicationRecord
   has_many :prices, dependent: :destroy
   has_many :splits, dependent: :destroy
   # A security row is shared by every family that holds the instrument, but a
-  # `Tag` carries `family_id` -- so a tagging is only reachable through its
-  # owning family's tags. That makes tags the family-scoped counterpart to the
-  # classification columns, which are shared.
+  # Tag belongs to one family, so a tagging is reachable only through its
+  # owning family's tags. Read one family's with #tags_for and write them with
+  # #set_tags_for. There is deliberately no `has_many :tags, through:`: its
+  # generated `tags=`, `tag_ids=` and `tags <<` know nothing about families,
+  # and would delete other families' taggings or attach a tag the family does
+  # not own.
   has_many :taggings, as: :taggable, dependent: :destroy
-  has_many :tags, through: :taggings
   has_many :constituents, class_name: "Security::Constituent", dependent: :destroy
   has_many :classification_proposals, class_name: "Security::ClassificationProposal", dependent: :destroy
 
@@ -166,39 +168,66 @@ class Security < ApplicationRecord
     kind == "cash"
   end
 
+  # `family`'s tags on this security, and no other family's.
+  def tags_for(family)
+    family.tags.where(id: taggings.select(:tag_id))
+  end
+
+  # Moves this security's taggings onto `canonical` when the two are merged.
+  # A tag `canonical` already carries stays here and goes with this
+  # security's destroy!, as the unique index on taggings allows only one.
+  def move_taggings_to!(canonical)
+    transaction do
+      # The same row lock set_tags_for takes, on both securities in a stable
+      # order, so a concurrent tag edit on either waits for the move.
+      Security.where(id: [ id, canonical.id ]).order(:id).lock.load
+
+      taggings.where(<<~SQL, canonical.id).update_all(taggable_id: canonical.id)
+        NOT EXISTS (
+          SELECT 1 FROM taggings carried
+          WHERE carried.taggable_type = 'Security'
+            AND carried.taggable_id = ?
+            AND carried.tag_id = taggings.tag_id
+        )
+      SQL
+      taggings.reset
+    end
+  end
+
   # Replaces only `family`'s tags on this security.
   #
-  # `tags` spans every family, because the security row does -- so the obvious
-  # `security.tags = ...` would delete other families' taggings on the same
-  # instrument. Ids are resolved through `family.tags` rather than `Tag`, which
-  # is also what stops a crafted request attaching a tag this family does not
-  # own: the security is shared, so that would publish the tag's name to
-  # everyone else holding it.
+  # A wholesale replace would delete other families' taggings on the same
+  # instrument, because the row is shared. Ids are resolved through
+  # `family.tags` rather than `Tag`, so a tag this family does not own is
+  # never attached: that would show its name to every family holding the
+  # security.
+  #
+  # Lock order is security (FOR UPDATE), then tags (FOR SHARE), then taggings.
+  # `Tag#replace_and_destroy!` takes taggings then the tag, so the two can
+  # deadlock on the same security and tag, and PostgreSQL then aborts one of
+  # them with a deadlock error. A new writer should take the locks in this
+  # order.
   def set_tags_for(family, tag_ids)
-    wanted = family.tags.where(id: Array(tag_ids).reject(&:blank?)).pluck(:id)
+    # `with_lock` reloads the row, which an unsaved security does not have.
+    raise ArgumentError, "save the security before tagging it" unless persisted?
+
     mine = family.tags.select(:id)
 
-    # `with_lock` rather than a bare transaction: this is a check-then-insert on
-    # a row every family shares, and `taggings` has no unique index to refuse a
-    # duplicate. Two concurrent saves could both pass the `reload.pluck` check
-    # and both create the same tagging. Locking the security serialises edits to
-    # one instrument without touching anyone else's.
+    # A check-then-insert on a row every family shares. The unique index on
+    # taggings refuses a duplicate, so without the lock two concurrent saves
+    # of the same tag would fail one of them rather than both succeed. The
+    # lock also reloads the record, so no stale association survives.
     with_lock do
+      # Read inside the lock and FOR SHARE: the security's row lock does not
+      # cover the tags, so without it a tag deleted between this read and the
+      # insert below would fail the insert. A concurrent delete of a wanted
+      # tag now waits for this write to commit.
+      wanted = family.tags.where(id: Array(tag_ids).reject(&:blank?)).lock("FOR SHARE").pluck(:id)
+
       taggings.where(tag_id: mine).where.not(tag_id: wanted).destroy_all
-      # Scoped to `wanted` rather than reloading every tagging on the security:
-      # a tag id outside `wanted` cannot change the subtraction, and this row is
-      # shared by every family holding the instrument, so the unscoped read grew
-      # with how popular the security is rather than with what this family asked
-      # for. Raised by Codacy on #198. `where` queries rather than reading the
-      # loaded association, so it still sees the destroy above.
       already = taggings.where(tag_id: wanted).pluck(:tag_id)
       (wanted - already).each { |id| taggings.create!(tag_id: id) }
     end
-
-    # Both associations, because the reload that used to refresh `taggings` is
-    # gone with the unscoped read.
-    taggings.reset
-    tags.reset
   end
 
   # Derived rather than stored: developed/emerging is a property of the country,

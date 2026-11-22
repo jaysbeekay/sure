@@ -2023,7 +2023,9 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     # holds any fund at all costs one grouped read of `security_constituents`.
     # It is one query whether the answer is none or many -- the test below
     # holds that -- and it is the floor for knowing the answer at all.
-    assert_operator queries.size, :<=, 4, "expected the cost-basis preload, latest prices and constituent queries only, got:\n#{queries.join("\n")}"
+    # Five with the fifo check Holding.preload_avg_costs makes once for
+    # holdings that have no buy (we-promise/sure#4902): these six have none.
+    assert_operator queries.size, :<=, 5, "expected the cost-basis preload, its fifo check, latest prices and constituent queries only, got:\n#{queries.join("\n")}"
   end
 
   # The anti-N+1 for #214/#219. Resolving constituent tickers per fund cost a
@@ -3251,6 +3253,26 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_in_delta 900, statement.unrealized_gains, 0.001
   end
 
+  # The Value column sums every position, so a Day change built from only the
+  # positions with a previous snapshot says so, with how many it covers.
+  test "holdings_table_rows marks a day change that covers only some positions" do
+    security = Security.create!(ticker: "HALF", name: "Half covered")
+    with_snapshot = create_investment_account(balance: 1_000)
+    without_snapshot = create_investment_account(balance: 1_000)
+    Holding.create!(account: with_snapshot, security: security, date: 1.day.ago.to_date, qty: 1, price: 100, amount: 100, currency: "USD")
+    Holding.create!(account: with_snapshot, security: security, date: Date.current, qty: 1, price: 120, amount: 120, currency: "USD")
+    Holding.create!(account: without_snapshot, security: security, date: Date.current, qty: 9, price: 100, amount: 900, currency: "USD")
+
+    row = @statement.holdings_table_rows.find { |r| r.ticker == "HALF" }
+
+    assert_equal Money.new(20, "USD"), row.day_change.value
+    assert_equal [ 1, 2 ], [ row.day_change_positions, row.positions.size ]
+    assert row.day_change_partial?
+
+    Holding.create!(account: without_snapshot, security: security, date: 1.day.ago.to_date, qty: 9, price: 100, amount: 900, currency: "USD")
+    full = InvestmentStatement.new(@family, user: nil).holdings_table_rows.find { |r| r.ticker == "HALF" }
+    assert_not full.day_change_partial?, "every position has a snapshot"
+  end
   test "holdings table rows with the same figure keep a fixed order in both directions" do
     account = create_investment_account(balance: 10_000)
     %w[Beta Alpha Gamma].each_with_index do |name, i|

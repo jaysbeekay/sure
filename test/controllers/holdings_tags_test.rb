@@ -21,7 +21,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
   test "a security is tagged from the drawer, and the tag reaches it from the family" do
     patch tags_holding_path(@holding), params: { security: { tag_ids: [ @tag.id ] } }
 
-    assert_equal [ @tag ], @security.reload.tags.to_a
+    assert_equal [ @tag ], Tag.where(id: @security.taggings.select(:tag_id)).to_a
     assert_includes @family.tags.find(@tag.id).securities, @security
   end
 
@@ -34,7 +34,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
       patch tags_holding_path(@holding), params: { security: { tag_ids: [ @other_tag.id ] } }
     end
 
-    assert_empty @security.reload.tags
+    assert_empty Tag.where(id: @security.taggings.select(:tag_id))
   end
 
   # The destruction test, and the reason this is not a one-line `tags=`.
@@ -45,9 +45,9 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
 
     patch tags_holding_path(@holding), params: { security: { tag_ids: [ @tag.id ] } }
 
-    @security.reload
-    assert_includes @security.tags, @tag
-    assert_includes @security.tags, @other_tag,
+    tagged = Tag.where(id: @security.taggings.select(:tag_id))
+    assert_includes tagged, @tag
+    assert_includes tagged, @other_tag,
                     "another family's tag was destroyed by this family's edit"
   end
 
@@ -57,7 +57,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
 
     patch tags_holding_path(@holding), params: { security: { tag_ids: [ "" ] } }
 
-    assert_equal [ @other_tag ], @security.reload.tags.to_a
+    assert_equal [ @other_tag ], Tag.where(id: @security.taggings.select(:tag_id)).to_a
   end
 
   test "re-submitting the same tag does not duplicate the tagging" do
@@ -79,7 +79,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
       price: @holding.price, amount: @holding.amount, currency: @holding.currency
     )
 
-    assert_equal [ @tag ], tomorrow.security.tags.to_a,
+    assert_equal [ @tag ], tomorrow.security.tags_for(@tag.family).to_a,
                  "the tag did not survive a new snapshot row, so it is not on the security"
   end
 
@@ -94,7 +94,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
     end
 
     assert Security.exists?(@security.id)
-    assert_empty @security.reload.tags
+    assert_empty Tag.where(id: @security.taggings.select(:tag_id))
   end
 
   # A security tag is a family-scoped ANNOTATION, not a change to the holding --
@@ -109,7 +109,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
     sign_in member
     patch tags_holding_path(@holding), params: { security: { tag_ids: [ @tag.id ] } }
 
-    assert_equal [ @tag ], @security.reload.tags.to_a,
+    assert_equal [ @tag ], Tag.where(id: @security.taggings.select(:tag_id)).to_a,
                  "a read_write member could not annotate, though they can tag a transaction"
   end
 
@@ -120,7 +120,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
   # vanish for exactly the members this slice was widened to include, silently.
   #
   # Raised by Codacy as a drift risk between the view's list and the action's
-  # `:annotate` gate; both now read AccountAuthorizable::PERMISSION_LEVELS, and
+  # `:annotate` gate; both now read AccountPolicy#permits?, and
   # this is the assertion that fails if they are ever answered separately again.
   test "a read-write member is offered the picker they are allowed to submit" do
     member = family_guest
@@ -160,7 +160,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
 
     assert_equal :read_only, @holding.account.reload.permission_for(guest),
                  "the guest could not reach the holding, so the permission gate was never tested"
-    assert_empty @security.reload.tags
+    assert_empty Tag.where(id: @security.taggings.select(:tag_id))
     assert_equal I18n.t("accounts.not_authorized"), flash[:alert]
   end
 
@@ -170,7 +170,7 @@ class HoldingsTagsTest < ActionDispatch::IntegrationTest
     patch tags_holding_path(@holding), params: { security: { tag_ids: [ @other_tag.id ] } }
 
     assert_response :not_found
-    assert_empty @security.reload.tags
+    assert_empty Tag.where(id: @security.taggings.select(:tag_id))
   end
 
   test "the drawer offers the tag picker, with the name the action reads" do

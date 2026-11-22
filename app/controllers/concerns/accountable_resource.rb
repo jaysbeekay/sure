@@ -114,8 +114,11 @@ module AccountableResource
       # Update remaining account attributes. Note: currency is intentionally allowed
       # here so all account types (depositories, credit cards, loans, etc.) can
       # have their currency changed via this shared update path.
-      unless @account.update(update_params) &&
-          (cost_basis_method.nil? || !@account.supports_trades? || @account.update(cost_basis_method: cost_basis_method))
+      # One save: lock_saved_attributes! below locks what this save changed,
+      # and a second save would leave it nothing to lock.
+      @account.assign_attributes(update_params)
+      @account.cost_basis_method = cost_basis_method if cost_basis_method && @account.supports_trades?
+      unless @account.save
         @error_message = @account.errors.full_messages.join(", ")
         raise ActiveRecord::Rollback
       end
@@ -136,16 +139,32 @@ module AccountableResource
       return
     end
 
+    apply_logo_choice
     # The stored figures were worked out under the old method; a sync restates
     # them. Compared by hand: lock_saved_attributes! saves again, which clears
     # saved_change_to_cost_basis_method?.
     @account.sync_later if @account.cost_basis_method != previous_cost_basis_method
-    apply_logo_choice
+    @account_updated = true
 
-    redirect_back_or_to account_path(@account), notice: t("accounts.update.success", type: accountable_type.name.underscore.humanize)
+    notice = t("accounts.update.success", type: accountable_type.name.underscore.humanize)
+    respond_to do |format|
+      format.html { redirect_back_or_to account_path(@account), notice: notice }
+      # The form submitted through Turbo from the modal: return to the page it
+      # was opened on with a "replace" visit, which Turbo turns into a
+      # morphing refresh of the same page, keeping its scroll position.
+      format.turbo_stream do
+        flash[:notice] = notice
+        render turbo_stream: turbo_stream.action(:redirect, url_from(request.referer) || account_path(@account))
+      end
+    end
   end
 
   private
+    # Whether `update` saved the account, for controllers that save more after it.
+    def account_updated?
+      @account_updated.present?
+    end
+
     def logo_choice
       params.dig(:account, :logo_choice).presence
     end

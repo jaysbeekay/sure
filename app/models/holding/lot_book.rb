@@ -16,7 +16,9 @@
 #
 # Lot quantities are kept at the precision they are stored at, and a sale
 # beyond the open lots is a shortfall the next acquisitions fill before they
-# open a lot, so the open lots always sum to the position.
+# open a lot, so the open lots always sum to the position. Units that fill a
+# shortfall stay out of the pool, and under fifo they price the part of the
+# sale that went beyond the lots, oldest sale first.
 #
 # Buys add to the running cost and quantity. Sells relieve quantity at the
 # current average cost (leaving the per-share average unchanged), and once the
@@ -36,15 +38,15 @@
 # under average there is no per-lot consumption to direct.
 class Holding::LotBook
   Lot = Data.define(:source_id, :acquired_on, :qty, :unit_cost)
+  # `lot_source_id` and `unit_cost` are nil for the opening lot and for units
+  # sold beyond what was held until an acquisition covers them.
+  Disposal = Data.define(:sale_id, :lot_source_id, :qty, :unit_cost)
 
   # A drift this small is the 18-place rounding of a split that does not
   # divide evenly; anything wider is a real difference.
   OPENING_RESIDUAL_BOUND = BigDecimal("1e-12")
-  # `lot_source_id` and `unit_cost` are nil for the opening lot and for units
-  # sold beyond what was held.
-  Disposal = Data.define(:sale_id, :lot_source_id, :qty, :unit_cost)
 
-  attr_reader :lots, :disposals
+  attr_reader :lots
 
   def initialize(method: "average")
     @fifo = method.to_s == "fifo"
@@ -52,7 +54,12 @@ class Holding::LotBook
     @disposals = []
     @closed = []
     @shortfall = BigDecimal("0")
+    @uncovered = []
     reset
+  end
+
+  def disposals
+    @disposals.select { |disposal| disposal.qty.positive? }
   end
 
   # Applies a trade by its signed quantity: positive is a buy, negative a sell.
@@ -73,10 +80,15 @@ class Holding::LotBook
     qty = qty&.to_d
     return if qty.nil? || !qty.positive?
 
+    # Units that cover a sale beyond what was held close that position; only
+    # the rest is held, so only the rest joins the pool.
+    held = qty - [ qty, @shortfall ].min
     add_lot(source_id, acquired_on, qty, price&.to_d)
+    return unless held.positive?
+
     @unknown = true if price.nil?
-    @total_cost += price.to_d * qty unless price.nil?
-    @total_qty += qty
+    @total_cost += price.to_d * held unless price.nil?
+    @total_qty += held
   end
 
   # Units that arrived by internal movement, at a cost nothing here knows.
@@ -113,6 +125,9 @@ class Holding::LotBook
   def split(ratio)
     @total_qty = Security::Split.scale(@total_qty, ratio)
     @shortfall = Security::Split.scale(@shortfall, ratio)
+    # A cover after the split is in other shares than the sale it would price,
+    # so a sale short across a split keeps its unknown cost.
+    @uncovered.clear
     rescale_lots(Security::Split.scale(open_qty, ratio)) do |lot|
       lot.with(
         qty: Security::Split.scale(lot.qty, ratio),
@@ -128,6 +143,13 @@ class Holding::LotBook
     return nil if @total_qty.zero? || @unknown
 
     @total_cost / @total_qty
+  end
+
+  # Whether the pool took a buy at a price nothing here knows (no rate for its
+  # currency on the day), which leaves the average unknown until the position
+  # closes.
+  def unpriced?
+    @unknown
   end
 
   # An open lot a trade brought in at a cost nothing here knows.
@@ -170,6 +192,7 @@ class Holding::LotBook
     def add_lot(source_id, acquired_on, qty, unit_cost)
       filled = [ qty, @shortfall ].min
       @shortfall -= filled
+      cover(filled, source_id, unit_cost) if filled.positive?
       lot = Lot.new(source_id: source_id, acquired_on: acquired_on, qty: qty - filled, unit_cost: unit_cost)
       lot.qty.positive? ? @lots << lot : @closed << lot
     end
@@ -205,13 +228,35 @@ class Holding::LotBook
       return unless left.positive?
 
       @shortfall += left
-      record_disposal(sale_id, nil, left, nil)
+      @uncovered << [ record_disposal(sale_id, nil, left, nil), left ]
     end
 
+    # Returns the disposal's index, or nil when nothing was recorded.
     def record_disposal(sale_id, lot_source_id, qty, unit_cost)
       return unless sale_id
 
       @disposals << Disposal.new(sale_id: sale_id, lot_source_id: lot_source_id, qty: qty, unit_cost: unit_cost)
+      @disposals.size - 1
+    end
+
+    # Moves `qty` of the oldest shortfall onto the acquisition that filled it,
+    # at its cost. Each shortfall is queued with its disposal's index, or nil
+    # for a transfer out, which recorded none but is still filled in turn. A
+    # covered part leaves its disposal at a lower quantity, which #disposals
+    # drops once it reaches zero.
+    def cover(qty, source_id, unit_cost)
+      left = qty
+      while left.positive? && (pending = @uncovered.first)
+        index, short = pending
+        taken = [ left, short ].min
+        if index
+          @disposals[index] = @disposals[index].with(qty: @disposals[index].qty - taken)
+          @disposals << @disposals[index].with(lot_source_id: source_id, qty: taken, unit_cost: unit_cost)
+        end
+        short -= taken
+        short.positive? ? pending[1] = short : @uncovered.shift
+        left -= taken
+      end
     end
 
     # Pro-rata relief across every open lot; an oversell closes them all and

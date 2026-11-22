@@ -128,7 +128,7 @@
             </div>
           </div>
           <% if @lots.any? %>
-            <%= render "holdings/lots", holding: @holding, lots: @lots %>
+            <%= render "holdings/lots", holding: @holding, lots: @lots, can_edit: @can_write_lots, provider_cost: @lots_provider_cost %>
           <% end %>
           <div class="flex items-center justify-between text-sm">
             <dt class="text-secondary"><%= t(".book_value_label") %></dt>
@@ -251,7 +251,7 @@
           <%= render DS::TagSelect.new(
                 form: f,
                 tags: @family_tags,
-                selected_ids: @holding.security.tags.where(family: Current.family).pluck(:id),
+                selected_ids: @holding.security.tags_for(Current.family).pluck(:id),
                 label: t("securities.tags.label")
               ) %>
           <div class="flex justify-end">

@@ -53,6 +53,7 @@ es:
       spending_pace: Ritmo de gasto
       top_movers: Mayores cambios
       stale_valuation: Valoración
+      fixed_commitments_ratio: Compromisos fijos
     meta:
       next_n_days:
         one: Próximo día
@@ -67,6 +68,7 @@ es:
       on_pace: al ritmo previsto
       of_budget: del presupuesto
       need_attention: requieren atención
+      of_income: de tus ingresos
       days_overdue:
         one: "%{count} día de retraso"
         other: "%{count} días de retraso"
@@ -97,6 +99,7 @@ es:
       spending_pace: Ver la historia de tus gastos
       top_movers: Ver la historia de tus gastos
       stale_valuation: Actualizar valor
+      fixed_commitments_ratio: Revisar transacciones recurrentes
     titles:
       spending_anomaly:
         above: El gasto en %{category} va en aumento
@@ -127,6 +130,9 @@ es:
         up: "%{category} es lo que más ha subido en tus gastos"
         down: "%{category} es lo que más ha bajado en tus gastos"
       stale_valuation: "%{account} necesita un valor nuevo"
+      fixed_commitments_ratio:
+        up: Tus compromisos fijos pesan más en tus ingresos
+        over_half: Tus compromisos fijos ya se llevan la mitad o más de tus ingresos
     templates:
       spending_anomaly:
         above: Vas camino de gastar %{projected_spend} en %{category} este mes, aproximadamente un %{deviation_pct}% más que tu promedio mensual reciente de %{baseline_spend}.
@@ -160,3 +166,10 @@ es:
         up: El gasto subió sobre todo en %{categories} frente a los %{days} días anteriores, con el mayor aumento en %{top_change}.
         down: El gasto bajó sobre todo en %{categories} frente a los %{days} días anteriores, con la mayor bajada en %{top_change}.
       stale_valuation: "%{account} se valoró por última vez el %{last_valued_on} y sigue contando como %{balance} en tu patrimonio neto."
+      fixed_commitments_ratio: "Tus compromisos recurrentes, %{commitments} al mes, se llevan el %{current_ratio}% de tus ingresos mensuales habituales (%{income}), frente al %{previous_ratio}% de hace seis meses. %{explanation}"
+    fixed_commitments_ratio:
+      contributors: "Lo que más ha cambiado: %{list}."
+      contributor:
+        new: "%{name} (pago nuevo, %{amount} al mes)"
+        raised: "%{name} (%{amount} más al mes)"
+      income_fell: Tus ingresos mensuales habituales han bajado de %{previous_income} a %{current_income}.

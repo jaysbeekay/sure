@@ -1,27 +1,14 @@
 module PortfoliosHelper
-  # The holdings table's columns: [sort key or nil, label key, alignment].
-  # A nil sort key is a column the table does not sort by.
-  HOLDINGS_COLUMNS = [
-    [ "name", "security", "text-left" ],
-    [ nil, "accounts", "text-right" ],
-    [ nil, "qty", "text-right" ],
-    [ nil, "avg_cost", "text-right" ],
-    [ "value", "value", "text-right" ],
-    [ "weight", "weight", "text-right" ],
-    [ "return", "unrealized", "text-right" ],
-    [ "day_change", "day_change", "text-right" ]
-  ].freeze
-
-  # Where a column header links: the same column flips direction, another
-  # column opens on its natural direction (names ascending, figures
+  # Where a holdings column header links: the same column flips direction,
+  # another column opens on its natural direction (names ascending, figures
   # descending). The period and grouping travel with it.
-  def holdings_sort_link(key, active_sort:, active_dir:, period:, by:)
+  def holdings_sort_link(key, active_sort:, active_dir:, period: nil, by: nil)
     next_dir = if active_sort == key
       active_dir == "asc" ? "desc" : "asc"
     else
       key == "name" ? "asc" : "desc"
     end
-    portfolio_path({ period: period.key, sort: key, dir: next_dir, by: by }.compact)
+    portfolio_path({ period: period&.key, sort: key, dir: next_dir, by: by }.compact)
   end
 
   # The aria-sort value for a column header, or nil when it is not the
@@ -30,6 +17,19 @@ module PortfoliosHelper
     return nil unless key && active_sort == key
 
     active_dir == "asc" ? "ascending" : "descending"
+  end
+
+  # A sortable holdings column's header: a link to its next sort, with the
+  # direction's chevron on the active column. It reloads only the sections'
+  # frame, as the period picker and the allocation grouping do.
+  def holdings_sort_header(label, key, active_sort:, active_dir:, period: nil, by: nil)
+    active = active_sort == key
+
+    link_to holdings_sort_link(key, active_sort: active_sort, active_dir: active_dir, period: period, by: by),
+            class: class_names("inline-flex items-center gap-1 hover:text-primary focus-ring rounded", "text-primary" => active),
+            data: { turbo_frame: "portfolio_sections" } do
+      safe_join([ label, (icon(active_dir == "asc" ? "chevron-up" : "chevron-down", size: "xs") if active) ].compact)
+    end
   end
 
   # Deterministic segment colours for the allocation donut (D5): the chart

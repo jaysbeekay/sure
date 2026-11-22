@@ -21,6 +21,7 @@ en:
         quarterly: Quarterly
         ytd: Year to Date
         last_6_months: Last 6 Months
+        all_time: All Time
         custom: Custom Range
       date_range:
         from: From
@@ -35,6 +36,7 @@ en:
         ytd: "YTD %{year}"
         past_year: "%{year}"
         last_6_months: "%{start} – %{end}"
+        all_time: "%{start} – %{end}"
       period_picker:
         quarter: "Q%{quarter} %{year}"
         ytd: "YTD %{year}"

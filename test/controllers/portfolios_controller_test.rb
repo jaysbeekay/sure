@@ -75,9 +75,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "turbo-frame#portfolio_sections"
 
     # The fixture family holds AAPL in accounts(:investment), so every
-    # section has something to show; data quality is present because the
-    # fixture security has no price rows (stale by definition).
-    %w[kpis value_chart holdings accounts allocation data_quality].each do |key|
+    # section has something to show. Data quality stays hidden: AAPL is priced
+    # today and the keyless securities fallback gives it a provider, so there
+    # is nothing to fix.
+    %w[kpis value_chart holdings accounts allocation].each do |key|
       assert_select "[data-section-key=?]", key, count: 1
     end
   end
@@ -367,8 +368,9 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     # zero. `index_chart` and `comparison` are absent for the same kind of
     # reason: no account holds a balance on two days of the period, so there
     # is no time-weighted return to draw, rather than a flat line of 100s
-    # chained from calendar rows of zeros.
-    assert_equal %w[value_chart kpis performance realized_gains income holdings accounts allocation data_quality retirement],
+    # chained from calendar rows of zeros. `data_quality` is absent because
+    # the fixture holding has nothing to fix.
+    assert_equal %w[value_chart kpis performance realized_gains income holdings accounts allocation retirement],
       css_select("[data-section-key]").map { |node| node["data-section-key"] }
     assert_select "[data-section-key=kpis][data-reports-section-collapsed-value=?]", "true"
     assert_select "[data-section-key=value_chart][data-reports-section-collapsed-value=?]", "false"
@@ -410,9 +412,12 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
 
     assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL']", count: 1
-    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL'] td[data-portfolio-value]", text: ApplicationController.helpers.format_money(row.amount_money)
-    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL'] button[aria-expanded='false'][aria-controls]"
-    positions = css_select("#portfolio-holdings [data-portfolio-positions='AAPL'] a[href^='/holdings/']")
+    assert_select "#portfolio-holdings tr[data-portfolio-holding='AAPL'] [data-portfolio-value]", text: ApplicationController.helpers.format_money(row.amount_money)
+    toggle = css_select("#portfolio-holdings tr[data-portfolio-holding='AAPL'] button[aria-expanded='false'][aria-controls]").first
+    assert toggle, "the summary row must carry a collapsed toggle"
+    detail = css_select("#portfolio-holdings tr##{toggle["aria-controls"]}[hidden]").first
+    assert detail, "the toggle must point at the hidden detail row"
+    positions = css_select(detail, "[data-portfolio-positions='AAPL'] a[href^='/holdings/']")
     assert_equal 2, positions.size
     assert_includes positions.map { |a| a["href"] }, holding_path(second.holdings.first)
   end
@@ -458,7 +463,7 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
 
     assert_select "tr[data-portfolio-holding='NOBASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/
     assert_select "tr[data-portfolio-holding='NOBASIS'] span[title=?]", row_hint
-    assert_select "tr[data-portfolio-positions='NOBASIS'] span[title=?]", position_hint, text: "—"
+    assert_select "[data-portfolio-positions='NOBASIS'] span[title=?]", position_hint, text: "—"
     assert_select "tr[data-portfolio-holding='AAPL']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0,
       message: "AAPL's basis is computable from its trade, so the row must not warn"
     assert_select "tr[data-portfolio-holding='BASIS']", text: /#{I18n.t("portfolios.holdings.missing_cost_basis")}/, count: 0
@@ -467,7 +472,12 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_select "tr[data-portfolio-holding='PARTIAL'] span[title=?]", row_hint
     assert_select "tr[data-portfolio-holding='PARTIAL']", text: /#{eight}/,
       message: "a partly known basis still shows the average cost the row hint describes"
-    assert_select "tr[data-portfolio-positions='PARTIAL'] span[title=?]", position_hint, count: 1
+    assert_select "[data-portfolio-positions='PARTIAL'] span[title=?]", position_hint, count: 1
+    # AAPL stores no basis but has a buy trade, so its position shows the
+    # computed average cost rather than the missing-basis dash.
+    aapl_cost = statement_avg_cost("AAPL")
+    assert_select "[data-portfolio-positions='AAPL'] span[title=?]", position_hint, count: 0
+    assert_select "[data-portfolio-positions='AAPL'] td", text: ApplicationController.helpers.format_money(aapl_cost)
   end
 
   test "the page's query count is bounded and does not grow with holdings" do
@@ -1042,11 +1052,19 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             taggings, once per page. Measured in the same environment: 116
   #             on fork main, 118 here, and those two are the only difference
   #             apart from the period-return rate lookups swapped one for one
+  #  119 -> 120 merged with the 2026-11-22 upstream sync. Measured in the same
+  #             environment: 118 on fork main, 120 here. Holding.preload_avg_costs
+  #             (we-promise/sure#4902) asks once which accounts sell by fifo
+  #             for holdings with no buy, and Family#missing_data_provider?
+  #             now goes on to the exchange-rate check under the keyless
+  #             securities fallback (we-promise/sure#5318), which reads account
+  #             and entry currencies. The account cards reuse the statement's
+  #             accounts (we-promise/sure#5306), one fewer. All once per page
   #
   # No rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 119
+  PORTFOLIO_QUERY_CEILING = 120
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one
@@ -1194,6 +1212,71 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     assert_no_match(/yet/i, I18n.t("portfolios.empty_state.title"))
   end
 
+  test "a day change that covers only some positions says how many" do
+    security = Security.create!(ticker: "HALF", name: "Half covered")
+    second_broker = @family.accounts.create!(name: "Second broker", balance: 900, cash_balance: 0, currency: "USD", accountable: Investment.new)
+    Holding.create!(account: accounts(:investment), security: security, date: 1.day.ago.to_date, qty: 1, price: 100, amount: 100, currency: "USD")
+    Holding.create!(account: accounts(:investment), security: security, date: Date.current, qty: 1, price: 120, amount: 120, currency: "USD")
+    Holding.create!(account: second_broker, security: security, date: Date.current, qty: 9, price: 100, amount: 900, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    assert_select "tr[data-portfolio-holding='HALF'] [data-day-change-partial]",
+      text: I18n.t("portfolios.holdings.day_change_partial", covered: 1, total: 2)
+    assert_select "tr[data-portfolio-holding='AAPL'] [data-day-change-partial]", count: 0
+  end
+
+  # The row's warning badge explains itself on hover only through its title,
+  # so the explanation is also visible text in the row's details.
+  test "a row without a full cost basis explains it in its details as visible text" do
+    unknown = Security.create!(ticker: "NOBASIS", name: "Without basis")
+    Holding.create!(account: accounts(:investment), security: unknown, date: Date.current, qty: 1, price: 10, amount: 10, currency: "USD")
+
+    get portfolio_path
+    assert_response :success
+
+    toggle = css_select("#portfolio-holdings tr[data-portfolio-holding='NOBASIS'] button[aria-controls]").first
+    assert_select "tr##{toggle["aria-controls"]} p", text: I18n.t("portfolios.holdings.missing_cost_basis_hint")
+  end
+
+  test "holdings table renders its figures with design-system parts in the page's locale" do
+    second = create_second_aapl_account(qty: 20, price: 215)
+    statement = InvestmentStatement.new(@family, user: @user)
+    row = statement.holdings_table_rows.find { |r| r.ticker == "AAPL" }
+    assert row.unrealized, "precondition: AAPL has a return to show"
+
+    get portfolio_path(locale: "de")
+    assert_response :success
+
+    aapl = "#portfolio-holdings tr[data-portfolio-holding='AAPL']"
+    # DS::ProgressRing: a decorative svg the adjacent percentage labels, not
+    # the legacy partial's hard-coded gray track.
+    assert_select "#{aapl} svg[aria-hidden='true'] circle", minimum: 2
+    assert_select "#{aapl} circle.text-gray-300", count: 0
+    expected = I18n.with_locale(:de) { ApplicationController.helpers.number_to_percentage(row.unrealized.percent, precision: 1) }
+    assert_select "#{aapl} [data-trend-percent]", text: "(#{expected})"
+    assert_match ",", expected, "precondition: German writes a decimal comma"
+    assert_select "#{aapl} p.wrap-anywhere", text: row.name
+    assert_select "[data-portfolio-positions='AAPL'] th", text: I18n.t("portfolios.holdings.columns.cost_basis_per_share", locale: :de)
+    assert second
+  end
+
+  test "stores the holdings section in the saved order and collapsed set" do
+    patch update_preferences_portfolio_path,
+      params: { preferences: { portfolio_section_order: %w[accounts holdings], portfolio_collapsed_sections: { holdings: true } } },
+      as: :json
+
+    assert_response :ok
+    @user.reload
+    assert_equal %w[accounts holdings], @user.preferences["portfolio_section_order"]
+    assert_equal({ "holdings" => true }, @user.preferences["portfolio_collapsed_sections"])
+
+    get portfolio_path
+    assert_equal %w[accounts holdings], css_select("[data-section-key]").map { |node| node["data-section-key"] }.first(2)
+    assert_select "[data-section-key=holdings][data-reports-section-collapsed-value=?]", "true"
+  end
+
   private
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
@@ -1258,5 +1341,11 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
           Holding.create!(account: account, security: security, date: Date.current, qty: 10, price: 100, amount: 1000, currency: "USD", **basis)
         end
       end
+    end
+
+    def statement_avg_cost(ticker)
+      row = InvestmentStatement.new(@family, user: @user).holdings_table_rows.find { |r| r.ticker == ticker }
+      assert_nil row.positions.sole.cost_basis, "the premise: #{ticker} stores no cost basis"
+      row.positions.sole.avg_cost
     end
 end

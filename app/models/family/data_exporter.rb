@@ -73,8 +73,30 @@ class Family::DataExporter
       TEXT
     end
 
-    def generate_accounts_csv
+    # Wraps a CSV writer so every row emitted is escaped against formula
+    # injection. Wrapping the writer rather than each call site means a column
+    # added later cannot go out unescaped by accident, which is exactly how the
+    # ticker and subtype columns were missed before.
+    class SanitizedCsv
+      def initialize(csv)
+        @csv = csv
+      end
+
+      def <<(row)
+        @csv << CsvSanitizer.sanitize_row(row)
+      end
+    end
+
+    private_constant :SanitizedCsv
+
+    def generate_sanitized_csv
       CSV.generate do |csv|
+        yield SanitizedCsv.new(csv)
+      end
+    end
+
+    def generate_accounts_csv
+      generate_sanitized_csv do |csv|
         csv << [ "id", "name", "type", "subtype", "balance", "currency", "created_at" ]
 
         # Only export accounts belonging to this family
@@ -93,7 +115,7 @@ class Family::DataExporter
     end
 
     def generate_transactions_csv
-      CSV.generate do |csv|
+      generate_sanitized_csv do |csv|
         csv << TRANSACTIONS_CSV_HEADERS
 
         # Only export transactions from accounts belonging to this family
@@ -120,7 +142,7 @@ class Family::DataExporter
     end
 
     def generate_trades_csv
-      CSV.generate do |csv|
+      generate_sanitized_csv do |csv|
         csv << [ "date", "account_name", "ticker", "quantity", "price", "amount", "currency" ]
 
         # Only export trades from accounts belonging to this family
@@ -141,7 +163,7 @@ class Family::DataExporter
     end
 
     def generate_categories_csv
-      CSV.generate do |csv|
+      generate_sanitized_csv do |csv|
         csv << [ "name", "color", "parent_category", "lucide_icon" ]
 
         # Only export categories belonging to this family
@@ -157,7 +179,7 @@ class Family::DataExporter
     end
 
     def generate_merchants_csv
-      CSV.generate do |csv|
+      generate_sanitized_csv do |csv|
         # Headers match MerchantImport's expected columns so the export round-trips
         csv << [ "name", "color", "website_url" ]
 
@@ -173,7 +195,7 @@ class Family::DataExporter
     end
 
     def generate_rules_csv
-      CSV.generate do |csv|
+      generate_sanitized_csv do |csv|
         csv << [ "name", "resource_type", "active", "effective_date", "conditions", "actions", "group" ]
 
         # Only export rules belonging to this family, in run order so an
@@ -481,12 +503,15 @@ class Family::DataExporter
       # Export trades with full data. Lots are rebuilt from trades on sync, so
       # a trade carries only what the user set on its lot: the lot's total
       # cost, and, on a sale, the trade whose lot it names to sell from. Trades
-      # go oldest first and buys before sales on a day, so a named lot is
-      # always ahead of its sale, even when an import arrives in chunks.
+      # go in the order Holding::PortfolioCache#trades replays them: by date,
+      # then as entered, buys before sales entered together. An import stamps
+      # entries in file order, so the file's order is the imported replay
+      # order, and a named lot, which replays before its sale, is always
+      # ahead of it, even when an import arrives in chunks.
       lot_total_costs = HoldingLot.derived.joins(:account).where(accounts: { family_id: @family.id })
         .where.not(manual_total_cost: nil).pluck(:source_entry_id, :manual_total_cost).to_h
       @family.trades.includes(:security, :lot_source_entry, entry: :account)
-        .order("entries.date ASC, trades.qty DESC, trades.id ASC").each do |trade|
+        .order(Arel.sql("entries.date ASC, entries.created_at ASC, CASE WHEN trades.qty < 0 THEN 1 ELSE 0 END ASC, entries.id ASC")).each do |trade|
         lines << {
           type: "Trade",
           data: {
@@ -791,6 +816,7 @@ class Family::DataExporter
         effective_date: rule.effective_date&.iso8601,
         position: rule.position,
         stop_processing: rule.stop_processing,
+        apply_immediately: rule.apply_immediately,
         group: rule.rule_group&.name,
         conditions: rule.conditions.where(parent_id: nil).map { |condition| serialize_condition(condition) },
         actions: rule.actions.map { |action| serialize_action(action) }

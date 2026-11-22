@@ -11,23 +11,12 @@ class Tag::DeletionsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
-  # This test used to assert that the replacement gained one transaction per
-  # transaction the old tag had. The fixture's only tagged transaction already
-  # carries BOTH tags, so what it was really pinning was the duplicate row
-  # #202 exists to remove -- the merge added a second (tag two, transaction
-  # one) tagging and the count went up. With the dedupe in place it does not,
-  # and the assertion failed. The expectation was wrong, not the change.
-  #
-  # Both branches are covered now, because the fixture alone only exercises
-  # the skip: an object that already carries the replacement must not be
-  # tagged twice, and an object carrying only the old tag must still be moved.
-  test "create with replacement moves what needs moving and duplicates nothing" do
+  test "create with replacement" do
     replacement_tag = tags(:two)
 
-    already_carrying = transactions(:one)
-    assert_equal [ @tag.id, replacement_tag.id ].sort, already_carrying.tags.map(&:id).sort,
-                 "the fixture must carry both tags, or the skip is never exercised"
-
+    # The fixture transaction already carries both tags, so it must end up
+    # with the replacement once; this one only carries the deleted tag.
+    already_tagged = transactions(:one)
     moved = transactions(:transfer_out)
     moved.taggings.create!(tag: @tag)
 
@@ -35,10 +24,8 @@ class Tag::DeletionsControllerTest < ActionDispatch::IntegrationTest
       post tag_deletions_url(@tag), params: { replacement_tag_id: replacement_tag.id }
     end
 
-    assert_equal [ replacement_tag ], already_carrying.reload.tags,
-                 "an object already carrying the replacement was tagged with it twice"
-    assert_equal [ replacement_tag ], moved.reload.tags,
-                 "an object carrying only the old tag lost it instead of being moved"
+    assert_equal [ replacement_tag ], already_tagged.reload.tags.to_a
+    assert_equal [ replacement_tag ], moved.reload.tags.to_a
   end
 
   test "create without replacement" do

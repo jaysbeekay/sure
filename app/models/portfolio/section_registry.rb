@@ -24,6 +24,9 @@ class Portfolio::SectionRegistry
 
   attr_reader :statement, :period, :as_of, :user, :sort, :dir, :by, :look_through, :extra_sections
 
+  # Everything an account card's logo reads, preloaded onto the cards.
+  CARD_PRELOADS = [ { logo_attachment: :blob }, :accountable, :plaid_account, :simplefin_account, { account_providers: :provider } ].freeze
+
   # `sort`, `dir` and `by` are the query-string state of the holdings table
   # and the allocation donut, passed through as given: the statement
   # whitelists them (InvestmentStatement::HOLDINGS_SORT_KEYS,
@@ -181,7 +184,7 @@ class Portfolio::SectionRegistry
           key: "holdings",
           title: "portfolios.sections.holdings",
           partial: "portfolios/holdings",
-          locals: shared_locals.merge(rows: holdings_rows, sort: sort, dir: dir, by: by),
+          locals: shared_locals.merge(rows: holdings_rows, sort: holdings_sort.first, dir: holdings_sort.last, by: by),
           visible: holdings_rows.any?,
           collapsible: true
         },
@@ -542,7 +545,13 @@ class Portfolio::SectionRegistry
     end
 
     def holdings_rows
-      @holdings_rows ||= statement.holdings_table_rows(sort: sort, dir: dir)
+      @holdings_rows ||= statement.holdings_table_rows(sort: holdings_sort.first, dir: holdings_sort.last)
+    end
+
+    # The sort the statement applies, so the view marks the header the rows
+    # are ordered by even when the requested one fell back.
+    def holdings_sort
+      @holdings_sort ||= InvestmentStatement.holdings_sort(sort, dir)
     end
 
     def realized_gains
@@ -747,14 +756,20 @@ class Portfolio::SectionRegistry
       end
     end
 
-    # The accounts the cards show, in name order (id breaks ties, so
-    # same-named cards keep their places), with every record the logo reads
-    # (the attachment, the accountable's colour, the provider links and the
-    # provider each falls back to) loaded here rather than once per card.
+    # The accounts the cards show, in name order (case-insensitive; id breaks
+    # ties, so same-named cards keep their places), with every record the logo
+    # reads (the attachment, the accountable's colour, the provider links and
+    # the provider each falls back to) loaded here rather than once per card.
+    #
+    # They are the statement's own records, sorted here, rather than a second
+    # query: the holdings section's weights load the same accounts through the
+    # statement, and the page reads them once.
     def accounts_for_cards
-      @accounts_for_cards ||= statement.investment_accounts.with_attached_logo
-        .includes(:accountable, :plaid_account, :simplefin_account, account_providers: :provider)
-        .alphabetically.order(:id).to_a
+      @accounts_for_cards ||= begin
+        accounts = statement.investment_accounts.to_a.sort_by { |account| [ account.name.downcase, account.id ] }
+        ActiveRecord::Associations::Preloader.new(records: accounts, associations: CARD_PRELOADS).call
+        accounts
+      end
     end
 
     def shared_locals

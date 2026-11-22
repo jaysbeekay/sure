@@ -6,7 +6,9 @@ class HoldingsController < ApplicationController
 
   def index
     @account = accessible_accounts.find(params[:account_id])
-    @current_holdings = @account.current_holdings.includes(:account, :security)
+    # Every row shows its average cost; load them together, not per row.
+    @current_holdings = @account.current_holdings.includes(:account, :security).to_a
+    Holding.preload_avg_costs(@current_holdings)
     @trade_republic_categories = trade_republic_categories_for(@account)
   end
 
@@ -21,6 +23,12 @@ class HoldingsController < ApplicationController
     # tables.
     @can_annotate_holding = account_permission?(@holding.account, :annotate)
     @lots = @holding.open_lots.to_a
+    # The lots partial gates its edit affordances on these, as
+    # HoldingLotsController refuses the writes: a read-only share edits
+    # nothing, and under a provider's cost a lot's manual cost can only be
+    # cleared.
+    @lots_provider_cost = @lots.any? && @holding.provider_cost_position?
+    @can_write_lots = Account.writable_by(Current.user).exists?(id: @holding.account_id)
   end
 
   # The family-scoped half of classification. Unlike the classification columns,
@@ -28,7 +36,7 @@ class HoldingsController < ApplicationController
   # the owning family's tags -- so this is where a household's own scheme goes.
   #
   # The write itself is `Security#set_tags_for`, which replaces only this
-  # family's taggings; `security.tags = ...` here would delete other families'.
+  # family's taggings.
   def tags
     # `:annotate`, not `:write`. A security tag is a family-scoped annotation
     # rather than a change to the holding, which is exactly how a transaction's
@@ -158,21 +166,23 @@ class HoldingsController < ApplicationController
     new_security.failed_fetch_at = nil
 
     begin
-      # Saving the security, moving the holdings and trades, and re-materializing
-      # run as one transaction, so a failure at any step leaves nothing changed
-      # and the alert below is true.
+      # Saving the security, the remap and the re-materialization with the new
+      # security's prices commit together, so a failure at any step leaves
+      # nothing changed and the alert below is true. The remap runs under the
+      # account row lock, taken first as a sync and a lot edit take it. The
+      # materializer's own lock! reloads the account, so it reads no
+      # associations cached before the remap.
+      # The around_action :switch_timezone already sets the family timezone
+      # for this request, so Date.current is correct here.
       ActiveRecord::Base.transaction do
         new_security.save!
 
-        @holding.remap_security!(new_security)
-
-        # Re-materialize holdings with the new security's prices.
-        # Reload account to avoid stale associations from remap_security!.
-        # The around_action :switch_timezone already sets the family timezone
-        # for this request, so Date.current is correct here.
         account = Account.find(@holding.account_id)
-        strategy = account.linked? ? :reverse : :forward
-        Balance::Materializer.new(account, strategy: strategy, security_ids: [ new_security.id ]).materialize_balances
+        account.with_lock do
+          @holding.remap_security!(new_security)
+          strategy = account.linked? ? :reverse : :forward
+          Balance::Materializer.new(account, strategy: strategy, security_ids: [ new_security.id ]).materialize_balances
+        end
       end
     rescue StandardError => e
       # A failure reaches the user as a flash alert on the redirect, not a 500
@@ -231,12 +241,25 @@ class HoldingsController < ApplicationController
   end
 
   def reset_security
+    security_ids = [ @holding.security_id, @holding.provider_security_id ]
+    reset = @holding.provider_security_id.present?
+
     begin
-      @holding.reset_security_to_provider!
+      # The reset and the re-materialization of both securities, as a remap
+      # re-materializes its target, commit together under the account row
+      # lock, so the lots and holdings each takes back match before the next
+      # sync.
+      account = Account.find(@holding.account_id)
+      account.with_lock do
+        @holding.reset_security_to_provider!
+        if reset
+          strategy = account.linked? ? :reverse : :forward
+          Balance::Materializer.new(account, strategy: strategy, security_ids: security_ids).materialize_balances
+        end
+      end
     rescue StandardError => e
       # A failure reaches the user as a flash alert on the redirect, not a 500
-      # error response. reset_security_to_provider! writes inside one
-      # transaction, which has rolled the reset back.
+      # error response. The row lock's transaction has rolled the reset back.
       Rails.logger.warn("reset_security failed for holding #{@holding.id}: #{e.class}: #{e.message}")
       Rails.error.report(e, handled: true, context: { holding_id: @holding.id, action: "reset_security" })
       flash[:alert] = t(".failed")
