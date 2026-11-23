@@ -68,6 +68,15 @@ class Spending::PaceTest < ActiveSupport::TestCase
     assert_equal 400.to_d, result.spent
   end
 
+  # 677 of 1,000 is 67.7%, and day 20 of 30 is 66.7%: rounding would quote 68%
+  # and 67%, so the floor is what keeps the quoted figures from overstating.
+  test "the quoted percentages are rounded down" do
+    result = pace(spent: "677", day: 20)
+
+    assert_equal 67, result.spent_percent
+    assert_equal 66, result.elapsed_percent
+  end
+
   test "no budget means no pace" do
     assert_nil Spending::Pace.for(nil, on: Date.new(2026, 6, 15), spent: 10.to_d)
   end
