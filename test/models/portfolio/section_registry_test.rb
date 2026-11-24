@@ -41,7 +41,9 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
 
     assert_equal "portfolios/performance", section[:partial]
     assert_same perf, section[:locals][:performance]
-    assert_equal %i[twr annualized_twr mwr annualized_mwr volatility max_drawdown].sort,
+    # The six figures, and whether the money-weighted ones may be one of
+    # several rates, read from the same computation.
+    assert_equal %i[twr annualized_twr mwr annualized_mwr mwr_ambiguous volatility max_drawdown].sort,
                  section[:locals][:returns].keys.sort
   end
 

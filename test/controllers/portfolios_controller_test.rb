@@ -306,6 +306,60 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # Portfolio::Performance#money_weighted_return_ambiguous? is true when the
+  # money-weighted flows change sign more than once, so the figure may be one
+  # of several rates that solve them. The figure is still shown; both
+  # money-weighted cards say it may not be the only one. The same page with the
+  # flag off is the baseline, so the hedge is measured against its absence.
+  test "the money-weighted cards hedge a figure whose flows may fit several rates" do
+    hedge = I18n.t("portfolios.performance.mwr_ambiguous_hint")
+
+    render_performance_with(mwr_ambiguous: false)
+    assert_select "#portfolio-performance p", text: hedge, count: 0
+    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.mwr_hint"), count: 1
+    plain_annualized = css_select("#portfolio-performance p").count { |p| p.text == I18n.t("portfolios.performance.annualized_hint") }
+
+    render_performance_with(mwr_ambiguous: true)
+    assert_select "#portfolio-performance p", text: hedge, count: 2
+    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.mwr_hint"), count: 1
+    # Both annualised cards keep the shared caveat, and the annualised
+    # money-weighted card adds the hedge below it.
+    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.annualized_hint"), count: plain_annualized
+    assert_equal [ I18n.t("portfolios.performance.annualized_hint"), hedge ],
+                 mwr_card_hints(I18n.t("portfolios.performance.annualized_mwr"))
+    # The figures themselves are unchanged.
+    assert_select "#portfolio-performance p", text: /21\.00%/
+    assert_select "#portfolio-performance p", text: /30\.00%/
+  end
+
+  # The hedge says the figure may not be the only one; the period caveat says
+  # what kind of figure it is and why it can differ from a broker's. Both stay
+  # true when the flows are ambiguous, so the period card shows the caveat and
+  # then the hedge, against the caveat alone with the flag off.
+  test "the period money-weighted card shows its caveat beside the hedge" do
+    caveat = I18n.t("portfolios.performance.mwr_hint")
+    hedge = I18n.t("portfolios.performance.mwr_ambiguous_hint")
+
+    render_performance_with(mwr_ambiguous: false)
+    assert_equal [ caveat ], period_mwr_card_hints
+
+    render_performance_with(mwr_ambiguous: true)
+    assert_equal [ caveat, hedge ], period_mwr_card_hints
+  end
+
+  # Under a year the annualised money-weighted figure is withheld while the
+  # period figure is shown. A hedge beside "no data" would qualify a figure
+  # that is not there, and would replace the hint that explains why it is
+  # missing, so only the period card hedges.
+  test "a withheld annualised money-weighted figure keeps its own hint when the period figure is hedged" do
+    hedge = I18n.t("portfolios.performance.mwr_ambiguous_hint")
+
+    render_performance_with(mwr_ambiguous: true, annualized_mwr: nil)
+
+    assert_select "#portfolio-performance p", text: hedge, count: 1
+    assert_select "#portfolio-performance p", text: I18n.t("portfolios.performance.annualized_hint"), count: 2
+  end
+
   # "Left out" is true of the chained TWR and of nothing else on this section. A
   # suppressed day keeps its place in the series (R6): volatility counts it as an
   # observation of zero, and its flows stay in the money-weighted series. Three
@@ -1195,6 +1249,27 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   end
 
   private
+    def render_performance_with(mwr_ambiguous:, annualized_mwr: BigDecimal("0.30"))
+      Portfolio::Performance.any_instance.stubs(:money_weighted_return).returns(BigDecimal("0.21"))
+      Portfolio::Performance.any_instance.stubs(:annualized_money_weighted_return).returns(annualized_mwr)
+      Portfolio::Performance.any_instance.stubs(:money_weighted_return_ambiguous?).returns(mwr_ambiguous)
+      Portfolio::Performance.any_instance.stubs(:rate_missing?).returns(false)
+      Portfolio::Performance.any_instance.stubs(:suppressed_dates).returns([])
+
+      get portfolio_path
+      assert_response :success
+    end
+
+    def period_mwr_card_hints
+      mwr_card_hints(I18n.t("portfolios.performance.mwr"))
+    end
+
+    def mwr_card_hints(label)
+      card = css_select("#portfolio-performance .bg-container-inset").find { |c| c.at_css("span")&.text == label }
+      assert card, "#{label} card not rendered"
+      card.css("p.text-xs").map(&:text)
+    end
+
     def enable_preview(user)
       user.update!(preferences: (user.preferences || {}).merge("preview_features_enabled" => true))
     end
