@@ -14,13 +14,15 @@ class InvestmentStatement
 
   # Get totals for a specific period
   def totals(period: Period.current_month)
-    account_ids = investment_account_ids
+    account_ids = totals_account_ids
 
     result = totals_query(account_ids: account_ids, date_range: period.date_range)
 
     PeriodTotals.new(
       contributions: Money.new(result[:contributions], family.currency),
       withdrawals: Money.new(result[:withdrawals], family.currency),
+      buys: Money.new(result[:buys], family.currency),
+      sells: Money.new(result[:sells], family.currency),
       dividends: Money.new(result[:dividends], family.currency),
       interest: Money.new(result[:interest], family.currency),
       fees: Money.new(result[:fees], family.currency),
@@ -659,11 +661,7 @@ class InvestmentStatement
 
   # Investment accounts
   def investment_accounts
-    @investment_accounts ||= begin
-      scope = family.accounts.visible.included_in_reports.where(accountable_type: %w[Investment Crypto])
-      scope = scope.included_in_finances_for(user) if user
-      scope
-    end
+    @investment_accounts ||= report_accounts.where(accountable_type: %w[Investment Crypto])
   end
 
   private
@@ -805,12 +803,12 @@ class InvestmentStatement
     end
 
     # fees is stated separately from contributions and withdrawals rather than
-    # subtracted out of them. Whether a contribution already contains its fee
-    # is a property of the writer -- Trade::CreateForm and Binance P2P fold it
+    # subtracted out of them. Whether a trade already contains its fee is a
+    # property of the writer -- Trade::CreateForm and Binance P2P fold it
     # into entries.amount, Kraken and Binance spot do not -- so the two are not
     # additive for every provider. P21 states this; the reasoning is in
     # InvestmentStatement::Totals.
-    PeriodTotals = Data.define(:contributions, :withdrawals, :dividends, :interest, :fees, :trades_count, :currency) do
+    PeriodTotals = Data.define(:contributions, :withdrawals, :buys, :sells, :dividends, :interest, :fees, :trades_count, :currency) do
       def net_flow
         contributions - withdrawals
       end
@@ -1611,23 +1609,83 @@ class InvestmentStatement
       @investment_account_ids ||= investment_accounts.pluck(:id)
     end
 
+    def report_accounts
+      scope = family.accounts.visible.included_in_reports
+      user ? scope.included_in_finances_for(user) : scope
+    end
+
+    # The accounts #totals reads: the investment accounts, plus the cash
+    # account a broker settles their trades on when it keeps the cash in an
+    # account of its own. Trade Republic does: its Cash account is a
+    # depository account, and each trade's settlement there is linked to the
+    # Portfolio or Crypto account as a confirmed transfer
+    # (TradeRepublicAccount.settlement_account_ids_for). Taken as one scope,
+    # those settlements are internal, like a buy paid from an investment
+    # account's own cash, and money is counted where it enters or leaves the
+    # broker: a transfer between the Cash account and the user's bank. As on
+    # every account the totals read, a cash row counts only when it records
+    # a flow (Totals#recorded_flow_sql), so card payments and other unlinked
+    # rows on the Cash account are neither. Nor is a credit card or loan
+    # payment made from it: Totals is told which accounts settle trades, and
+    # leaves those payments out there (see Totals#recorded_flow_sql). Income
+    # the broker books there (dividends, interest) is read with it. The Cash
+    # account passes the same report and visibility filters as the investment
+    # accounts. A user who does not have it in their finances therefore gets
+    # the investment accounts alone, on which each settlement counts as a
+    # contribution or a withdrawal again.
+    #
+    # Only a provider that books trade settlements this way is followed, not
+    # every account of the same connection: a bank connection with a checking
+    # and a brokerage account would otherwise make every deposit from that
+    # checking account internal, and it would never be counted.
+    def totals_account_ids
+      @totals_account_ids ||= (investment_account_ids + settlement_account_ids).uniq
+    end
+
+    def settlement_account_ids
+      @settlement_account_ids ||= if investment_account_ids.empty?
+        []
+      else
+        report_accounts.where(id: TradeRepublicAccount.settlement_account_ids_for(investment_account_ids)).pluck(:id)
+      end
+    end
+
     def totals_query(account_ids:, date_range:)
       if account_ids.empty?
         return Totals.new(family, account_ids: account_ids, date_range: date_range).call
       end
 
-      account_ids_hash = Digest::MD5.hexdigest(account_ids.sort.join(","))
+      # Which of those accounts settle trades changes what Totals counts
+      # (see Totals#recorded_flow_sql), so it is part of the key too.
+      account_ids_hash = Digest::MD5.hexdigest("#{account_ids.sort.join(",")}|#{settlement_account_ids.sort.join(",")}")
 
       Rails.cache.fetch([
         # Bumped when the aggregation's meaning changes (v2: real income
         # totals; v3: fees, and contributions net of reported fees; v4: a
         # zero-amount Fee-labelled trade counts its fee column; v5: income
-        # summed signed) so a deploy never serves the previous shape from Redis.
-        "investment_statement", "totals_query/v5", ExchangeRate::CONVERSION_CACHE_VERSION, family.id, user&.id, family.currency,
+        # summed signed; v6: contributions and withdrawals are external flows,
+        # with buys and sells beside them) so a deploy never serves the
+        # previous shape from Redis.
+        "investment_statement", "totals_query/v6", ExchangeRate::CONVERSION_CACHE_VERSION, family.id, user&.id, family.currency,
         account_ids_hash, date_range.begin, date_range.end, family.entries_cache_version,
         # A rate stored later can complete totals that left an amount out.
-        ExchangeRate.updated_at_version
-      ]) { Totals.new(family, account_ids: account_ids, date_range: date_range).call }
+        ExchangeRate.updated_at_version,
+        transfers_version(account_ids)
+      ]) { Totals.new(family, account_ids: account_ids, settlement_account_ids: settlement_account_ids, date_range: date_range).call }
+    end
+
+    # Contributions and withdrawals depend on which transactions a confirmed
+    # Transfer links (Portfolio::FlowClassifier), and linking, confirming or
+    # removing a transfer between two existing transactions need not write
+    # to either entry, so entries_cache_version alone would miss it. The
+    # count catches a removal; the timestamp catches a confirmation.
+    def transfers_version(account_ids)
+      leg_ids = Entry.where(account_id: account_ids, entryable_type: "Transaction").select(:entryable_id)
+      count, max_at = Transfer
+        .where(inflow_transaction_id: leg_ids)
+        .or(Transfer.where(outflow_transaction_id: leg_ids))
+        .pick(Arel.sql("count(*)"), Arel.sql("max(transfers.updated_at)"))
+      "#{count}-#{max_at&.to_f}"
     end
 
     def monetizable_currency

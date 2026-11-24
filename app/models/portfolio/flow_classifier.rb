@@ -157,33 +157,85 @@ class Portfolio::FlowClassifier
   # The joins #sql_case relies on. The caller's query must select FROM
   # `entries` and place this fragment before its WHERE clause.
   #
-  # One row per entry, which an aggregate embedding this relies on, by
-  # construction rather than by trust. Transfer validates each leg as unique,
-  # but the only unique index is on the pair, so a writer that bypasses
-  # validations (insert_all), or two matchers racing past the validation, can
-  # make one transaction a leg of two transfers. A plain join would then give
-  # the entry two rows and a SUM over it would count the entry twice. The
-  # lateral reads one transfer per transaction, preferring one the
-  # transaction is the inflow of, as #transfer_counterpart does, then the
-  # earliest by created_at and id, which #classify reads too.
+  # One row per entry, which an aggregate embedding this relies on.
+  # Transfer#transfer_has_opposite_amounts makes a leg a transfer's inflow
+  # while its amount is negative and its outflow while it is positive, and
+  # Transfer validates each side as unique, so a transaction normally has one
+  # transfer. Those checks run only when a transfer is saved. A leg's amount
+  # can change sign afterwards (a provider re-sync writes it again), and such
+  # a leg can then become another transfer's leg on the other side. One join
+  # on either side would return both transfers, and a SUM would count the
+  # entry twice.
+  #
+  # So the transfers are joined twice, once per side, and the sign chooses
+  # between them without excluding either: flow_sign_transfers is the
+  # transfer on the side the amount allows (the outflow while it is
+  # positive, else the inflow), flow_other_transfers the one on the other
+  # side, joined only when there is no flow_sign_transfers row, and
+  # flow_transfers takes whichever was found. A leg whose sign
+  # flipped on its own transfer, with no second transfer, keeps that link, as
+  # do both legs of a pair whose amounts were negated together.
+  # #confirmed_transfer_for picks the same transfer in Ruby.
+  #
+  # Two transfers on the preferred side, or on the other side when the
+  # preferred one is missing, are still both joined. The uniqueness
+  # validations rule that out only for writers that run them one at a time:
+  # two racing writers, or rows written around the validations (insert_all),
+  # can create it, since the table has a unique index on the pair only.
+  #
+  # Each join keeps the OR probe on both transfer columns, which uses the
+  # index on each, and checks the side on top of it. Choosing the transfer
+  # in a LATERAL ... ORDER BY ... LIMIT 1 instead gave one row in every case
+  # but took the query out of its parallel plan and priced it past the JIT
+  # inlining threshold; over five years it ran three to four times slower.
+  #
+  # The counterpart entry is only looked up among the scope's accounts, which
+  # is all #transfer_resolution_sql asks of it: entries has no index on
+  # entryable_id, and without the account bound the join reads every
+  # Transaction entry in the database. InvestmentStatement::Totals#recorded_flow_sql
+  # relies on this bound as well: there, a NULL counterpart means the other
+  # leg is outside the scope.
+  #
+  # The security-transfer legs are joined grouped, one row per date,
+  # security and quantity, so that join cannot fan out either (see
+  # #security_transfer_legs_sql).
+  #
+  # Only a confirmed Transfer links two legs. An auto-match starts out
+  # pending and, as Transfer#confirm! promises, an unconfirmed suggestion
+  # never moves a report, so until the user confirms it each leg is
+  # classified as if it were unlinked.
   def sql_joins
     <<~SQL.squish
       LEFT JOIN trades ON entries.entryable_type = 'Trade' AND trades.id = entries.entryable_id
       LEFT JOIN transactions ON entries.entryable_type = 'Transaction' AND transactions.id = entries.entryable_id
-      LEFT JOIN LATERAL (
-        SELECT t.inflow_transaction_id, t.outflow_transaction_id
-        FROM transfers t
-        WHERE entries.entryable_type = 'Transaction'
-          AND (t.inflow_transaction_id = transactions.id OR t.outflow_transaction_id = transactions.id)
-        ORDER BY (t.inflow_transaction_id = transactions.id) DESC, t.created_at, t.id
-        LIMIT 1
-      ) flow_transfers ON TRUE
+      LEFT JOIN transfers flow_sign_transfers
+        ON entries.entryable_type = 'Transaction'
+        AND flow_sign_transfers.status = 'confirmed'
+        AND (flow_sign_transfers.inflow_transaction_id = transactions.id OR flow_sign_transfers.outflow_transaction_id = transactions.id)
+        AND CASE WHEN entries.amount > 0 THEN flow_sign_transfers.outflow_transaction_id ELSE flow_sign_transfers.inflow_transaction_id END = transactions.id
+      LEFT JOIN transfers flow_other_transfers
+        ON entries.entryable_type = 'Transaction'
+        AND flow_sign_transfers.id IS NULL
+        AND flow_other_transfers.status = 'confirmed'
+        AND (flow_other_transfers.inflow_transaction_id = transactions.id OR flow_other_transfers.outflow_transaction_id = transactions.id)
+        AND CASE WHEN entries.amount > 0 THEN flow_other_transfers.inflow_transaction_id ELSE flow_other_transfers.outflow_transaction_id END = transactions.id
+      CROSS JOIN LATERAL (
+        SELECT
+          COALESCE(flow_sign_transfers.inflow_transaction_id, flow_other_transfers.inflow_transaction_id) AS inflow_transaction_id,
+          COALESCE(flow_sign_transfers.outflow_transaction_id, flow_other_transfers.outflow_transaction_id) AS outflow_transaction_id
+      ) flow_transfers
       LEFT JOIN entries flow_counterpart_entries
         ON flow_counterpart_entries.entryable_type = 'Transaction'
+        AND flow_counterpart_entries.account_id = ANY(#{scope_ids_sql})
         AND flow_counterpart_entries.entryable_id = CASE
           WHEN flow_transfers.inflow_transaction_id = transactions.id THEN flow_transfers.outflow_transaction_id
           ELSE flow_transfers.inflow_transaction_id
         END
+      LEFT JOIN (#{security_transfer_legs_sql}) flow_security_transfers
+        ON entries.entryable_type = 'Trade'
+        AND flow_security_transfers.date = entries.date
+        AND flow_security_transfers.security_id = trades.security_id
+        AND flow_security_transfers.qty = -trades.qty
     SQL
   end
 
@@ -261,7 +313,7 @@ class Portfolio::FlowClassifier
     # is dropped, so this leg must be the external flow, and one sent before
     # it is kept, so this leg is internal even if dated after the cut-off.
     def transfer_resolution(entry, transaction)
-      counterpart_account_id, counterpart_date = transfer_counterpart(transaction)
+      counterpart_account_id, counterpart_date = transfer_counterpart(entry, transaction)
       if counterpart_account_id && in_scope_on?(counterpart_account_id, counterpart_date)
         :internal
       else
@@ -269,17 +321,12 @@ class Portfolio::FlowClassifier
       end
     end
 
-    # The account (by id only) and date of the other leg of a linked
+    # The account (by id only) and date of the other leg of a confirmed
     # Transfer; the counterpart account itself is never loaded, so a scope
-    # check cannot leak an account the user is not allowed to see.
-    #
-    # The transfer is chosen as #sql_joins chooses it: one the transaction is
-    # the inflow of first, then the earliest by created_at and id. Not through
-    # transfer_as_inflow / transfer_as_outflow: has_one is unordered, so of two
-    # transfers on one leg it can return either.
-    def transfer_counterpart(transaction)
-      transfer = earliest_transfer(inflow_transaction_id: transaction.id) ||
-        earliest_transfer(outflow_transaction_id: transaction.id)
+    # check cannot leak an account the user is not allowed to see. A pending
+    # auto-match links nothing yet.
+    def transfer_counterpart(entry, transaction)
+      transfer = confirmed_transfer_for(entry, transaction)
       return nil unless transfer
 
       counterpart_id = transfer.inflow_transaction_id == transaction.id ? transfer.outflow_transaction_id : transfer.inflow_transaction_id
@@ -287,8 +334,13 @@ class Portfolio::FlowClassifier
       [ account_id&.to_s, date ]
     end
 
-    def earliest_transfer(leg)
-      Transfer.where(leg).order(:created_at, :id).first
+    # The transfer #sql_joins picks for this transaction: the confirmed one
+    # on the side its sign allows (the outflow while its amount is positive,
+    # else the inflow), else the confirmed one on the other side.
+    def confirmed_transfer_for(entry, transaction)
+      sides = %i[inflow_transaction_id outflow_transaction_id]
+      sides.reverse! if entry.amount.positive?
+      sides.lazy.map { |side| Transfer.confirmed.find_by(side => transaction.id) }.find(&:itself)
     end
 
     # A security moved between accounts has no Transfer row; its other leg is
@@ -339,22 +391,46 @@ class Portfolio::FlowClassifier
       "CASE WHEN #{in_scope_sql('flow_counterpart_entries.account_id', 'flow_counterpart_entries.date')} THEN 'internal' ELSE #{direction_sql} END"
     end
 
+    # True when #security_transfer_legs_sql found a Transfer trade on the
+    # same date and security, with the opposite quantity, in a scope account
+    # other than this entry's. Each group carries the lowest and highest
+    # account id among its legs, so a leg in another account exists exactly
+    # when either differs from this entry's. With no group, both are NULL and
+    # the CASE takes the direction.
     def security_transfer_counterpart_in_scope_sql
       <<~SQL.squish
-        EXISTS (
-          SELECT 1
-          FROM entries counterpart_entries
-          JOIN trades counterpart_trades
-            ON counterpart_trades.id = counterpart_entries.entryable_id
-            AND counterpart_entries.entryable_type = 'Trade'
-          WHERE #{in_scope_sql('counterpart_entries.account_id')}
-            AND counterpart_entries.account_id <> entries.account_id
-            AND counterpart_entries.date = entries.date
-            #{"AND counterpart_entries.excluded IS NOT TRUE" unless include_excluded}
-            AND counterpart_trades.security_id = trades.security_id
-            AND counterpart_trades.qty = -trades.qty
-            AND counterpart_trades.investment_activity_label = '#{TRANSFER_LABEL}'
-        )
+        (flow_security_transfers.min_account_id <> entries.account_id
+          OR flow_security_transfers.max_account_id <> entries.account_id)
+      SQL
+    end
+
+    # Every live Transfer trade in the scope's accounts on its date (an
+    # account past its cut-off is out, as #in_scope_on? says), grouped by date,
+    # security and quantity. include_excluded reads an excluded leg as live. A correlated EXISTS asked the same question per
+    # row, and the planner priced each probe against the whole scope, so its
+    # estimate grew with the square of the entries and a few thousand crossed
+    # jit_above_cost; JIT compilation then took longer than the query.
+    # Grouped and hash-joined, the cost stays proportional to the rows read.
+    #
+    # entries.excluded is nullable, and a NULL leg is live here as it is to
+    # #classify, hence IS NOT TRUE rather than = false. uuid has no MIN or
+    # MAX, so the ids are compared as text.
+    def security_transfer_legs_sql
+      <<~SQL.squish
+        SELECT
+          counterpart_entries.date,
+          counterpart_trades.security_id,
+          counterpart_trades.qty,
+          MIN(counterpart_entries.account_id::text)::uuid AS min_account_id,
+          MAX(counterpart_entries.account_id::text)::uuid AS max_account_id
+        FROM entries counterpart_entries
+        JOIN trades counterpart_trades
+          ON counterpart_trades.id = counterpart_entries.entryable_id
+          AND counterpart_entries.entryable_type = 'Trade'
+        WHERE #{in_scope_sql('counterpart_entries.account_id', 'counterpart_entries.date')}
+          #{"AND counterpart_entries.excluded IS NOT TRUE" unless include_excluded}
+          AND counterpart_trades.investment_activity_label = '#{TRANSFER_LABEL}'
+        GROUP BY counterpart_entries.date, counterpart_trades.security_id, counterpart_trades.qty
       SQL
     end
 

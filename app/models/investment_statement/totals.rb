@@ -1,7 +1,14 @@
 class InvestmentStatement::Totals
-  def initialize(family, account_ids:, date_range:)
+  # Transaction kinds a liability payment carries (Transfer.kind_for_account).
+  LIABILITY_PAYMENT_KINDS = %w[cc_payment loan_payment].freeze
+
+  # settlement_account_ids are the accounts among account_ids that a broker
+  # settles trades on but that the user may also run as a current account
+  # (InvestmentStatement#totals_account_ids); see #recorded_flow_sql.
+  def initialize(family, account_ids:, date_range:, settlement_account_ids: [])
     @family = family
     @account_ids = account_ids
+    @settlement_account_ids = Array(settlement_account_ids) & Array(account_ids)
     @date_range = date_range
   end
 
@@ -13,6 +20,8 @@ class InvestmentStatement::Totals
     {
       contributions: result["contributions"]&.to_d || 0,
       withdrawals: result["withdrawals"]&.to_d || 0,
+      buys: result["buys"]&.to_d || 0,
+      sells: result["sells"]&.to_d || 0,
       dividends: result["dividends"]&.to_d || 0,
       interest: result["interest"]&.to_d || 0,
       fees: result["fees"]&.to_d || 0,
@@ -25,6 +34,8 @@ class InvestmentStatement::Totals
       {
         contributions: 0,
         withdrawals: 0,
+        buys: 0,
+        sells: 0,
         dividends: 0,
         interest: 0,
         fees: 0,
@@ -32,128 +43,196 @@ class InvestmentStatement::Totals
       }
     end
 
+    # The bound values are sanitized on their own and the classifier's
+    # fragments spliced in afterwards: #sql_case is already sanitized, and
+    # running it through sanitize_sql_array again would read any `:word` in
+    # a label literal as a bind (see Portfolio::FlowClassifier#scope_ids_sql).
     def query_sql
-      ActiveRecord::Base.sanitize_sql_array([
-        aggregation_sql,
-        sql_params
-      ])
+      aggregation_sql
+        .sub("__FLOW_JOINS__") { flow_classifier.sql_joins }
+        .gsub("__FLOW_CLASS__") { "(#{flow_classifier.sql_case})" }
+        .gsub("__RECORDED_FLOW__") { recorded_flow_sql }
     end
 
-    # One aggregation over the period's trades and labelled transactions.
+    # Contributions and withdrawals are money that entered or left the
+    # accounts in scope: deposits, withdrawals, and transfers or journalled
+    # positions whose other leg is outside the scope. Portfolio::FlowClassifier
+    # decides that, with the same account ids the card reads as its scope, so
+    # a transfer between two of those accounts is internal and counts on
+    # neither side. A buy or a sale is internal to the account: it turns cash
+    # into a security or back, so it is not money added or taken out.
     #
-    # Contributions and withdrawals are the cash each trade entry records
-    # (`ABS(entries.amount)`), unchanged from before this class reported fees.
-    # `fees` is reported beside them rather than subtracted out of them,
-    # because whether a trade's amount already contains its fee is a property
-    # of the writer, not of the row: `Trade::CreateForm` and Binance P2P fold
-    # the fee in, Kraken and Binance spot do not, and nothing stored on the
-    # entry says which (docs/portfolio/methodology.md, "Provider audit").
+    # The classifier picks the direction from the sign (a Transaction) or the
+    # quantity (a Trade), so ABS of the amount in its class is the size of
+    # the flow.
     #
-    # Inferring it from `qty * price` was tried and removed. `trades.price` is
-    # not a second opinion about the cash: it is `numeric(19,10)`, so a
-    # sub-1e-10 crypto price stores as 0 and a sale measured against it
-    # disappears from the totals; it can be stale or in another currency, and
-    # then a buy measured against it doubles; and on the one writer whose sell
-    # quantity is already net of its fee (Binance P2P) the comparison charges
-    # the fee twice. Each of those was reproduced. The cash on the entry is
-    # the only figure that is always exactly what moved, so it is the one
-    # reported, and P21 states the consequence: for a writer that folds the
-    # fee in, that fee is inside the contribution and in `fees`, so the two
-    # do not add up to cash out for every provider.
+    # The card counts a flow only when the row says it is one (see
+    # #recorded_flow_sql), not by the sign the classifier falls back to for
+    # any other cash row. Only those rows, income and trades are read, and
+    # the lateral `flow` subquery classifies each of them once (OFFSET 0
+    # keeps the planner from inlining the CASE into both sums).
     #
-    # Only trades feed contributions and withdrawals (P29). A deposit (a
-    # Contribution-labelled or investment_contribution Transaction, or a
-    # linked Transfer's inflow leg) is an external flow to
-    # Portfolio::FlowClassifier and InvestmentFlowStatement; counting it here
-    # too would count the deposit and the buy it funded twice.
+    # Buys (qty > 0) and sells (qty < 0) are still summed, as before, under
+    # their own names: the cash committed to buying securities and the cash
+    # a sale brought back.
     #
-    # Income is by label, whether the provider stored it as a qty-0 Trade or
-    # as a Transaction: the same labels Portfolio::FlowClassifier calls
-    # income, read from it so the two cannot drift. Income is summed signed
-    # and then negated, as Portfolio::FlowClassifier requires: a negative
-    # amount is money in, so a margin-interest charge or a dividend reversal
-    # carrying an income label reduces the total instead of adding to it
-    # (we-promise/sure#4082). Fees are the Fee-labelled
-    # entries plus trades.fee on every other trade; a Fee-labelled trade reads
-    # its fee column only when its amount is zero, never both (P23). Pending is
-    # the classifier's rule too, not Transaction's ::boolean cast (P25).
-    # Income and fee labels are
-    # excluded from the direction buckets rather than relying on qty: 0, so a
-    # buy relabelled Dividend is counted once.
+    # Investment income (dividends, interest) is aggregated by activity label
+    # rather than by direction. Since #1311 these are recorded as Trades with
+    # qty: 0 and price: 0 (Trade::CreateForm#create_income_trade).
+    #
+    # Several providers store the same income as a Transaction carrying the
+    # same label instead (Trading212, IBKR, Questrade, SnapTrade, Indexa
+    # Capital, Kraken's fiat staking and earn rows), so income reads the label
+    # from whichever of the two the entry is. Pending transactions are left
+    # out until they post, for income and flows alike. A Transaction has no
+    # trades row, so it never reaches the buy and sell branches or
+    # trades_count.
+    #
+    # Income is summed signed and then negated, as Portfolio::FlowClassifier
+    # requires: a negative amount is money in, so a margin-interest charge or
+    # a dividend reversal carrying an income label reduces the total instead
+    # of adding to it.
+    #
+    # The buy and sell branches additionally exclude income and fee labels
+    # rather than relying on qty: 0 to keep the buckets disjoint. Without this
+    # guard such a row would be counted twice: once by direction and once as
+    # income or a fee.
+    #
+    # Fees are reported beside the other totals, never subtracted from them:
+    # whether a trade's amount already contains its fee is a property of the
+    # writer (Trade::CreateForm and Binance P2P fold it in, Kraken and Binance
+    # spot do not), and nothing on the entry says which (P21). They are the
+    # Fee-labelled entries, the fee leg of a linked Transfer, and trades.fee
+    # on every other trade; a Fee-labelled trade reads its fee column only
+    # when its amount is zero, never both (P23).
     #
     # A row in a currency with no rate at all is left out, not counted at 1,
     # as in InvestmentStatement; ExchangeRate.rate_sql gives the
-    # nearest stored rate otherwise.
+    # nearest stored rate otherwise. The lateral `fx` subquery looks the rate
+    # up once per row: written into each of the six sums, its two correlated
+    # lookups were priced six times over, and the estimate crossed
+    # jit_above_cost.
     #
     # account_ids is already scoped to the family's visible (draft/active)
-    # investment accounts, so the query trusts that input and skips a join back
-    # to accounts for family/status filtering. Transactions are narrowed to
-    # the income and fee shapes in the WHERE clause, so the rows scanned are
-    # the period's trades plus its labelled investment transactions.
-    def aggregation_sql
-      rate = ExchangeRate.rate_sql(from: "entries.currency", to: ":target_currency", on: "entries.date")
-
-      <<~SQL
-        SELECT
-          COALESCE(SUM(CASE WHEN trades.qty > 0 AND NOT #{income_or_fee_sql}
-            THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as contributions,
-          COALESCE(SUM(CASE WHEN trades.qty < 0 AND NOT #{income_or_fee_sql}
-            THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as withdrawals,
-          COALESCE(-SUM(CASE WHEN #{label_sql} = 'Dividend' THEN entries.amount * #{rate} ELSE 0 END), 0) as dividends,
-          COALESCE(-SUM(CASE WHEN #{label_sql} = 'Interest' THEN entries.amount * #{rate} ELSE 0 END), 0) as interest,
-          COALESCE(SUM(CASE
-            WHEN #{fee_sql} THEN COALESCE(NULLIF(ABS(entries.amount), 0), trades.fee, 0)
-            WHEN trades.id IS NOT NULL THEN trades.fee
-            ELSE 0
-          END * #{rate}), 0) as fees,
-          COUNT(trades.id) as trades_count
-        FROM entries
-        LEFT JOIN trades ON trades.id = entries.entryable_id AND entries.entryable_type = 'Trade'
-        LEFT JOIN transactions ON transactions.id = entries.entryable_id AND entries.entryable_type = 'Transaction'
-        WHERE entries.account_id IN (:account_ids)
-          AND entries.date BETWEEN :start_date AND :end_date
-          AND entries.excluded = false
-          AND (
-            entries.entryable_type = 'Trade'
-            OR (entries.entryable_type = 'Transaction' AND (#{income_or_fee_sql}) #{pending_exclusion_sql})
-          )
-      SQL
-    end
-
-    # COALESCE keeps an unlabelled entry (NULL) out of every label set.
-    def label_sql
-      "COALESCE(trades.investment_activity_label, transactions.investment_activity_label, '')"
-    end
-
-    def income_or_fee_sql
-      "(#{label_sql} IN (#{quote_list(income_labels)}) OR #{fee_sql})"
+    # investment accounts and the cash accounts that settle their trades
+    # (InvestmentStatement#totals_account_ids), so the query trusts that input
+    # and skips a join back to accounts for family/status filtering.
+    # COALESCE keeps an unlabeled trade (NULL) out of the set.
+    def income_label_sql
+      "COALESCE(trades.investment_activity_label, '') IN (#{quote_list(Portfolio::FlowClassifier.labels_for(:income))})"
     end
 
     # A Fee label, or the fee leg of a linked Transfer (a standard
     # transaction pointing at its transfer), as Portfolio::FlowClassifier
     # defines a fee.
     def fee_sql
-      "(#{label_sql} IN (#{quote_list(fee_labels)}) OR (transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard'))"
+      "(COALESCE(#{label_sql}, '') IN (#{quote_list(Portfolio::FlowClassifier.labels_for(:fee))}) OR (transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard'))"
     end
 
-    # The classifier's rule, which is Transaction.pending_sql: it agrees with
-    # Transaction#pending? and never raises, where the ::boolean cast this
-    # used to carry aborted the family's whole aggregation on a flag
-    # PostgreSQL could not parse (P25).
-    def pending_exclusion_sql
-      "AND NOT (#{Portfolio::FlowClassifier.pending_sql})"
+    def flow_classifier
+      @flow_classifier ||= Portfolio::FlowClassifier.new(scope_account_ids: @account_ids)
     end
 
-    def income_labels
-      Portfolio::FlowClassifier.labels_for(:income)
+    # The rows that record a movement of money in or out: a Trade or a
+    # Transaction labelled Contribution, Withdrawal or Transfer (the
+    # classifier calls any other Trade internal), a Transaction of a transfer
+    # kind, or a leg of a confirmed Transfer whose other leg is outside the
+    # scope (flow_transfers and flow_counterpart_entries, joined by the
+    # classifier). Transfer::Creator and Transfer#confirm! give both legs a
+    # transfer kind; a link written another way (an import, an older row) can
+    # leave them standard. Such a leg is still money in or out when its other
+    # leg is outside the scope, and the classifier gives it its direction. With
+    # the other leg in the scope it is not counted: the classifier resolves a
+    # link only for a transfer kind or label and reads any other row by its
+    # sign, so the move would count on both sides.
+    #
+    # Any other cash row is left out, even though the classifier gives it a
+    # direction by its sign. Providers write investment activity that is not
+    # a flow that way: SimpleFIN records buys and sales as unlabelled
+    # Transactions, and Plaid labels its "cash" type, which covers dividends
+    # and interest, "Other". Counting those by sign would bring back the
+    # trades-as-contributions reading this card replaced. A manual deposit
+    # counts once it is labelled Contribution.
+    #
+    # On a settlement account (Trade Republic's Cash account, which has an
+    # IBAN and a card) a credit card or loan payment is not counted either,
+    # unless it carries one of the labels above. That account is often the
+    # user's current account: their card spending there is already not a
+    # flow, and their salary is not one, so a card bill or a loan instalment
+    # paid from it is spending too, not money taken out of the broker.
+    # Counted, every month's bill would lower net contributions while the
+    # income that paid it never raised them. A transfer to the user's other
+    # accounts (funds_movement) still counts as a withdrawal.
+    def recorded_flow_sql
+      labels = (Portfolio::FlowClassifier::EXTERNAL_LABELS + [ Portfolio::FlowClassifier::TRANSFER_LABEL ])
+
+      <<~SQL.squish
+        (
+          COALESCE(trades.investment_activity_label, transactions.investment_activity_label) IN (#{quote_list(labels)})
+          OR (
+            (
+              transactions.kind IN (#{quote_list(Transaction::TRANSFER_KINDS)})
+              OR (flow_transfers.inflow_transaction_id IS NOT NULL AND flow_counterpart_entries.account_id IS NULL)
+            )
+            #{settlement_payment_exclusion_sql}
+          )
+        )
+      SQL
     end
 
-    def fee_labels
-      Portfolio::FlowClassifier.labels_for(:fee)
+    def settlement_payment_exclusion_sql
+      return "" if @settlement_account_ids.empty?
+
+      ids = ActiveRecord::Base.sanitize_sql_array([ "ARRAY[:ids]::uuid[]", { ids: @settlement_account_ids } ])
+      "AND NOT (entries.account_id = ANY(#{ids}) AND transactions.kind IN (#{quote_list(LIABILITY_PAYMENT_KINDS)}))"
     end
 
     def quote_list(values)
       values.map { |value| ActiveRecord::Base.connection.quote(value) }.join(", ")
+    end
+
+    def aggregation_sql
+      ActiveRecord::Base.sanitize_sql_array([ <<~SQL, sql_params ])
+        SELECT
+          COALESCE(SUM(CASE WHEN flow.flow_class = 'external_inflow' THEN ABS(entries.amount * fx.rate) ELSE 0 END), 0) as contributions,
+          COALESCE(SUM(CASE WHEN flow.flow_class = 'external_outflow' THEN ABS(entries.amount * fx.rate) ELSE 0 END), 0) as withdrawals,
+          COALESCE(SUM(CASE WHEN trades.qty > 0 AND NOT #{income_label_sql} AND NOT #{fee_sql} THEN ABS(entries.amount * fx.rate) ELSE 0 END), 0) as buys,
+          COALESCE(SUM(CASE WHEN trades.qty < 0 AND NOT #{income_label_sql} AND NOT #{fee_sql} THEN ABS(entries.amount * fx.rate) ELSE 0 END), 0) as sells,
+          COALESCE(-SUM(CASE WHEN #{label_sql} = 'Dividend' THEN entries.amount * fx.rate ELSE 0 END), 0) as dividends,
+          COALESCE(-SUM(CASE WHEN #{label_sql} = 'Interest' THEN entries.amount * fx.rate ELSE 0 END), 0) as interest,
+          COALESCE(SUM(CASE
+            WHEN #{fee_sql} THEN COALESCE(NULLIF(ABS(entries.amount), 0), trades.fee, 0)
+            WHEN trades.id IS NOT NULL THEN trades.fee
+            ELSE 0
+          END * fx.rate), 0) as fees,
+          COUNT(trades.id) as trades_count
+        FROM entries
+        __FLOW_JOINS__
+        CROSS JOIN LATERAL (
+          SELECT #{ExchangeRate.rate_sql(from: "entries.currency", to: ":target_currency", on: "entries.date")} AS rate
+          OFFSET 0
+        ) fx
+        LEFT JOIN LATERAL (
+          SELECT __FLOW_CLASS__ AS flow_class
+          WHERE __RECORDED_FLOW__
+          OFFSET 0
+        ) flow ON true
+        WHERE entries.account_id IN (:account_ids)
+          AND entries.date BETWEEN :start_date AND :end_date
+          AND entries.excluded = false
+          AND (
+            entries.entryable_type = 'Trade'
+            OR (
+              entries.entryable_type = 'Transaction'
+              AND (transactions.investment_activity_label IN ('Dividend', 'Interest') OR #{fee_sql} OR __RECORDED_FLOW__)
+              #{Transaction.pending_providers_sql("transactions")}
+            )
+          )
+      SQL
+    end
+
+    def label_sql
+      "COALESCE(trades.investment_activity_label, transactions.investment_activity_label)"
     end
 
     def sql_params
