@@ -27,19 +27,28 @@ class EnsureEnableBankingPendingTotalsMigrationTest < ActiveSupport::TestCase
 
   test "adds only the column that is missing" do
     connection.remove_column :enable_banking_accounts, :anchor_pending_total
+    kept = column_definition(:pending_total)
 
     run_migration
 
-    COLUMNS.each { |column| assert connection.column_exists?(:enable_banking_accounts, column), column }
+    assert connection.column_exists?(:enable_banking_accounts, :anchor_pending_total, :decimal, precision: 19, scale: 4)
+    assert_equal kept, column_definition(:pending_total)
   end
 
   test "does nothing where the columns are already there" do
-    COLUMNS.each { |column| assert connection.column_exists?(:enable_banking_accounts, column), column }
+    before = COLUMNS.map { |column| column_definition(column) }
 
     assert_nothing_raised { run_migration }
+
+    assert_equal before, COLUMNS.map { |column| column_definition(column) }
   end
 
   private
+    def column_definition(name)
+      connection.columns(:enable_banking_accounts).find { |column| column.name == name.to_s }
+        &.then { |column| [ column.sql_type, column.null, column.default ] }
+    end
+
     def connection
       ActiveRecord::Base.connection
     end

@@ -802,8 +802,8 @@ class InvestmentStatement
       @all_time_totals ||= totals(period: Period.all_time)
     end
 
-    # fees is stated separately from contributions and withdrawals rather than
-    # subtracted out of them. Whether a trade already contains its fee is a
+    # fees is stated separately from buys and sells rather than subtracted out
+    # of them. Whether a trade already contains its fee is a
     # property of the writer -- Trade::CreateForm and Binance P2P fold it
     # into entries.amount, Kraken and Binance spot do not -- so the two are not
     # additive for every provider. P21 states this; the reasoning is in

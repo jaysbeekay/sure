@@ -1330,6 +1330,23 @@ class InvestmentStatementTest < ActiveSupport::TestCase
     assert_equal Money.new(1024.92, "EUR"), totals.buys
   end
 
+  # The Cash account is often the user's current account, so a fee booked
+  # there (a bank charge, or a transfer's fee leg to their bank) is not an
+  # investment fee. Fees are read from the investment accounts only.
+  test "fees on the Trade Republic Cash account are not investment fees" do
+    portfolio, cash = create_split_trade_republic_connection
+    bank = @family.accounts.create!(name: "Bank", balance: 5000, currency: "EUR", accountable: Depository.new)
+    sync_trade_republic(portfolio, [ trade_republic_order(id: "evt_buy", quantity: "2.0", signed_amount: -800, date: "2026-07-15") ])
+    sync_trade_republic(cash, [])
+    create_labelled_transaction(account: cash.current_account, label: "Fee", amount: 3, date: Date.new(2026, 7, 16))
+    create_linked_transfer(family: @family, from: cash.current_account, to: bank, amount: 100, date: Date.new(2026, 7, 17), source_fee_amount: 2)
+    create_labelled_transaction(account: portfolio.current_account, label: "Fee", amount: 1.5, date: Date.new(2026, 7, 16))
+
+    totals = InvestmentStatement.new(@family.reload).totals(period: july_2026)
+
+    assert_equal Money.new(1.5, "EUR"), totals.fees
+  end
+
   # The money enters the broker once, when it reaches the Cash account from
   # the user's bank. The buy it then funds moves it within the broker. Income
   # Trade Republic books on the Cash account is the portfolio's income, and

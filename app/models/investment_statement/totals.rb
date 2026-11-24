@@ -124,9 +124,14 @@ class InvestmentStatement::Totals
 
     # A Fee label, or the fee leg of a linked Transfer (a standard
     # transaction pointing at its transfer), as Portfolio::FlowClassifier
-    # defines a fee.
+    # defines a fee. A settlement account is often the user's current account,
+    # so its bank charges and transfer fees are not investment fees: fees are
+    # read from the investment accounts only.
     def fee_sql
-      "(COALESCE(#{label_sql}, '') IN (#{quote_list(Portfolio::FlowClassifier.labels_for(:fee))}) OR (transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard'))"
+      fee = "(COALESCE(#{label_sql}, '') IN (#{quote_list(Portfolio::FlowClassifier.labels_for(:fee))}) OR (transactions.transfer_id IS NOT NULL AND transactions.kind = 'standard'))"
+      return fee if @settlement_account_ids.empty?
+
+      "(#{fee} AND NOT entries.account_id = ANY(#{settlement_ids_sql}))"
     end
 
     def flow_classifier
@@ -183,8 +188,11 @@ class InvestmentStatement::Totals
     def settlement_payment_exclusion_sql
       return "" if @settlement_account_ids.empty?
 
-      ids = ActiveRecord::Base.sanitize_sql_array([ "ARRAY[:ids]::uuid[]", { ids: @settlement_account_ids } ])
-      "AND NOT (entries.account_id = ANY(#{ids}) AND transactions.kind IN (#{quote_list(LIABILITY_PAYMENT_KINDS)}))"
+      "AND NOT (entries.account_id = ANY(#{settlement_ids_sql}) AND transactions.kind IN (#{quote_list(LIABILITY_PAYMENT_KINDS)}))"
+    end
+
+    def settlement_ids_sql
+      ActiveRecord::Base.sanitize_sql_array([ "ARRAY[:ids]::uuid[]", { ids: @settlement_account_ids } ])
     end
 
     def quote_list(values)
@@ -224,7 +232,7 @@ class InvestmentStatement::Totals
             entries.entryable_type = 'Trade'
             OR (
               entries.entryable_type = 'Transaction'
-              AND (transactions.investment_activity_label IN ('Dividend', 'Interest') OR #{fee_sql} OR __RECORDED_FLOW__)
+              AND (transactions.investment_activity_label IN (#{quote_list(Portfolio::FlowClassifier.labels_for(:income))}) OR #{fee_sql} OR __RECORDED_FLOW__)
               #{Transaction.pending_providers_sql("transactions")}
             )
           )

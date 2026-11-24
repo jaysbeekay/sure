@@ -1302,10 +1302,10 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
     end
 
     # Every provider read, the query cache's answers included. The sidebar's
-    # balance sheet and the cards each preload the providers in one batch;
-    # when both batches name the same ids in the same order the second is
-    # answered from the cache, so leaving cached reads out made the count
-    # depend on the order of the ids rather than on the number of cards.
+    # balance sheet and the cards each preload the providers in one batch, and
+    # the cache answers the second only when both name the same ids in the
+    # same order, so a count without cached reads follows the order of the
+    # ids rather than the number of cards.
     def provider_queries(&block)
       reads = 0
       callback = ->(*, payload) { reads += 1 if payload[:sql].include?(%(FROM "lunchflow_accounts")) }

@@ -139,10 +139,6 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
     assert_equal :external_inflow, Portfolio::FlowClassifier.new(scope_account_ids: [ @ira.id ]).classify(inflow)
   end
 
-  # A provider that labels both legs of a real transfer used to outrank the
-  # transfer itself, so money moved between two accounts inside the scope read
-  # as money leaving the portfolio and arriving from outside it -- twice over,
-  # once on each leg.
   # Transfer validates each leg as unique, but only the pair is a unique index,
   # so insert_all or two racing matchers can link one leg to two transfers.
   # sql_joins promises one row per entry, which every SUM embedding it relies
@@ -227,6 +223,10 @@ class Portfolio::FlowClassifierTest < ActiveSupport::TestCase
     assert_equal :external_outflow, @family_scope.classify(outflow.reload)
   end
 
+  # A provider that labels both legs of a real transfer used to outrank the
+  # transfer itself, so money moved between two accounts inside the scope read
+  # as money leaving the portfolio and arriving from outside it -- twice over,
+  # once on each leg.
   test "a Contribution or Withdrawal label does not outrank a linked transfer in scope" do
     transfer = create_linked_transfer(family: @family, from: @brokerage, to: @ira, amount: 100)
     transfer.outflow_transaction.update!(investment_activity_label: "Withdrawal")

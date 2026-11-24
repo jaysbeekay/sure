@@ -163,7 +163,8 @@ class Portfolio::FlowClassifier
   # validations (insert_all), two racing matchers, or a leg whose amount
   # changed sign after a re-sync can make one transaction a leg of two
   # transfers. A plain join would give the entry two rows and a SUM would
-  # count it twice (Portfolio::DailyReturns and IncomeBySecurity included).
+  # count it twice (InvestmentStatement::Totals, Portfolio::DailyReturns and
+  # Portfolio::ReturnScope embed these joins).
   #
   # The lateral reads one confirmed transfer per transaction: the one on the
   # side its sign allows (the outflow while its amount is positive, else the
