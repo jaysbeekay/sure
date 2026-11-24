@@ -1,4 +1,4 @@
-class ReconcileEnableBankingPendingTotals < ActiveRecord::Migration[8.1]
+class EnsureEnableBankingPendingTotals < ActiveRecord::Migration[8.1]
   # WidenHoldingLotUnitCost first shipped on this fork as 20261118090000, the
   # version upstream later gave AddPendingTotalsToEnableBankingAccounts. A
   # database that ran the widening under that version records it as run, so
