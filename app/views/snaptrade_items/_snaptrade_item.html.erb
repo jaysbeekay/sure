@@ -120,7 +120,7 @@
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
-        <% stats = snaptrade_item.syncs.ordered.first&.sync_stats || {} %>
+        <% stats = snaptrade_item.latest_sync_stats %>
         <% activities_pending = snaptrade_item.snaptrade_accounts.any?(&:activities_fetch_pending) %>
         <%= render ProviderSyncSummary.new(
           stats: stats,

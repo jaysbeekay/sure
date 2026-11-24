@@ -82,11 +82,7 @@
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
-        <% stats = if defined?(@lunchflow_sync_stats_map) && @lunchflow_sync_stats_map
-             @lunchflow_sync_stats_map[lunchflow_item.id] || {}
-           else
-             lunchflow_item.syncs.ordered.first&.sync_stats || {}
-           end %>
+        <% stats = lunchflow_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: lunchflow_item, show_account_details: visible_accounts.size == lunchflow_item.accounts.size,

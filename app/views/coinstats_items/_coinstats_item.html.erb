@@ -84,11 +84,7 @@
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
-        <% stats = if defined?(@coinstats_sync_stats_map) && @coinstats_sync_stats_map
-             @coinstats_sync_stats_map[coinstats_item.id] || {}
-           else
-             coinstats_item.syncs.ordered.first&.sync_stats || {}
-           end %>
+        <% stats = coinstats_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: coinstats_item, show_account_details: visible_accounts.size == coinstats_item.accounts.size

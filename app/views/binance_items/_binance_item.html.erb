@@ -103,7 +103,7 @@
           <% end %>
         <% end %>
 
-        <% stats = binance_item.syncs.ordered.first&.sync_stats || {} %>
+        <% stats = binance_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: binance_item, show_account_details: visible_accounts.size == binance_item.accounts.size

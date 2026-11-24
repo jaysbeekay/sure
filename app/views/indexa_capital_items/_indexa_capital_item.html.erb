@@ -103,7 +103,7 @@
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
-        <% stats = indexa_capital_item.syncs.ordered.first&.sync_stats || {} %>
+        <% stats = indexa_capital_item.latest_sync_stats %>
         <% activities_pending = indexa_capital_item.indexa_capital_accounts.any?(&:activities_fetch_pending) %>
         <%= render ProviderSyncSummary.new(
           stats: stats,

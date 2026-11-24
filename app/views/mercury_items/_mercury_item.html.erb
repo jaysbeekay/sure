@@ -82,11 +82,7 @@
         <% end %>
 
         <%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
-        <% stats = if defined?(@mercury_sync_stats_map) && @mercury_sync_stats_map
-             @mercury_sync_stats_map[mercury_item.id] || {}
-           else
-             mercury_item.syncs.ordered.first&.sync_stats || {}
-           end %>
+        <% stats = mercury_item.latest_sync_stats %>
         <%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: mercury_item, show_account_details: visible_accounts.size == mercury_item.accounts.size,

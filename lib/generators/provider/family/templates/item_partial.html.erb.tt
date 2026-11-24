@@ -81,11 +81,7 @@
         <%% end %>
 
         <%%# Sync summary (collapsible) - using shared ProviderSyncSummary component %>
-        <%% stats = if defined?(@<%= file_name %>_sync_stats_map) && @<%= file_name %>_sync_stats_map
-             @<%= file_name %>_sync_stats_map[<%= file_name %>_item.id] || {}
-           else
-             <%= file_name %>_item.syncs.ordered.first&.sync_stats || {}
-           end %>
+        <%% stats = <%= file_name %>_item.latest_sync_stats %>
         <%%= render ProviderSyncSummary.new(
           stats: stats,
           provider_item: <%= file_name %>_item,
