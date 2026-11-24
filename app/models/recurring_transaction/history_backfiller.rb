@@ -36,19 +36,27 @@ class RecurringTransaction
 
       # Uncovered past occurrences (before the current cycle, no payments)
       # are deleted, not marked missed -- backfill reconstructs what
-      # happened, it does not fabricate debt.
+      # happened, it does not fabricate debt. A declared bill owes nothing
+      # before its first due date either, which can fall after the current
+      # cycle has begun. The anchor is a scheduled date, so it bounds
+      # original_due_on: weekend adjustment can move the first occurrence's
+      # due_on ahead of it.
       def prune_uncovered_past!
         pruned = 0
 
         series_scope.find_each do |series|
+          uncovered = series.recurring_occurrences
+                            .open_status
+                            .where.not(id: RecurringAllocation.select(:recurring_occurrence_id))
           cycle_start = series.schedule.cycle_for(Date.current)&.begin
-          next if cycle_start.nil?
+          anchor = series.anchor_date if series.manual?
+          bounds = [
+            (uncovered.where("due_on < ?", cycle_start) if cycle_start),
+            (uncovered.where("original_due_on < ?", anchor) if anchor)
+          ].compact
+          next if bounds.empty?
 
-          pruned += series.recurring_occurrences
-                          .open_status
-                          .where("due_on < ?", cycle_start)
-                          .where.not(id: RecurringAllocation.select(:recurring_occurrence_id))
-                          .delete_all
+          pruned += bounds.reduce(:or).delete_all
         end
 
         pruned
