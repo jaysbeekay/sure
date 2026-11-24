@@ -2459,6 +2459,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_24_090000) do
     t.datetime "failed_fetch_at"
     t.integer "failed_fetch_count", default: 0, null: false
     t.date "first_provider_price_on"
+    t.string "first_provider_price_source"
     t.string "industry"
     t.string "kind", default: "standard", null: false
     t.datetime "last_health_check_at"
