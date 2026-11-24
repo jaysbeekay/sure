@@ -888,17 +888,22 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # Each card's logo falls back to its provider's, read through
   # AccountProvider#provider, so the provider records are loaded with the
   # accounts rather than once per card.
+  #
+  # Measured from two linked cards. On 2026-11-24 one linked card read the
+  # providers in one query, and three and five cards in two each: one batched
+  # preload for the balance sheet and one for the cards, neither per card.
   test "the accounts grid loads provider-linked accounts without a query per card" do
     link_investment_account(0)
-    one = provider_queries { get portfolio_path }
-
     link_investment_account(1)
+    two = provider_queries { get portfolio_path }
+
     link_investment_account(2)
-    three = provider_queries { get portfolio_path }
+    link_investment_account(3)
+    four = provider_queries { get portfolio_path }
 
     assert_response :success
-    assert_select "#portfolio-accounts a", minimum: 3
-    assert_equal one, three, "loading the linked accounts' providers grew with the number of cards"
+    assert_select "#portfolio-accounts a", minimum: 4
+    assert_equal two, four, "loading the linked accounts' providers grew with the number of cards"
   end
 
   # Created out of name order, so the order they were stored in is not the
@@ -1060,11 +1065,18 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   #             securities fallback (we-promise/sure#5318), which reads account
   #             and entry currencies. The account cards reuse the statement's
   #             accounts (we-promise/sure#5306), one fewer. All once per page
+  #  120 -> 123 merged with the 2026-11-24 upstream sync. Measured in the same
+  #             environment: 120 on the 2026-11-22 sync, 123 here. Upstream's
+  #             investment contributions (we-promise/sure#5070) read the
+  #             accounts that settle trades and key their cache on the
+  #             confirmed transfers, and the balance sheet and account cards
+  #             each preload a Crypto accountable; the account_shares
+  #             preload is gone, one fewer. All once per page
   #
   # No rise is per holding, and the comparison's is bounded rather than
   # merely small: the two tests above prove both, and those assertions -- not
   # this constant -- are the ones that matter.
-  PORTFOLIO_QUERY_CEILING = 120
+  PORTFOLIO_QUERY_CEILING = 123
 
   # The section hides itself on every fixture family, so nothing rendered this
   # partial and CI green said nothing about it. One measurable disposal and one

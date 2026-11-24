@@ -133,12 +133,12 @@ P21:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - contributions and withdrawals are the cash the trade entry records
+      - buys and sells are the cash the trade entry records
 P22:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - a stale, zero or foreign-currency price cannot move contributions or withdrawals
+      - a stale, zero or foreign-currency price cannot move buys or sells
 P23:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
@@ -165,7 +165,7 @@ P26:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - totals cache key carries the v5 aggregation version
+      - totals cache key carries the v6 aggregation version
 P27:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
@@ -182,7 +182,7 @@ P29:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
     tests:
-      - contributions and withdrawals count trades only, not external cash transactions
+      - contributions and withdrawals count external flows, and buys and sells count trades
 P30:
   - file: test/models/investment_statement_test.rb
     class: InvestmentStatementTest
