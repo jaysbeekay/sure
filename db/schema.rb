@@ -2200,6 +2200,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_23_220100) do
     t.uuid "category_id"
     t.datetime "created_at", null: false
     t.string "currency", null: false
+    t.date "declared_on"
     t.string "dedup_scope", default: "", null: false
     t.uuid "destination_account_id"
     t.integer "end_after_count"
