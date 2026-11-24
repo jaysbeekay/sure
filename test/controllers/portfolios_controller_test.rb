@@ -888,22 +888,17 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
   # Each card's logo falls back to its provider's, read through
   # AccountProvider#provider, so the provider records are loaded with the
   # accounts rather than once per card.
-  #
-  # Measured from two linked cards. On 2026-11-24 one linked card read the
-  # providers in one query, and three and five cards in two each: one batched
-  # preload for the balance sheet and one for the cards, neither per card.
   test "the accounts grid loads provider-linked accounts without a query per card" do
     link_investment_account(0)
-    link_investment_account(1)
-    two = provider_queries { get portfolio_path }
+    one = provider_queries { get portfolio_path }
 
+    link_investment_account(1)
     link_investment_account(2)
-    link_investment_account(3)
-    four = provider_queries { get portfolio_path }
+    three = provider_queries { get portfolio_path }
 
     assert_response :success
-    assert_select "#portfolio-accounts a", minimum: 4
-    assert_equal two, four, "loading the linked accounts' providers grew with the number of cards"
+    assert_select "#portfolio-accounts a", minimum: 3
+    assert_equal one, three, "loading the linked accounts' providers grew with the number of cards"
   end
 
   # Created out of name order, so the order they were stored in is not the
@@ -1306,8 +1301,16 @@ class PortfoliosControllerTest < ActionDispatch::IntegrationTest
       AccountProvider.create!(account: account, provider: provider)
     end
 
+    # Every provider read, the query cache's answers included. The sidebar's
+    # balance sheet and the cards each preload the providers in one batch;
+    # when both batches name the same ids in the same order the second is
+    # answered from the cache, so leaving cached reads out made the count
+    # depend on the order of the ids rather than on the number of cards.
     def provider_queries(&block)
-      capture_sql_queries(&block).count { |sql| sql.include?(%(FROM "lunchflow_accounts")) }
+      reads = 0
+      callback = ->(*, payload) { reads += 1 if payload[:sql].include?(%(FROM "lunchflow_accounts")) }
+      ActiveSupport::Notifications.subscribed(callback, "sql.active_record", &block)
+      reads
     end
 
     # The investment fixtures carry holdings but no balance history, and a
