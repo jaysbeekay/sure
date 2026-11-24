@@ -81,6 +81,7 @@ en:
       default_connection_name: Mercury Connection
       disconnect: Disconnect
       disconnect_confirm: "Disconnect %{name}?"
+      disconnect_label: "Disconnect %{name}"
       instructions:
         copy_token_html: "Copy the <strong>full token</strong> (including the <code>secret-token:</code> prefix) and add it as a named connection below"
         create_token: Create a new API token with "Read Only" access

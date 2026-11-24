@@ -103,6 +103,7 @@ pl:
       default_connection_name: Połączenie Mercury
       disconnect: Rozłącz
       disconnect_confirm: Odłączyć %{name}?
+      disconnect_label: Rozłącz %{name}
       instructions:
         copy_token_html: Skopiuj <strong>pełny token</strong> (razem z przedrostkiem
           <code>secret-token:</code>) i dodaj go poniżej jako nazwane połączenie

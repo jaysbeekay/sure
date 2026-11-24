@@ -91,6 +91,7 @@ tr:
       default_connection_name: Mercury Bağlantısı
       disconnect: Bağlantıyı kes
       disconnect_confirm: "%{name} bağlantısı kesilsin mi?"
+      disconnect_label: "%{name} bağlantısını kes"
       instructions:
         copy_token_html: "<strong>Tam token'ı</strong> (<code>secret-token:</code>
           ön ekiyle birlikte) kopyalayın ve aşağıya adlandırılmış bir bağlantı olarak

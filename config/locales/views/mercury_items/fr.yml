@@ -93,6 +93,7 @@ fr:
       default_connection_name: Connexion Mercury
       disconnect: Déconnecter
       disconnect_confirm: Déconnecter %{name} ?
+      disconnect_label: Déconnecter %{name}
       instructions:
         copy_token_html: Copiez le <strong>jeton complet</strong> (y compris le préfixe
           <code>secret-token :</code>) et ajoutez-le en tant que connexion nommée

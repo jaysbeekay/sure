@@ -94,6 +94,7 @@ ca:
       default_connection_name: Connexió Mercury
       disconnect: Desconnecta
       disconnect_confirm: Vols desconnectar %{name}?
+      disconnect_label: Desconnecta %{name}
       instructions:
         copy_token_html: Copia el <strong>token sencer</strong> (incloent el prefix
           <code>secret-token:</code>) i afegeix-lo com a connexió amb nom a continuació

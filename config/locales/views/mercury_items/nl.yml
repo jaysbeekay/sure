@@ -77,6 +77,7 @@ nl:
       default_connection_name: "Mercury-koppeling"
       disconnect: "Loskoppelen"
       disconnect_confirm: "%{name} loskoppelen?"
+      disconnect_label: "%{name} loskoppelen"
       instructions:
         copy_token_html: "Kopieer het <strong>volledige token</strong> (inclusief het voorvoegsel <code>secret-token:</code>) en voeg het hieronder toe als benoemde koppeling"
         create_token: "Maak een nieuw API-token aan met \"Read Only\"-toegang"
