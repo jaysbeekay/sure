@@ -52,22 +52,32 @@ class Security::ClassificationProposal < ApplicationRecord
     # classified "ai" behind a row that says "rejected" -- the state #reject!'s
     # own comment says it exists to prevent (raised by Codacy on #199).
     #
-    # The veto is then re-checked inside the SECURITY's lock for the same
-    # reason: a concurrent manual save committing between check and write would
+    # The veto is checked inside the SECURITY's lock for the same reason: a
+    # concurrent manual save committing between check and write would
     # otherwise be overwritten silently, which is the case the veto exists for.
     #
-    # Lock order is proposal then security, and nothing takes them the other way
-    # round.
+    # Lock order is security, then proposal, as in Security::Merger#merge!,
+    # and nothing takes them the other way round.
     approved = false
 
-    with_lock do
-      next unless pending?
+    locked_security = security
+    # A merge can move this proposal and delete its security after it was read.
+    return false if locked_security.nil?
 
-      security.with_lock do
-        security.reload
-        next if security.classification_locked? || security.classification_source == "manual"
+    Security.transaction do
+      begin
+        locked_security.lock!
+      rescue ActiveRecord::RecordNotFound
+        next
+      end
 
-        security.update!(proposed_attributes.merge(source_attributes))
+      with_lock do
+        # The proposal lock reloads this row and its association; a proposal a
+        # merge moved since it was read now points at a security not locked here.
+        next unless pending? && security_id == locked_security.id
+        next if locked_security.classification_locked? || locked_security.classification_source == "manual"
+
+        locked_security.update!(proposed_attributes.merge(source_attributes))
         update!(status: "approved")
         approved = true
       end
