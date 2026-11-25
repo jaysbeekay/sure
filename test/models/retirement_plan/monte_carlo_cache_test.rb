@@ -55,7 +55,7 @@ class RetirementPlan::MonteCarloCacheTest < ActiveSupport::TestCase
       "a stream" => -> { @plan.streams.create!(kind: "income", name: "Pension", annual_amount: 12_000, source: "manual") },
       "the date" => -> { @as_of = @as_of.next_day },
       "spending" => -> { IncomeStatement.any_instance.stubs(:median_expense).returns(BigDecimal("1234")) },
-      "the funded assets" => -> { RetirementPlan.any_instance.stubs(:funding_total).returns(BigDecimal("98765")) }
+      "the funded assets" => -> { RetirementPlan.any_instance.stubs(:funding_assets).returns(RetirementPlan::AssetTotal.new(total: BigDecimal("98765"), unconverted_count: 0)) }
     }
     changes.each do |what, change|
       before = key
