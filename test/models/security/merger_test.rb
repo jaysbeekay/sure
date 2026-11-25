@@ -130,6 +130,16 @@ class Security::MergerTest < ActiveSupport::TestCase
       classification_of(@listed))
   end
 
+  test "a copied classification keeps the target's fields the source left blank" do
+    @listed.update!(asset_class: "equity", asset_sub_class: "stock", sector: "Financials", industry: "Banks", region: "north_america", classification_source: "ai")
+    lock_classification(@placeholder, asset_class: "fixed_income", asset_sub_class: "bond")
+
+    Security::Merger.new(from: @placeholder, into: @listed).merge!
+
+    assert_equal({ "asset_class" => "fixed_income", "asset_sub_class" => "bond", "sector" => "Financials", "industry" => "Banks", "region" => "north_america", "classification_source" => "manual", "classification_locked" => true },
+      classification_of(@listed))
+  end
+
   test "a manual source outranks an AI target, and nothing else outranks the target" do
     [
       [ "manual", "ai", true ],
