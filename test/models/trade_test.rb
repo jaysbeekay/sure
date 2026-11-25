@@ -470,6 +470,7 @@ class TradeTest < ActiveSupport::TestCase
     queries = capture_sql_queries { trades.each(&:realized_gain_loss) }
 
     assert_empty queries.grep(/SUM\(/), "no sale averages its buys on its own"
+    assert_empty queries.grep(/FROM "trades"/), "no sale replays its trades on its own"
     assert_equal [ BigDecimal(100) ] * 2, trades.map { |t| t.realized_gain_loss.value.amount }
   end
 

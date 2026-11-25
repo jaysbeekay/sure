@@ -286,6 +286,12 @@ class Holding < ApplicationRecord
     SQL
   end
 
+  # The figure .preload_avg_costs gave this holding, or nil when it gave none,
+  # its answer was unknown, or the holding has changed since. Never queries.
+  def preloaded_avg_cost
+    @preloaded_avg_cost if defined?(@preloaded_avg_cost) && !changed?
+  end
+
   # Replacing the cost replaces the #trend derived from it.
   def preload_avg_cost(value)
     @preloaded_avg_cost = value

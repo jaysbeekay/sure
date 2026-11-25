@@ -871,6 +871,7 @@ class HoldingTest < ActiveSupport::TestCase
     @amzn.date = 1.day.ago.to_date
 
     assert_equal Money.new(200), @amzn.avg_cost
+    assert_nil @amzn.preloaded_avg_cost, "nor does a sale read the preloaded figure"
   end
 
   test "a holding saved after the preload reads its own cost, not the preloaded one" do
