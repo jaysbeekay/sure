@@ -5,12 +5,13 @@ class RetirementPlan::MonteCarloTest < ActiveSupport::TestCase
   Stream = RetirementPlan::Simulation::Stream
 
   # Born 1980, end age 70 (2050). 400,000 at 5%, 20,000 a year saved until
-  # 2036, then 30,000 a year of spending, indexed at 2%.
+  # 2036, then 30,000 a year of spending, indexed at 2%. The spending is
+  # seeded, so it counts only once retired, as living costs do.
   def inputs(**overrides)
     {
       as_of: AS_OF, current_assets: 400_000, annual_contribution: 20_000,
       expected_annual_return: BigDecimal("0.05"), inflation_rate: BigDecimal("0.02"),
-      streams: [ Stream.new(kind: "expense", annual_amount: 30_000) ],
+      streams: [ Stream.new(kind: "expense", annual_amount: 30_000, seeded: true) ],
       birth_year: 1980, end_age: 70
     }.merge(overrides)
   end
@@ -82,12 +83,12 @@ class RetirementPlan::MonteCarloTest < ActiveSupport::TestCase
     assert_in_delta 1, sd, 0.02
   end
 
-  # 61,000 a year of spending is just inside what the deterministic path can
-  # meet (it lasts up to 61,473), so about half the paths fall short once
+  # 60,500 a year of spending is just inside what the deterministic path can
+  # meet (it lasts up to 60,577), so about half the paths fall short once
   # returns vary.
   test "the success rate is the share of paths that last, so a plan that only just lasts on expected returns is a coin flip" do
-    tight = monte_carlo(streams: [ Stream.new(kind: "expense", annual_amount: 61_000) ])
-    deterministic = RetirementPlan::Simulation.new(**inputs(streams: [ Stream.new(kind: "expense", annual_amount: 61_000) ]), retirement_year: 2036)
+    tight = monte_carlo(streams: [ Stream.new(kind: "expense", annual_amount: 60_500, seeded: true) ])
+    deterministic = RetirementPlan::Simulation.new(**inputs(streams: [ Stream.new(kind: "expense", annual_amount: 60_500, seeded: true) ]), retirement_year: 2036)
 
     assert deterministic.survives?, "the fixture must just last on expected returns"
     assert_operator tight.success_rate, :>, 0.3
@@ -125,7 +126,7 @@ class RetirementPlan::MonteCarloTest < ActiveSupport::TestCase
   end
 
   test "the worst-first ordering of the same returns never succeeds more often" do
-    mc = monte_carlo(streams: [ Stream.new(kind: "expense", annual_amount: 61_000) ])
+    mc = monte_carlo(streams: [ Stream.new(kind: "expense", annual_amount: 60_500, seeded: true) ])
 
     assert_operator mc.stress_success_rate, :<, mc.success_rate
   end
@@ -153,7 +154,7 @@ class RetirementPlan::MonteCarloTest < ActiveSupport::TestCase
   end
 
   test "the heatmap never lowers success for a higher return or savings rate, and its centre is the plain success rate" do
-    mc = monte_carlo(streams: [ Stream.new(kind: "expense", annual_amount: 61_000) ])
+    mc = monte_carlo(streams: [ Stream.new(kind: "expense", annual_amount: 60_500, seeded: true) ])
     grid = mc.heatmap
 
     assert_equal 5, grid.size
@@ -186,11 +187,11 @@ class RetirementPlan::MonteCarloTest < ActiveSupport::TestCase
 
   # Retired two years before the reference year: every modelled year is a
   # retirement year, so the stress run must reorder all of them. Skipping the
-  # reorder left the stress rate equal to the ordinary one (0.614 both).
+  # reorder left the stress rate equal to the ordinary one (0.62 both).
   test "the stress run reorders every year when retirement is already past" do
     mc = monte_carlo(retirement_year: AS_OF.year - 2, current_assets: 600_000)
 
-    assert_in_delta 0.614, mc.success_rate, 0.0001
+    assert_in_delta 0.62, mc.success_rate, 0.0001
     assert_operator mc.stress_success_rate, :<, 0.1
   end
 
