@@ -10,22 +10,30 @@
 #
 #   V(n + 1) = (V(n) - W(n)) * (1 + r) + C(n)
 #
-# Before retirement W holds only one-off amounts, which is the recurrence
-# RetirementPlan::Projection uses whenever there are none. From the
-# retirement year, W is spending less income, never below zero, and income
-# beyond spending is reinvested as C.
+# The first row runs from the reference date to the end of its year, so its
+# recurring flows and its growth are for the part of the year left. A one-off
+# is paid whole.
+#
+# Before retirement C is the contribution, less manual spending and plus
+# manual income; when spending is more, the rest is withdrawn. Seeded streams
+# count only from retirement: the contribution already pays today's living
+# costs and loans. From the retirement year, W is spending less income, never
+# below zero, and income beyond spending is reinvested as C. One-off amounts
+# come out in either case.
 #
 # `expected_annual_return` is the compound annual return before inflation.
-# Streams marked `indexed` grow with `inflation_rate` from the reference year,
-# as does the contribution. `end_value_real` is the end value in the
-# reference year's money.
+# The contribution is in the reference date's money and grows with
+# `inflation_rate` from that date; a stream marked `indexed` grows from its
+# own base year. `end_value_real` is the end value in the reference date's
+# money.
 class RetirementPlan::Simulation
   # A calendar-year span of spending or income. `start_year` nil runs from the
   # reference year; `end_year` nil runs to the end age. A one-off is paid once,
-  # in its start year.
-  Stream = Data.define(:kind, :annual_amount, :start_year, :end_year, :indexed) do
-    def initialize(kind:, annual_amount:, start_year: nil, end_year: nil, indexed: true)
-      super(kind: kind.to_s, annual_amount: annual_amount.to_d, start_year:, end_year:, indexed:)
+  # in its start year. `annual_amount` is in `base_year`'s money; nil means
+  # the reference year's.
+  Stream = Data.define(:kind, :annual_amount, :start_year, :end_year, :indexed, :seeded, :base_year) do
+    def initialize(kind:, annual_amount:, start_year: nil, end_year: nil, indexed: true, seeded: false, base_year: nil)
+      super(kind: kind.to_s, annual_amount: annual_amount.to_d, start_year:, end_year:, indexed:, seeded:, base_year:)
     end
 
     def active_in?(year, first_year)
@@ -60,6 +68,12 @@ class RetirementPlan::Simulation
 
   def last_year
     birth_year + end_age
+  end
+
+  # The part of the first year from the reference date to its end, the
+  # reference date included: 1 on the first of January.
+  def first_year_fraction
+    @first_year_fraction ||= Rational(as_of.end_of_year - as_of + 1, as_of.end_of_year.yday)
   end
 
   def rows
@@ -104,8 +118,7 @@ class RetirementPlan::Simulation
       @depletion_year = nil
 
       (first_year..last_year).map do |year|
-        n = year - first_year
-        contribution, withdrawal = flows_for(year, n)
+        contribution, withdrawal = flows_for(year)
         start_value = value
 
         if @depletion_year.nil? && withdrawal > value
@@ -113,38 +126,61 @@ class RetirementPlan::Simulation
         end
 
         after_withdrawal = [ value - withdrawal, 0 ].max
-        growth = after_withdrawal * @return_rate
+        growth = after_withdrawal * (compound(@return_rate, part_of(year)) - 1)
         value = after_withdrawal + growth + contribution
 
         Row.new(
           year: year, age: year - birth_year, start_value: start_value,
           contribution: contribution, withdrawal: withdrawal, growth: growth,
-          end_value: value, end_value_real: value / inflation_factor(n + 1)
+          end_value: value, end_value_real: value / compound(@inflation_rate, years_from_as_of(year + 1))
         )
       end
     end
 
-    # Before retirement: the contribution goes in, and only one-offs come out.
-    # From the retirement year: spending less income comes out, and income
-    # beyond spending goes back in.
-    def flows_for(year, n)
-      one_offs = total(year, n, "one_off")
+    # Recurring flows are for the part of the year the row covers; a one-off
+    # is paid whole. Before retirement the contribution goes in, net of manual
+    # streams; from the retirement year spending less income comes out, and
+    # income beyond spending goes back in.
+    def flows_for(year)
+      one_offs = total(year, "one_off")
 
-      if year < retirement_year
-        [ @annual_contribution * inflation_factor(n), one_offs ]
+      net = if year < retirement_year
+        manual_spending = total(year, "expense", seeded: false) - total(year, "income", seeded: false)
+        manual_spending - @annual_contribution * compound(@inflation_rate, years_from_as_of(year))
       else
-        net = total(year, n, "expense") - total(year, n, "income")
-        [ [ -net, 0 ].max, [ net, 0 ].max + one_offs ]
+        total(year, "expense") - total(year, "income")
       end
+      net = prorate(net, year)
+
+      [ [ -net, 0 ].max, [ net, 0 ].max + one_offs ]
     end
 
-    def total(year, n, kind)
+    # `seeded` nil counts every stream of the kind.
+    def total(year, kind, seeded: nil)
       @streams
-        .select { |stream| stream.kind == kind && stream.active_in?(year, first_year) }
-        .sum(BigDecimal("0")) { |stream| stream.indexed ? stream.annual_amount * inflation_factor(n) : stream.annual_amount }
+        .select { |stream| stream.kind == kind && stream.active_in?(year, first_year) && (seeded.nil? || stream.seeded == seeded) }
+        .sum(BigDecimal("0")) { |stream| stream.indexed ? stream.annual_amount * compound(@inflation_rate, year - (stream.base_year || first_year)) : stream.annual_amount }
     end
 
-    def inflation_factor(years)
-      (1 + @inflation_rate)**years
+    def part_of(year)
+      year == first_year ? first_year_fraction : 1
+    end
+
+    # Multiplied then divided, so a BigDecimal amount keeps its precision.
+    def prorate(amount, year)
+      part = part_of(year).to_r
+      amount * part.numerator / part.denominator
+    end
+
+    # Years from the reference date to the start of `year`.
+    def years_from_as_of(year)
+      year == first_year ? 0 : year - first_year - 1 + first_year_fraction
+    end
+
+    # (1 + rate) ** years. A whole number of years stays exact; a fraction of
+    # a year goes through BigDecimal#power, which needs a precision.
+    def compound(rate, years)
+      base = 1 + rate
+      years.to_r.denominator == 1 ? base**years.to_i : base.power(BigDecimal(years.numerator) / years.denominator, 20)
     end
 end
