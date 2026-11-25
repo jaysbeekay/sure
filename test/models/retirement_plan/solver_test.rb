@@ -1,7 +1,8 @@
 require "test_helper"
 
 class RetirementPlan::SolverTest < ActiveSupport::TestCase
-  AS_OF = Date.new(2026, 3, 15)
+  # The first day of a year, so the first row is a whole year.
+  AS_OF = Date.new(2026, 1, 1)
   Stream = RetirementPlan::Simulation::Stream
 
   # 0% return and no inflation, so every figure below is plain arithmetic.
@@ -40,8 +41,8 @@ class RetirementPlan::SolverTest < ActiveSupport::TestCase
     assert_equal 60, result.depletion_age
   end
 
-  # Income of 50,000 in 2028 and 2029 only counts once retired, when its
-  # surplus over spending is reinvested; before that the contribution is
+  # Seeded income of 50,000 in 2028 and 2029 only counts once retired, when
+  # its surplus over spending is reinvested; before that the contribution is
   # fixed. Retiring in 2027 catches it: 10,000 saved, 10,000 spent, then
   # 80,000 reinvested against seven later years of 10,000. Retiring in 2030
   # or 2031 misses it (40,000 vs 70,000; 50,000 vs 60,000), and 2032 lasts
@@ -49,8 +50,8 @@ class RetirementPlan::SolverTest < ActiveSupport::TestCase
   # bisection over 2026..2036 would land on 2032; the earliest is 2027.
   test "the earliest lasting year is found when a later year runs out again" do
     streams = [
-      Stream.new(kind: "expense", annual_amount: 10_000),
-      Stream.new(kind: "income", annual_amount: 50_000, start_year: 2028, end_year: 2029)
+      Stream.new(kind: "expense", annual_amount: 10_000, seeded: true),
+      Stream.new(kind: "income", annual_amount: 50_000, start_year: 2028, end_year: 2029, seeded: true)
     ]
 
     assert_equal [ false, true, true, false, false, true ],
@@ -62,7 +63,7 @@ class RetirementPlan::SolverTest < ActiveSupport::TestCase
     def base
       {
         as_of: AS_OF, current_assets: 0, annual_contribution: 10_000, expected_annual_return: 0, inflation_rate: 0,
-        streams: [ Stream.new(kind: "expense", annual_amount: 10_000) ], birth_year: 1976, end_age: 60
+        streams: [ Stream.new(kind: "expense", annual_amount: 10_000, seeded: true) ], birth_year: 1976, end_age: 60
       }
     end
 

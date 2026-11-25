@@ -67,7 +67,10 @@ class RetirementPlan::MonteCarlo
   def percentiles
     @percentiles ||= begin
       values = run(simulation, keep_values: true)[:values]
-      deflators = (1..year_count).map { |n| (1 + base_simulation.inflation_rate.to_f)**n }
+      # To the end of each year from the reference date, as Simulation's
+      # end_value_real: the first year is only the part of it left.
+      fraction = base_simulation.first_year_fraction.to_f
+      deflators = (0...year_count).map { |t| (1 + base_simulation.inflation_rate.to_f)**(t + fraction) }
 
       PERCENTILES.to_h do |p|
         [ p, (0...year_count).map { |t| self.class.percentile(values.map { |path| path[t] }, p) / deflators[t] } ]
@@ -147,13 +150,14 @@ class RetirementPlan::MonteCarlo
       base = [ 1 + sim.return_rate.to_f, 0.0 ].max
       # Retired before the reference year, every modelled year is retired.
       split = (sim.retirement_year - first_year).clamp(0, year_count)
+      fraction = sim.first_year_fraction.to_f
       survived = 0
       values = [] if keep_values
 
       draws.each do |z|
         growth = z.map { |zt| base * Math.exp(@sigma * zt) }
-        lasted, path_values = replay(sim.current_assets.to_f, flows, growth, keep_values:)
-        lasted &&= replay(sim.current_assets.to_f, flows, growth[0...split] + growth[split..].sort).first if worst_first
+        lasted, path_values = replay(sim.current_assets.to_f, flows, growth, fraction, keep_values:)
+        lasted &&= replay(sim.current_assets.to_f, flows, growth[0...split] + growth[split..].sort, fraction).first if worst_first
 
         survived += 1 if lasted
         values << path_values if keep_values
@@ -163,8 +167,9 @@ class RetirementPlan::MonteCarlo
     end
 
     # Whether one path lasts, and, when kept, its value at the end of each
-    # year.
-    def replay(value, flows, growth, keep_values: false)
+    # year. The first year grows for only the part of it left, whichever
+    # year's return the ordering puts there.
+    def replay(value, flows, growth, fraction, keep_values: false)
       lasted = true
       path_values = [] if keep_values
 
@@ -177,7 +182,7 @@ class RetirementPlan::MonteCarlo
         else
           value -= withdrawal
         end
-        value = value * growth[t] + contribution
+        value = value * (t.zero? ? growth[t]**fraction : growth[t]) + contribution
         path_values << value if keep_values
       end
 
