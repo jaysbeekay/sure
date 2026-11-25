@@ -1,8 +1,10 @@
 # Folds one security row into another that stands for the same instrument and
 # deletes it, moving everything that references it: holdings, trades, lots,
-# prices, splits and tags. Rows the target already has for the same key win,
-# except holdings, where the most recently written row for an
-# (account, date, currency) is kept. Accounts that referenced the merged row
+# prices, splits, tags, classification proposals and constituents. Rows the
+# target already has for the same key win, except holdings, where the most
+# recently written row for an (account, date, currency) is kept; constituents
+# move only to a target with none. A locked classification on the source is
+# carried onto a target without one. Accounts that referenced the merged row
 # are synced afterwards so their holdings and balances are rebuilt on one row.
 class Security::Merger
   def initialize(from:, into:)
@@ -18,6 +20,7 @@ class Security::Merger
     account_ids = Security.transaction do
       locked = Security.where(id: [ from.id, into.id ]).order(:id).lock.to_a
       source = locked.find { |security| security.id == from.id }
+      target = locked.find { |security| security.id == into.id }
       # A concurrent merge already removed the row.
       next [] unless locked.size == 2
       next [] if condition && !condition.call(source)
@@ -30,6 +33,9 @@ class Security::Merger
         move_unless_target_has(Security::Price, :date, :currency)
         move_unless_target_has(Security::Split, :ex_date)
         move_taggings!
+        move_unless_target_has(Security::ClassificationProposal, :family_id)
+        move_constituents!(target)
+        move_classification!(source, target)
         into.update!(name: from.name) if into.name.blank? && from.name.present?
         source.reload.destroy!
       end
@@ -86,6 +92,24 @@ class Security::Merger
       rows = model.where(security_id: from.id)
       rows.where(kept_row.exists).delete_all
       rows.update_all(security_id: into.id, updated_at: Time.current)
+    end
+
+    # Read from the locked rows, not the caller's `into`, which can predate a
+    # concurrent manual lock on the target. Only the fields the source holds
+    # are copied, with the asset pair moving together, as an approved
+    # classification proposal writes them.
+    def move_classification!(source, target)
+      return unless source.classification_locked? && !target.classification_locked?
+
+      attributes = { sector: source.sector, region: source.region }.compact_blank
+      attributes.merge!(asset_class: source.asset_class, asset_sub_class: source.asset_sub_class.presence) if source.asset_class.present?
+      target.update!(attributes.merge(classification_source: source.classification_source, classification_locked: true))
+    end
+
+    def move_constituents!(target)
+      return if Security::Constituent.where(security_id: target.id).exists?
+
+      Security::Constituent.where(security_id: from.id).update_all(security_id: target.id, updated_at: Time.current)
     end
 
     def move_taggings!
