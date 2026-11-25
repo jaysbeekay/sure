@@ -103,6 +103,7 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
     assert_equal payment.amount * 12, stream.annual_amount
     assert_equal projection.payoff_date.year, stream.end_year
     assert_equal [ "expense", false, loan_account ], [ stream.kind, stream.indexed, stream.account ]
+    assert_equal AS_OF.year, stream.base_year
   end
 
   # 50,000 left is behind the contract's 49,400 or so: the contracted
@@ -176,15 +177,15 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
     assert_equal [ "EUR", payment.amount * 12, euros ], [ stream.currency, stream.annual_amount, stream.account ]
     before = RetirementPlan.find(@plan.id)
     assert_equal 1, before.unconverted_stream_count(as_of: AS_OF)
-    withdrawal_before = before.simulation(as_of: AS_OF, retirement_year: AS_OF.year).rows.first.withdrawal
+    withdrawal_before = before.simulation(as_of: AS_OF, retirement_year: AS_OF.year).rows.second.withdrawal
 
     ExchangeRate.unstub(:find_or_fetch_rate)
     ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", date: AS_OF, rate: BigDecimal("1.1"))
 
     after = RetirementPlan.find(@plan.id)
     assert_equal 0, after.unconverted_stream_count(as_of: AS_OF)
-    withdrawal_after = after.simulation(as_of: AS_OF, retirement_year: AS_OF.year).rows.first.withdrawal
-    assert_in_delta payment.amount * 12 * BigDecimal("1.1"), withdrawal_after - withdrawal_before, 0.01
+    withdrawal_after = after.simulation(as_of: AS_OF, retirement_year: AS_OF.year).rows.second.withdrawal
+    assert_in_delta payment.amount * 12 * BigDecimal("1.1"), withdrawal_after - withdrawal_before, 0.01, "2027, a whole year"
   end
 
   test "loans in different currencies each seed their repayment in their own currency" do
@@ -211,6 +212,42 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
     assert_no_difference "RetirementPlan::Stream.count" do
       second.seed_streams!(as_of: AS_OF)
     end
+  end
+
+  # --- A stream's base year --------------------------------------------------
+
+  # Living costs seeded at 24,000 in 2026 are 25,461.60 in 2028 at 3%,
+  # whether the plan is read in 2026 or reopened in 2027.
+  test "a seeded stream keeps the year it was seeded in, and grows from it" do
+    @plan.update!(inflation_rate: BigDecimal("0.03"), end_age: 70, retirement_date: Date.new(2026, 1, 1))
+    RetirementPlan.any_instance.stubs(:annual_living_costs).returns(BigDecimal("24000"))
+    @plan.seed_streams!(as_of: AS_OF)
+
+    assert_equal AS_OF.year, @plan.streams.find_by!(source: "seeded_living_costs").base_year
+    withdrawals = [ AS_OF, Date.new(2027, 3, 15) ].map do |as_of|
+      RetirementPlan.find(@plan.id).simulation(as_of: as_of).rows.find { |r| r.year == 2028 }.withdrawal
+    end
+    assert_equal [ BigDecimal("25461.6"), BigDecimal("25461.6") ], withdrawals
+  end
+
+  test "an amount entered or changed is in that year's money; other edits keep the year" do
+    stream = travel_to(Date.new(2026, 6, 1)) { @plan.streams.create!(kind: "expense", name: "Rent", annual_amount: 12_000) }
+    assert_equal 2026, stream.base_year
+
+    travel_to(Date.new(2028, 2, 1)) { stream.update!(name: "Rent and rates") }
+    assert_equal 2026, stream.reload.base_year
+
+    travel_to(Date.new(2028, 2, 1)) { stream.update!(annual_amount: 13_000) }
+    assert_equal 2028, stream.reload.base_year
+  end
+
+  # Only manual streams move the contribution before retirement: the seeded
+  # ones are spending it already pays for.
+  test "a stream tells the simulation whether it was seeded" do
+    living = @plan.streams.create!(kind: "expense", name: "Living costs", annual_amount: 1, source: "seeded_living_costs")
+    manual = @plan.streams.create!(kind: "expense", name: "Rent", annual_amount: 1)
+
+    assert_equal [ true, false ], [ living, manual ].map { |s| s.to_simulation_stream(currency: "USD", date: AS_OF).seeded }
   end
 
   # --- Funding accounts -----------------------------------------------------
@@ -250,6 +287,29 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
 
     picked.update_columns(status: "active", exclude_from_reports: true)
     assert_equal BigDecimal("1000"), start.call, "excluded from reports and unshared: the default set"
+  end
+
+  # The progress figure and the simulation fund the plan from the same
+  # accounts: 60,000 linked out of 160,000 against an FI number of 300,000 is
+  # 20%, not 53%.
+  test "the simple figures read the linked accounts too" do
+    own_account(amount: 100_000)
+    picked = own_account(amount: 60_000)
+    @plan.funding_links.create!(account: picked)
+
+    assert_equal BigDecimal("60000"), RetirementPlan.find(@plan.id).projection(as_of: AS_OF).current_assets
+  end
+
+  test "an account left out for want of a rate is counted only when it funds the plan" do
+    picked = own_account(amount: 60_000)
+    euros = Account.create!(family: @family, owner: @member, accountable: Depository.new, name: "Euros", currency: "EUR", balance: 1_000)
+    Balance.create!(account: euros, date: AS_OF, balance: 1_000, currency: "EUR")
+    ExchangeRate.stubs(:provider).returns(nil)
+
+    assert_equal 1, RetirementPlan.find(@plan.id).unconverted_account_count(as_of: AS_OF), "default set"
+
+    @plan.funding_links.create!(account: picked)
+    assert_equal 0, RetirementPlan.find(@plan.id).unconverted_account_count(as_of: AS_OF), "linked: the euro account is not in it"
   end
 
   test "an account the user does not count in their finances cannot be linked" do
@@ -322,13 +382,14 @@ class RetirementPlan::PlannerInputsTest < ActiveSupport::TestCase
     create_transaction(account: checking, date: Date.new(2026, 2, 10), amount: -5_000)
     @plan.update!(expected_annual_return: BigDecimal("0.05"), inflation_rate: 0, savings_rate: BigDecimal("0.2"),
                   end_age: 70, retirement_date: Date.new(2040, 1, 1))
-    @plan.streams.create!(kind: "expense", name: "Living costs", annual_amount: 30_000)
+    @plan.streams.create!(kind: "expense", name: "Living costs", annual_amount: 30_000, source: "seeded_living_costs")
 
     sim = @plan.simulation(as_of: AS_OF)
 
     assert_equal [ 2040, 2050 ], [ sim.retirement_year, sim.last_year ]
     assert_equal BigDecimal("100000"), sim.rows.first.start_value
-    assert_equal BigDecimal("12000"), sim.rows.first.contribution, "20% of 60,000 a year of income"
+    assert_equal BigDecimal("12000"), sim.rows.second.contribution, "20% of 60,000 a year of income"
+    assert_equal BigDecimal("9600"), sim.rows.first.contribution, "the 292 days left of 2026"
     assert_equal BigDecimal("30000"), sim.rows.find { |r| r.year == 2040 }.withdrawal
   end
 

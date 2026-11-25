@@ -1,7 +1,10 @@
 require "test_helper"
 
 class RetirementPlan::SimulationTest < ActiveSupport::TestCase
-  AS_OF = Date.new(2026, 3, 15)
+  # The first day of a year, so the first row is a whole year and the hand
+  # tables below hold. A first row that starts later in the year is tested on
+  # its own.
+  AS_OF = Date.new(2026, 1, 1)
   Stream = RetirementPlan::Simulation::Stream
 
   test "0% return and no inflation: each year adds the contribution and nothing compounds" do
@@ -36,8 +39,8 @@ class RetirementPlan::SimulationTest < ActiveSupport::TestCase
     assert_equal BigDecimal("63000"), sim.rows.first.end_value
   end
 
-  test "before retirement nothing is withdrawn for spending; from the retirement year it is" do
-    sim = simulation(retirement_year: AS_OF.year + 2, streams: [ Stream.new(kind: "expense", annual_amount: 1_000) ])
+  test "before retirement nothing is withdrawn for seeded spending; from the retirement year it is" do
+    sim = simulation(retirement_year: AS_OF.year + 2, streams: [ Stream.new(kind: "expense", annual_amount: 1_000, seeded: true) ])
 
     assert_equal [ 0, 0, 1_000, 1_000 ], sim.rows.first(4).map(&:withdrawal)
     assert_equal [ 10_000, 10_000, 0, 0 ], sim.rows.first(4).map(&:contribution)
@@ -158,6 +161,101 @@ class RetirementPlan::SimulationTest < ActiveSupport::TestCase
     end
 
     assert_equal runs.first, runs.last
+  end
+
+  # --- The first year --------------------------------------------------------
+
+  # From 1 October, 92 of 2026's 365 days are left.
+  test "a first row that starts during the year counts only the part of the year left" do
+    sim = simulation(as_of: Date.new(2026, 10, 1), expected_annual_return: BigDecimal("0.05"))
+    first = sim.rows.first
+    part = Rational(92, 365)
+
+    assert_in_delta 10_000 * part, first.contribution, 0.01
+    assert_in_delta 100_000 * (1.05**part - 1), first.growth, 0.01
+    assert_equal BigDecimal("10000"), sim.rows.second.contribution, "the next year is whole"
+  end
+
+  test "spending in a first row that starts during the year is the part of the year left; a one-off is whole" do
+    sim = simulation(as_of: Date.new(2026, 10, 1), retirement_year: 2026, streams: [
+      Stream.new(kind: "expense", annual_amount: 36_500),
+      Stream.new(kind: "one_off", annual_amount: 1_000)
+    ])
+
+    assert_equal BigDecimal("10200"), sim.rows.first.withdrawal, "92 days of 36,500 a year, and the whole one-off"
+    assert_equal BigDecimal("36500"), sim.rows.second.withdrawal
+  end
+
+  # The reviewer's repro: 100,000 with 10,000 a year at 7% and 3% inflation
+  # ended 2027 at 135,490 from 31 December 2026 and at 117,000 from 1 January
+  # 2027. A day apart, the two now differ by about a day of growth.
+  test "a reference date a day earlier changes the next year's figures by about a day, and not the solved year" do
+    inputs = { current_assets: 100_000, annual_contribution: 10_000, expected_annual_return: BigDecimal("0.07"),
+               inflation_rate: BigDecimal("0.03"), birth_year: 1980, end_age: 90,
+               streams: [ Stream.new(kind: "expense", annual_amount: 20_000, seeded: true, base_year: 2027) ] }
+    a = RetirementPlan::Simulation.new(**inputs, as_of: Date.new(2026, 12, 31), retirement_year: 2040)
+    b = RetirementPlan::Simulation.new(**inputs, as_of: Date.new(2027, 1, 1), retirement_year: 2040)
+
+    assert_in_delta b.rows.find { _1.year == 2027 }.end_value, a.rows.find { _1.year == 2027 }.end_value, 100
+    assert_in_delta b.rows.last.end_value_real, a.rows.last.end_value_real, b.rows.last.end_value_real * BigDecimal("0.001")
+    assert_equal RetirementPlan::Solver.new(**inputs, as_of: Date.new(2027, 1, 1)).call.retirement_year,
+                 RetirementPlan::Solver.new(**inputs, as_of: Date.new(2026, 12, 31)).call.retirement_year
+  end
+
+  # The contribution is in the reference date's money, so it grows with the
+  # time since that date: from 1 October, 92 days into 2027.
+  test "the contribution grows with inflation from the reference date" do
+    sim = simulation(as_of: Date.new(2026, 10, 1), inflation_rate: BigDecimal("0.03"))
+
+    assert_in_delta 10_000 * 1.03**Rational(92, 365), sim.rows.second.contribution, 0.01
+    assert_in_delta 10_000 * 1.03**Rational(92 + 365, 365), sim.rows.third.contribution, 0.01
+  end
+
+  # --- Streams before retirement ---------------------------------------------
+
+  test "a manual expense before retirement comes out of the contribution, and beyond it out of the portfolio" do
+    sim = simulation(retirement_year: 2045,
+                     streams: [ Stream.new(kind: "expense", annual_amount: 4_000, start_year: 2028, end_year: 2029),
+                                Stream.new(kind: "expense", annual_amount: 20_000, start_year: 2030, end_year: 2033) ])
+
+    rows = sim.rows.select { _1.year.between?(2027, 2034) }
+    assert_equal [ 10_000, 6_000, 6_000, 0, 0, 0, 0, 10_000 ], rows.map(&:contribution)
+    assert_equal [ 0, 0, 0, 10_000, 10_000, 10_000, 10_000, 0 ], rows.map(&:withdrawal)
+  end
+
+  test "a manual income before retirement adds to the contribution" do
+    sim = simulation(retirement_year: 2045, streams: [ Stream.new(kind: "income", annual_amount: 12_000, start_year: 2028) ])
+
+    assert_equal [ 10_000, 22_000, 22_000 ], sim.rows.select { _1.year.between?(2027, 2029) }.map(&:contribution)
+  end
+
+  # The contribution is income less today's spending, living costs and loan
+  # payments included, so a seeded stream is already paid out of it.
+  test "a seeded stream does nothing before retirement and counts from it" do
+    sim = simulation(retirement_year: 2028, streams: [ Stream.new(kind: "expense", annual_amount: 4_000, seeded: true) ])
+
+    assert_equal [ 10_000, 10_000, 0 ], sim.rows.first(3).map(&:contribution)
+    assert_equal [ 0, 0, 4_000 ], sim.rows.first(3).map(&:withdrawal)
+  end
+
+  # --- A stream's base year --------------------------------------------------
+
+  # Living costs seeded at 24,000 in 2026: 24,720 in 2027 whether the plan is
+  # read in 2026 or reopened in 2027.
+  test "an indexed stream grows from its own base year, whatever the reference date" do
+    stream = Stream.new(kind: "expense", annual_amount: 24_000, base_year: 2026)
+    from_2026 = simulation(inflation_rate: BigDecimal("0.03"), retirement_year: 2026, streams: [ stream ])
+    from_2027 = simulation(as_of: Date.new(2027, 1, 1), inflation_rate: BigDecimal("0.03"), retirement_year: 2027, streams: [ stream ])
+
+    assert_equal [ BigDecimal("24720"), BigDecimal("24720") ],
+                 [ from_2026, from_2027 ].map { |sim| sim.rows.find { _1.year == 2027 }.withdrawal }
+  end
+
+  test "an unindexed stream ignores its base year" do
+    sim = simulation(inflation_rate: BigDecimal("0.03"), retirement_year: 2026,
+                     streams: [ Stream.new(kind: "expense", annual_amount: 5_000, base_year: 2020, indexed: false) ])
+
+    assert_equal BigDecimal("5000"), sim.rows.first.withdrawal
   end
 
   private
