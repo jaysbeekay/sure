@@ -2304,6 +2304,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_21_110000) do
   create_table "retirement_plan_streams", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "account_id"
     t.decimal "annual_amount", precision: 19, scale: 4, null: false
+    t.integer "base_year", null: false
     t.datetime "created_at", null: false
     t.string "currency", null: false
     t.integer "end_year"
