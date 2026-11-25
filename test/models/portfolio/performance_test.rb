@@ -241,6 +241,29 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_nil result.mwr
   end
 
+  # The chained figure removes only the flows it knows about. A valuation-tracked
+  # account has none on record, so a deposit into it moves its stated value and
+  # chains as return: the aggregate cannot be called time-weighted once any
+  # account in it is valuation tracked.
+  test "flows are known only when no account in the scope is valuation tracked" do
+    build_textbook_case
+    valued = build_valuation_tracked_account
+
+    assert performance.flows_known?, "every account records its flows"
+    refute performance(account_ids: [ @account.id, valued.id ]).flows_known?,
+           "one valuation-tracked account makes the scope's flows unknown"
+    refute performance(account_ids: [ valued.id ]).flows_known?
+  end
+
+  # An account with no balances in the period has nothing chained, so it cannot
+  # turn the label either.
+  test "an account with no balances in the period does not make the flows unknown" do
+    build_textbook_case
+    empty = create_portfolio_account(family: @family)
+
+    assert performance(account_ids: [ @account.id, empty.id ]).flows_known?
+  end
+
   # The rule must not overreach: an account with no balances in the period
   # contributes nothing, so it cannot make the scope's flows unknown.
   test "an account with no balances in the period does not withhold mwr" do
@@ -632,6 +655,19 @@ class Portfolio::PerformanceTest < ActiveSupport::TestCase
     assert_includes warm.cache_key, "_#{Portfolio::Performance::CACHE_VERSION}_"
     refute_equal "v7", Portfolio::Performance::CACHE_VERSION, "v7 entries were cached without the flag"
     refute_equal "v8", Portfolio::Performance::CACHE_VERSION, "v8 entries were cached before family scoping and the one-day TWR change"
+    refute_equal "v9", Portfolio::Performance::CACHE_VERSION, "v9 entries were cached without flows_known"
+  end
+
+  test "the cached metrics carry whether the flows are known" do
+    build_textbook_case
+    valued = build_valuation_tracked_account
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+
+    refute performance(account_ids: [ @account.id, valued.id ]).flows_known?, "the cold read computes it"
+
+    warm = performance(account_ids: [ @account.id, valued.id ])
+    warm.expects(:compute).never
+    refute warm.flows_known?, "the warm read is served from the cache with the flag intact"
   end
 
   # End to end, with nothing set by hand between the layers. Every other
