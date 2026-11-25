@@ -97,7 +97,7 @@ class RetirementPlan::Simulation
   # Each year's [contribution, withdrawal], which do not depend on returns.
   # RetirementPlan::MonteCarlo replays them under varying returns.
   def yearly_flows
-    @yearly_flows ||= (first_year..last_year).map { |year| flows_for(year, year - first_year) }
+    @yearly_flows ||= (first_year..last_year).map { |year| flows_for(year) }
   end
 
   def inflation_rate
