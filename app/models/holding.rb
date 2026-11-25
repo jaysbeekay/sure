@@ -161,7 +161,7 @@ class Holding < ApplicationRecord
     return if pending.empty?
 
     unit_cost, internal_movement = avg_cost_row_sql(holding_currency: "cur.currency", account_currency: "accounts.currency")
-    lot_joins = avg_cost_lot_joins_sql(holding_currency: "cur.currency", account_currency: "accounts.currency", holding_date: "cur.date")
+    lot_joins = avg_cost_lot_joins_sql(holding_currency: "cur.currency", account_currency: "accounts.currency")
     rows = Holding.from("holdings cur")
       .joins(<<~SQL.squish)
         JOIN accounts ON accounts.id = cur.account_id
@@ -269,20 +269,15 @@ class Holding < ApplicationRecord
   # the rate on the acquisition's day from the account's currency, which the
   # cost is in, into the holding's. A cost basis is what was paid then, so a
   # lot in a holding of another currency converts at that day's rate, and is
-  # unknown without one. A cost set on a lot that a split has restated since
-  # its acquisition is not used. All three arguments are SQL expressions.
-  def self.avg_cost_lot_joins_sql(holding_currency:, account_currency:, holding_date:)
+  # unknown without one. The cost is spread over the units the acquisition
+  # brought in, so a later split rescales it in the replay (Holding::LotBook
+  # #split) like any other lot's. Both arguments are SQL expressions.
+  def self.avg_cost_lot_joins_sql(holding_currency:, account_currency:)
     <<~SQL.squish
       LEFT JOIN holding_lots lots ON lots.account_id = entries.account_id
         AND lots.source_entry_id = entries.id
         AND lots.manual_total_cost IS NOT NULL
         AND trades.qty > 0
-        AND NOT EXISTS (
-          SELECT 1 FROM security_splits lot_splits
-          WHERE lot_splits.security_id = trades.security_id
-            AND lot_splits.ex_date > entries.date
-            AND lot_splits.ex_date <= #{holding_date}
-        )
       LEFT JOIN exchange_rates lot_rates ON (
         lot_rates.date = entries.date AND
         lot_rates.from_currency = #{account_currency} AND
@@ -727,7 +722,7 @@ class Holding < ApplicationRecord
     def avg_cost_trade_rows(through:, before:)
       quoted = { holding_currency: self.class.connection.quote(currency), account_currency: self.class.connection.quote(account.currency) }
       unit_cost, internal_movement = self.class.avg_cost_row_sql(**quoted)
-      lot_joins = self.class.avg_cost_lot_joins_sql(**quoted, holding_date: self.class.connection.quote(date))
+      lot_joins = self.class.avg_cost_lot_joins_sql(**quoted)
 
       cutoff = ActiveRecord::Base.sanitize_sql_array(
         if before
