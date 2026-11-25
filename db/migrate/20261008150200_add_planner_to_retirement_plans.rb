@@ -41,8 +41,11 @@ class AddPlannerToRetirementPlans < ActiveRecord::Migration[8.1]
       # runs to the plan's end age.
       t.integer :start_year
       t.integer :end_year
-      # Grows with the plan's inflation rate from today when true.
+      # Grows with the plan's inflation rate from base_year when true.
       t.boolean :indexed, null: false, default: true
+      # The year whose money annual_amount is in: the year it was entered or
+      # last changed, or seeded.
+      t.integer :base_year, null: false
       t.string :source, null: false, default: "manual"
       # The loan a seeded repayment stream came from. Nullified, not
       # cascaded, when the account goes: the user may have edited the stream.

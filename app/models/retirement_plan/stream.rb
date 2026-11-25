@@ -14,6 +14,7 @@ class RetirementPlan::Stream < ApplicationRecord
   belongs_to :account, optional: true
 
   before_validation :default_currency, on: :create
+  before_validation :date_the_amount, if: :will_save_change_to_annual_amount?
 
   validates :name, presence: true
   validates :currency, presence: true
@@ -21,6 +22,7 @@ class RetirementPlan::Stream < ApplicationRecord
   validates :source, inclusion: { in: SOURCES }
   validates :annual_amount, numericality: { greater_than: 0 }
   validates :start_year, :end_year, numericality: { only_integer: true }, allow_nil: true
+  validates :base_year, numericality: { only_integer: true }
   validate :ends_no_earlier_than_it_starts
   # Only when the account changes: a form resubmits the account a stream
   # already holds, and a loan that has since stopped being shared must not
@@ -31,7 +33,8 @@ class RetirementPlan::Stream < ApplicationRecord
   # Money::ConversionError when there is no rate.
   def to_simulation_stream(currency:, date:)
     amount = Money.new(annual_amount, self.currency).exchange_to(currency, date: date).amount
-    RetirementPlan::Simulation::Stream.new(kind:, annual_amount: amount, start_year:, end_year:, indexed:)
+    RetirementPlan::Simulation::Stream.new(kind:, annual_amount: amount, start_year:, end_year:, indexed:,
+                                           seeded: source != "manual", base_year:)
   end
 
   private
@@ -39,6 +42,12 @@ class RetirementPlan::Stream < ApplicationRecord
     # Goal or Budget takes.
     def default_currency
       self.currency ||= retirement_plan&.user&.family&.currency
+    end
+
+    # An amount typed in is in that year's money. Seeding sets the year itself,
+    # from its reference date.
+    def date_the_amount
+      self.base_year = Date.current.year unless will_save_change_to_base_year?
     end
 
     def ends_no_earlier_than_it_starts

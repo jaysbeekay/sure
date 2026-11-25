@@ -13,7 +13,7 @@ class RetirementPlans::MilestonesTest < ActionDispatch::IntegrationTest
     # lie ahead, so both states render.
     IncomeStatement.any_instance.stubs(:median_expense).returns(BigDecimal("1000"))
     IncomeStatement.any_instance.stubs(:median_income).returns(BigDecimal("5000"))
-    RetirementPlan.any_instance.stubs(:funding_total).returns(BigDecimal("100000"))
+    RetirementPlan.any_instance.stubs(:funding_assets).returns(RetirementPlan::AssetTotal.new(total: BigDecimal("100000"), unconverted_count: 0))
     @plan = RetirementPlan.create!(user: @user, birth_year: 1980, end_age: 90, retirement_date: Date.new(2046, 1, 1),
                                    safe_withdrawal_rate: BigDecimal("0.04"), savings_rate: BigDecimal("0.5"))
   end
