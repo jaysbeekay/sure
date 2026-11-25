@@ -86,10 +86,11 @@ class MarketDataImporterTest < ActiveSupport::TestCase
     account = family.accounts.create!(name: "Chequing", currency: "CAD", balance: 100, accountable: Depository.new)
     account.entries.create!(date: 10.days.ago.to_date, amount: 10, currency: "GBP", name: "Card payment", entryable: Transaction.new)
 
-    [ %w[GBP CAD], %w[GBP USD], %w[CAD USD] ].each do |from, to|
+    # GBP/CAD comes back empty, so GBP/USD is fetched again as its first USD leg.
+    { %w[GBP CAD] => 1, %w[GBP USD] => 2, %w[CAD USD] => 1 }.each do |(from, to), calls|
       @provider.expects(:fetch_exchange_rates)
                .with(from: from, to: to, start_date: anything, end_date: anything)
-               .once
+               .times(calls)
                .returns(provider_success_response([]))
     end
 
@@ -255,9 +256,13 @@ class MarketDataImporterTest < ActiveSupport::TestCase
     Provider::Registry.any_instance.stubs(:get_provider).with(:yahoo_finance).returns(yahoo)
     Setting.stubs(:enabled_securities_providers).returns([ "twelve_data" ])
 
-    yahoo.expects(:fetch_security_prices).returns(provider_success_response([
-      OpenStruct.new(security: security, date: snapshot_start_date, price: 100, currency: "USD")
-    ]))
+    yahoo.expects(:fetch_security_prices)
+         .with(symbol: "AAPL", exchange_operating_mic: "XNAS",
+               start_date: snapshot_start_date - SECURITY_PRICE_BUFFER,
+               end_date: Date.current.in_time_zone("America/New_York").to_date)
+         .returns(provider_success_response([
+           OpenStruct.new(security: security, date: snapshot_start_date, price: 100, currency: "USD")
+         ]))
     yahoo.stubs(:fetch_security_info).returns(provider_success_response(OpenStruct.new(name: "Apple", logo_url: "logo")))
 
     MarketDataImporter.new(mode: :snapshot).import_security_prices

@@ -814,6 +814,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_23_220100) do
     t.date "first_provider_rate_on"
     t.string "from_currency", null: false
     t.string "provider_name"
+    t.boolean "quoted_directly", default: false, null: false
     t.string "to_currency", null: false
     t.datetime "updated_at", null: false
     t.index ["from_currency", "to_currency"], name: "index_exchange_rate_pairs_on_pair_unique", unique: true
@@ -2373,6 +2374,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_23_220100) do
     t.datetime "failed_fetch_at"
     t.integer "failed_fetch_count", default: 0, null: false
     t.date "first_provider_price_on"
+    t.string "first_provider_price_source"
     t.string "industry"
     t.string "kind", default: "standard", null: false
     t.datetime "last_health_check_at"
@@ -2412,6 +2414,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_23_220100) do
   end
 
   create_table "security_prices", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.boolean "carried_forward", default: false, null: false
     t.datetime "created_at", null: false
     t.string "currency", default: "USD", null: false
     t.date "date", null: false
