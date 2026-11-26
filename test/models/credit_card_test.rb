@@ -684,6 +684,16 @@ class CreditCardTest < ActiveSupport::TestCase
     assert_equal 0, card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
   end
 
+  test "without a due day, a payment after the cycle closed does not restore its grace" do
+    card = interest_card(close_day: 31, due_day: 25)
+    card.update!(due_day: nil)
+    charge(card.account, Date.new(2026, 8, 15), 1000)
+    charge(card.account, Date.new(2026, 10, 15), -1000)
+
+    # Unpaid through the September cycle: 1,000 x 30 x 0.18 / 365
+    assert_equal BigDecimal("14.79"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 10, 20)).amount
+  end
+
   test "an actual/360 card divides the APR by 360 days" do
     card = interest_card(close_day: 10, due_day: 26)
     card.update!(day_count_convention: "actual_360")

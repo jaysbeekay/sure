@@ -156,7 +156,7 @@ class CreditCard < ApplicationRecord
     scoped = account.entries.excluding_pending.excluding_split_parents
     return nil unless all_in_currency?(scoped.where(date: ..last_day), currency)
 
-    paid = statement_paid_by_due_date?(scoped, last_close, as_of)
+    paid = statement_paid_by_due_date?(scoped, last_close, [ as_of, last_day ].min)
     return nil if paid.nil?
     return Money.new(0, currency) if paid
 
@@ -360,8 +360,8 @@ class CreditCard < ApplicationRecord
     # Whether the statement that closed on `close` was paid in full by its due
     # date, which is what grace on the next cycle's purchases turns on. Unlike
     # statement_settled?, a payment after the due date does not count. Without
-    # a due day, the payments so far decide. nil when the closed balance is
-    # unknown.
+    # a due day, the payments up to `as_of` decide. nil when the closed balance
+    # is unknown.
     def statement_paid_by_due_date?(scoped, close, as_of)
       balance = balance_record_on_or_before(close, scoped.where(date: ..close))
       return nil if balance.nil?

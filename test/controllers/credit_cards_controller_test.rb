@@ -130,6 +130,7 @@ class CreditCardsControllerTest < ActionDispatch::IntegrationTest
   test "updates the interest basis from the edit form" do
     get edit_credit_card_path(@account)
     assert_select "select[name='account[accountable_attributes][day_count_convention]'] option[value='actual_360']"
+    assert_select "select[name='account[accountable_attributes][day_count_convention]'][aria-describedby]"
 
     patch credit_card_path(@account), params: {
       account: {
