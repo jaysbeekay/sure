@@ -555,6 +555,33 @@ class EntrySplitTest < ActiveSupport::TestCase
     assert_empty txn.locked_attributes
   end
 
+  test "resplit! by id moves the family's entries cache version on a tag-only change" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    family = @entry.account.family
+    before = family.entries_cache_version
+
+    travel 1.second do
+      assert @entry.resplit!([ { id: part.id, name: "Part 1", amount: 60, tag_ids: [ tags(:one).id ] }, { id: other.id, name: "Part 2", amount: 40 } ])
+    end
+
+    assert_equal [ tags(:one).id ], part.reload.transaction.tag_ids
+    assert_not_equal before, family.entries_cache_version
+  end
+
+  test "resplit! by id moves a tag-filtered search's totals cache key on a tag-only change" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    search = -> { Transaction::Search.new(@entry.account.family, filters: { "tags" => [ tags(:one).name ] }) }
+    key_before = search.call.cache_key_base
+
+    travel 1.second do
+      assert_difference -> { search.call.transactions_scope.count }, 1 do
+        @entry.resplit!([ { id: part.id, name: "Part 1", amount: 60, tag_ids: [ tags(:one).id ] }, { id: other.id, name: "Part 2", amount: 40 } ])
+      end
+    end
+
+    assert_not_equal key_before, search.call.cache_key_base
+  end
+
   private
     def give_part_state(part, label:, notes:)
       part.transaction.update!(investment_activity_label: label)

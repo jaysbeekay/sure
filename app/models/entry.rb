@@ -1149,12 +1149,17 @@ class Entry < ApplicationRecord
     end
 
     # The edit form doesn't carry a part's exclusion, so a split hash without :excluded keeps it.
+    #
+    # Tags are saved as taggings alone, so a tag-only change saves neither the transaction nor the
+    # entry; the touch moves Family#entries_cache_version for caches filtered on tags.
     def update_split_part!(part, split_attrs)
+      tag_ids_before = part.entryable.tag_ids.sort
       part.entryable.update!(split_part_transaction_attributes(split_attrs))
 
       attrs = { name: split_attrs[:name], amount: split_attrs[:amount] }
       attrs[:excluded] = TRUTHY_VALUES.include?(split_attrs[:excluded]) unless split_attrs[:excluded].nil?
       part.update!(attrs)
+      part.touch if part.entryable.tag_ids.sort != tag_ids_before
     end
 
     # Remembers the earliest date this entry had before any save that changed
