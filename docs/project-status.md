@@ -19,11 +19,29 @@ GitHub (`node --test .github/project-status/test/*.test.mjs`).
 - **Forward-only.** A card is never moved back, so one you have dragged further on stays put.
 - **Epics are skipped** (`type:epic`); their progress comes from sub-issues.
 - **Closed items are skipped.** Done, closed and reopened are left to the board's built-in workflows.
-- **PRs from outside the repository move only their own card.** `pull_request_target` runs for PRs
-  from forks too, whose body anyone can write, so the issues a PR names move only when its author is
-  the owner, a member or a collaborator.
-- **Pre-flights work too.** GitHub does not link a PR into `mirror/upstream-main` to its issue, but
-  this reads the PR body, so `Closes #N` on a pre-flight still moves issue `#N`.
+- **PRs from outside the repository move only their own card**, and only at the next sweep (up to an
+  hour). Their `pull_request` runs get no secrets, so the sweep is what moves them. Anyone can write
+  their body, so the issues a PR names move only when its author is the owner, a member or a
+  collaborator.
+- **Pre-flights work too, at the next sweep.** Their `up/*` heads are cut from upstream and do not
+  carry this workflow, so no PR event runs for them. GitHub does not link a PR into
+  `mirror/upstream-main` to its issue, but the sweep reads the PR body, so `Closes #N` on a
+  pre-flight still moves issue `#N`.
+- **A PR with a merge conflict moves at the next sweep.** GitHub runs no `pull_request` workflow for
+  it, so marking it ready moves its card within the hour rather than at once.
+
+## When it runs
+
+| Trigger | What it reads |
+|---|---|
+| `issue_comment` | The comment, and the issue's earlier comments when it cites a review |
+| `pull_request` (opened, edited, ready for review) | The PR, for same-repository PRs whose head carries this workflow |
+| `schedule` (hourly, `--sweep`) | Every open PR, whatever its base, read as if it had just been edited |
+| `workflow_dispatch` | The number and status you give it |
+
+`pull_request_target` is not used: GitHub blocks it by default in public repositories from
+2026-12-02. The sweep makes the same decisions as a PR event, and moves are forward-only, so a PR
+both paths see is written at most once.
 
 ## Moving a card by hand (you, or a Claude session)
 
@@ -63,6 +81,8 @@ review approved, Code changes requested and Auto-close issue off.
 
 ## Safety
 
-The workflow never checks out pull request code: every trigger, `pull_request_target` included,
-runs the script from the default branch. It never comments, labels or pushes, and setting a project
-field triggers no workflow, so it cannot start Gatekeeper (`main.yml`) or itself.
+The workflow never checks out pull request code: every trigger, `pull_request` included, runs the
+script from the default branch. Under `pull_request` the workflow file itself is read from the PR's
+head, and only same-repository PRs, whose authors can already push, get `PROJECT_TOKEN`. It never
+comments, labels or pushes, and setting a project field triggers no workflow, so it cannot start
+Gatekeeper (`main.yml`) or itself.

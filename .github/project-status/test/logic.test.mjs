@@ -205,6 +205,19 @@ describe("decide: pull requests", () => {
     assert.deepEqual(decide("pull_request_target", prEvent("reopened"), CTX), []);
     assert.deepEqual(decide("pull_request_target", prEvent("synchronize"), CTX), []);
   });
+
+  test("pull_request makes the same moves as pull_request_target", () => {
+    const events = [
+      prEvent("opened", { body: "Closes #424" }),
+      prEvent("edited", { draft: false, base: "mirror/upstream-main", body: "Closes #424\nUpstream PR: we-promise/sure#4174", number: 440 }),
+      prEvent("ready_for_review", { draft: false, body: "Closes #424", association: "NONE" }),
+    ];
+    for (const e of events) {
+      const moves = decide("pull_request", e, CTX);
+      assert.notDeepEqual(moves, [], e.action);
+      assert.deepEqual(moves, decide("pull_request_target", e, CTX), e.action);
+    }
+  });
 });
 
 describe("decide: manual", () => {
