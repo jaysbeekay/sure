@@ -1,10 +1,15 @@
 # Folds one security row into another that stands for the same instrument and
 # deletes it, moving everything that references it: holdings, trades, lots,
-# prices, splits and tags. Rows the target already has for the same key win,
-# except holdings, where the most recently written row for an
+# prices, splits, tags, classification proposals and constituents, and a
+# classification a person asserted. Rows the target already has for the same
+# key win, except holdings, where the most recently written row for an
 # (account, date, currency) is kept. Accounts that referenced the merged row
 # are synced afterwards so their holdings and balances are rebuilt on one row.
 class Security::Merger
+  # Who asserted a classification, by how far it outranks the rest: a person by
+  # hand, then a person approving a proposal. Unlisted sources rank zero.
+  PERSON_RANKS = { "ai" => 1, "manual" => 2 }.freeze
+
   def initialize(from:, into:)
     @from = from
     @into = into
@@ -15,9 +20,13 @@ class Security::Merger
   def merge!(condition: nil)
     return into if from.id == into.id
 
+    merged = nil
     account_ids = Security.transaction do
+      # Security rows first, then (moving them) proposal rows: the order
+      # Security::ClassificationProposal#approve! takes.
       locked = Security.where(id: [ from.id, into.id ]).order(:id).lock.to_a
       source = locked.find { |security| security.id == from.id }
+      merged = target = locked.find { |security| security.id == into.id }
       # A concurrent merge already removed the row.
       next [] unless locked.size == 2
       next [] if condition && !condition.call(source)
@@ -30,13 +39,14 @@ class Security::Merger
         move_unless_target_has(Security::Price, :date, :currency)
         move_unless_target_has(Security::Split, :ex_date)
         move_taggings!
-        into.update!(name: from.name) if into.name.blank? && from.name.present?
+        move_proposals!
+        update_target!(source, target, now)
         source.reload.destroy!
       end
     end
 
     Account.where(id: account_ids).find_each(&:sync_later)
-    into
+    merged
   end
 
   private
@@ -75,6 +85,54 @@ class Security::Merger
       lots = HoldingLot.where(security_id: from.id)
       HoldingLot.move!(derived: lots.derived, opening: lots.opening, to: into)
       HoldingLot.where(origin_security_id: from.id).update_all(origin_security_id: into.id, updated_at: now)
+    end
+
+    # One write, without validations: a target invalid for an unrelated reason
+    # (a price provider since removed) must not roll the merge back.
+    def update_target!(source, target, now)
+      attributes = {}
+      attributes[:name] = source.name if target.name.blank? && source.name.present?
+      attributes.merge!(classification_from(source, target))
+      attributes.merge!(move_constituents!(source, target, now))
+      target.update_columns(attributes.merge(updated_at: now)) if attributes.any?
+    end
+
+    # A classification a person asserted survives the merge when it outranks
+    # the target's and the target is not locked. As with
+    # Security::ClassificationProposal#source_attributes, an answer without an
+    # asset class claims nothing: copied locked it would shut the provider out
+    # of the asset class, copied unlocked it would be open to overwriting, so
+    # the provider classifies the target instead.
+    def classification_from(source, target)
+      return {} if source.asset_class.blank? || target.classification_locked?
+      return {} unless PERSON_RANKS.fetch(source.classification_source, 0) > PERSON_RANKS.fetch(target.classification_source, 0)
+
+      { sector: source.sector, industry: source.industry, region: source.region }.compact_blank.merge(
+        asset_class: source.asset_class,
+        asset_sub_class: source.asset_sub_class.presence,
+        classification_source: source.classification_source,
+        classification_locked: source.classification_locked
+      )
+    end
+
+    # One proposal per family survives: the pending one when only one of the
+    # two is pending, otherwise the target's.
+    def move_proposals!
+      proposals = Security::ClassificationProposal
+      pending_on_source = proposals.pending.where(security_id: from.id).select(:family_id)
+      proposals.where(security_id: into.id, family_id: pending_on_source).where.not(status: "pending").delete_all
+      move_unless_target_has(proposals, :family_id)
+    end
+
+    # A target the provider has already answered, with rows or an empty list,
+    # keeps its answer; the source's rows go with the source. Otherwise the
+    # target takes the source's answer, an empty one included, so the provider
+    # is not asked again.
+    def move_constituents!(source, target, now)
+      return {} if target.constituents_fetched_at.present? || Security::Constituent.exists?(security_id: target.id)
+
+      Security::Constituent.where(security_id: source.id).update_all(security_id: target.id, updated_at: now)
+      source.constituents_fetched_at ? { constituents_fetched_at: source.constituents_fetched_at } : {}
     end
 
     def move_unless_target_has(model, *key_columns)

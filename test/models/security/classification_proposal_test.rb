@@ -328,6 +328,41 @@ class Security::ClassificationProposalTest < ActiveSupport::TestCase
     assert_nil @security.classification_source
   end
 
+  test "a proposal moved to another security since it was read is not approved" do
+    proposal = propose(asset_class: "equity", asset_sub_class: "stock")
+    proposal.security
+    Security::ClassificationProposal.where(id: proposal.id).update_all(security_id: securities(:msft).id)
+
+    assert_not proposal.approve!
+    assert_nil @security.reload.asset_class
+    assert_nil securities(:msft).reload.asset_class
+    assert proposal.reload.pending?
+  end
+
+  test "a proposal whose security a merge deleted since it was read is refused, not raised" do
+    [ true, false ].each do |association_loaded|
+      gone = Security.create!(ticker: "GONE#{association_loaded}", exchange_operating_mic: "XNAS")
+      proposal = Security::ClassificationProposal.propose!(security: gone, family: @family, asset_class: "equity", asset_sub_class: "stock")
+      proposal = Security::ClassificationProposal.find(proposal.id) unless association_loaded
+      moved_to = Security.create!(ticker: "KEPT#{association_loaded}", exchange_operating_mic: "XNAS")
+      Security::ClassificationProposal.where(id: proposal.id).update_all(security_id: moved_to.id)
+      Security.where(id: gone.id).delete_all
+
+      assert_equal false, proposal.approve!, "association loaded: #{association_loaded}"
+      assert_nil moved_to.reload.asset_class
+    end
+  end
+
+  test "approval locks the security row before the proposal row" do
+    proposal = propose(asset_class: "equity", asset_sub_class: "stock")
+    locks = []
+    collect = ->(*, payload) { locks << payload[:sql][/FROM "(securities|security_classification_proposals)"/, 1] if payload[:sql].include?("FOR UPDATE") }
+
+    ActiveSupport::Notifications.subscribed(collect, "sql.active_record") { assert proposal.approve! }
+
+    assert_equal [ "securities", "security_classification_proposals" ], locks.compact
+  end
+
   private
     def propose(**attrs)
       Security::ClassificationProposal.propose!(
