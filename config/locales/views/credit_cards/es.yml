@@ -45,7 +45,6 @@ es:
         charges: Cargos
         estimated_interest_label: Intereses estimados
         monthly_rate_label: Tipo mensual
-        per_month: "%{amount}/mes"
         closes_on: El próximo extracto cierra el %{date}
         credit_toward_next: Crédito para el próximo extracto
         due_on: Vence el %{date}

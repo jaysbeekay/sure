@@ -562,14 +562,15 @@ class CreditCardTest < ActiveSupport::TestCase
     assert admin_summary.scheduled_payment.present?
   end
 
-  test "the statement summary estimates monthly interest on the remaining balance" do
+  test "the statement summary shows the interest the open cycle has accrued so far" do
     card = statement_card(close_day: 10, due_day: 26)
     card.update!(apr: 12)
     charge(card.account, Date.new(2026, 9, 20), 1200)
 
     summary = card.statement_summary(as_of: Date.new(2026, 10, 16), viewer: users(:family_admin))
 
-    assert_equal 12, summary.estimated_interest.amount
+    # 1,200 unpaid over 11-16 Oct: 1,200 x 6 x 0.12 / 365 = 2.367
+    assert_equal BigDecimal("2.37"), summary.estimated_interest.amount
     assert_equal 1, summary.monthly_rate
   end
 
@@ -580,7 +581,8 @@ class CreditCardTest < ActiveSupport::TestCase
 
     summary = card.statement_summary(as_of: Date.new(2026, 10, 16), viewer: users(:family_admin))
 
-    assert_equal BigDecimal("0.004"), summary.estimated_interest.amount
+    # 0.40 x 6 x 0.12 / 365 = 0.00079, which rounds to 0.001 at three places
+    assert_equal BigDecimal("0.001"), summary.estimated_interest.amount
     assert_equal "KWD", summary.estimated_interest.currency.iso_code
   end
 
@@ -603,6 +605,121 @@ class CreditCardTest < ActiveSupport::TestCase
     assert_nil summary.estimated_interest
   end
 
+  test "cycle interest charges each day's balance, a payment from the day after it posts" do
+    card = interest_card(close_day: 10, due_day: 26)
+    charge(card.account, Date.new(2026, 8, 20), 1000)
+    charge(card.account, Date.new(2026, 9, 20), -500)
+
+    # 1,000 over 11-20 Sep (the payment day included), 500 over 21 Sep-10 Oct:
+    # (1,000 x 10 + 500 x 20) x 0.18 / 365 = 9.863
+    interest = card.cycle_interest_money(last_close: Date.new(2026, 9, 10), as_of: Date.new(2026, 10, 10))
+
+    assert_equal BigDecimal("9.86"), interest.amount
+    assert_equal "USD", interest.currency.iso_code
+  end
+
+  test "cycle interest follows the number of days in each cycle" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2025, 12, 15), 1000)
+
+    assert_equal BigDecimal("13.81"), card.cycle_interest_money(last_close: Date.new(2026, 1, 31), as_of: Date.new(2026, 2, 28)).amount
+    assert_equal BigDecimal("14.79"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+    assert_equal BigDecimal("15.29"), card.cycle_interest_money(last_close: Date.new(2026, 9, 30), as_of: Date.new(2026, 10, 31)).amount
+  end
+
+  test "cycle interest stops at the cycle's close" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2025, 12, 15), 1000)
+
+    assert_equal BigDecimal("14.79"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 10, 20)).amount
+  end
+
+  test "a purchase accrues from the day it posts" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2026, 8, 15), 500)
+    charge(card.account, Date.new(2026, 9, 15), 1000)
+
+    # 500 x 30 + 1,000 x 16 (15-30 Sep) = 31,000 balance-days; 15 days would give 14.79
+    assert_equal BigDecimal("15.29"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+  end
+
+  test "a day in credit charges nothing instead of offsetting other days" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2026, 8, 15), 1000)
+    charge(card.account, Date.new(2026, 9, 28), -1500)
+
+    # 1,000 x 28 days, then two days 500 in credit that count as zero:
+    # 28,000 x 0.18 / 365 = 13.81; netting the credit would give 13.32
+    assert_equal BigDecimal("13.81"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+  end
+
+  test "new purchases accrue nothing when the last statement was paid in full on its due date" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2026, 8, 15), 1000)
+    charge(card.account, Date.new(2026, 9, 5), 200)
+    charge(card.account, Date.new(2026, 9, 25), -1000)
+
+    assert_equal 0, card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+  end
+
+  test "a statement paid in full a day late leaves the whole cycle accruing" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2026, 8, 15), 1000)
+    charge(card.account, Date.new(2026, 9, 5), 200)
+    charge(card.account, Date.new(2026, 9, 26), -1000)
+
+    # 1,000 x 4 + 1,200 x 22 (5-26 Sep) + 200 x 4 = 31,200 balance-days
+    assert_equal BigDecimal("15.39"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+  end
+
+  test "new purchases accrue nothing after a statement with no balance" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2026, 9, 15), 1000)
+
+    assert_equal 0, card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+  end
+
+  test "an actual/360 card divides the APR by 360 days" do
+    card = interest_card(close_day: 10, due_day: 26)
+    card.update!(day_count_convention: "actual_360")
+    charge(card.account, Date.new(2026, 8, 20), 1000)
+    charge(card.account, Date.new(2026, 9, 20), -500)
+
+    # 20,000 balance-days x 0.18 / 360
+    assert_equal BigDecimal("10.00"), card.cycle_interest_money(last_close: Date.new(2026, 9, 10), as_of: Date.new(2026, 10, 10)).amount
+  end
+
+  test "cycle interest is unknown without an APR" do
+    card = interest_card(close_day: 10, due_day: 26)
+    card.update!(apr: nil)
+    charge(card.account, Date.new(2026, 8, 20), 1000)
+
+    assert_nil card.cycle_interest_money(last_close: Date.new(2026, 9, 10), as_of: Date.new(2026, 10, 10))
+  end
+
+  test "cycle interest is unknown when the cycle holds an entry in another currency" do
+    card = interest_card(close_day: 10, due_day: 26)
+    charge(card.account, Date.new(2026, 8, 20), 1000)
+    card.account.entries.create!(
+      name: "Foreign charge", date: Date.new(2026, 9, 15), amount: 50, currency: "EUR", entryable: Transaction.new
+    )
+
+    assert_nil card.cycle_interest_money(last_close: Date.new(2026, 9, 10), as_of: Date.new(2026, 10, 10))
+  end
+
+  test "a card takes actual/365 by default and accepts only the listed bases" do
+    card = statement_card(close_day: 10, due_day: 26)
+
+    assert_equal "actual_365", card.day_count_convention
+
+    card.day_count_convention = "actual_360"
+    assert card.valid?
+
+    card.day_count_convention = "thirty_360"
+    assert_not card.valid?
+    assert card.errors[:day_count_convention].present?
+  end
+
   test "the statement summary refuses a remaining amount it cannot total" do
     card = statement_card(close_day: 10, due_day: 26)
     charge(card.account, Date.new(2026, 9, 20), 300)
@@ -621,6 +738,7 @@ class CreditCardTest < ActiveSupport::TestCase
     assert_nil summary.charges
     assert_nil summary.credits
     assert_nil summary.accrued
+    assert_nil summary.estimated_interest
     assert foreign.persisted?
   end
 
@@ -645,6 +763,13 @@ class CreditCardTest < ActiveSupport::TestCase
       )
 
       card.reload
+    end
+
+    # 18% so the worked figures read as the usual card examples.
+    def interest_card(close_day:, due_day:)
+      card = statement_card(close_day: close_day, due_day: due_day)
+      card.update!(apr: 18)
+      card
     end
 
     def scheduled_payment_series(card, source:, stale:)

@@ -46,7 +46,6 @@ zh-CN:
         charges: "消费记账"
         estimated_interest_label: "预估利息"
         monthly_rate_label: "月利率"
-        per_month: "%{amount}/月"
         closes_on_days:
           zero: "账单结账日 %{date}（今天）"
           one: "账单结账日 %{date}（1 天后）"

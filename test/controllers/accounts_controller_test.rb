@@ -1390,7 +1390,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-testid='credit-card-summary-grid'][class*='@3xl:grid-cols-3']", count: 1
   end
 
-  test "credit card overview shows the estimated monthly interest for the APR" do
+  test "credit card overview shows the interest the cycle has accrued so far" do
     sign_in users(:family_admin)
     account = accounts(:credit_card)
     account.credit_card.update!(statement_close_day: 10, due_day: 26, apr: 12, minimum_payment: nil)
@@ -1406,7 +1406,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
       assert_response :success
       assert_match I18n.t("credit_cards.tabs.overview.estimated_interest_label"), response.body
-      assert_match I18n.t("credit_cards.tabs.overview.per_month", amount: Money.new(12, "USD").format), response.body
+      assert_match I18n.t("credit_cards.tabs.overview.accrued_this_cycle", amount: Money.new(BigDecimal("2.37"), "USD").format), response.body
       assert_match I18n.t("credit_cards.tabs.overview.monthly_rate_label"), response.body
       assert_match I18n.t("credit_cards.tabs.overview.balance_carried_label"), response.body
       assert_match "1.000%", response.body

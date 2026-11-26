@@ -45,7 +45,6 @@ nl:
         charges: "Afschrijvingen"
         estimated_interest_label: "Geschatte rente"
         monthly_rate_label: "Maandelijkse rente"
-        per_month: "%{amount}/maand"
         closes_on: "Volgend afschrift sluit op %{date}"
         credit_toward_next: "Tegoed voor het volgende afschrift"
         due_on: "Te betalen op %{date}"

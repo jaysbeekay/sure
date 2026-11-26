@@ -14,6 +14,12 @@ class CreditCard < ApplicationRecord
   )
   ScheduledPayment = Data.define(:payment, :due_date)
 
+  # The days in the year each interest basis divides the APR by to get the
+  # daily periodic rate.
+  DAY_COUNT_BASES = { "actual_365" => 365, "actual_360" => 360 }.freeze
+
+  validates :day_count_convention, inclusion: { in: DAY_COUNT_BASES.keys }
+
   validates :statement_close_day, :due_day,
             numericality: { only_integer: true, greater_than_or_equal_to: 1, less_than_or_equal_to: 31 },
             allow_nil: true
@@ -126,6 +132,41 @@ class CreditCard < ApplicationRecord
     accrued_after_bill_settlement(statement_ledger(as_of: as_of, last_close: last_close))
   end
 
+  # The interest the cycle that opened after `last_close` has accrued through
+  # `as_of`, or through the cycle's own close once that has passed. Each day
+  # charges its balance at the daily rate of the card's basis: a charge counts
+  # from the day it posts, a payment or other credit from the day after, and a
+  # day in credit charges nothing. The days are summed and rounded once. The
+  # current APR applies to the whole cycle.
+  #
+  # Nothing accrues when the statement that closed on `last_close` was paid in
+  # full by its due date. Until it is paid, the figure shows what the cycle is
+  # accruing, which is what it costs if the payment misses that date.
+  #
+  # nil without an APR, when an entry is in another currency, or when the
+  # balance records have not been built yet.
+  def cycle_interest_money(last_close:, as_of: Date.current)
+    return nil if apr.blank? || !statement_cycle_configured?
+
+    currency = account.currency
+    first_day = last_close + 1
+    last_day = [ as_of, day_of_month_in(last_close.next_month, statement_close_day) ].min
+    return Money.new(0, currency) if last_day < first_day
+
+    scoped = account.entries.excluding_pending.excluding_split_parents
+    return nil unless all_in_currency?(scoped.where(date: ..last_day), currency)
+
+    paid = statement_paid_by_due_date?(scoped, last_close, as_of)
+    return nil if paid.nil?
+    return Money.new(0, currency) if paid
+
+    balance_days = cycle_balance_days(scoped, first_day, last_day)
+    return nil if balance_days.nil?
+
+    interest = balance_days * apr / 100 / DAY_COUNT_BASES.fetch(day_count_convention)
+    Money.new(interest.round(Money::Currency.new(currency).default_precision || 2), currency)
+  end
+
   # One read of the statement cycle for the Overview tab. The view needs the
   # closed statement, what has happened since, and whether the bill is settled;
   # building them together keeps those figures on one `as_of` and avoids
@@ -153,7 +194,7 @@ class CreditCard < ApplicationRecord
       next_close: next_statement_close_date(as_of: as_of),
       status: statement_status(balance: balance, remaining: remaining, due_date: last_due_date, as_of: as_of),
       scheduled_payment: next_scheduled_payment(as_of: as_of, viewer: viewer),
-      estimated_interest: estimated_monthly_interest_money(remaining),
+      estimated_interest: cycle_interest_money(last_close: last_close, as_of: as_of),
       monthly_rate: monthly_rate
     )
   end
@@ -316,14 +357,54 @@ class CreditCard < ApplicationRecord
       apr / 12 if apr.present?
     end
 
-    def estimated_monthly_interest_money(balance)
-      return nil if apr.blank? || balance.nil?
-      return Money.new(0, account.currency) unless balance.positive?
+    # Whether the statement that closed on `close` was paid in full by its due
+    # date, which is what grace on the next cycle's purchases turns on. Unlike
+    # statement_settled?, a payment after the due date does not count. Without
+    # a due day, the payments so far decide. nil when the closed balance is
+    # unknown.
+    def statement_paid_by_due_date?(scoped, close, as_of)
+      balance = balance_record_on_or_before(close, scoped.where(date: ..close))
+      return nil if balance.nil?
+      return true unless balance.positive?
 
-      Money.new(
-        (balance.amount * apr / 100 / 12).round(balance.currency.default_precision || 2),
-        account.currency
-      )
+      due = payment_due_date_for(close)
+      cutoff = due ? [ due, as_of ].min : as_of
+      credits = scoped.where(entryable_type: "Transaction", date: (close + 1)..cutoff).where("amount < 0")
+      return nil unless all_in_currency?(credits, account.currency)
+
+      credits.sum(:amount).abs >= balance.amount
+    end
+
+    # The sum over the cycle's days of each day's balance before that day's
+    # credits, a day in credit counting as zero. A balance record's end
+    # balance already includes the credits posted that day; on a card they are
+    # its inflows, so adding them back gives the balance a payment does not
+    # reduce until the next day. A day without a record keeps the last one's
+    # end balance. nil when there are entries but no balance records yet.
+    def cycle_balance_days(scoped, first_day, last_day)
+      records = account.balances
+        .where(currency: account.currency, date: first_day..last_day)
+        .pluck(:date, :end_balance, :cash_inflows)
+        .index_by(&:first)
+      carried = account.balances
+        .where(currency: account.currency, date: ...first_day)
+        .order(date: :desc)
+        .pick(:end_balance)
+
+      if records.empty? && carried.nil?
+        return scoped.where(date: ..last_day).none? ? 0 : nil
+      end
+
+      carried ||= 0
+      (first_day..last_day).sum do |date|
+        if (record = records[date])
+          _, end_balance, inflows = record
+          carried = end_balance
+          [ end_balance + inflows, 0 ].max
+        else
+          [ carried, 0 ].max
+        end
+      end
     end
 
     def statement_settled?(as_of: Date.current)

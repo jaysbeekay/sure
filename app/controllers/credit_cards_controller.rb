@@ -9,7 +9,8 @@ class CreditCardsController < ApplicationController
     :annual_fee,
     :expiration_date,
     :statement_close_day,
-    :due_day
+    :due_day,
+    :day_count_convention
   )
 
   def update

@@ -3,6 +3,12 @@ module CreditCardsHelper
     (1..31).map { |day| [ localized_ordinal(day), day ] }
   end
 
+  def credit_card_day_count_convention_options
+    CreditCard::DAY_COUNT_BASES.keys.map do |convention|
+      [ t("credit_cards.form.day_count_convention_#{convention}", raise: true), convention ]
+    end
+  end
+
   def credit_card_due_countdown(days)
     return nil if days.nil?
     return t("credit_cards.due.overdue", count: days.abs) if days.negative?

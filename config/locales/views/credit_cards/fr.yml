@@ -67,7 +67,6 @@ fr:
         no_cycle_description: 'Indiquez le jour où votre relevé est arrêté et le jour où le paiement est dû : cet onglet affichera alors le montant de votre dernier relevé et ce qui s''accumule pour le prochain. Une carte liée les renseigne généralement pour vous.'
         no_cycle_title: Aucun cycle de relevé défini
         payments_applied: Paiements imputés
-        per_month: "%{amount}/mois"
         scheduled_payment: Paiement prévu de %{amount} le %{date}
         since_last_statement: Depuis le dernier relevé
         statement_balance: Solde du relevé

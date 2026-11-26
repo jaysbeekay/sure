@@ -86,7 +86,8 @@ class Family::DataImporterTest < ActiveSupport::TestCase
         available_credit: 2_650,
         due_day: 5,
         statement_close_day: 20,
-        expiration_date: Date.new(2029, 8, 31)
+        expiration_date: Date.new(2029, 8, 31),
+        day_count_convention: "actual_360"
       )
     )
 
@@ -100,6 +101,7 @@ class Family::DataImporterTest < ActiveSupport::TestCase
     assert_equal 5, card.due_day
     assert_equal 20, card.statement_close_day
     assert_equal Date.new(2029, 8, 31), card.expiration_date
+    assert_equal "actual_360", card.day_count_convention
   end
 
   test "round trips vehicle details through full export" do

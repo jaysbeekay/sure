@@ -109,7 +109,7 @@
               <span class="flex items-center justify-between gap-4">
                 <span><%= t(".estimated_interest_label") %></span>
                 <span class="font-medium text-primary">
-                  <%= summary.estimated_interest ? t(".per_month", amount: format_money(summary.estimated_interest)) : t(".unknown") %>
+                  <%= summary.estimated_interest ? t(".accrued_this_cycle", amount: format_money(summary.estimated_interest)) : t(".unknown") %>
                 </span>
               </span>
               <span class="flex items-center justify-between gap-4">

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_11_24_120100) do
+ActiveRecord::Schema[8.1].define(version: 2026_11_26_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -560,6 +560,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_24_120100) do
     t.decimal "apr", precision: 10, scale: 2
     t.decimal "available_credit", precision: 10, scale: 2
     t.datetime "created_at", null: false
+    t.string "day_count_convention", default: "actual_365", null: false
     t.integer "due_day"
     t.date "expiration_date"
     t.jsonb "locked_attributes", default: {}
@@ -567,6 +568,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_11_24_120100) do
     t.integer "statement_close_day"
     t.string "subtype"
     t.datetime "updated_at", null: false
+    t.check_constraint "day_count_convention::text = ANY (ARRAY['actual_365'::character varying::text, 'actual_360'::character varying::text])", name: "chk_credit_cards_day_count_convention"
     t.check_constraint "due_day >= 1 AND due_day <= 31", name: "chk_credit_cards_due_day"
     t.check_constraint "statement_close_day >= 1 AND statement_close_day <= 31", name: "chk_credit_cards_statement_close_day"
   end
