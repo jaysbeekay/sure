@@ -649,7 +649,12 @@ class CreditCardTest < ActiveSupport::TestCase
     charge(card.account, Date.new(2026, 9, 28), -1500)
 
     # 1,000 x 28 days, then two days 500 in credit that count as zero:
-    # 28,000 x 0.18 / 365 = 13.81; netting the credit would give 13.32
+    # 28,000 x 0.18 / 365 = 13.81; netting the credit would give 13.32.
+    # The balance records end with the last entry, so these two days carry it.
+    assert_equal BigDecimal("13.81"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+
+    # A later charge gives those days records of their own, still in credit
+    charge(card.account, Date.new(2026, 9, 30), 100)
     assert_equal BigDecimal("13.81"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
   end
 
