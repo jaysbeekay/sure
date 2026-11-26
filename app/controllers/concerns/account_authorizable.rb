@@ -5,24 +5,13 @@ module AccountAuthorizable
     include StreamExtensions
   end
 
-  # Which permissions satisfy which level. One table, because a view that has
-  # to decide whether to RENDER a control needs the same answer the action uses
-  # to ACCEPT it, and a second copy of the list is how the two drift: the
-  # control disappears for someone whose save would have succeeded, or is
-  # offered to someone whose save is refused. Read through #account_permission?
-  # rather than copied.
-  PERMISSION_LEVELS = {
-    write: %i[owner full_control],
-    annotate: %i[owner full_control read_write],
-    owner: %i[owner]
-  }.freeze
-
   private
 
-    # Does the current user clear `level` on this account? An unknown level
-    # clears nothing, which is the `else false` the case statement had.
+    # Does the current user clear `level` on this account? Read through
+    # AccountPolicy, the one table, so a view deciding whether to render a
+    # control gets the answer the action gives when it is submitted.
     def account_permission?(account, level)
-      PERMISSION_LEVELS.fetch(level, []).include?(account.permission_for(Current.user))
+      AccountPolicy.new(Current.user, account).permits?(level)
     end
 
     def require_account_permission!(account, level = :write, redirect_path: nil)

@@ -45,6 +45,7 @@ RSpec.describe 'API V1 Loans', type: :request do
   let!(:mortgage_account) do
     Account.create!(
       family: family,
+      owner: user,
       name: 'Mortgage',
       balance: 500000,
       currency: 'USD',
@@ -60,6 +61,7 @@ RSpec.describe 'API V1 Loans', type: :request do
   let!(:variable_loan_account) do
     Account.create!(
       family: family,
+      owner: user,
       name: 'Variable Rate Loan',
       balance: 500000,
       currency: 'USD',
@@ -75,6 +77,7 @@ RSpec.describe 'API V1 Loans', type: :request do
   let!(:non_amortizable_loan_account) do
     Account.create!(
       family: family,
+      owner: user,
       name: 'No Rate Loan',
       balance: 500000,
       currency: 'USD',

@@ -31,6 +31,17 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     assert_equal 0, book.open_qty
   end
 
+  test "under fifo a purchase covers a transfer out's shortfall before a later sale's" do
+    book = Holding::LotBook.new(method: "fifo")
+    book.apply(nil, -4)
+    book.apply(nil, -6, source_id: "sale")
+
+    book.apply(BigDecimal("20"), 5, source_id: "cover")
+
+    assert_equal [ [ nil, 5, nil ], [ "cover", 1, 20 ] ],
+      book.disposals.map { |d| [ d.lot_source_id, d.qty, d.unit_cost ] }
+  end
+
   test "under average the book records no disposals" do
     book = Holding::LotBook.new
     book.apply(BigDecimal("12"), 60, source_id: "first")
@@ -76,7 +87,7 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
-  # --- The Example from jaysbeekay/sure#551 -----------------------------------
+  # --- The Example from the lot cost basis proposal ---------------------------
   # 60 bought at $12, 40 at $20; 40 sold at $25.
 
   # --- A named lot ------------------------------------------------------------
@@ -249,6 +260,31 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
+  # Rows imported together share a created_at, so a sell-to-cover on the day of
+  # its vest has nothing but the ids to order it; the vest is offered, and the
+  # replay sells from it, whichever id is lower.
+  test "a same-day buy stamped with the sale's created_at is offered and sold from" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("NAMV", 30)
+      trade(security, 10, 20, 2)
+      sale = trade(security, -3, 25, 6)
+      vest = trade(security, 5, 22, 6)
+      Entry.where(id: [ sale.id, vest.id ]).update_all(created_at: TODAY)
+      Entry.where(id: sale.id).update_all(id: "00000000-0000-0000-0000-000000000001")
+      Entry.where(id: vest.id).update_all(id: "ffffffff-ffff-ffff-ffff-ffffffffffff")
+      vest_id = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+      sale_trade = Trade.find(sale.entryable_id)
+      assert_includes sale_trade.lot_choices.pluck(:id), vest_id
+      sale_trade.update!(lot_source_entry_id: vest_id)
+
+      materialize(:forward)
+
+      assert_equal [ [ vest_id, 3 ] ], HoldingLotDisposal.where(sale_entry_id: "00000000-0000-0000-0000-000000000001").pluck(:lot_source_entry_id, :qty).map { |id, qty| [ id, qty.to_i ] }
+    end
+  end
+
   test "a sale's held choice stays offered even once the replay no longer reaches it first" do
     travel_to TODAY do
       setup_account(method: "fifo")
@@ -310,6 +346,62 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       assert_equal [ first ], Trade.find(first_sale.entryable_id).lot_choices.to_a, "the lot this sale emptied"
       assert_equal [ second ], Trade.find(later_sale.entryable_id).lot_choices.to_a, "the lot an earlier sale emptied was offered"
       assert_not Trade.find(later_sale.entryable_id).update(lot_source_entry: first), "a sold-out lot can be named by a crafted submit"
+    end
+  end
+
+  # Two sales on one day replay in the order they were entered, so a lot the
+  # first one emptied is gone before the second runs. Offering it would let
+  # the second name a lot the replay can no longer find, and the book would
+  # fall back to oldest-first without saying so.
+  test "a lot an earlier sale on the same day emptied is not offered" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("NAMS", 30)
+      first = trade(security, 10, 20, 2)
+      second = trade(security, 10, 22, 3)
+      first_sale = trade(security, -10, 25, 5)
+      later_sale = trade(security, -5, 25, 5)
+      entered_in_order(first_sale, later_sale)
+      materialize(:forward)
+
+      assert_equal [ first, second ], Trade.find(first_sale.entryable_id).lot_choices.to_a, "both lots are open when the first sale runs"
+      assert_equal [ second ], Trade.find(later_sale.entryable_id).lot_choices.to_a, "the lot the earlier sale that day emptied was offered"
+      assert_not Trade.find(later_sale.entryable_id).update(lot_source_entry: first)
+    end
+  end
+
+  # A transfer out consumes lots without recording a disposal, so a lot it
+  # emptied after the sale looks the same as one emptied before it. The lot
+  # was still open on the sale's date, so it stays offered and can be named.
+  test "a lot a later transfer out emptied is still offered" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("NAMT", 30)
+      trade(security, 10, 20, 2)
+      second = trade(security, 10, 22, 3)
+      sale = trade(security, -5, 25, 4)
+      transfer_out(security, -15, 6)
+      materialize(:forward)
+
+      assert_equal 0, HoldingLot.derived.find_by!(source_entry_id: second.id).qty, "the transfer out empties the lot"
+      assert_includes Trade.find(sale.entryable_id).lot_choices.to_a, second
+      assert Trade.find(sale.entryable_id).update(lot_source_entry: second), "a lot open on the sale's date can be named"
+    end
+  end
+
+  test "lots a transfer out emptied before the sale are not offered" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("NAMU", 30)
+      first = trade(security, 10, 20, 2)
+      second = trade(security, 10, 22, 3)
+      transfer_out(security, -20, 4)
+      third = trade(security, 10, 24, 5)
+      sale = trade(security, -5, 25, 6)
+      materialize(:forward)
+
+      assert_equal [ third ], Trade.find(sale.entryable_id).lot_choices.to_a
+      assert_not Trade.find(sale.entryable_id).update(lot_source_entry: first)
     end
   end
 
@@ -383,6 +475,103 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
+  # A same-day round trip from a flat position, with the sale entered before
+  # the purchase. Entry order stands, so the sale runs short, and the purchase
+  # that covers it prices it.
+  test "under fifo a sale entered ahead of the day's purchase is priced at that purchase" do
+    travel_to TODAY do
+      gains = %w[average fifo].map do |method|
+        setup_account(method: method)
+        security = priced_security("FIFD#{method[0]}", 30)
+        sale = trade(security, -10, 250, 5)
+        buy = trade(security, 10, 200, 5)
+        entered_in_order(sale, buy)
+        materialize(:forward)
+        gain(sale)
+      end
+
+      assert_equal [ 500, 500 ], gains, "the fifo sale is covered by the day's 10 at $200"
+    end
+  end
+
+  test "under fifo a short sale covered on a later day is measured against that cover" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("FIFL", 30)
+      lot = trade(security, 5, 100, 2)
+      sale = trade(security, -15, 220, 3)
+      cover = trade(security, 10, 250, 7)
+      materialize(:forward)
+
+      assert_equal 3300 - (5 * 100 + 10 * 250), gain(sale), "5 from the lot at $100, 10 covered at $250"
+      assert_equal [ [ lot.id, 5, 100 ], [ cover.id, 10, 250 ] ].sort_by(&:last),
+        HoldingLotDisposal.where(sale_entry: sale).pluck(:lot_source_entry_id, :qty, :unit_cost)
+          .map { |id, qty, cost| [ id, qty.to_i, cost.to_i ] }.sort_by(&:last)
+    end
+  end
+
+  # Under average a sale entered ahead of the same day's purchase, from a flat
+  # position, must not leave that purchase in the pool once the position is
+  # back to zero, or the next purchase averages against it.
+  test "under average a same-day round trip entered sale first leaves no cost behind" do
+    travel_to TODAY do
+      setup_account
+      security = priced_security("AVGD", 30)
+      sale = trade(security, -10, 250, 5)
+      buy = trade(security, 10, 200, 5)
+      entered_in_order(sale, buy)
+      trade(security, 10, 300, 6)
+      materialize(:forward)
+
+      assert_equal 300, @account.holdings.find_by!(security: security, date: d(6)).avg_cost.amount
+      assert_equal 500, gain(sale)
+    end
+  end
+
+  test "under fifo a day's purchase entered first replays as before" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("FIFE", 30)
+      buy = trade(security, 10, 200, 5)
+      sale = trade(security, -10, 250, 5)
+      entered_in_order(buy, sale)
+      materialize(:forward)
+
+      assert_equal 500, gain(sale)
+    end
+  end
+
+  # Older lots still come first: only what the sale could not take from them is
+  # left for a later purchase to cover.
+  test "under fifo a sale entered ahead of the day's purchase still takes the oldest lot" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("FIFO", 30)
+      trade(security, 10, 100, 2)
+      sale = trade(security, -10, 250, 5)
+      buy = trade(security, 10, 200, 5)
+      entered_in_order(sale, buy)
+      materialize(:forward)
+
+      assert_equal 1500, gain(sale), "10 x ($250 - $100)"
+      assert_equal [ [ 10, 200 ] ], @account.holding_lots.where(security: security).where("qty > 0").pluck(:qty, :unit_cost).map { |q, c| [ q.to_i, c.to_i ] }
+    end
+  end
+
+  # Sold short in the morning and covered at a higher price later the same day.
+  test "under fifo an intraday short sale is measured against the day's cover" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      security = priced_security("FIFS", 30)
+      sale = trade(security, -10, 200, 5)
+      cover = trade(security, 10, 250, 5)
+      entered_in_order(sale, cover)
+      materialize(:forward)
+
+      assert_equal(-500, gain(sale))
+    end
+  end
+
   test "average account figures unchanged after the method column exists" do
     travel_to TODAY do
       setup_account
@@ -396,19 +585,19 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
 
   # --- The avg-cost fallback on a fifo account --------------------------------
 
-  test "a linked fifo account's current row falls back to the open lots, in both paths" do
+  test "a linked fifo account's current row falls back to the open lots" do
     travel_to TODAY do
       linked_example(method: "average")
       assert_nil current_row.cost_basis
-      assert_equal [ BigDecimal("15.2") ] * 2, both_paths(current_row), "average: the pool, unchanged"
+      assert_equal BigDecimal("15.2"), fallback_cost(current_row), "average: the pool, unchanged"
 
       twenty, sale = linked_example(method: "fifo")
       assert_nil current_row.cost_basis, "the provider gives no cost, so the fallback answers"
-      both_paths(current_row).each { |figure| assert_in_delta BigDecimal("17.3333"), figure, BigDecimal("0.0001") }
+      assert_in_delta BigDecimal("17.3333"), fallback_cost(current_row), BigDecimal("0.0001")
 
       name_lot(sale, twenty)
       materialize(:reverse)
-      assert_equal [ 12, 12 ], both_paths(current_row)
+      assert_equal 12, fallback_cost(current_row)
     end
   end
 
@@ -417,11 +606,11 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       linked_example(method: "fifo")
       earlier = @account.holdings.find_by!(security: @security, date: d(9))
       earlier.update_columns(cost_basis: nil)
-      assert_equal [ nil, nil ], both_paths(earlier), "an earlier row: the lots are today's"
+      assert_nil fallback_cost(earlier), "an earlier row: the lots are today's"
 
       lot = HoldingLot.derived.where(account: @account).where("qty > 0").first
       lot.update_columns(qty: lot.qty - 1)
-      assert_equal [ nil, nil ], both_paths(current_row), "lots out of partition"
+      assert_nil fallback_cost(current_row), "lots out of partition"
     end
   end
 
@@ -437,10 +626,10 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
         @account.holdings.create!(security: @security, date: d(10), qty: 10, price: 30, amount: 300, currency: "USD",
           account_provider: @account_provider)
         materialize(:reverse)
-        both_paths(current_row)
+        fallback_cost(current_row)
       end
 
-      assert_equal [ [ nil, nil ], [ 12, 12 ] ], figures
+      assert_equal [ nil, 12 ], figures
     end
   end
 
@@ -455,7 +644,7 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
         account_provider: @account_provider)
       materialize(:reverse)
 
-      assert_equal [ nil, nil ], both_paths(current_row)
+      assert_nil fallback_cost(current_row)
     end
   end
 
@@ -465,12 +654,12 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       materialize(:reverse)
       assert HoldingLot.opening.where(account: @account).sole.qty.positive?, "1 of the 5 is still open"
 
-      assert_equal [ 150, 150 ], both_paths(current_row)
+      assert_equal 150, fallback_cost(current_row)
       assert_equal 150, @account.holdings.find_by!(security: @security, date: d(9)).cost_basis, "the calculators' figure"
     end
   end
 
-  test "a clamped fifo position stays unknown in both paths" do
+  test "a clamped fifo position stays unknown" do
     travel_to TODAY do
       setup_account(method: "fifo")
       link_account
@@ -482,29 +671,7 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       materialize(:reverse)
       assert HoldingLot.where(account: @account, clamped: true).exists?
 
-      assert_equal [ nil, nil ], both_paths(current_row)
-    end
-  end
-
-  test "the fifo fallback preload reads every holding in the same number of queries" do
-    travel_to TODAY do
-      setup_account(method: "fifo")
-      link_account
-      ids = 3.times.map do |i|
-        security = priced_security("LFB#{i}", 30)
-        trade(security, 10, 12, 2)
-        @account.holdings.create!(security: security, date: d(10), qty: 10, price: 30, amount: 300, currency: "USD",
-          account_provider: @account_provider).id
-      end
-      materialize(:reverse)
-
-      counts = [ 1, 3 ].map do |n|
-        batch = Holding.where(id: ids.first(n)).to_a
-        queries = capture_sql_queries { Holding.preload_avg_costs(batch) }.size
-        assert_equal [ 12 ] * n, batch.map { |holding| holding.avg_cost.amount }
-        queries
-      end
-      assert_equal counts.first, counts.last
+      assert_nil fallback_cost(current_row)
     end
   end
 
@@ -547,7 +714,6 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
 
       trade = Trade.find(sale.entryable_id)
       assert_nil trade.realized_gain_loss
-      assert_equal :missing_exchange_rate, trade.realized_gain_loss_unavailable_reason
     end
   end
 
@@ -558,7 +724,6 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
 
       trade = Trade.find(@sale.entryable_id)
       assert_nil trade.realized_gain_loss
-      assert_equal :missing_cost_basis, trade.realized_gain_loss_unavailable_reason
       assert_equal [ [ nil, 2 ], [ @first.id, 2 ] ],
         HoldingLotDisposal.where(sale_entry: @sale).map { |d| [ d.lot_source_entry_id, d.qty ] }.sort_by { |id, _| id.to_s }
     end
@@ -582,14 +747,17 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
-  # --- The partition guard (owner decision 12) --------------------------------
+  # --- The partition guard ----------------------------------------------------
 
-  test "unlink, forward sync, then read: lots out of partition fall back to the snapshot figure" do
+  # The snapshot is the open lots' mean after the sale, not what the sale
+  # consumed, so under fifo a sale its lot records do not cover has an unknown
+  # gain rather than one priced off the snapshot.
+  test "unlink, forward sync, then read: lots out of partition leave a fifo gain unknown" do
     travel_to TODAY do
       # 6 units before the trades: the sale takes 4 of them, and 2 stay open.
       build_reverse_fixture(pre_history: 6)
       materialize(:reverse)
-      assert_equal :missing_cost_basis, Trade.find(@sale.entryable_id).tap(&:realized_gain_loss).realized_gain_loss_unavailable_reason
+      assert_nil Trade.find(@sale.entryable_id).realized_gain_loss
       @account_provider.destroy!
       materialize(:forward)
 
@@ -597,9 +765,7 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       assert_equal 18, HoldingLot.where(security: @security).sum(:qty), "the retained opening lot's 2"
       assert_equal 400, HoldingLotDisposal.where(sale_entry: @sale).sum("qty * unit_cost"), "the forward run's record"
 
-      snapshot_basis = @account.holdings.find_by!(security: @security, date: d(5)).avg_cost.amount * 4
-      assert_equal 650, snapshot_basis
-      assert_equal 4 * 300 - 650, gain(@sale)
+      assert_nil gain(@sale), "not the snapshot's $650, which is not what the sale consumed"
     end
   end
 
@@ -614,7 +780,7 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
     end
   end
 
-  test "lots short of the holding fall back to the snapshot figure" do
+  test "lots short of the holding leave a fifo gain unknown" do
     travel_to TODAY do
       build_reverse_fixture(pre_history: 0)
       materialize(:reverse)
@@ -622,7 +788,7 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       lot.update_columns(qty: lot.qty - 2)
 
       assert_equal 14, HoldingLot.where(security: @security).sum(:qty), "2 short of the holding's 16"
-      assert_equal 4 * 300 - 650, gain(@sale), "the snapshot's $650, not the lot record's $400"
+      assert_nil gain(@sale), "neither the lot record's $400 nor the snapshot's $650"
     end
   end
 
@@ -640,6 +806,28 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
 
       assert_equal [ 250 - 120, 1500 - (50 * 12 + 10 * 20) ], sales.map { |s| gains.disposals.find { |d| d.trade.entry == s }.amount }
       assert_equal 1, queries.count { |sql| sql.include?(%("holding_lot_disposals")) }, "one preload, not one per sale"
+    end
+  end
+
+  test "the fifo fallback preload reads every holding in the same number of queries" do
+    travel_to TODAY do
+      setup_account(method: "fifo")
+      link_account
+      ids = 3.times.map do |i|
+        security = priced_security("LFB#{i}", 30)
+        trade(security, 10, 12, 2)
+        @account.holdings.create!(security: security, date: d(10), qty: 10, price: 30, amount: 300, currency: "USD",
+          account_provider: @account_provider).id
+      end
+      materialize(:reverse)
+
+      counts = [ 1, 3 ].map do |n|
+        batch = Holding.where(id: ids.first(n)).to_a
+        queries = capture_sql_queries { Holding.preload_avg_costs(batch) }.size
+        assert_equal [ 12 ] * n, batch.map { |holding| holding.avg_cost.amount }
+        queries
+      end
+      assert_equal counts.first, counts.last
     end
   end
 
@@ -717,6 +905,12 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
       entries.each_with_index { |entry, index| entry.update_columns(created_at: TODAY + index.seconds) }
     end
 
+    def transfer_out(security, qty, day)
+      entry = trade(security, qty, 25, day)
+      entry.entryable.update!(investment_activity_label: Trade::TRANSFER_LABEL)
+      entry
+    end
+
     def name_lot(sale, lot)
       Trade.find(sale.entryable_id).update!(lot_source_entry: lot)
     end
@@ -742,6 +936,11 @@ class HoldingLotDisposalTest < ActiveSupport::TestCase
 
     def current_row
       @account.holdings.find_by!(security: @security, date: d(10))
+    end
+
+    # Holding#avg_cost on a fresh copy, so no earlier answer is reused.
+    def fallback_cost(holding)
+      Holding.find(holding.id).avg_cost&.amount
     end
 
     # [Holding#avg_cost on its own, the same after Holding.preload_avg_costs]

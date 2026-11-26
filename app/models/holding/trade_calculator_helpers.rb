@@ -22,6 +22,9 @@ module Holding::TradeCalculatorHelpers
       total / trade.qty if total
     end
 
+    # Keyed by the acquiring entry, which is unique in the account. Not scoped
+    # to the run's securities: a trade can move to another security before
+    # its lot does, and its lot's figure still applies to it.
     def manual_lot_costs
       @manual_lot_costs ||= HoldingLot.derived.where(account_id: account.id).where.not(manual_total_cost: nil)
         .pluck(:source_entry_id, :manual_total_cost).to_h

@@ -8,6 +8,12 @@ class InvestmentsControllerTest < ActionDispatch::IntegrationTest
     @account = accounts(:investment)
   end
 
+  test "the investment type select is labelled from the locale" do
+    get new_investment_url
+    assert_response :success
+    assert_select "label[for=account_accountable_attributes_subtype]", text: "Investment type"
+  end
+
   test "changing the method starts one sync of the account" do
     assert @account.cost_basis_average?
     Account.any_instance.expects(:sync_later).once
@@ -62,5 +68,29 @@ class InvestmentsControllerTest < ActionDispatch::IntegrationTest
     patch depository_path(depository), params: { account: { cost_basis_method: "fifo" } }
 
     assert depository.reload.cost_basis_average?
+  end
+
+  # A linked account's provider sync overwrites any attribute not locked, so
+  # a field edited on the form is locked whether or not the method changes.
+  test "renaming a linked account locks its name, the method unchanged" do
+    AccountProvider.create!(account: @account, provider: plaid_accounts(:one))
+    assert_not @account.locked?(:name)
+
+    patch investment_path(@account), params: { account: { name: "Renamed", cost_basis_method: "average" } }
+
+    assert_redirected_to account_path(@account)
+    assert @account.reload.locked?(:name)
+  end
+
+  test "renaming a linked account locks its name, the method changed" do
+    AccountProvider.create!(account: @account, provider: plaid_accounts(:one))
+    assert_not @account.locked?(:name)
+
+    patch investment_path(@account), params: { account: { name: "Renamed", cost_basis_method: "fifo" } }
+
+    assert_redirected_to account_path(@account)
+    @account.reload
+    assert @account.locked?(:name)
+    assert @account.cost_basis_fifo?
   end
 end

@@ -611,6 +611,82 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
       "the cards must be exactly the statement's investment accounts"
   end
 
+  # The statement's query has no order of its own, so the tiebreak must not
+  # lean on whatever order its rows arrive in: feed them in descending id.
+  test "account cards with the same name are ordered by id whatever order the statement returns" do
+    same = %w[b d f].map do |digit|
+      @family.accounts.create!(id: "#{digit * 8}-0000-4000-8000-000000000000", name: "Same brokerage", balance: 100,
+                               currency: "USD", accountable: Investment.new, owner: @user)
+    end
+    @statement.stubs(:investment_accounts).returns(@family.accounts.where(id: same.map(&:id)).order(id: :desc))
+
+    cards = registry.sections.find { |s| s[:key] == "accounts" }[:locals][:accounts]
+
+    assert_equal same.map(&:id), cards.map(&:id)
+  end
+
+  # The statement falls back on its own for an unknown sort, so the view must
+  # be told what it fell back to, or no header shows the sort it sees.
+  test "passes the effective sort and direction to the holdings locals" do
+    holdings = Portfolio::SectionRegistry.new(
+      statement: @statement, period: @period, as_of: @as_of, user: @user, sort: "unsupported", dir: "asc"
+    ).sections.find { |s| s[:key] == "holdings" }
+
+    assert_equal [ "value", "asc" ], [ holdings[:locals][:sort], holdings[:locals][:dir] ]
+    values = holdings[:locals][:rows].map { |row| row.amount.amount }
+    assert_equal values.sort, values, "the rows are in the order the locals name"
+  end
+
+  # The cards are the statement's own records, so the associations their
+  # logos read have to be preloaded onto those records, not left to load per
+  # card.
+  test "the account cards come with everything their logos read preloaded" do
+    logoed = accounts(:investment)
+    logoed.logo.attach(io: StringIO.new("logo"), filename: "logo.png", content_type: "image/png")
+    provider = LunchflowAccount.create!(lunchflow_item: lunchflow_items(:one), account_id: "lf_registry_logo",
+                                        name: logoed.name, currency: "USD")
+    AccountProvider.create!(account: logoed, provider: provider)
+    @statement = InvestmentStatement.new(@family, user: @user)
+
+    cards = registry.sections.find { |s| s[:key] == "accounts" }[:locals][:accounts]
+
+    assert_not_empty cards
+    cards.each do |account|
+      %i[logo_attachment accountable plaid_account simplefin_account account_providers].each do |name|
+        assert account.association(name).loaded?, "#{name} is not preloaded on #{account.name}"
+      end
+    end
+    card = cards.find { |account| account.id == logoed.id }
+    assert card.logo_attachment.association(:blob).loaded?, "the logo's blob is not preloaded"
+    assert_not_empty card.account_providers
+    card.account_providers.each do |link|
+      assert link.association(:provider).loaded?, "the provider link's provider is not preloaded"
+    end
+  end
+
+  test "the account cards ignore case when ordering by name" do
+    lower = @family.accounts.create!(name: "alpha brokerage", balance: 100, currency: "USD", accountable: Investment.new, owner: @user)
+    upper = @family.accounts.create!(name: "Beta brokerage", balance: 100, currency: "USD", accountable: Investment.new, owner: @user)
+    @statement = InvestmentStatement.new(@family, user: @user)
+
+    cards = registry.sections.find { |s| s[:key] == "accounts" }[:locals][:accounts]
+
+    assert_operator cards.index(lower), :<, cards.index(upper)
+  end
+
+  # A family whose investment accounts hold nothing has no rows to list, so
+  # the section stays out rather than drawing an empty table.
+  test "the holdings section is visible only when the family holds a security" do
+    assert registry.sections.find { |s| s[:key] == "holdings" }[:visible]
+
+    Holding.where(account: @statement.investment_accounts).delete_all
+    @statement = InvestmentStatement.new(@family, user: @user)
+    sections = registry.sections
+
+    assert_not sections.find { |s| s[:key] == "holdings" }[:visible]
+    assert sections.find { |s| s[:key] == "accounts" }[:visible], "the accounts still list with nothing held"
+  end
+
   private
     def link_investment_account(index)
       account = @family.accounts.create!(name: "Linked brokerage #{index}", balance: 1_000, currency: "USD",
@@ -698,5 +774,10 @@ class Portfolio::SectionRegistryTest < ActiveSupport::TestCase
         user: @user,
         extra_sections: extra_sections
       )
+    end
+
+    def stub_section
+      { key: "stub", title: "portfolios.sections.accounts", partial: "portfolios/accounts",
+        locals: {}, visible: true, collapsible: true }
     end
 end

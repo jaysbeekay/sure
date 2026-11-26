@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require Rails.root.join("db/migrate/20261118090000_widen_holding_lot_unit_cost")
+require Rails.root.join("db/migrate/20261118090001_widen_holding_lot_unit_cost")
 
 class WidenHoldingLotUnitCostMigrationTest < ActiveSupport::TestCase
   # Narrowing the columns again would overflow on a cost the old ones cannot

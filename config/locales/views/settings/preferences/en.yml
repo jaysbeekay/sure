@@ -7,6 +7,8 @@ en:
         insights_subtitle: "Tune the nudges Sure raises for you"
         stale_valuation_days: "Remind me to update manual values after (days)"
         stale_valuation_days_hint: "Between 1 and 3650 days. Applies to properties, vehicles and other accounts you value by hand."
+        show_balance_updates: Synced balance updates
+        show_balance_updates_hint: Always list the daily balances that bank syncing records in the activity of linked accounts
         country: Country
         currency: Currency
         date_format: Date format

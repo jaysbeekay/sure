@@ -14,7 +14,6 @@ class Tag < ApplicationRecord
   belongs_to :family
   has_many :taggings, dependent: :destroy
   has_many :transactions, through: :taggings, source: :taggable, source_type: "Transaction"
-  has_many :securities, through: :taggings, source: :taggable, source_type: "Security"
   has_many :import_mappings, as: :mappable, dependent: :destroy, class_name: "Import::Mapping"
 
   validates :name, presence: true, uniqueness: { scope: :family }
@@ -56,29 +55,34 @@ class Tag < ApplicationRecord
     persisted? ? name : UNTAGGED_FILTER_VALUE
   end
 
+  # Read-only: Security#set_tags_for is the one writer, so tagging a security
+  # always takes its lock and stays inside the family.
+  def securities
+    Security.where(id: taggings.where(taggable_type: "Security").select(:taggable_id))
+  end
+
   def replace_and_destroy!(replacement)
     transaction do
       raise ActiveRecord::RecordInvalid, "Replacement tag cannot be the same as the tag being destroyed" if replacement == self
 
       if replacement
-        # An object may already carry the replacement tag. Re-pointing that
-        # object's old-tag row as well would create a second row for the same
-        # taggable, which index_taggings_unique refuses (RecordNotUnique).
-        # Skip the taggables that already carry the replacement (a subquery
-        # over its own taggables) so each object ends up tagged exactly once
-        # with it; its old-tag row then falls away via dependent: :destroy.
-        #
-        # NOTE: the skip is a taggable check, not where.not(tag_id: replacement.id);
-        # inside self.taggings every row already has tag_id == self.id, and the
-        # self-merge guard above guarantees self.id != replacement.id for all of
-        # them, so a tag_id filter matches every row and skips nothing.
-        # `where.not(taggable_id: <subquery>)` compiles to NOT IN, and NOT IN
-        # against a set containing NULL is NULL for every row -- so a single
-        # replacement tagging with a NULL taggable_id would make this update
-        # match nothing and silently merge no tags at all. The columns are
-        # nullable (db/schema.rb), so the subquery excludes them explicitly.
-        taggables_already_carrying = replacement.taggings.where.not(taggable_id: nil).select(:taggable_id)
-        taggings.where.not(taggable_id: taggables_already_carrying).update_all tag_id: replacement.id
+        # Skip objects that already carry the replacement: moving their row
+        # would tag them twice. Their old row goes with destroy! below. The
+        # type is compared the way index_taggings_unique keys it, with a
+        # missing type folded to '', so the two always agree.
+        taggings.where(<<~SQL, replacement.id).update_all(tag_id: replacement.id)
+          NOT EXISTS (
+            SELECT 1 FROM taggings carried
+            WHERE carried.tag_id = ?
+              AND COALESCE(carried.taggable_type, '') = COALESCE(taggings.taggable_type, '')
+              AND carried.taggable_id = taggings.taggable_id
+          )
+        SQL
+        # A loaded taggings association still lists the moved rows, and
+        # destroy! would delete them by id.
+        taggings.reset
+        # Properties counting this tag's transactions as costs follow them.
+        Property.where(cost_tag_id: id).update_all cost_tag_id: replacement.id
       end
 
       destroy!
