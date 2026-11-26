@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Moves cards on the project board for the event that started this run.
-// Decisions are in logic.mjs; this file only reads GitHub and writes the
-// board. See docs/project-status.md.
+// Moves cards on the project board for the event that started this run, or,
+// with --sweep, for every open PR. Decisions are in logic.mjs; this file only
+// reads GitHub and writes the board. See docs/project-status.md.
 //
 // Writes go through PROJECT_TOKEN: the Actions token cannot write to a
 // user-owned project. Setting a project field triggers no workflow, and this
@@ -10,7 +10,7 @@
 
 import fs from "node:fs";
 
-import { STATUSES, citedIds, decide, shouldMove } from "./logic.mjs";
+import { STATUSES, citedIds, decide, isHeld, rank, shouldMove } from "./logic.mjs";
 
 const env = process.env;
 const API = "https://api.github.com";
@@ -115,6 +115,22 @@ async function setStatus(board, itemId, optionId) {
   );
 }
 
+// Every open PR, read as if it had just been edited. It reaches the PRs no
+// pull_request run moves: pre-flights (their up/* heads lack this workflow),
+// PRs with a merge conflict (GitHub runs no pull_request workflow for them)
+// and PRs from forks (their runs get no secrets). An item named by several
+// PRs is moved once, to the furthest status any of them asks for.
+async function sweepMoves(ctx) {
+  const pulls = await readAll(`/repos/${repo}/pulls?state=open`);
+  const furthest = new Map();
+  for (const pr of pulls) {
+    for (const move of decide("pull_request", { action: "edited", pull_request: pr }, ctx)) {
+      if (rank(move.status) > rank(furthest.get(move.number)?.status)) furthest.set(move.number, move);
+    }
+  }
+  return [...furthest.values()];
+}
+
 async function main() {
   if (!env.PROJECT_TOKEN || !env.PROJECT_NUMBER) {
     log("Not configured: set secrets.PROJECT_TOKEN and vars.PROJECT_NUMBER (docs/project-status.md). Nothing moved.");
@@ -138,7 +154,7 @@ async function main() {
     ctx.comments = await readAll(`/repos/${repo}/issues/${event.issue.number}/comments`);
   }
 
-  const moves = decide(eventName, event, ctx);
+  const moves = process.argv.includes("--sweep") ? await sweepMoves(ctx) : decide(eventName, event, ctx);
   if (!moves.length) {
     log("Nothing to move for this event.");
     return;
@@ -166,7 +182,8 @@ async function main() {
 
       const card = await itemFor(board, item.node_id);
       if (!shouldMove(card.status, option.name, { force })) {
-        log(`#${number}: already at ${card.status}, not moved back to ${option.name}.`);
+        if (isHeld(card.status)) log(`#${number}: at ${card.status}, held there; a manual run moves it.`);
+        else log(`#${number}: already at ${card.status}, not moved back to ${option.name}.`);
         continue;
       }
       await setStatus(board, card.id, option.id);

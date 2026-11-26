@@ -10,12 +10,18 @@ export function rank(status) {
   return STATUSES.findIndex((s) => s.toLowerCase() === String(status ?? "").toLowerCase());
 }
 
-// An empty or unrecognised current status always moves. A forced move (the
-// manual workflow) sets the status whatever it was, backwards included.
+// A card with no status always moves. One at a status this script never sets,
+// such as Blocked, is held there. A forced move (the manual workflow) sets the
+// status whatever it was, backwards and out of Blocked included.
 export function shouldMove(current, target, { force = false } = {}) {
   if (!target) return false;
   if (force) return rank(current) !== rank(target);
+  if (isHeld(current)) return false;
   return rank(target) > rank(current);
+}
+
+export function isHeld(status) {
+  return Boolean(status) && rank(status) === -1;
 }
 
 // Gatekeeper's issue review. The heading must be the comment's first line, so
@@ -113,7 +119,7 @@ export function decide(eventName, event, ctx) {
     return settles ? [{ number, status: "Ready to build" }] : [];
   }
 
-  if (eventName === "pull_request_target") {
+  if (eventName === "pull_request" || eventName === "pull_request_target") {
     if (!["opened", "edited", "ready_for_review"].includes(event.action)) return [];
     const pr = event.pull_request;
     if (pr.state !== "open") return [];
@@ -122,8 +128,8 @@ export function decide(eventName, event, ctx) {
     // A pre-flight whose upstream PR is named has moved on to upstream.
     if (pr.base?.ref === ctx.mirrorBase && upstreamPr(pr.body, ctx.upstreamRepo)) status = "Upstream";
 
-    // pull_request_target also runs for PRs from forks, whose body anyone
-    // can write, so only a trusted author's PR moves the issues it names.
+    // PRs from forks reach here too (through the sweep), and anyone can write
+    // their body, so only a trusted author's PR moves the issues it names.
     const issues = TRUSTED.includes(pr.author_association) ? linkedIssues(pr.body, ctx.repo) : [];
     return [{ number: pr.number, status }, ...issues.map((number) => ({ number, status }))];
   }

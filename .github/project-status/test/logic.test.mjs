@@ -43,9 +43,18 @@ describe("shouldMove: forward only", () => {
     assert.equal(shouldMove("In review", "In review"), false);
   });
 
-  test("an empty or unknown current status always moves", () => {
+  test("a card with no status always moves", () => {
     assert.equal(shouldMove(null, "Triage"), true);
-    assert.equal(shouldMove("Todo", "In progress"), true);
+    assert.equal(shouldMove("", "In progress"), true);
+  });
+
+  test("a card at a status this script does not set, such as Blocked, is held", () => {
+    assert.equal(shouldMove("Blocked", "In review"), false);
+    assert.equal(shouldMove("Todo", "In progress"), false);
+  });
+
+  test("a forced move still moves a held card", () => {
+    assert.equal(shouldMove("Blocked", "In review", { force: true }), true);
   });
 
   test("a forced move goes backward too, but not to the same status", () => {
@@ -204,6 +213,19 @@ describe("decide: pull requests", () => {
     // The board's "Item reopened" workflow sets Triage; moving it on here would race it.
     assert.deepEqual(decide("pull_request_target", prEvent("reopened"), CTX), []);
     assert.deepEqual(decide("pull_request_target", prEvent("synchronize"), CTX), []);
+  });
+
+  test("pull_request makes the same moves as pull_request_target", () => {
+    const events = [
+      prEvent("opened", { body: "Closes #424" }),
+      prEvent("edited", { draft: false, base: "mirror/upstream-main", body: "Closes #424\nUpstream PR: we-promise/sure#4174", number: 440 }),
+      prEvent("ready_for_review", { draft: false, body: "Closes #424", association: "NONE" }),
+    ];
+    for (const e of events) {
+      const moves = decide("pull_request", e, CTX);
+      assert.notDeepEqual(moves, [], e.action);
+      assert.deepEqual(moves, decide("pull_request_target", e, CTX), e.action);
+    }
   });
 });
 
