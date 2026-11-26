@@ -396,4 +396,147 @@ class EntrySplitTest < ActiveSupport::TestCase
     assert_not Entry.exists?(@entry.id)
     assert_not Entry.exists?(part.id)
   end
+
+  test "resplit! keeps a kept part's label, notes and attachment by id" do
+    removed, kept = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    give_part_state(removed, label: "Dividend", notes: "first note")
+    give_part_state(kept, label: "Interest", notes: "second note")
+    kept_blob_id = kept.transaction.attachments.first.blob_id
+    removed_attachment_ids = removed.transaction.attachments.pluck(:id)
+
+    assert @entry.resplit!([ { id: kept.id, name: "Renamed", amount: 100 } ])
+
+    assert_equal [ kept.id ], @entry.reload.child_entries.pluck(:id)
+    kept.reload
+    assert_equal "Renamed", kept.name
+    assert_equal 100, kept.amount
+    assert_equal "Interest", kept.transaction.investment_activity_label
+    assert_equal "second note", kept.notes
+    assert_equal [ kept_blob_id ], kept.transaction.attachments.pluck(:blob_id)
+    assert_not Entry.exists?(removed.id)
+    assert_not ActiveStorage::Attachment.exists?(id: removed_attachment_ids)
+  end
+
+  test "resplit! leaves a kept part's locks alone" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    locked_at = 1.day.ago.iso8601
+    part.transaction.update!(locked_attributes: { "category_id" => locked_at })
+    part.update!(locked_attributes: { "name" => locked_at })
+
+    assert @entry.resplit!([
+      { id: part.id, name: "Part 1", amount: 60 },
+      { id: other.id, name: "Part 2", amount: 40 }
+    ])
+
+    part.reload
+    assert_equal({ "category_id" => locked_at }, part.transaction.locked_attributes)
+    assert_equal({ "name" => locked_at }, part.locked_attributes)
+  end
+
+  test "resplit! by id refuses while a kept part is a confirmed transfer leg" do
+    part, other = @entry.split!([ { name: "Principal", amount: 60 }, { name: "Interest", amount: 40 } ])
+    transfer = link_split_part_to_loan(part)
+
+    assert_raises(Entry::SplitPartTransferredError) do
+      @entry.resplit!([ { id: part.id, name: "Principal", amount: 50 }, { id: other.id, name: "Interest", amount: 50 } ])
+    end
+    assert_equal 60, part.reload.amount
+    assert_equal(-60, transfer.inflow_transaction.entry.reload.amount)
+  end
+
+  test "resplit! by id keeps a pending match, which then can't be confirmed with unequal amounts" do
+    part, other = @entry.split!([ { name: "Principal", amount: 60 }, { name: "Interest", amount: 40 } ])
+    transfer = link_split_part_to_loan(part, status: "pending")
+
+    assert @entry.resplit!([ { id: part.id, name: "Principal", amount: 50 }, { id: other.id, name: "Interest", amount: 50 } ])
+    assert_equal 50, part.reload.amount
+
+    assert_raises(ActiveRecord::RecordInvalid) { transfer.reload.confirm! }
+    assert transfer.reload.pending?
+  end
+
+  test "resplit! refuses a part id from another split and changes nothing" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    stranger = create_transaction(amount: 100, name: "Elsewhere", account: accounts(:depository))
+    foreign = stranger.split!([ { name: "X", amount: 50 }, { name: "Y", amount: 50 } ]).first
+
+    assert_raises(ActiveRecord::RecordInvalid) do
+      @entry.resplit!([ { id: part.id, name: "Part 1", amount: 60 }, { id: foreign.id, name: "Stolen", amount: 40 } ])
+    end
+    assert_equal [ part.id, other.id ].sort, @entry.reload.child_entries.pluck(:id).sort
+    assert_equal "X", foreign.reload.name
+    assert_equal stranger.id, foreign.parent_entry_id
+  end
+
+  test "resplit! refuses the same part id on two rows" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+
+    assert_raises(ActiveRecord::RecordInvalid) do
+      @entry.resplit!([ { id: part.id, name: "Part 1", amount: 50 }, { id: part.id, name: "Again", amount: 50 } ])
+    end
+    assert_equal [ part.id, other.id ].sort, @entry.reload.child_entries.pluck(:id).sort
+    assert_equal 60, part.reload.amount
+  end
+
+  test "resplit! by id still requires the parts to sum to the parent" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+
+    assert_raises(ActiveRecord::RecordInvalid) do
+      @entry.resplit!([ { id: part.id, name: "Part 1", amount: 70 }, { id: other.id, name: "Part 2", amount: 40 } ])
+    end
+    assert_equal [ 60, 40 ], [ part.reload.amount, other.reload.amount ]
+  end
+
+  test "resplit! by id creates a row with a blank id as a new part like split! does" do
+    @entry.transaction.update!(investment_activity_label: "Dividend")
+    reference = create_transaction(amount: 100, name: "Reference", account: accounts(:depository))
+    reference.transaction.update!(investment_activity_label: "Dividend")
+    expected_label = reference.split!([ { name: "R", amount: 100 } ]).first.transaction.investment_activity_label
+
+    part, removed = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+
+    assert @entry.resplit!([ { id: part.id, name: "Part 1", amount: 60 }, { id: "", name: "New", amount: 40 } ])
+
+    new_part = @entry.reload.child_entries.find_by!(name: "New")
+    assert_not_includes [ part.id, removed.id ], new_part.id
+    assert_not Entry.exists?(removed.id)
+    assert_equal [ expected_label ], [ new_part.transaction.investment_activity_label ]
+    assert_equal [ part.id, new_part.id ], @entry.child_entries.in_split_order.pluck(:id)
+  end
+
+  test "resplit! by id keeps a kept part's exclusion when the row doesn't set it" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    part.update!(excluded: true)
+
+    assert @entry.resplit!([
+      { id: part.id, name: "Part 1", amount: 60, excluded: nil },
+      { id: other.id, name: "Part 2", amount: 40, excluded: "true" }
+    ])
+
+    assert part.reload.excluded?
+    assert other.reload.excluded?
+  end
+
+  test "resplit! by id updates a kept part's category, merchant and tags" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    merchant = @entry.account.family.merchants.create!(name: "Kept merchant", type: "FamilyMerchant")
+
+    assert @entry.resplit!([
+      { id: part.id, name: "Part 1", amount: 60, category_id: categories(:food_and_drink).id, merchant_id: merchant.id, tag_ids: [ tags(:one).id ] },
+      { id: other.id, name: "Part 2", amount: 40 }
+    ])
+
+    txn = part.reload.transaction
+    assert_equal categories(:food_and_drink).id, txn.category_id
+    assert_equal merchant.id, txn.merchant_id
+    assert_equal [ tags(:one).id ], txn.tag_ids
+    assert_empty txn.locked_attributes
+  end
+
+  private
+    def give_part_state(part, label:, notes:)
+      part.transaction.update!(investment_activity_label: label)
+      part.update!(notes: notes)
+      part.transaction.attachments.attach(io: StringIO.new("receipt"), filename: "#{label}.pdf", content_type: "application/pdf")
+    end
 end

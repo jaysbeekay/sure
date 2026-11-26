@@ -709,16 +709,23 @@ class Entry < ApplicationRecord
     end
   end
 
-  # Replaces the children of a split under the same lock, so a concurrent unsplit can't be undone
-  # and two edits can't both insert children. Returns false when the entry is no longer a split
-  # parent. Editing an existing split doesn't re-check whether the parent is pending or a transfer:
-  # it creates no new split. Raises SplitPartTransferredError while a part is a leg of a confirmed transfer.
+  # Edits a split under the same lock, so a concurrent unsplit can't be undone and two edits can't
+  # both insert children. A split hash with an :id updates that part in place, keeping what the
+  # edit doesn't set (activity label, notes, attachments, locks); one without becomes a new part,
+  # and parts left out are removed. When no split carries an id, every part is replaced. Returns
+  # false when the entry is no longer a split parent. Editing an existing split doesn't re-check
+  # whether the parent is pending or a transfer: it creates no new split. Raises
+  # SplitPartTransferredError while a part is a leg of a confirmed transfer.
   def resplit!(splits)
     with_split_lock do
       next false unless split_parent?
 
-      unsplit!
-      split!(splits)
+      if splits.any? { |split_attrs| split_attrs[:id].present? }
+        update_split_parts!(splits)
+      else
+        unsplit!
+        split!(splits)
+      end
       true
     end
   end
@@ -765,37 +772,10 @@ class Entry < ApplicationRecord
   #   rules further down (or a later run) don't overwrite them. Tags are only ever added by rules.
   # @return [Array<Entry>] the created child entries
   def split!(splits, lock_attributes: false)
-    total = splits.sum { |s| s[:amount].to_d }
-    unless total == amount
-      raise ActiveRecord::RecordInvalid.new(self), "Split amounts must sum to parent amount (expected #{amount}, got #{total})"
-    end
+    ensure_split_total!(splits)
 
     self.class.transaction do
-      children = splits.map do |split_attrs|
-        child_transaction = Transaction.new(
-          category_id: split_attrs[:category_id],
-          merchant_id: split_attrs[:merchant_id].presence || entryable.try(:merchant_id),
-          tag_ids: split_attrs[:tag_ids] || [],
-          kind: entryable.try(:kind)
-        )
-        if lock_attributes
-          locked_at = Time.current
-          child_transaction.locked_attributes = split_attrs.slice(:category_id, :merchant_id).compact_blank.keys.index_with { locked_at }
-        end
-
-        child_entries.create!(
-          account: account,
-          date: date,
-          name: split_attrs[:name],
-          amount: split_attrs[:amount],
-          currency: currency,
-          notes: split_attrs[:notes],
-          import: import,
-          import_locked: import_locked,
-          excluded: TRUTHY_VALUES.include?(split_attrs[:excluded]),
-          entryable: child_transaction
-        )
-      end
+      children = splits.map { |split_attrs| create_split_part!(split_attrs, lock_attributes: lock_attributes) }
 
       update!(excluded: true)
       mark_user_modified!
@@ -1104,6 +1084,77 @@ class Entry < ApplicationRecord
 
     def split_part_transaction_ids
       child_entries.where(entryable_type: "Transaction").select(:entryable_id)
+    end
+
+    def ensure_split_total!(splits)
+      total = splits.sum { |s| s[:amount].to_d }
+      return if total == amount
+
+      raise ActiveRecord::RecordInvalid.new(self), "Split amounts must sum to parent amount (expected #{amount}, got #{total})"
+    end
+
+    def split_part_transaction_attributes(split_attrs)
+      {
+        category_id: split_attrs[:category_id],
+        merchant_id: split_attrs[:merchant_id].presence || entryable.try(:merchant_id),
+        tag_ids: split_attrs[:tag_ids] || []
+      }
+    end
+
+    def create_split_part!(split_attrs, lock_attributes: false)
+      child_transaction = Transaction.new(**split_part_transaction_attributes(split_attrs), kind: entryable.try(:kind))
+      if lock_attributes
+        locked_at = Time.current
+        child_transaction.locked_attributes = split_attrs.slice(:category_id, :merchant_id).compact_blank.keys.index_with { locked_at }
+      end
+
+      child_entries.create!(
+        account: account,
+        date: date,
+        name: split_attrs[:name],
+        amount: split_attrs[:amount],
+        currency: currency,
+        notes: split_attrs[:notes],
+        import: import,
+        import_locked: import_locked,
+        excluded: TRUTHY_VALUES.include?(split_attrs[:excluded]),
+        entryable: child_transaction
+      )
+    end
+
+    # Ids are looked up among this split's own parts only, so a crafted request can't move another
+    # entry into the split. An id that isn't one of them, or that appears twice, refuses the edit.
+    def update_split_parts!(splits)
+      id_type = self.class.type_for_attribute(:id)
+      ids = splits.filter_map { |split_attrs| split_attrs[:id].presence }.map { |id| id_type.cast(id) }
+      parts = child_entries.where(id: ids.compact).index_by(&:id)
+      if parts.size != ids.size
+        raise ActiveRecord::RecordInvalid.new(self), "Each part id must name a different part of this split"
+      end
+
+      ensure_split_total!(splits)
+      refuse_while_split_part_transferred!
+
+      child_entries.where.not(id: ids).find_each do |child|
+        child.unsplitting = true
+        child.destroy!
+      end
+
+      splits.each do |split_attrs|
+        part = parts[id_type.cast(split_attrs[:id])] if split_attrs[:id].present?
+        part ? update_split_part!(part, split_attrs) : create_split_part!(split_attrs)
+      end
+
+      mark_user_modified!
+    end
+
+    # The edit form doesn't carry a part's exclusion, so a split hash without :excluded keeps it.
+    def update_split_part!(part, split_attrs)
+      part.entryable.update!(split_part_transaction_attributes(split_attrs))
+
+      attrs = { name: split_attrs[:name], amount: split_attrs[:amount] }
+      attrs[:excluded] = TRUTHY_VALUES.include?(split_attrs[:excluded]) unless split_attrs[:excluded].nil?
+      part.update!(attrs)
     end
 
     # Remembers the earliest date this entry had before any save that changed
