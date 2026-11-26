@@ -704,6 +704,17 @@ class CreditCardTest < ActiveSupport::TestCase
     assert_equal BigDecimal("10.00"), card.cycle_interest_money(last_close: Date.new(2026, 9, 10), as_of: Date.new(2026, 10, 10)).amount
   end
 
+  test "a balance update that lowers the balance counts from its own day" do
+    card = interest_card(close_day: 31, due_day: 25)
+    charge(card.account, Date.new(2026, 8, 15), 1000)
+    balance_update(card.account, Date.new(2026, 9, 21), 500)
+
+    # A balance update is not a payment, so it has no next-day rule:
+    # 1,000 x 20 (1-20 Sep) + 500 x 10 (21-30 Sep) = 25,000 balance-days.
+    # From the next day it would be 25,500, or 12.58.
+    assert_equal BigDecimal("12.33"), card.cycle_interest_money(last_close: Date.new(2026, 8, 31), as_of: Date.new(2026, 9, 30)).amount
+  end
+
   test "cycle interest is unknown without an APR" do
     card = interest_card(close_day: 10, due_day: 26)
     card.update!(apr: nil)
