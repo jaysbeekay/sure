@@ -339,23 +339,6 @@ class WiseItemTest < ActiveSupport::TestCase
     assert_equal 1, stats[:replaced_stale_links]
   end
 
-  # Removing a link the linker made (the transfer drawer's Delete) records a
-  # rejection, so the next sync does not link the legs again.
-  test "a link the linker makes again on its own is told apart from a person's transfer" do
-    inflow, outflow = book(gbp_to_eur("9000000106"), @standard_account, create_balance("GBP", "10000003"))
-    @wise_item.link_jar_transfers!
-    linked = Transfer.find_by!(inflow_transaction_id: inflow.entryable_id)
-    bank = bank_entry(amount: 50, date: Date.current)
-    person = Transfer.create!(inflow_transaction: @standard_sure_account.entries.create!(amount: -50, currency: "EUR", date: Date.current,
-                                                                                         name: "From bank", entryable: Transaction.new).entryable,
-                              outflow_transaction: bank.entryable, status: "confirmed")
-
-    assert WiseItem::InterbalanceLinker.relinks?(linked)
-    assert_not WiseItem::InterbalanceLinker.relinks?(person)
-    linked.update!(notes: "Moved my savings")
-    assert_not WiseItem::InterbalanceLinker.relinks?(linked)
-  end
-
   # A transfer from the GBP balance into the euro balance's own account
   # details is in both statements under its reference: a debit on GBP and a
   # credit on EUR, linked as a transfer like a conversion. A refund credit
@@ -373,7 +356,6 @@ class WiseItemTest < ActiveSupport::TestCase
     transfer = Transfer.where(outflow_transaction_id: gbp.current_account.transactions.select(:id)).sole
     assert_equal [ credit.entryable_id, debit.entryable_id ], [ transfer.inflow_transaction_id, transfer.outflow_transaction_id ]
     assert transfer.confirmed?
-    assert WiseItem::InterbalanceLinker.relinks?(transfer)
     assert_equal "standard", refunded.entryable.reload.kind
   end
 

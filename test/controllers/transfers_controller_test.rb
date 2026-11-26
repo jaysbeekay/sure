@@ -565,18 +565,7 @@ class TransfersControllerTest < ActionDispatch::IntegrationTest
   # The Wise sync links a conversion's legs again on its own, so removing
   # that link rejects it, and the legs stay unlinked.
   test "rejects a link the Wise sync makes, so it stays removed" do
-    family = users(:family_admin).family
-    wise_item = WiseItem.create!(family: family, name: "Wise", token: "test_token", profile_id: "123", profile_type: :business)
-    legs = { "EUR" => -117.5, "GBP" => 100 }.to_h do |currency, amount|
-      wise_account = wise_item.wise_accounts.create!(balance_id: "1000000#{currency == 'EUR' ? 1 : 2}", name: "Wise #{currency}",
-                                                     currency: currency, raw_payload: { "type" => "STANDARD" })
-      account = Account.create!(family: family, name: "Wise #{currency}", balance: 0, currency: currency,
-                                accountable: Depository.new(subtype: "checking"))
-      AccountProvider.create!(account: account, provider: wise_account)
-      side = amount.negative? ? "inflow" : "outflow"
-      [ currency, account.entries.create!(external_id: "wise_interbalance_8001_#{side}", source: "wise", amount: amount, currency: currency,
-                                          date: Date.current, name: "Conversion", entryable: Transaction.new) ]
-    end
+    wise_item, legs = wise_conversion
     wise_item.link_jar_transfers!
     transfer = Transfer.find_by!(inflow_transaction_id: legs["EUR"].entryable_id)
 
@@ -587,6 +576,70 @@ class TransfersControllerTest < ActionDispatch::IntegrationTest
       wise_item.link_jar_transfers!
     end
     assert_equal %w[standard standard], legs.values.map { |entry| entry.entryable.reload.kind }
+  end
+
+  test "removing a Wise link that carries notes keeps it removed" do
+    wise_item, legs = wise_conversion
+    wise_item.link_jar_transfers!
+    transfer = Transfer.find_by!(inflow_transaction_id: legs["EUR"].entryable_id)
+    transfer.update!(notes: "Moved my savings")
+
+    delete transfer_url(transfer)
+
+    assert_no_difference -> { Transfer.count } do
+      wise_item.link_jar_transfers!
+    end
+  end
+
+  test "removing a confirmed transfer keeps the pair out of the next auto-match" do
+    family = users(:family_admin).family
+    outflow = create_transaction(date: 1.day.ago.to_date, account: accounts(:depository), amount: 432.10)
+    inflow = create_transaction(date: Date.current, account: accounts(:credit_card), amount: -432.10)
+    assert_difference -> { Transfer.count } => 1 do
+      family.auto_match_transfers!
+    end
+    transfer = Transfer.find_by!(inflow_transaction_id: inflow.entryable_id, outflow_transaction_id: outflow.entryable_id)
+    transfer.confirm!
+
+    assert_difference -> { Transfer.count } => -1, -> { RejectedTransfer.count } => 1 do
+      delete transfer_url(transfer)
+    end
+
+    assert RejectedTransfer.exists?(inflow_transaction_id: inflow.entryable_id, outflow_transaction_id: outflow.entryable_id)
+    assert_no_difference -> { Transfer.count } do
+      family.auto_match_transfers!
+    end
+  end
+
+  test "removing a transfer keeps both transactions, deletes its fees and leaves the pair to match by hand" do
+    family = users(:family_admin).family
+    outflow = create_transaction(date: 1.day.ago.to_date, account: accounts(:depository), amount: 432.10)
+    inflow = create_transaction(date: Date.current, account: accounts(:credit_card), amount: -432.10)
+    family.auto_match_transfers!
+    transfer = Transfer.find_by!(inflow_transaction_id: inflow.entryable_id)
+    fee = attach_fee(transfer, account: accounts(:depository))
+
+    delete transfer_url(transfer)
+
+    assert Entry.exists?(outflow.id) && Entry.exists?(inflow.id)
+    assert_not Transaction.exists?(fee.id)
+    assert_includes Transfer::Matcher.new(inflow.entryable.reload).candidates.map(&:outflow_transaction_id), outflow.entryable_id
+    assert_empty family.transaction_ids_with_transfer_candidates([ inflow.entryable.reload, outflow.entryable.reload ], user: users(:family_admin))
+  end
+
+  # The rejection is of the pair, so a third transaction that matches one
+  # leg can still be auto-matched to it.
+  test "removing a transfer leaves its legs free to auto-match another transaction" do
+    family = users(:family_admin).family
+    outflow = create_transaction(date: 1.day.ago.to_date, account: accounts(:depository), amount: 432.10)
+    inflow = create_transaction(date: Date.current, account: accounts(:credit_card), amount: -432.10)
+    family.auto_match_transfers!
+    delete transfer_url(Transfer.find_by!(inflow_transaction_id: inflow.entryable_id))
+    other_outflow = create_transaction(date: Date.current, account: accounts(:other_asset), amount: 432.10)
+
+    family.auto_match_transfers!
+
+    assert Transfer.exists?(inflow_transaction_id: inflow.entryable_id, outflow_transaction_id: other_outflow.entryable_id)
   end
 
   test "can create transfer with tags on both sides" do
@@ -1292,5 +1345,22 @@ class TransfersControllerTest < ActionDispatch::IntegrationTest
       create_transaction(account: account, amount: 5, name: "Transfer fee").transaction.tap do |fee|
         fee.update!(transfer: transfer)
       end
+    end
+
+    # Two balances of one Wise connection holding the two legs of a conversion.
+    def wise_conversion
+      family = users(:family_admin).family
+      wise_item = WiseItem.create!(family: family, name: "Wise", token: "test_token", profile_id: "123", profile_type: :business)
+      legs = { "EUR" => -117.5, "GBP" => 100 }.to_h do |currency, amount|
+        wise_account = wise_item.wise_accounts.create!(balance_id: "1000000#{currency == 'EUR' ? 1 : 2}", name: "Wise #{currency}",
+                                                       currency: currency, raw_payload: { "type" => "STANDARD" })
+        account = Account.create!(family: family, name: "Wise #{currency}", balance: 0, currency: currency,
+                                  accountable: Depository.new(subtype: "checking"))
+        AccountProvider.create!(account: account, provider: wise_account)
+        side = amount.negative? ? "inflow" : "outflow"
+        [ currency, account.entries.create!(external_id: "wise_interbalance_8001_#{side}", source: "wise", amount: amount, currency: currency,
+                                            date: Date.current, name: "Conversion", entryable: Transaction.new) ]
+      end
+      [ wise_item, legs ]
     end
 end
