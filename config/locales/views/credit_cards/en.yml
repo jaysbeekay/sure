@@ -55,7 +55,6 @@ en:
       treat_balance_as_available_credit_label: Balance is available credit
     tabs:
       overview:
-        accrued_this_cycle: "%{amount} so far this cycle"
         above_minimum: This statement came to %{balance}, above the %{minimum} minimum.
           Paying only the minimum leaves the balance on the card at this APR.
         annual_percentage_rate: Annual Percentage Rate
@@ -64,6 +63,9 @@ en:
         balance_updates: Balance updates
         charges: Charges
         estimated_interest_label: Estimated interest
+        interest_if_not_paid_by: "%{amount} if not paid in full by %{date}"
+        interest_not_paid_by: "%{amount}, not paid in full by %{date}"
+        interest_if_not_paid: "%{amount} if the statement is not paid in full"
         monthly_rate_label: Monthly rate
         closes_on_days:
           zero: Statement closes %{date} (today)

@@ -55,6 +55,9 @@ id:
         balance_carried_label: Sisa saldo terutang
         charges: Beban biaya
         estimated_interest_label: Estimasi bunga
+        interest_if_not_paid_by: "%{amount} jika tidak dibayar penuh sebelum %{date}"
+        interest_not_paid_by: "%{amount}, tidak dibayar penuh sebelum %{date}"
+        interest_if_not_paid: "%{amount} jika tagihan tidak dibayar penuh"
         monthly_rate_label: Suku bunga bulanan
         closes_on: "Tagihan berikutnya ditutup pada %{date}"
         credit_toward_next: Kredit menuju tagihan berikutnya

@@ -1390,7 +1390,7 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-testid='credit-card-summary-grid'][class*='@3xl:grid-cols-3']", count: 1
   end
 
-  test "credit card overview shows the interest the cycle has accrued so far" do
+  test "credit card overview shows what the cycle costs if the statement is not paid by its due date" do
     sign_in users(:family_admin)
     account = accounts(:credit_card)
     account.credit_card.update!(statement_close_day: 10, due_day: 26, apr: 12, minimum_payment: nil)
@@ -1406,10 +1406,36 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
 
       assert_response :success
       assert_match I18n.t("credit_cards.tabs.overview.estimated_interest_label"), response.body
-      assert_match I18n.t("credit_cards.tabs.overview.accrued_this_cycle", amount: Money.new(BigDecimal("2.37"), "USD").format), response.body
+      assert_match "$2.37 if not paid in full by Oct 26, 2026", response.body
       assert_match I18n.t("credit_cards.tabs.overview.monthly_rate_label"), response.body
       assert_match I18n.t("credit_cards.tabs.overview.balance_carried_label"), response.body
       assert_match "1.000%", response.body
+    end
+  end
+
+  test "credit card overview dates the interest by the closed statement's due date after a late payment" do
+    sign_in users(:family_admin)
+    account = accounts(:credit_card)
+    account.credit_card.update!(statement_close_day: 10, due_day: 26, apr: 12, minimum_payment: nil)
+
+    travel_to Date.new(2026, 11, 2) do
+      account.entries.create!(
+        name: "Cycle charge", date: Date.new(2026, 9, 20), amount: 1200, currency: "USD",
+        entryable: Transaction.new
+      )
+      account.entries.create!(
+        name: "Late payment", date: Date.new(2026, 10, 28), amount: -1200, currency: "USD",
+        entryable: Transaction.new
+      )
+
+      materialize_balances(account)
+      get account_url(account, tab: "overview")
+
+      # 1,200 over 11-28 Oct: 1,200 x 18 x 0.12 / 365 = 7.10. The bill is
+      # settled, so the next due date (26 Nov) is the one the tab shows
+      # elsewhere; grace turned on 26 Oct.
+      assert_response :success
+      assert_match "$7.10, not paid in full by Oct 26, 2026", response.body
     end
   end
 
