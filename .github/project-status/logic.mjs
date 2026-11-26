@@ -10,12 +10,18 @@ export function rank(status) {
   return STATUSES.findIndex((s) => s.toLowerCase() === String(status ?? "").toLowerCase());
 }
 
-// An empty or unrecognised current status always moves. A forced move (the
-// manual workflow) sets the status whatever it was, backwards included.
+// A card with no status always moves. One at a status this script never sets,
+// such as Blocked, is held there. A forced move (the manual workflow) sets the
+// status whatever it was, backwards and out of Blocked included.
 export function shouldMove(current, target, { force = false } = {}) {
   if (!target) return false;
   if (force) return rank(current) !== rank(target);
+  if (isHeld(current)) return false;
   return rank(target) > rank(current);
+}
+
+export function isHeld(status) {
+  return Boolean(status) && rank(status) === -1;
 }
 
 // Gatekeeper's issue review. The heading must be the comment's first line, so

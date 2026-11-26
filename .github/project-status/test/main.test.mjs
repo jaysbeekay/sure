@@ -145,6 +145,19 @@ describe("main.mjs against a fake GitHub", () => {
     assert.deepEqual(github.status, { 424: "Triage" });
   });
 
+  test("a PR event leaves a Blocked card where it is", async () => {
+    github = fakeGitHub({ items: { 432: { node_id: "PR_432" }, 424: { node_id: "I_424" } }, status: { 432: "Blocked", 424: "Ready to build" } });
+    const { lines } = await runMain("pull_request", draftPr("Closes #424"));
+    assert.deepEqual(github.status, { 432: "Blocked", 424: "In progress" });
+    assert.match(lines.join("\n"), /#432: at Blocked, held there/);
+  });
+
+  test("a manual run moves a Blocked card", async () => {
+    github = fakeGitHub({ items: { 424: { node_id: "I_424" } }, status: { 424: "Blocked" } });
+    await runMain("workflow_dispatch", {}, { INPUT_NUMBER: "424", INPUT_STATUS: "In review" });
+    assert.deepEqual(github.status, { 424: "In review" });
+  });
+
   test("a missing Status option fails the run and names the options the board has", async () => {
     github = fakeGitHub({ items: { 432: { node_id: "PR_432" } }, options: OPTIONS.filter((o) => o.name !== "In progress") });
     const { lines, exitCode } = await runMain("pull_request_target", draftPr(""));
@@ -208,6 +221,17 @@ describe("main.mjs --sweep", () => {
     await sweep();
     assert.deepEqual(github.status, { 601: "Upstream", 701: "In review" });
     assert.equal(writes(), 0);
+  });
+
+  test("leaves a Blocked card alone and still moves a card with no status", async () => {
+    github = fakeGitHub({
+      pulls: [pull(857, { base: "mirror/upstream-main", body: "Upstream PR: we-promise/sure#5506" }), pull(709, { body: "Closes #609" })],
+      items: Object.fromEntries([609, 709, 857].map((n) => [n, { node_id: `N_${n}` }])),
+      status: { 857: "Blocked" },
+    });
+    await sweep();
+    assert.deepEqual(github.status, { 857: "Blocked", 709: "In review", 609: "In review" });
+    assert.equal(writes(), 2);
   });
 
   test("skips closed PRs", async () => {

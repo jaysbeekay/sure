@@ -10,7 +10,7 @@
 
 import fs from "node:fs";
 
-import { STATUSES, citedIds, decide, rank, shouldMove } from "./logic.mjs";
+import { STATUSES, citedIds, decide, isHeld, rank, shouldMove } from "./logic.mjs";
 
 const env = process.env;
 const API = "https://api.github.com";
@@ -182,7 +182,8 @@ async function main() {
 
       const card = await itemFor(board, item.node_id);
       if (!shouldMove(card.status, option.name, { force })) {
-        log(`#${number}: already at ${card.status}, not moved back to ${option.name}.`);
+        if (isHeld(card.status)) log(`#${number}: at ${card.status}, held there; a manual run moves it.`);
+        else log(`#${number}: already at ${card.status}, not moved back to ${option.name}.`);
         continue;
       }
       await setStatus(board, card.id, option.id);

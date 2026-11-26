@@ -6,7 +6,8 @@ name: Project status
 #   draft PR naming "Closes/Part of #N"       -> In progress (PR and issue)
 #   PR marked ready                           -> In review
 #   pre-flight naming its upstream PR         -> Upstream
-# Moves are forward-only. Done, closed and reopened are left to the board's
+# Moves are forward-only, and a card at Blocked (or any status this script
+# never sets) is held there. Done, closed and reopened are left to the board's
 # built-in workflows. "Run workflow" sets any status by hand, which is how a
 # Claude session moves a card.
 #
@@ -48,9 +49,16 @@ concurrency:
 
 jobs:
   move:
-    if: github.repository == 'jaysbeekay/sure'
+    # PRs from forks and Dependabot get no PROJECT_TOKEN, so their runs are
+    # skipped rather than shown green with nothing moved; the sweep moves them.
+    if: >-
+      github.repository == 'jaysbeekay/sure' &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login != 'dependabot[bot]'))
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The sweep makes about three calls per open PR and issue it names.
+    timeout-minutes: 15
     steps:
       - name: Check out the script from the default branch
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1

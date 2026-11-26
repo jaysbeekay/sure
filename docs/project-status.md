@@ -17,10 +17,16 @@ GitHub (`node --test .github/project-status/test/*.test.mjs`).
 | A pre-flight (base `mirror/upstream-main`) names `Upstream PR: we-promise/sure#N` | Upstream |
 
 - **Forward-only.** A card is never moved back, so one you have dragged further on stays put.
+  The PR's state wins for the board's normal statuses: a card dragged back to an earlier one moves
+  forward again at the next event or sweep. Use Blocked to hold a card.
+- **Blocked holds a card.** A card at a status this script never sets, such as Blocked, is left
+  there by every automatic move, PR events and the sweep alike. Only a manual run moves it. A card
+  with no status still moves.
 - **Epics are skipped** (`type:epic`); their progress comes from sub-issues.
 - **Closed items are skipped.** Done, closed and reopened are left to the board's built-in workflows.
 - **PRs from outside the repository move only their own card**, and only at the next sweep (up to an
-  hour). Their `pull_request` runs get no secrets, so the sweep is what moves them. Anyone can write
+  hour). Their `pull_request` runs get no secrets, so they are skipped (as are Dependabot's) and
+  the sweep is what moves them. Anyone can write
   their body, so the issues a PR names move only when its author is the owner, a member or a
   collaborator.
 - **Pre-flights work too, at the next sweep.** Their `up/*` heads are cut from upstream and do not
@@ -83,6 +89,9 @@ review approved, Code changes requested and Auto-close issue off.
 
 The workflow never checks out pull request code: every trigger, `pull_request` included, runs the
 script from the default branch. Under `pull_request` the workflow file itself is read from the PR's
-head, and only same-repository PRs, whose authors can already push, get `PROJECT_TOKEN`. It never
+head, and only same-repository PRs, whose authors can already push, get `PROJECT_TOKEN`. Anyone who
+can push can already read repository secrets through a push-triggered workflow, so this adds no
+exposure. The token is a classic personal access token with the `project` scope (and `repo` if
+setup needed it). It never
 comments, labels or pushes, and setting a project field triggers no workflow, so it cannot start
 Gatekeeper (`main.yml`) or itself.
