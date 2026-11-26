@@ -444,6 +444,28 @@ class EntrySplitTest < ActiveSupport::TestCase
     assert_equal(-60, transfer.inflow_transaction.entry.reload.amount)
   end
 
+  test "resplit! by id refuses to remove a confirmed transfer leg" do
+    part, other = @entry.split!([ { name: "Principal", amount: 60 }, { name: "Interest", amount: 40 } ])
+    transfer = link_split_part_to_loan(part)
+
+    assert_raises(Entry::SplitPartTransferredError) do
+      @entry.resplit!([ { id: other.id, name: "Interest", amount: 100 } ])
+    end
+    assert Entry.exists?(part.id)
+    assert Transfer.exists?(transfer.id)
+    assert_equal 40, other.reload.amount
+  end
+
+  test "resplit! by id changes nothing when a kept row fails validation after a removal" do
+    part, removed = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+
+    assert_raises(ActiveRecord::RecordInvalid) do
+      @entry.resplit!([ { id: part.id, name: "", amount: 100 } ])
+    end
+    assert_equal [ part.id, removed.id ].sort, @entry.reload.child_entries.pluck(:id).sort
+    assert_equal "Part 1", part.reload.name
+  end
+
   test "resplit! by id keeps a pending match, which then can't be confirmed with unequal amounts" do
     part, other = @entry.split!([ { name: "Principal", amount: 60 }, { name: "Interest", amount: 40 } ])
     transfer = link_split_part_to_loan(part, status: "pending")
