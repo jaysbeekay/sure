@@ -829,11 +829,10 @@ class HoldingLotTest < ActiveSupport::TestCase
 
   # --- The fallback reads user-set lot costs ------------------------------------
 
-  # The fallback divides by the trades' own quantities, which a later split
-  # does not restate, so a user-set cost spread over them would read high.
-  # Across a split the transferred units stay unknown, as before the cost was
-  # set, in both the single and the batched path.
-  test "the avg-cost fallback leaves a costed transfer unknown across a later split" do
+  # The fallback replays the cost over the units the transfer brought in and
+  # rescales it on the split, so 1500 for 10 units is 75 for each of the 20
+  # held, not 150, in both the single and the batched path.
+  test "the avg-cost fallback keeps a costed transfer's cost across a later split" do
     travel_to TODAY do
       setup_account
       link_account
@@ -845,10 +844,10 @@ class HoldingLotTest < ActiveSupport::TestCase
 
       HoldingLot.find_by!(source_entry: transfer).set_manual_total_cost!(1500)
 
-      assert_nil Holding.find(provider_row.id).avg_cost, "not 1500 / 10, the unsplit units"
+      assert_equal Money.new(75), Holding.find(provider_row.id).avg_cost, "not 1500 / 10, the unsplit units"
       batch = [ Holding.find(provider_row.id) ]
       Holding.preload_avg_costs(batch)
-      assert_nil batch.first.avg_cost
+      assert_equal Money.new(75), batch.first.avg_cost
     end
   end
 

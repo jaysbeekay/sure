@@ -669,6 +669,30 @@ class HoldingTest < ActiveSupport::TestCase
     assert_equal own, batched, "the batch disagrees with #avg_cost"
   end
 
+  # A lot's cost holds through a later split, as in the calculators: 800 for
+  # 10 units is 80 a unit, 40 once a 2-for-1 split doubles them. Ignoring the
+  # cost would price them at the buy's 100, 50 after the split, and the
+  # costed transfer in would leave the position unknown.
+  test "a costed lot keeps its cost through a later split" do
+    day = 5.days.ago.to_date
+    security = create_security("LOTS", prices: [ { date: Date.current, price: 60 } ])
+    buy = create_trade(security, account: @account, qty: 10, price: 100, date: day)
+    HoldingLot.create!(account: @account, security: security, source_entry: buy, qty: 20,
+                       currency: "USD", acquired_on: day, manual_total_cost: 800)
+    moved_in = create_trade(security, account: @account, qty: 10, price: 100, date: day)
+    moved_in.entryable.update!(investment_activity_label: "Sweep In")
+    HoldingLot.create!(account: @account, security: security, source_entry: moved_in, qty: 20,
+                       currency: "USD", acquired_on: day, manual_total_cost: 800)
+    security.splits.create!(ex_date: 2.days.ago.to_date, numerator: 2, denominator: 1, source: "manual")
+    holding = create_holding(security, Date.current, 40)
+
+    batch = [ Holding.find(holding.id) ]
+    Holding.preload_avg_costs(batch)
+
+    assert_equal Money.new(BigDecimal("40")), holding.avg_cost
+    assert_equal Money.new(BigDecimal("40")), batch.first.avg_cost
+  end
+
   # A lot's cost is in the account's currency; a holding in another currency
   # carries its cost in its own, converted at the rate on the day the lot was
   # acquired, not today's: a basis is what was paid then. 400 USD for 5 units
