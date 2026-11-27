@@ -42,29 +42,6 @@ class WiseItem::InterbalanceLinker
     resource_ids.first.present? && resource_ids.uniq.one? && transfer.notes.blank? && !transfer.fee_transactions.exists?
   end
 
-  # Whether the linker links a transfer's legs again on the next sync after
-  # a person removes the transfer: one of the links it makes, between two
-  # balances of one connection. Removing such a link rejects it instead
-  # (TransfersController#destroy), so it stays removed.
-  def self.relinks?(transfer)
-    entries = [ transfer.inflow_transaction&.entry, transfer.outflow_transaction&.entry ]
-    return false unless entries.all? { |entry| entry&.source == "wise" }
-
-    item_ids = WiseAccount.joins(:account_provider).where(account_providers: { account_id: entries.map(&:account_id) }).distinct.pluck(:wise_item_id)
-    return false unless item_ids.one?
-
-    system_link?(transfer, WiseItem.find(item_ids.first).accounts.pluck(:id).to_set) || send_link?(transfer)
-  end
-
-  # A link of the two statement rows of a "send to myself": one reference,
-  # money out of one balance and into another, nothing a person added.
-  def self.send_link?(transfer)
-    inflow, outflow = transfer.inflow_transaction&.entry, transfer.outflow_transaction&.entry
-    references = [ inflow, outflow ].map { |entry| transfer_reference(entry&.external_id) }
-    references.first.present? && references.uniq.one? && inflow.account_id != outflow.account_id &&
-      transfer.notes.blank? && !transfer.fee_transactions.exists?
-  end
-
   # The TRANSFER-<id> reference of a transfer's statement row entry; nil for
   # its fee's and any other entry.
   def self.transfer_reference(external_id)

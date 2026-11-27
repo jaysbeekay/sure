@@ -147,9 +147,9 @@ class TransfersController < ApplicationController
   def destroy
     return unless require_account_permission!(unlink_permission_account, redirect_path: transactions_url)
 
-    # A link the Wise sync makes again on its own is rejected instead, so it
-    # stays removed.
-    WiseItem::InterbalanceLinker.relinks?(@transfer) ? @transfer.reject! : @transfer.destroy!
+    # Records a rejection, so neither the next sync's auto-match nor a
+    # provider's linker pairs the same two transactions again.
+    @transfer.reject!
     redirect_back_or_to transactions_url, notice: t(".success")
   end
 

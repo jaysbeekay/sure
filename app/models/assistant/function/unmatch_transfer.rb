@@ -9,7 +9,7 @@
 #
 # By default it rejects the pairing (Transfer#reject!, the Reject button), so
 # auto-match won't suggest it again. reject: false only unlinks
-# (Transfer#destroy!, as TransfersController#destroy does).
+# (Transfer#destroy!).
 #
 # Transfer fee transactions belong to the transfer and are deleted with it, as
 # in the UI; the result lists them and the affected accounts are resynced.
