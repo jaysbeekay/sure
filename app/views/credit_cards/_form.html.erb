@@ -25,6 +25,11 @@
                                         step: 0.01 %>
       </div>
 
+      <%= credit_card_form.select :day_count_convention,
+                                  credit_card_day_count_convention_options,
+                                  { label: t("credit_cards.form.day_count_convention"),
+                                    help_text: t("credit_cards.form.day_count_convention_hint") } %>
+
       <div class="flex items-center gap-2">
         <%= credit_card_form.date_field :expiration_date,
                                       label: t("credit_cards.form.expiration_date") %>

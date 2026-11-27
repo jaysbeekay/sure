@@ -47,8 +47,10 @@ de:
         balance_updates: "Saldo-Aktualisierungen"
         charges: "Belastungen"
         estimated_interest_label: "Geschätzte Zinsen"
+        interest_if_not_paid_by: "%{amount}, falls nicht bis %{date} vollständig bezahlt"
+        interest_not_paid_by: "%{amount}, nicht bis %{date} vollständig bezahlt"
+        interest_if_not_paid: "%{amount}, falls die Abrechnung nicht vollständig bezahlt wird"
         monthly_rate_label: "Monatlicher Zinssatz"
-        per_month: "%{amount}/Monat"
         closes_on_days:
           zero: "Abrechnung schließt am %{date} (heute)"
           one: "Abrechnung schließt am %{date} (1 Tag)"

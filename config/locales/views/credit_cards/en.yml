@@ -18,6 +18,10 @@ en:
       apr_placeholder: '15.99'
       available_credit: Available credit
       available_credit_placeholder: '10000'
+      day_count_convention: Interest basis
+      day_count_convention_actual_360: Actual/360
+      day_count_convention_actual_365: Actual/365
+      day_count_convention_hint: How your card issuer turns the APR into a daily rate.
       due_day: Payment due day
       expiration_date: Expiration date
       minimum_payment: Minimum payment
@@ -59,8 +63,10 @@ en:
         balance_updates: Balance updates
         charges: Charges
         estimated_interest_label: Estimated interest
+        interest_if_not_paid_by: "%{amount} if not paid in full by %{date}"
+        interest_not_paid_by: "%{amount}, not paid in full by %{date}"
+        interest_if_not_paid: "%{amount} if the statement is not paid in full"
         monthly_rate_label: Monthly rate
-        per_month: "%{amount}/month"
         closes_on_days:
           zero: Statement closes %{date} (today)
           one: Statement closes %{date} (1 day)

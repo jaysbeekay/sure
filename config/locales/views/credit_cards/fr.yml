@@ -62,12 +62,14 @@ fr:
           other: Échéance le %{date} (%{count} jours de retard)
         edit_card_details: Modifier les détails de la carte
         estimated_interest_label: Intérêts estimés
+        interest_if_not_paid_by: "%{amount} si non réglé intégralement avant le %{date}"
+        interest_not_paid_by: "%{amount}, non réglé intégralement avant le %{date}"
+        interest_if_not_paid: "%{amount} si le relevé n'est pas réglé intégralement"
         monthly_rate_label: Taux mensuel
         multi_currency_unavailable: Ce relevé additionne des opérations enregistrées dans plusieurs devises, qui ne peuvent pas être totalisées ici sans un taux pour chacune d'elles. Les soldes sont laissés vides plutôt qu'estimés.
         no_cycle_description: 'Indiquez le jour où votre relevé est arrêté et le jour où le paiement est dû : cet onglet affichera alors le montant de votre dernier relevé et ce qui s''accumule pour le prochain. Une carte liée les renseigne généralement pour vous.'
         no_cycle_title: Aucun cycle de relevé défini
         payments_applied: Paiements imputés
-        per_month: "%{amount}/mois"
         scheduled_payment: Paiement prévu de %{amount} le %{date}
         since_last_statement: Depuis le dernier relevé
         statement_balance: Solde du relevé

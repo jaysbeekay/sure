@@ -179,6 +179,29 @@ class I18nTest < ActiveSupport::TestCase
     end
   end
 
+  # The card Overview's interest line. Fallbacks would show the English
+  # sentence beside the translated label, so each locale that translates the
+  # label carries every form, with the placeholders English passes.
+  def test_card_interest_lines_exist_beside_the_interest_label
+    keys = %w[interest_if_not_paid_by interest_not_paid_by interest_if_not_paid].map { |key| "credit_cards.tabs.overview.#{key}" }
+    locales = I18n.available_locales.select do |locale|
+      I18n.t("credit_cards.tabs.overview.estimated_interest_label", locale: locale, fallback: false, default: nil)
+    end
+    assert_includes locales, :de
+
+    offenses = locales.flat_map do |locale|
+      keys.filter_map do |key|
+        value = I18n.t(key, locale: locale, fallback: false, default: nil)
+        next "#{locale}: #{key} is missing" if value.nil?
+
+        english = I18n.t(key, locale: :en, fallback: false, default: nil).to_s
+        "#{locale}: #{key} placeholders differ" if value.scan(/%\{\w+\}/).sort != english.scan(/%\{\w+\}/).sort
+      end
+    end
+
+    assert_empty offenses, offenses.join("\n")
+  end
+
   # The All bills default status option. Every bills locale must translate it,
   # or the default filter falls back to English.
   def test_bills_current_bills_label_exists_for_each_bills_locale

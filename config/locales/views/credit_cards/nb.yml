@@ -47,8 +47,10 @@ nb:
         balance_updates: "Saldooppdateringer"
         charges: "Kjøp"
         estimated_interest_label: "Estimert rente"
+        interest_if_not_paid_by: "%{amount} hvis ikke betalt i sin helhet innen %{date}"
+        interest_not_paid_by: "%{amount}, ikke betalt i sin helhet innen %{date}"
+        interest_if_not_paid: "%{amount} hvis kontoutskriften ikke betales i sin helhet"
         monthly_rate_label: "Månedlig rente"
-        per_month: "%{amount}/måned"
         closes_on_days:
           zero: "Kontoutskriften avsluttes %{date} (i dag)"
           one: "Kontoutskriften avsluttes %{date} (om %{count} dag)"

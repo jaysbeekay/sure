@@ -127,6 +127,38 @@ class CreditCardsControllerTest < ActionDispatch::IntegrationTest
     assert_nil @account.credit_card.due_day
   end
 
+  test "updates the interest basis from the edit form" do
+    get edit_credit_card_path(@account)
+    assert_select "select[name='account[accountable_attributes][day_count_convention]'] option[value='actual_360']"
+    assert_select "select[name='account[accountable_attributes][day_count_convention]'][aria-describedby]"
+
+    patch credit_card_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: @account.accountable_id,
+          day_count_convention: "actual_360"
+        }
+      }
+    }
+
+    assert_redirected_to @account
+    assert_equal "actual_360", @account.reload.credit_card.day_count_convention
+  end
+
+  test "an interest basis outside the list is rejected" do
+    patch credit_card_path(@account), params: {
+      account: {
+        accountable_attributes: {
+          id: @account.accountable_id,
+          day_count_convention: "thirty_360"
+        }
+      }
+    }
+
+    assert_response :unprocessable_entity
+    assert_equal "actual_365", @account.reload.credit_card.day_count_convention
+  end
+
   test "a statement cycle day outside the month is rejected" do
     patch credit_card_path(@account), params: {
       account: {

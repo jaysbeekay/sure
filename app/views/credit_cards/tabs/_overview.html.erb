@@ -109,7 +109,7 @@
               <span class="flex items-center justify-between gap-4">
                 <span><%= t(".estimated_interest_label") %></span>
                 <span class="font-medium text-primary">
-                  <%= summary.estimated_interest ? t(".per_month", amount: format_money(summary.estimated_interest)) : t(".unknown") %>
+                  <%= credit_card_interest_if_unpaid(summary.estimated_interest, due_date: summary.last_due_date, today: today) %>
                 </span>
               </span>
               <span class="flex items-center justify-between gap-4">
