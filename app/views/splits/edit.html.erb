@@ -38,6 +38,7 @@
         <% @children.each_with_index do |child, index| %>
           <%= render "splits/row",
                      index: index,
+                     id: child.id,
                      name: child.name,
                      amount: (-child.amount).to_f,
                      category_id: child.entryable.try(:category_id),

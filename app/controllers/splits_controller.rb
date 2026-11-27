@@ -96,7 +96,7 @@ class SplitsController < ApplicationController
     end
 
     def split_params
-      params.require(:split).permit(splits: [ :name, :amount, :category_id, :merchant_id, :excluded, tag_ids: [] ])
+      params.require(:split).permit(splits: [ :id, :name, :amount, :category_id, :merchant_id, :excluded, tag_ids: [] ])
     end
 
     def set_form_options
@@ -116,6 +116,7 @@ class SplitsController < ApplicationController
 
       raw_splits.map do |s|
         {
+          id: s[:id],
           name: s[:name],
           amount: s[:amount].to_d * -1,
           excluded: s[:excluded],

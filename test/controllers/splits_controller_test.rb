@@ -391,6 +391,52 @@ class SplitsControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[Interest Principal], @entry.reload.child_entries.order(:name).pluck(:name)
   end
 
+  test "edit posts each existing part's id and none for a new row" do
+    parts = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+
+    get edit_transaction_split_path(@entry)
+
+    doc = Nokogiri::HTML::Document.parse(response.body)
+    ids = doc.css("[data-split-transaction-target='rowsContainer'] input[type='hidden'][name$='[id]']").map { |input| input["value"] }
+    assert_equal parts.map(&:id), ids
+    template = Nokogiri::HTML::DocumentFragment.parse(doc.at_css("template[data-split-transaction-target='rowTemplate']").inner_html)
+    assert_empty template.css("input[name$='[id]']")
+  end
+
+  test "update keeps a part's activity label" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    part.transaction.update!(investment_activity_label: "Dividend")
+
+    patch transaction_split_path(@entry), params: {
+      split: {
+        splits: [
+          { id: part.id, name: "Part 1", amount: "-50", category_id: "" },
+          { id: other.id, name: "Part 2", amount: "-50", category_id: "" }
+        ]
+      }
+    }
+
+    assert_redirected_to transactions_url
+    assert_equal I18n.t("splits.update.success"), flash[:notice]
+    assert_equal 50, part.reload.amount
+    assert_equal "Dividend", part.transaction.investment_activity_label
+  end
+
+  test "update refuses a part id from another split" do
+    part, other = @entry.split!([ { name: "Part 1", amount: 60 }, { name: "Part 2", amount: 40 } ])
+    stranger = create_transaction(amount: 100, name: "Elsewhere", account: accounts(:depository))
+    foreign = stranger.split!([ { name: "X", amount: 40 }, { name: "Y", amount: 60 } ]).first
+
+    patch transaction_split_path(@entry), params: {
+      split: { splits: [ { id: part.id, name: "Part 1", amount: "-60" }, { id: foreign.id, name: "Stolen", amount: "-40" } ] }
+    }
+
+    assert_redirected_to transactions_url
+    assert flash[:alert].present?
+    assert_equal [ part.id, other.id ].sort, @entry.reload.child_entries.pluck(:id).sort
+    assert_equal stranger.id, foreign.reload.parent_entry_id
+  end
+
   private
     def sql_queries(&block)
       queries = []

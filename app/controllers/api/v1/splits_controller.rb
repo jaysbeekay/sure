@@ -61,9 +61,9 @@ class Api::V1::SplitsController < Api::V1::BaseController
 
   # PATCH/PUT /api/v1/transactions/:transaction_id/split
   #
-  # Replaces the existing children. They are destroyed and recreated, exactly as
-  # the web UI does it, so anything set on a child afterwards -- a category, an
-  # exclusion -- is NOT carried over. Send the full set you want.
+  # Replaces the existing children. They are destroyed and recreated, so anything
+  # set on a child afterwards -- a category, an exclusion -- is NOT carried over.
+  # Send the full set you want.
   def update
     return render_not_split unless @entry.split_parent?
 
