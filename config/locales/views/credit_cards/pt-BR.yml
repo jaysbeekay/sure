@@ -45,8 +45,10 @@ pt-BR:
         balance_updates: Atualizações de saldo
         charges: Compras
         estimated_interest_label: Juros estimados
+        interest_if_not_paid_by: "%{amount} se a fatura não for paga integralmente até %{date}"
+        interest_not_paid_by: "%{amount}, fatura não paga integralmente até %{date}"
+        interest_if_not_paid: "%{amount} se a fatura não for paga integralmente"
         monthly_rate_label: Taxa mensal
-        per_month: "%{amount}/mês"
         closes_on_days:
           zero: A fatura fecha em %{date} (hoje)
           one: A fatura fecha em %{date} (falta 1 dia)
