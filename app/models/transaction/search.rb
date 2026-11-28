@@ -241,7 +241,9 @@ class Transaction::Search
       # old logic (or by the merged-in branch) must not be loaded into the
       # new Totals: the field sets differ, and a size mismatch makes
       # Marshal.load raise a TypeError that the cache store does not rescue.
-      Rails.cache.fetch("transaction_search_totals/v5/#{ExchangeRate::CONVERSION_CACHE_VERSION}/#{cache_key_base}") do
+      # v6: loan payments, and investment contributions the family counts as
+      # spending, moved from the transfer sums to the expense sum.
+      Rails.cache.fetch("transaction_search_totals/v6/#{ExchangeRate::CONVERSION_CACHE_VERSION}/#{cache_key_base}") do
         scope = transactions_scope
         excluded_scheduled_count = 0
 
@@ -272,40 +274,44 @@ class Transaction::Search
           on: "entries.date"
         )
 
+        # Transfer kinds the income statement counts as expenses, whatever
+        # their sign (IncomeStatement::ScopedTransactionsQuery#classification_sql),
+        # unless an activity label marks the row as an internal movement. The
+        # remaining transfer rows stay neutral.
+        counted_as_expense = ActiveRecord::Base.sanitize_sql_array([
+          "(transactions.kind IN (?) AND (transactions.investment_activity_label IS NULL OR transactions.investment_activity_label NOT IN (?)))",
+          Transaction::TRANSFER_KINDS - family.analytics_excluded_kinds,
+          Transaction::INTERNAL_MOVEMENT_LABELS
+        ])
+        expense_row = ActiveRecord::Base.sanitize_sql_array([
+          "((entries.amount >= 0 AND transactions.kind NOT IN (?)) OR #{counted_as_expense})",
+          Transaction::TRANSFER_KINDS
+        ])
+        neutral_transfer_row = ActiveRecord::Base.sanitize_sql_array([
+          "(transactions.kind IN (?) AND NOT #{counted_as_expense})",
+          Transaction::TRANSFER_KINDS
+        ])
+
         # The list shows excluded entries; the sums leave them out, as the
         # reports do. The counts ignore the excluded flag
         # (so an excluded row still counts), but are taken after the scheduled
-        # and tax-advantaged exclusions above. transfer_count lets the summary
-        # tell a transfer-only result set from one whose sums are all zero
+        # and tax-advantaged exclusions above. transfer_count covers the
+        # neutral transfer rows only, and lets the summary tell a result set
+        # of nothing but neutral transfers from one whose sums are all zero
         # because its entries are excluded, and expense_count counts the rows
         # the expense sum covers, leaving out a row with no rate, so a
         # per-purchase average divides by purchases rather than listed rows.
         result = scope
                   .select(
-                    ActiveRecord::Base.sanitize_sql_array([
-                      "COALESCE(SUM(CASE WHEN entries.amount >= 0 AND transactions.kind NOT IN (?) AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as expense_total",
-                      Transaction::TRANSFER_KINDS
-                    ]),
-                    ActiveRecord::Base.sanitize_sql_array([
-                      "COUNT(CASE WHEN entries.amount >= 0 AND transactions.kind NOT IN (?) AND entries.excluded = false AND #{rate} IS NOT NULL THEN entries.id END) as expense_count",
-                      Transaction::TRANSFER_KINDS
-                    ]),
+                    "COALESCE(SUM(CASE WHEN #{expense_row} AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as expense_total",
+                    "COUNT(CASE WHEN #{expense_row} AND entries.excluded = false AND #{rate} IS NOT NULL THEN entries.id END) as expense_count",
                     ActiveRecord::Base.sanitize_sql_array([
                       "COALESCE(SUM(CASE WHEN entries.amount < 0 AND transactions.kind NOT IN (?) AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as income_total",
                       Transaction::TRANSFER_KINDS
                     ]),
-                    ActiveRecord::Base.sanitize_sql_array([
-                      "COALESCE(SUM(CASE WHEN entries.amount < 0 AND transactions.kind IN (?) AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as transfer_inflow_total",
-                      Transaction::TRANSFER_KINDS
-                    ]),
-                    ActiveRecord::Base.sanitize_sql_array([
-                      "COALESCE(SUM(CASE WHEN entries.amount >= 0 AND transactions.kind IN (?) AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as transfer_outflow_total",
-                      Transaction::TRANSFER_KINDS
-                    ]),
-                    ActiveRecord::Base.sanitize_sql_array([
-                      "COUNT(CASE WHEN transactions.kind IN (?) THEN entries.id END) as transfer_count",
-                      Transaction::TRANSFER_KINDS
-                    ]),
+                    "COALESCE(SUM(CASE WHEN entries.amount < 0 AND #{neutral_transfer_row} AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as transfer_inflow_total",
+                    "COALESCE(SUM(CASE WHEN entries.amount >= 0 AND #{neutral_transfer_row} AND entries.excluded = false THEN ABS(entries.amount * #{rate}) ELSE 0 END), 0) as transfer_outflow_total",
+                    "COUNT(CASE WHEN #{neutral_transfer_row} THEN entries.id END) as transfer_count",
                     "COUNT(entries.id) as transactions_count"
                   )
                   .take
@@ -329,6 +335,7 @@ class Transaction::Search
     [
       family.id,
       family.currency,
+      family.investment_contributions_as_spending?, # decides which transfer kinds count as expenses
       Digest::SHA256.hexdigest(attributes.sort.to_h.to_json), # cached by filters
       family.entries_cache_version,
       ExchangeRate.updated_at_version, # a rate stored later can complete the totals

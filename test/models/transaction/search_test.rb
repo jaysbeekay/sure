@@ -547,7 +547,7 @@ class Transaction::SearchTest < ActiveSupport::TestCase
     key2 = search2.cache_key_base
 
     assert_equal key1, key2
-    assert_not_nil cache.read("transaction_search_totals/v5/#{ExchangeRate::CONVERSION_CACHE_VERSION}/#{key2}")
+    assert_not_nil cache.read("transaction_search_totals/v6/#{ExchangeRate::CONVERSION_CACHE_VERSION}/#{key2}")
     assert_equal result1, search2.totals
   end
 
@@ -642,6 +642,148 @@ class Transaction::SearchTest < ActiveSupport::TestCase
 
     assert_equal Money.new(60, "USD"), search.totals.expense_money
     assert_equal [ excluded.entryable_id, kept.entryable_id ].sort, search.transactions_scope.map(&:id).sort
+  end
+
+  # The dashboard and get_income_statement count loan payments (and, when the
+  # family counts investing as spending, investment contributions) as
+  # expenses whatever their sign (IncomeStatement::ScopedTransactionsQuery).
+  # The summary must too, or a category's card and its click-through disagree.
+  test "totals counts a loan payment as an expense" do
+    create_transaction(account: @checking_account, amount: 500, kind: "loan_payment")
+    create_transaction(account: @checking_account, amount: 100, kind: "standard")
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(600, "USD"), totals.expense_money
+    assert_equal Money.new(0, "USD"), totals.transfer_outflow_money
+    assert_equal 2, totals.expense_count
+  end
+
+  test "totals counts a loan payment's inflow leg as an expense" do
+    create_transaction(account: @loan_account, amount: -500, kind: "loan_payment")
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(500, "USD"), totals.expense_money
+    assert_equal Money.new(0, "USD"), totals.income_money
+    assert_equal Money.new(0, "USD"), totals.transfer_inflow_money
+    assert_equal Money.new(0, "USD"), totals.transfer_outflow_money
+  end
+
+  test "totals converts a foreign-currency loan payment at its rate" do
+    entry = create_transaction(account: @checking_account, amount: 500, currency: "EUR", kind: "loan_payment")
+    ExchangeRate.create!(from_currency: "EUR", to_currency: "USD", rate: 1.1, date: entry.date)
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(550, "USD"), totals.expense_money
+  end
+
+  test "totals counts an investment contribution as an expense when the family counts investing as spending" do
+    @family.update!(investment_contributions_as_spending: true)
+    create_transaction(account: @checking_account, amount: 300, kind: "investment_contribution")
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(300, "USD"), totals.expense_money
+    assert_equal Money.new(0, "USD"), totals.transfer_outflow_money
+  end
+
+  test "totals keeps an investment contribution a transfer when investing isn't counted as spending" do
+    @family.update!(investment_contributions_as_spending: false)
+    create_transaction(account: @checking_account, amount: 300, kind: "investment_contribution")
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(0, "USD"), totals.expense_money
+    assert_equal Money.new(300, "USD"), totals.transfer_outflow_money
+  end
+
+  test "totals keeps a counted kind with an internal-movement label a transfer" do
+    @family.update!(investment_contributions_as_spending: true)
+    entry = create_transaction(account: @checking_account, amount: 300, kind: "investment_contribution")
+    entry.entryable.update!(investment_activity_label: "Sweep In")
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(0, "USD"), totals.expense_money
+    assert_equal Money.new(300, "USD"), totals.transfer_outflow_money
+    assert_equal 1, totals.transfer_count
+  end
+
+  test "totals keeps funds movements and card payments as transfers" do
+    create_transaction(account: @checking_account, amount: 200, kind: "funds_movement")
+    create_transaction(account: @checking_account, amount: 150, kind: "cc_payment")
+    create_transaction(account: @loan_account, amount: -200, kind: "funds_movement")
+
+    totals = Transaction::Search.new(@family).totals
+
+    assert_equal Money.new(0, "USD"), totals.expense_money
+    assert_equal Money.new(0, "USD"), totals.income_money
+    assert_equal Money.new(350, "USD"), totals.transfer_outflow_money
+    assert_equal Money.new(200, "USD"), totals.transfer_inflow_money
+  end
+
+  # MerchantsController#show reads totals through this filter.
+  test "totals with the expense type filter leaves loan payments out" do
+    create_transaction(account: @checking_account, amount: 500, kind: "loan_payment")
+    create_transaction(account: @checking_account, amount: 100, kind: "standard")
+
+    totals = Transaction::Search.new(@family, filters: { types: [ "expense" ] }).totals
+
+    assert_equal Money.new(100, "USD"), totals.expense_money
+    assert_equal 1, totals.expense_count
+    assert_equal 1, totals.count
+  end
+
+  test "transfer_count leaves out the transfer kinds counted as expenses" do
+    create_transaction(account: @checking_account, amount: 500, kind: "loan_payment")
+
+    loan_only = Transaction::Search.new(@family, filters: { types: [ "transfer" ] }).totals
+
+    assert_equal 1, loan_only.count
+    assert_equal 0, loan_only.transfer_count
+
+    @checking_account.entries.delete_all
+    create_transaction(account: @checking_account, amount: 200, kind: "funds_movement")
+
+    neutral_only = Transaction::Search.new(@family, filters: { types: [ "transfer" ] }).totals
+
+    assert_equal 1, neutral_only.transfer_count
+    assert_equal neutral_only.count, neutral_only.transfer_count
+  end
+
+  test "totals cache changes when investment_contributions_as_spending toggles" do
+    Rails.stubs(:cache).returns(ActiveSupport::Cache::MemoryStore.new)
+    @family.update!(investment_contributions_as_spending: true)
+    create_transaction(account: @checking_account, amount: 300, kind: "investment_contribution")
+
+    before = Transaction::Search.new(@family.reload).totals.expense_money
+    @family.update!(investment_contributions_as_spending: false)
+    after = Transaction::Search.new(@family.reload).totals.expense_money
+
+    assert_equal Money.new(300, "USD"), before - after
+  end
+
+  test "totals matches the income statement for a loan payment category" do
+    loan_payments = @family.categories.create!(name: "Mortgage repayments", color: "#6471eb")
+    create_transaction(account: @checking_account, amount: 500, kind: "loan_payment", category: loan_payments)
+    create_transaction(account: @checking_account, amount: 100, kind: "standard", category: loan_payments)
+    labelled = create_transaction(account: @checking_account, amount: 70, kind: "loan_payment", category: loan_payments)
+    labelled.entryable.update!(investment_activity_label: "Transfer")
+
+    period = Period.custom(start_date: Date.current - 1.day, end_date: Date.current)
+    statement_total = IncomeStatement.new(@family, user: users(:family_admin))
+      .expense_totals(period: period)
+      .category_totals.find { |ct| ct.category.id == loan_payments.id }.total
+
+    totals = Transaction::Search.new(
+      @family,
+      filters: { categories: [ loan_payments.name ], start_date: period.start_date.to_s, end_date: period.end_date.to_s }
+    ).totals
+
+    assert_equal 600, statement_total
+    assert_equal Money.new(statement_total, "USD"), totals.expense_money
   end
 
   test "category filter includes subcategories" do

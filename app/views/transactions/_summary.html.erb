@@ -1,10 +1,11 @@
 <%# locals: (totals:, transactions_count:) %>
-<%# Show Inflow/Outflow labels only when the result set contains exclusively transfers.
-    This is decided by count, not by the sums: the sums leave excluded entries out, so an
-    excluded transfer (or an excluded expense) would otherwise flip the labels. For mixed
-    filters (e.g. Expense+Transfer), we keep Income/Expenses labels — transfer amounts
-    aren't included in the summary bar in that case, though the transaction list still
-    shows both types. %>
+<%# Show Inflow/Outflow labels only when the result set contains exclusively neutral
+    transfers. Loan payments, and investment contributions the family counts as spending,
+    are expenses here as on the dashboard, so they don't count as transfers. This is
+    decided by count, not by the sums: the sums leave excluded entries out, so an
+    excluded transfer (or an excluded expense) would otherwise flip the labels. In a mixed
+    result the Income/Expenses labels stay, and the neutral transfers left out of them
+    are shown on a line of their own under each column. %>
 <% show_transfers = totals.count.positive? && totals.transfer_count == totals.count %>
 <div class="grid grid-cols-1 md:grid-cols-3 bg-container rounded-xl shadow-border-xs md:divide-x divide-y md:divide-y-0 divide-alpha-black-100 theme-dark:divide-alpha-white-200">
   <div class="p-4 space-y-2">
@@ -25,6 +26,9 @@
       <p class="text-primary font-medium text-xl privacy-sensitive" id="total-income">
         <%= totals.income_money.format %>
       </p>
+      <% if totals.transfer_inflow_money.positive? %>
+        <p class="text-xs text-secondary privacy-sensitive" id="transfer-inflow-total"><%= t("transactions.summary.transfers_in", amount: totals.transfer_inflow_money.format) %></p>
+      <% end %>
     <% end %>
   </div>
   <div class="p-4 space-y-2">
@@ -38,6 +42,9 @@
       <p class="text-primary font-medium text-xl privacy-sensitive" id="total-expense">
         <%= totals.expense_money.format %>
       </p>
+      <% if totals.transfer_outflow_money.positive? %>
+        <p class="text-xs text-secondary privacy-sensitive" id="transfer-outflow-total"><%= t("transactions.summary.transfers_out", amount: totals.transfer_outflow_money.format) %></p>
+      <% end %>
     <% end %>
   </div>
 </div>

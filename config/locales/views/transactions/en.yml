@@ -255,6 +255,8 @@ en:
       expenses: Expenses
       inflow: Inflow
       outflow: Outflow
+      transfers_in: "Transfers in %{amount}"
+      transfers_out: "Transfers out %{amount}"
     header:
       edit_categories: Edit categories
       edit_imports: Edit imports

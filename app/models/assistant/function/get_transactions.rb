@@ -52,7 +52,11 @@ class Assistant::Function::GetTransactions < Assistant::Function
         Note: `total_income` and `total_expenses` are computed over the whole
         filtered set, exclude tax-advantaged accounts, and leave excluded rows
         out (which still appear in the list with `excluded: true`), so they do
-        not always equal the sum of the rows on this page.
+        not always equal the sum of the rows on this page. Like
+        get_income_statement, `total_expenses` counts "loan_payment" rows, and
+        "investment_contribution" rows when the family counts investing as
+        spending, whatever their `classification`; types: ["income", "expense"]
+        leaves those rows out.
 
         Note on pagination:
 

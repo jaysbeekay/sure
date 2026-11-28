@@ -1311,6 +1311,50 @@ end
     assert_select "p.text-secondary", text: I18n.t("transactions.summary.inflow"), count: 0
   end
 
+  test "shows the transfers left out of income and expenses in a mixed result" do
+    family = families(:empty)
+    sign_in users(:empty)
+    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
+    create_transaction(account: account, amount: 80, kind: "standard")
+    create_transaction(account: account, amount: 200, kind: "funds_movement")
+    create_transaction(account: account, amount: -30, kind: "funds_movement")
+
+    get transactions_url
+
+    assert_response :success
+    assert_select "#total-expense", text: Money.new(80, "USD").format
+    assert_select "#transfer-outflow-total", text: I18n.t("transactions.summary.transfers_out", amount: Money.new(200, "USD").format)
+    assert_select "#transfer-inflow-total", text: I18n.t("transactions.summary.transfers_in", amount: Money.new(30, "USD").format)
+  end
+
+  test "shows no transfers line when the result has no transfers" do
+    family = families(:empty)
+    sign_in users(:empty)
+    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
+    create_transaction(account: account, amount: 80, kind: "standard")
+
+    get transactions_url
+
+    assert_response :success
+    assert_select "#transfer-outflow-total", count: 0
+    assert_select "#transfer-inflow-total", count: 0
+  end
+
+  test "shows a loan-payment-only result as expenses" do
+    family = families(:empty)
+    sign_in users(:empty)
+    account = family.accounts.create! name: "Test", balance: 0, currency: "USD", accountable: Depository.new
+    create_transaction(account: account, amount: 500, kind: "loan_payment")
+
+    get transactions_url(q: { types: [ "transfer" ] })
+
+    assert_response :success
+    assert_select "p.text-secondary", text: I18n.t("transactions.summary.expenses")
+    assert_select "p.text-secondary", text: I18n.t("transactions.summary.outflow"), count: 0
+    assert_select "#total-expense", text: Money.new(500, "USD").format
+    assert_select "#transfer-outflow-total", count: 0
+  end
+
   test "mark_as_recurring creates a manual recurring transaction" do
     family = families(:empty)
     sign_in users(:empty)
