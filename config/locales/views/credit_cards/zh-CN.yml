@@ -48,7 +48,7 @@ zh-CN:
         interest_if_not_paid_by: "若未在 %{date} 前全额还款：%{amount}"
         interest_not_paid_by: "未在 %{date} 前全额还款：%{amount}"
         interest_if_not_paid: "若账单未全额还款：%{amount}"
-        monthly_rate_label: "月利率"
+        daily_rate_label: "日利率"
         closes_on_days:
           zero: "账单结账日 %{date}（今天）"
           one: "账单结账日 %{date}（1 天后）"

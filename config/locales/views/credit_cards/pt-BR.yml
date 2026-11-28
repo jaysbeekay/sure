@@ -48,7 +48,7 @@ pt-BR:
         interest_if_not_paid_by: "%{amount} se a fatura não for paga integralmente até %{date}"
         interest_not_paid_by: "%{amount}, fatura não paga integralmente até %{date}"
         interest_if_not_paid: "%{amount} se a fatura não for paga integralmente"
-        monthly_rate_label: Taxa mensal
+        daily_rate_label: Taxa diária
         closes_on_days:
           zero: A fatura fecha em %{date} (hoje)
           one: A fatura fecha em %{date} (falta 1 dia)

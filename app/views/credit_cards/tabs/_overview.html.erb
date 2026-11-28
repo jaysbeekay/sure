@@ -103,8 +103,8 @@
             <%= number_to_percentage(card.apr, precision: 3) %>
             <span class="mt-2 block space-y-1 text-sm text-secondary">
               <span class="flex items-center justify-between gap-4">
-                <span><%= t(".monthly_rate_label") %></span>
-                <span class="font-medium text-primary"><%= number_to_percentage(summary.monthly_rate, precision: 3) %></span>
+                <span><%= t(".daily_rate_label") %></span>
+                <span class="font-medium text-primary"><%= number_to_percentage(summary.daily_rate, precision: 5) %></span>
               </span>
               <span class="flex items-center justify-between gap-4">
                 <span><%= t(".estimated_interest_label") %></span>

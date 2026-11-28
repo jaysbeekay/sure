@@ -1407,10 +1407,26 @@ class AccountsControllerTest < ActionDispatch::IntegrationTest
       assert_response :success
       assert_match I18n.t("credit_cards.tabs.overview.estimated_interest_label"), response.body
       assert_match "$2.37 if not paid in full by Oct 26, 2026", response.body
-      assert_match I18n.t("credit_cards.tabs.overview.monthly_rate_label"), response.body
       assert_match I18n.t("credit_cards.tabs.overview.balance_carried_label"), response.body
-      assert_match "1.000%", response.body
+      # 12% / 365, the rate the interest line uses; APR / 12 would be 1.000%.
+      assert_match I18n.t("credit_cards.tabs.overview.daily_rate_label"), response.body
+      assert_match "0.03288%", response.body
+      assert_no_match "Monthly rate", response.body
+      assert_no_match "1.000%", response.body
     end
+  end
+
+  test "credit card overview shows the daily rate on the card's interest basis" do
+    sign_in users(:family_admin)
+    account = accounts(:credit_card)
+    account.credit_card.update!(statement_close_day: 10, due_day: 26, apr: 12, minimum_payment: nil, day_count_convention: "actual_360")
+
+    materialize_balances(account)
+    get account_url(account, tab: "overview")
+
+    assert_response :success
+    assert_match "0.03333%", response.body
+    assert_no_match "0.03288%", response.body
   end
 
   test "credit card overview dates the interest by the closed statement's due date after a late payment" do

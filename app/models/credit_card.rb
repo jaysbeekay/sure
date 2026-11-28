@@ -10,7 +10,7 @@ class CreditCard < ApplicationRecord
   StatementSummary = Data.define(
     :balance, :remaining, :charges, :credits, :payments_applied, :accrued, :adjustments,
     :due_date, :last_due_date, :next_close, :status, :scheduled_payment,
-    :estimated_interest, :monthly_rate
+    :estimated_interest, :daily_rate
   )
   ScheduledPayment = Data.define(:payment, :due_date)
 
@@ -132,6 +132,11 @@ class CreditCard < ApplicationRecord
     accrued_after_bill_settlement(statement_ledger(as_of: as_of, last_close: last_close))
   end
 
+  # The daily periodic rate, in percent: the APR over the basis days.
+  def daily_rate
+    apr / DAY_COUNT_BASES.fetch(day_count_convention) if apr.present?
+  end
+
   # The interest the cycle that opened after `last_close` has accrued through
   # `as_of`, or through the cycle's own close once that has passed. Each day
   # charges its balance at the daily rate of the card's basis: a charge counts
@@ -195,7 +200,7 @@ class CreditCard < ApplicationRecord
       status: statement_status(balance: balance, remaining: remaining, due_date: last_due_date, as_of: as_of),
       scheduled_payment: next_scheduled_payment(as_of: as_of, viewer: viewer),
       estimated_interest: cycle_interest_money(last_close: last_close, as_of: as_of),
-      monthly_rate: monthly_rate
+      daily_rate: daily_rate
     )
   end
 
@@ -351,10 +356,6 @@ class CreditCard < ApplicationRecord
       return occurrence.effective_due_on if occurrence
 
       payment.next_expected_date if payment.next_expected_date >= as_of
-    end
-
-    def monthly_rate
-      apr / 12 if apr.present?
     end
 
     # Whether the statement that closed on `close` was paid in full by its due

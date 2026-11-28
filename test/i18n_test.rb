@@ -179,11 +179,11 @@ class I18nTest < ActiveSupport::TestCase
     end
   end
 
-  # The card Overview's interest line. Fallbacks would show the English
-  # sentence beside the translated label, so each locale that translates the
+  # The card Overview's interest and daily rate lines. Fallbacks would show
+  # English beside the translated label, so each locale that translates the
   # label carries every form, with the placeholders English passes.
   def test_card_interest_lines_exist_beside_the_interest_label
-    keys = %w[interest_if_not_paid_by interest_not_paid_by interest_if_not_paid].map { |key| "credit_cards.tabs.overview.#{key}" }
+    keys = %w[interest_if_not_paid_by interest_not_paid_by interest_if_not_paid daily_rate_label].map { |key| "credit_cards.tabs.overview.#{key}" }
     locales = I18n.available_locales.select do |locale|
       I18n.t("credit_cards.tabs.overview.estimated_interest_label", locale: locale, fallback: false, default: nil)
     end
