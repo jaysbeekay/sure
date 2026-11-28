@@ -571,7 +571,7 @@ class CreditCardTest < ActiveSupport::TestCase
 
     # 1,200 unpaid over 11-16 Oct: 1,200 x 6 x 0.12 / 365 = 2.367
     assert_equal BigDecimal("2.37"), summary.estimated_interest.amount
-    assert_equal 1, summary.monthly_rate
+    assert_equal BigDecimal(12) / 365, summary.daily_rate
   end
 
   test "the statement summary rounds interest to the account currency precision" do
@@ -595,6 +595,17 @@ class CreditCardTest < ActiveSupport::TestCase
     assert_equal 0, summary.estimated_interest.amount
   end
 
+  test "the daily rate divides the APR by the card's interest basis days" do
+    card = statement_card(close_day: 10, due_day: 26)
+
+    # A fractional APR, so rounding it to a whole percent (19 / 365 = 0.05205%) fails.
+    assert_equal "actual_365", card.day_count_convention
+    assert_equal "0.05203%", ActiveSupport::NumberHelper.number_to_percentage(card.daily_rate, precision: 5)
+
+    card.update!(day_count_convention: "actual_360")
+    assert_equal "0.05275%", ActiveSupport::NumberHelper.number_to_percentage(card.daily_rate, precision: 5)
+  end
+
   test "the statement summary has no interest estimate without an APR" do
     card = statement_card(close_day: 10, due_day: 26)
     card.update!(apr: nil)
@@ -603,6 +614,7 @@ class CreditCardTest < ActiveSupport::TestCase
     summary = card.statement_summary(as_of: Date.new(2026, 10, 16), viewer: users(:family_admin))
 
     assert_nil summary.estimated_interest
+    assert_nil summary.daily_rate
   end
 
   test "cycle interest charges each day's balance, a payment from the day after it posts" do

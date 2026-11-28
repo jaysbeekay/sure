@@ -66,7 +66,7 @@ en:
         interest_if_not_paid_by: "%{amount} if not paid in full by %{date}"
         interest_not_paid_by: "%{amount}, not paid in full by %{date}"
         interest_if_not_paid: "%{amount} if the statement is not paid in full"
-        monthly_rate_label: Monthly rate
+        daily_rate_label: Daily rate
         closes_on_days:
           zero: Statement closes %{date} (today)
           one: Statement closes %{date} (1 day)

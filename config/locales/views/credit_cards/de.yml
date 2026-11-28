@@ -50,7 +50,7 @@ de:
         interest_if_not_paid_by: "%{amount}, falls nicht bis %{date} vollständig bezahlt"
         interest_not_paid_by: "%{amount}, nicht bis %{date} vollständig bezahlt"
         interest_if_not_paid: "%{amount}, falls die Abrechnung nicht vollständig bezahlt wird"
-        monthly_rate_label: "Monatlicher Zinssatz"
+        daily_rate_label: "Täglicher Zinssatz"
         closes_on_days:
           zero: "Abrechnung schließt am %{date} (heute)"
           one: "Abrechnung schließt am %{date} (1 Tag)"

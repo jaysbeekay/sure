@@ -58,7 +58,7 @@ id:
         interest_if_not_paid_by: "%{amount} jika tidak dibayar penuh sebelum %{date}"
         interest_not_paid_by: "%{amount}, tidak dibayar penuh sebelum %{date}"
         interest_if_not_paid: "%{amount} jika tagihan tidak dibayar penuh"
-        monthly_rate_label: Suku bunga bulanan
+        daily_rate_label: Suku bunga harian
         closes_on: "Tagihan berikutnya ditutup pada %{date}"
         credit_toward_next: Kredit menuju tagihan berikutnya
         due_on: "Jatuh tempo pada %{date}"
