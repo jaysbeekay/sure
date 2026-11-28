@@ -39,6 +39,22 @@ class Assistant::Function::GetTransactionsTest < ActiveSupport::TestCase
     assert_equal [ excluded.entryable_id ], result[:transactions].map { |item| item[:id] }
   end
 
+  test "total_expenses counts a loan payment" do
+    loan_payment = Entry.create!(
+      account: accounts(:depository),
+      name: "Mortgage repayment 7731",
+      date: Date.current,
+      amount: 500,
+      currency: "USD",
+      entryable: Transaction.new(kind: "loan_payment")
+    )
+
+    result = @function.call("page" => 1, "order" => "asc", "search" => loan_payment.name)
+
+    assert_equal Money.new(500, "USD").format, result[:total_expenses]
+    assert_equal [ loan_payment.entryable_id ], result[:transactions].map { |item| item[:id] }
+  end
+
   test "excludes transactions from inaccessible accounts" do
     hidden_entry = Entry.create!(
       account: accounts(:investment),
